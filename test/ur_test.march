@@ -1,0 +1,51 @@
+mod UrTest do
+  needs IO.Console
+  needs IO.Clock
+  needs IO.Process
+  alias Ur.Sim as S
+  fn main(_cap : Cap(IO.Console)) : Unit do
+    let c = S.new()
+    Test.assert_true((S.act(c, -1, 1)).cash == c.cash, "negative parcel is rejected")
+    Test.assert_true((S.act(c, 0, 2)).cash == c.cash, "housing cannot be zoned on water")
+    let poor = { c with cash: 0 }
+    Test.assert_true((S.act(poor, S.index(11, 20), 1)).cash == 0, "unaffordable construction leaves budget unchanged")
+    Test.assert_true((S.act(c, S.count(), 1)).cash == c.cash, "past-end parcel is rejected")
+    Test.assert_true((S.act(c, S.index(10, 9), 2)).cash == c.cash, "mountain zoning is rejected without charge")
+    Test.assert_true((S.act(c, S.index(9, 20), 1)).cash == c.cash, "existing road is not charged twice")
+    let graded = S.act(c, S.index(10, 9), 6)
+    Test.assert_eq_int(S.get(graded.heights, S.index(10, 9)), S.get(c.heights, S.index(10, 9)) - 8, "grading lowers land two metres")
+    Test.assert_eq_int(graded.cash, c.cash - 180, "grading costs money")
+    let dense = S.act(S.act(S.act(c, S.index(10, 20), 5), S.index(10, 20), 5), S.index(10, 20), 5)
+    Test.assert_eq_int(S.get(dense.density, S.index(10, 20)), 3, "density is capped")
+    Test.assert_eq_int(dense.cash, c.cash - 80, "capped density does not charge")
+    let a = S.access(c)
+    Test.assert_true(NativeArray.get_int(a, S.index(9, 20)) >= 0, "starter road reaches harbour")
+    let remote = S.act(c, S.index(27, 14), 1)
+    Test.assert_true(NativeArray.get_int(S.access(remote), S.index(27, 14)) == -1, "isolated roads do not grant market access")
+    let grown = S.advance(c, 80)
+    Test.assert_true(S.population(grown) > S.population(c), "serviced zones develop privately")
+    let taxed = S.advance({ c with tax: 25 }, 80)
+    Test.assert_true(S.population(taxed) < S.population(grown), "high taxes deter investment")
+    let powerless = { c with plants: NativeArray.make_int(S.count(), 0) }
+    Test.assert_true(S.population(S.advance(powerless, 30)) == S.population(powerless), "no power prevents growth")
+    Test.assert_true((S.policy(c, 100, -100)).tax == 25, "tax policy is bounded")
+    Test.assert_true((S.policy(c, 100, -100)).energy == 1, "energy policy is bounded")
+    let costly = S.advance({ c with energy: 12 }, 80)
+    Test.assert_eq_int(S.population(costly), S.population(c), "high energy price blocks new investment")
+    Test.assert_true(S.population(S.advance(c, 80)) == S.population(grown), "growth is deterministic")
+    Test.assert_false(Ur.Input.world_drag(false, false, true, true), "UI press does not own world drag")
+    Test.assert_false(Ur.Input.world_drag(false, true, true, false), "dragging out of UI cannot build")
+    Test.assert_true(Ur.Input.world_drag(false, false, true, false), "world press starts painting")
+    let tall = { c with buildings: NativeArray.set_int(c.buildings, S.index(10, 20), 3) }
+    Test.assert_eq_int(Ur.Scene.pick_at(tall, 84.0, 154.5), S.index(10, 20), "roof selects its building, not the next parcel")
+    let bridge = S.act(c, 0, 1)
+    let cleared = S.act(bridge, 0, 7)
+    Test.assert_true(S.get(cleared.roads, 0) == 0, "bridges can be demolished")
+    let region = Ur.Scenario.connected_region()
+    Test.assert_true(S.get(S.access(region), S.index(28, 16)) >= 0, "bridge connects the second island")
+    let town = S.advance(region, 1200)
+    Test.assert_true(S.population(town) >= 500, "the first milestone is achievable through normal construction")
+    Test.assert_true(town.income > 0, "expanded region sustains a positive budget")
+    Authority.must(println("Ur simulation: all assertions passed"))
+  end
+end

@@ -1,0 +1,100 @@
+mod Ur do
+  needs IO
+  needs IO.Foreign
+  needs IO.Process
+  needs Window
+  alias Strata.Ffi.Vk as Vk
+  alias Ur.Sim as S
+  type Play = { city : Ur.Sim.City, stats : Ur.Sim.Stats, cx : Float, cz : Float, zoom : Float, tool : Int, paused : Bool, speed : Int,
+    keys : Int, mouse : Bool, drag : Bool, last_plot : Int, hovered : Int, reason : String, time : Float, elapsed : Float,
+    frame : Int, drawn : Int, limit : Int, trace_input : Bool, tick_ms : Float }
+  pfn minimum(a : Float, b : Float) : Float do if a < b do a else b end end
+  pfn maximum(a : Float, b : Float) : Float do if a > b do a else b end end
+  pfn keycode(i : Int) : Int do
+    if i < 7 do 49 + i else match i do
+      7 -> 32
+      8 -> 258
+      9 -> 91
+      10 -> 93
+      11 -> 59
+      12 -> 39
+      _ -> 294
+    end end
+  end
+  pfn keymask(i : Int, mask : Int) : Int do
+    if i >= 14 do mask else keymask(i + 1, if Vk.key(keycode(i)) do int_or(mask, int_shl(1, i)) else mask end) end
+  end
+  pfn pressed(now : Int, old : Int, i : Int) : Bool do int_and(now, int_shl(1, i)) != 0 && int_and(old, int_shl(1, i)) == 0 end
+  pfn select_tool(now : Int, old : Int, i : Int, tool : Int) : Int do
+    if i >= 7 do tool else select_tool(now, old, i + 1, if pressed(now, old, i) do i + 1 else tool end) end
+  end
+  pfn axis(negative : Int, positive : Int) : Float do (if Vk.key(positive) do 1.0 else 0.0 end) -. (if Vk.key(negative) do 1.0 else 0.0 end) end
+  pfn run_frames(p : Play) : Unit do
+    Vk.poll()
+    if Vk.should_close() || Vk.key(256) || (p.limit > 0 && p.frame >= p.limit) do
+      Authority.must(println("ur: frames=" ++ int_to_string(p.frame) ++ " drawn=" ++ int_to_string(p.drawn) ++ " population=" ++ int_to_string(S.population(p.city)) ++ " tick_ms=" ++ float_to_string(p.tick_ms) ++ " frame_cpu_ms=" ++ float_to_string(Vk.stat(0)) ++ " gpu_ms=" ++ float_to_string(Vk.stat(3)) ++ " quads=" ++ int_to_string(Vk.live_quads()) ++ " refused=" ++ int_to_string(Vk.refused())))
+      Vk.close()
+    else
+      let time = Vk.time()
+      let dt = minimum(0.25, maximum(0.0, time -. p.time))
+      let keys = keymask(0, 0)
+      let mouse = Vk.mouse_button(0)
+      let mx = Vk.mouse_x()
+      let my = Vk.mouse_y()
+      let w = int_to_float(Vk.win_w())
+      let h = int_to_float(Vk.win_h())
+      let cx = maximum(0.0, minimum(288.0, p.cx +. axis(263, 262) *. dt *. p.zoom *. 0.7))
+      let cz = maximum(0.0, minimum(224.0, p.cz +. axis(265, 264) *. dt *. p.zoom *. 0.7))
+      let zoom = maximum(35.0, minimum(240.0, p.zoom +. axis(61, 45) *. dt *. 90.0))
+      let tool = select_tool(keys, p.keys, 0, p.tool)
+      let clicked_tool = if mouse && !p.mouse do Ur.Hud.tool_at(mx, my) else 0 end
+      let tool = if clicked_tool > 0 do clicked_tool else tool end
+      let paused = if pressed(keys, p.keys, 7) do !p.paused else p.paused end
+      let speed = if pressed(keys, p.keys, 8) do (if p.speed == 1 do 4 else 1 end) else p.speed end
+      let tax = (if pressed(keys, p.keys, 10) do 1 else 0 end) - (if pressed(keys, p.keys, 9) do 1 else 0 end)
+      let energy = (if pressed(keys, p.keys, 12) do 1 else 0 end) - (if pressed(keys, p.keys, 11) do 1 else 0 end)
+      let c = S.policy(p.city, tax, energy)
+      let over_ui = Ur.Hud.over_panel(mx, my, w, h)
+      let hovered = if over_ui do -1 else Ur.Scene.pick(c, mx, my, w, h, cx, cz, zoom) end
+      let drag = Ur.Input.world_drag(p.drag, p.mouse, mouse, over_ui)
+      let paint = Ur.Input.should_paint(drag, p.mouse, hovered, p.last_plot)
+      if p.trace_input && (mouse || p.frame % 120 == 0) do
+        Authority.must(println("input: x=" ++ float_to_string(mx) ++ " y=" ++ float_to_string(my) ++ " w=" ++ float_to_string(w) ++ " h=" ++ float_to_string(h) ++ " mouse=" ++ bool_to_string(mouse) ++ " hover=" ++ int_to_string(hovered) ++ " drag=" ++ bool_to_string(drag)))
+      else () end
+      let c = if paint do S.act(c, hovered, tool) else c end
+      let elapsed = if paused do 0.0 else p.elapsed +. dt *. int_to_float(speed) end
+      let due = elapsed >= 1.0
+      let start = Vk.time()
+      let c = if due do S.tick(c) else c end
+      let tick_ms = if due do (Vk.time() -. start) *. 1000.0 else p.tick_ms end
+      let st = if paint || due do S.stats(c) else p.stats end
+      if paint || due do Ur.Scene.sync(p.city, c, 0, false) else () end
+      if hovered != p.hovered || paint do Ur.Scene.highlight(c, hovered) else () end
+      let reason = if hovered != p.hovered || paint || due || tax != 0 || energy != 0 do S.reason_with(c, hovered, st) else p.reason end
+      Ur.Scene.camera(cx, cz, zoom, if h > 0.0 do w /. h else 1.6 end)
+      if Strata.Render.draw_ui(Ur.Hud.draw(c, st, tool, hovered, reason, paused, speed, tick_ms)) do () else Ur.AppError.stop("HUD overflow") end
+      if pressed(keys, p.keys, 13) || (p.limit > 0 && p.frame == p.limit - 1) do Vk.request_shot() else () end
+      let drawn = p.drawn + (if Vk.frame() do 1 else 0 end)
+      run_frames({ city: c, stats: st, cx: cx, cz: cz, zoom: zoom, tool: tool, paused: paused, speed: speed,
+        keys: keys, mouse: mouse, drag: drag, last_plot: if mouse do hovered else -1 end, hovered: hovered, reason: reason,
+        time: time, elapsed: if due do elapsed -. 1.0 else elapsed end, frame: p.frame + 1, drawn: drawn, limit: p.limit, trace_input: p.trace_input, tick_ms: tick_ms })
+    end
+  end
+  fn main(_cap : Cap(IO)) : Unit do
+    let c = S.new()
+    let bench = Authority.must(Env.get_int("UR_BENCH", 0))
+    if bench > 0 do
+      let start = unix_time_ms()
+      let after = S.advance(c, bench)
+      Authority.must(println("months=" ++ int_to_string(bench) ++ " elapsed_ms=" ++ int_to_string(unix_time_ms() - start) ++ " population=" ++ int_to_string(S.population(after)) ++ " cash=" ++ int_to_string(after.cash)))
+    else if Vk.open(1440, 900, false, 262144) do
+      Vk.set_vsync(true)
+      Ur.Scene.setup()
+      let c = if Authority.must(Env.get_int("UR_DEMO", 0)) > 0 do S.advance(Ur.Scenario.connected_region(), 600) else c end
+      Ur.Scene.sync(c, c, 0, true)
+      run_frames({ city: c, stats: S.stats(c), cx: 144.0, cz: 112.0, zoom: 180.0, tool: 1, paused: false, speed: 1,
+        keys: 0, mouse: false, drag: false, last_plot: -1, hovered: -1, reason: "Select a parcel to inspect development",
+        time: Vk.time(), elapsed: 0.0, frame: 0, drawn: 0, limit: Authority.must(Env.get_int("UR_FRAMES", 0)), trace_input: Authority.must(Env.get_int("UR_INPUT_LOG", 0)) > 0, tick_ms: 0.0 })
+    else Ur.AppError.stop("Could not open Strata renderer; check Vulkan and GLFW installation") end end
+  end
+end

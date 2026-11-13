@@ -1,0 +1,14 @@
+[package]
+name = "ur"
+version = "0.1.0"
+type = "app"
+description = "A cute futuristic voxel city builder among islands and mountains"
+author = ""
+license = ""
+
+[deps]
+strata = { path = "../strata" }
+
+[ffi]
+sources = ["../strata/native/strata_vk.c", "../strata/native/strata_text.c", "../strata/native/strata_audio.c", "../strata/native/strata_noise.c", "../strata/native/strata_anim.c", "../strata/native/strata_ent.c", "../strata/native/strata_vox.cpp"]
+link = ["-I../strata/native", "-Wno-override-module", "-ffp-contract=off", "-fno-exceptions", "-I/opt/homebrew/include", "-I../strata/native/sheenbidi/Headers", "-I/opt/homebrew/include/freetype2", "-I/opt/homebrew/include/harfbuzz", "-L/opt/homebrew/lib", "-lglfw", "-lvulkan", "-lfreetype", "-lharfbuzz", "-Wl,-rpath,/opt/homebrew/lib"]

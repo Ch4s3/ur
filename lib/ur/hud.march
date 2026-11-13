@@ -1,0 +1,67 @@
+mod Ur.Hud do
+  needs IO.Foreign
+  needs Window
+  alias Strata.Ui as U
+  alias Strata.Text as T
+  alias Ur.Sim as S
+  pfn label(u : Strata.Ui.Ui, x : Float, y : Float, size : Float, text : String, bright : Bool) : Strata.Ui.Ui do
+    T.text(u, 0, x, y, T.default_font(), size, if bright do (0.93, 0.95, 0.90, 1.0) else (0.58, 0.69, 0.70, 1.0) end, text)
+  end
+  pfn panel(u : Strata.Ui.Ui, x : Float, y : Float, w : Float, h : Float) : Strata.Ui.Ui do
+    U.rect(u, 0, x, y, w, h, (0.055, 0.105, 0.13, 0.96))
+  end
+  fn tool_at(mx : Float, my : Float) : Int do
+    if mx >= 18.0 && mx < 218.0 && my >= 120.0 && my < 442.0 do
+      float_to_int((my -. 120.0) /. 46.0) + 1
+    else 0 end
+  end
+  fn over_panel(mx : Float, my : Float, w : Float, h : Float) : Bool do
+    my < 94.0 || my >= h -. 86.0 || (mx < 234.0 && my < 464.0) || (mx >= w -. 294.0 && my < 580.0)
+  end
+  pfn tools(u : Strata.Ui.Ui, i : Int, chosen : Int) : Strata.Ui.Ui do
+    if i > 7 do u else
+      let y = 120.0 +. int_to_float(i - 1) *. 46.0
+      let bg = U.rect(u, 0, 18.0, y, 200.0, 40.0, if i == chosen do (0.22, 0.40, 0.40, 1.0) else (0.075, 0.14, 0.17, 1.0) end)
+      let txt = int_to_string(i) ++ "   " ++ S.tool_name(i)
+      tools(label(bg, 30.0, y +. 10.0, 14.0, txt, true), i + 1, chosen)
+    end
+  end
+  fn draw(c : Ur.Sim.City, st : Ur.Sim.Stats, chosen : Int, hover : Int, reason : String, paused : Bool, speed : Int, ms : Float) : Strata.Ui.Ui do
+    let u = Strata.Render.ui_begin(1.0)
+    let w = U.width(u)
+    let h = U.height(u)
+    let a = panel(u, 0.0, 0.0, w, 80.0)
+    let a = label(a, 24.0, 13.0, 32.0, "UR", true)
+    let a = label(a, 26.0, 52.0, 10.0, "THE ISLAND REGION", false)
+    let a = label(a, 230.0, 17.0, 11.0, "RESIDENTS", false)
+    let a = label(a, 230.0, 36.0, 24.0, int_to_string(st.people), true)
+    let a = label(a, 385.0, 17.0, 11.0, "JOBS", false)
+    let a = label(a, 385.0, 36.0, 24.0, int_to_string(st.work), true)
+    let a = label(a, 520.0, 17.0, 11.0, "TREASURY", false)
+    let a = label(a, 520.0, 36.0, 24.0, "$" ++ int_to_string(c.cash), true)
+    let a = label(a, 735.0, 17.0, 11.0, "MONTHLY BALANCE", false)
+    let a = label(a, 735.0, 39.0, 18.0, (if c.income >= 0 do "+$" else "$" end) ++ int_to_string(c.income), true)
+    let a = label(a, w -. 180.0, 18.0, 12.0, "MONTH " ++ int_to_string(c.month), false)
+    let a = label(a, w -. 180.0, 40.0, 18.0, if paused do "PAUSED" else int_to_string(speed) ++ "x  RUNNING" end, true)
+    let a = tools(panel(a, 10.0, 108.0, 216.0, 344.0), 1, chosen)
+    let x = w -. 278.0
+    let a = panel(a, x, 108.0, 260.0, 450.0)
+    let a = label(a, x +. 18.0, 124.0, 11.0, "REGIONAL POLICY", false)
+    let a = label(a, x +. 18.0, 153.0, 18.0, "Tax rate   " ++ int_to_string(c.tax) ++ "%", true)
+    let a = label(a, x +. 18.0, 182.0, 12.0, "[ decrease    ] increase", false)
+    let a = label(a, x +. 18.0, 215.0, 18.0, "Energy price   $" ++ int_to_string(c.energy), true)
+    let a = label(a, x +. 18.0, 244.0, 12.0, "; decrease    ' increase", false)
+    let a = label(a, x +. 18.0, 278.0, 14.0, "Power  " ++ int_to_string(st.used) ++ " / " ++ int_to_string(st.power), true)
+    let a = U.rect(a, 0, x +. 18.0, 311.0, 224.0, 1.0, (0.23, 0.34, 0.35, 1.0))
+    let a = label(a, x +. 18.0, 330.0, 11.0, if S.valid(hover) do "PARCEL " ++ int_to_string(hover % S.width()) ++ " / " ++ int_to_string(hover / S.width()) else "DEVELOPMENT" end, false)
+    let style = T.with_wrap(T.style(), 220.0)
+    let a = T.styled(a, 0, x +. 18.0, 354.0, T.default_font(), 16.0, (0.94, 0.88, 0.68, 1.0), style, reason)
+    let detail = if S.valid(hover) do "Density " ++ int_to_string(S.get(c.density, hover)) ++ "   |   " ++ int_to_string(S.get(c.heights, hover) / 4) ++ " m elevation" else "Hover over a plot to see what it needs." end
+    let a = label(a, x +. 18.0, 438.0, 12.0, detail, false)
+    let a = T.styled(a, 0, x +. 18.0, 480.0, T.default_font(), 13.0, (0.70, 0.82, 0.76, 1.0), style, if st.people >= 500 && c.income > 0 do "Milestone reached: a thriving town. Keep expanding." else "First milestone: 500 residents and a positive monthly balance." end)
+    let a = panel(a, 0.0, h -. 76.0, w, 76.0)
+    let a = label(a, 24.0, h -. 64.0, 15.0, c.message, true)
+    let a = label(a, 24.0, h -. 35.0, 12.0, "Click / drag to build   |   1-7 tools   |   Arrows pan   |   - / = zoom   |   Space pause   |   Tab speed   |   Esc quit", false)
+    label(a, w -. 180.0, h -. 35.0, 11.0, "tick " ++ int_to_string(float_to_int(ms *. 1000.0)) ++ " us", false)
+  end
+end

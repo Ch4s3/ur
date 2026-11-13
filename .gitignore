@@ -1,0 +1,6 @@
+/.march/
+/march-phases/
+*.ll
+
+/.forge/
+/strata_shot.ppm

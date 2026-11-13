@@ -1,0 +1,19 @@
+-- A reproducible player-built expansion, used by tests and screenshot runs.
+-- Every change goes through the same construction rules as mouse input.
+mod Ur.Scenario do
+  alias Ur.Sim as S
+  pfn corridor(c : Ur.Sim.City, x : Int) : Ur.Sim.City do
+    if x > 28 do c else
+      let road = S.act(c, S.index(x, 16), 1)
+      let homes = S.act(road, S.index(x, 17), 2)
+      let jobs = S.act(homes, S.index(x, 15), 3)
+      let dense = S.act(S.act(jobs, S.index(x, 17), 5), S.index(x, 15), 5)
+      corridor(S.act(S.act(dense, S.index(x, 17), 5), S.index(x, 15), 5), x + 1)
+    end
+  end
+  fn connected_region() : Ur.Sim.City do
+    let c = corridor(S.new(), 10)
+    let c = S.act(S.act(c, S.index(12, 17), 7), S.index(12, 17), 4)
+    S.act(S.act(c, S.index(27, 17), 7), S.index(27, 17), 4)
+  end
+end

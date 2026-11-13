@@ -1,0 +1,9 @@
+mod Ur.AppError do
+  needs IO.Console
+  needs IO.Process
+  doc "Report an unrecoverable application error and exit with failure."
+  fn stop(message : String) : Unit do
+    Authority.must(println("Ur: " ++ message))
+    Authority.must(Process.exit(1))
+  end
+end

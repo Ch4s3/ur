@@ -1,0 +1,9 @@
+mod Ur.Input do
+  -- A drag belongs to the surface on which its initial press occurred.
+  fn world_drag(active : Bool, was_down : Bool, down : Bool, over_ui : Bool) : Bool do
+    if !down do false else if !was_down do !over_ui else active end end
+  end
+  fn should_paint(active : Bool, was_down : Bool, plot : Int, last_plot : Int) : Bool do
+    active && plot >= 0 && (!was_down || plot != last_plot)
+  end
+end

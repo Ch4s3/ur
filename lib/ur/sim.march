@@ -1,0 +1,230 @@
+-- Parcel simulation: money and quantities use integers for deterministic ticks.
+mod Ur.Sim do
+  type City = {
+    heights : NativeIntArr, roads : NativeIntArr, zones : NativeIntArr,
+    density : NativeIntArr, buildings : NativeIntArr, plants : NativeIntArr,
+    cash : Int, month : Int, tax : Int, energy : Int, income : Int, message : String
+  }
+  type Stats = { people : Int, work : Int, used : Int, power : Int, routes : NativeIntArr }
+  type Development = Unzoned | Full | NoRoad | NoPower | HighTax | HighEnergy | Remote | NoJobs | NoWorkers | Ready
+  fn stats(c : City) : Stats do
+    let routes = access(c)
+    { people: population(c), work: jobs(c), used: load(c), power: supply(c, routes), routes: routes }
+  end
+  pfn is_ready(s : Development) : Bool do
+    match s do
+      Ready -> true
+      _ -> false
+    end
+  end
+  pfn status_text(s : Development) : String do
+    match s do
+      Unzoned -> "Unzoned land"
+      Full -> "At permitted density"
+      NoRoad -> "No road connection to the harbour"
+      NoPower -> "No spare connected power capacity"
+      HighTax -> "Taxes make development unprofitable"
+      HighEnergy -> "Energy is too expensive"
+      Remote -> "Transport costs are too high"
+      NoJobs -> "Waiting for more jobs"
+      NoWorkers -> "Waiting for workers and customers"
+      Ready -> "Ready for private development"
+    end
+  end
+  fn width() : Int do 36 end
+  fn depth() : Int do 28 end
+  fn count() : Int do 1008 end
+  fn index(x : Int, z : Int) : Int do z * width() + x end
+  fn valid(i : Int) : Bool do i >= 0 && i < count() end
+  fn clamp(v : Int, lo : Int, hi : Int) : Int do if v < lo do lo else if v > hi do hi else v end end end
+  fn get(a : NativeIntArr, i : Int) : Int do if valid(i) do NativeArray.get_int(a, i) else 0 end end
+  fn neighbour(i : Int, d : Int) : Int do
+    if d == 0 do (if i % width() > 0 do i - 1 else -1 end)
+    else if d == 1 do (if i % width() < width() - 1 do i + 1 else -1 end)
+    else if d == 2 do (if i >= width() do i - width() else -1 end)
+    else if i < count() - width() do i + width() else -1 end end end end
+  end
+  fn terrain(x : Int, z : Int) : Int do
+    let a = 100 - (x - 12) * (x - 12) - (z - 14) * (z - 14)
+    let b = 30 - (x - 28) * (x - 28) - (z - 13) * (z - 13)
+    let hill = clamp(70 - (x - 10) * (x - 10) * 3 - (z - 9) * (z - 9) * 2, 0, 70)
+    if a > 0 do 4 + a / 10 + hill else if b > 0 do 4 + b / 3 else 0 end end
+  end
+  pfn terrain_fill(a : NativeIntArr, i : Int) : NativeIntArr do
+    if i >= count() do a else terrain_fill(NativeArray.set_int(a, i, terrain(i % width(), i / width())), i + 1) end
+  end
+  pfn seed(c : City, z : Int) : City do
+    if z > 21 do c
+    else
+      let road = index(9, z)
+      let home = index(10, z)
+      let shop = index(8, z)
+      seed({ c with roads: NativeArray.set_int(c.roads, road, 1),
+        zones: NativeArray.set_int(NativeArray.set_int(c.zones, home, 1), shop, 2),
+        buildings: NativeArray.set_int(NativeArray.set_int(c.buildings, home, if z >= 20 do 1 else 0 end), shop, if z == 20 do 2 else 0 end)
+      }, z + 1)
+    end
+  end
+  fn new() : City do
+    seed({ heights: terrain_fill(NativeArray.make_int(1008, 0), 0), roads: NativeArray.make_int(1008, 0),
+      zones: NativeArray.make_int(1008, 0), density: NativeArray.make_int(1008, 1), buildings: NativeArray.make_int(1008, 0),
+      plants: NativeArray.set_int(NativeArray.make_int(1008, 0), index(8, 21), 1),
+      cash: 18000, month: 0, tax: 10, energy: 4, income: 0,
+      message: "Connect land. Zone it. Let people build. Reach 500 residents with a positive budget." }, 16)
+  end
+  -- Each reachable road enters the queue once. O(parcels), no all-pairs routing.
+  pfn visit(c : City, dist : NativeIntArr, queue : NativeIntArr, tail : Int, i : Int, d : Int) : (NativeIntArr, NativeIntArr, Int) do
+    if d >= 4 do (dist, queue, tail)
+    else
+      let j = neighbour(i, d)
+      let next = if valid(j) && get(c.roads, j) > 0 && get(dist, j) < 0 && int_abs(get(c.heights, i) - get(c.heights, j)) <= 12 do
+        (NativeArray.set_int(dist, j, get(dist, i) + 1), NativeArray.set_int(queue, tail, j), tail + 1)
+      else (dist, queue, tail) end
+      match next do (ds, qs, n) -> visit(c, ds, qs, n, i, d + 1) end
+    end
+  end
+  pfn flood(c : City, dist : NativeIntArr, queue : NativeIntArr, head : Int, tail : Int) : NativeIntArr do
+    if head >= tail do dist
+    else match visit(c, dist, queue, tail, NativeArray.get_int(queue, head), 0) do
+      (ds, qs, n) -> flood(c, ds, qs, head + 1, n)
+    end end
+  end
+  fn access(c : City) : NativeIntArr do
+    let root = index(9, 21)
+    let dist = NativeArray.make_int(1008, -1)
+    if get(c.roads, root) == 0 do dist
+    else flood(c, NativeArray.set_int(dist, root, 0), NativeArray.set_int(NativeArray.make_int(1008, 0), 0, root), 0, 1) end
+  end
+  pfn near_go(a : NativeIntArr, i : Int, d : Int, best : Int) : Int do
+    if d >= 4 do best else
+      let j = neighbour(i, d)
+      let v = if valid(j) do get(a, j) else -1 end
+      near_go(a, i, d + 1, if v >= 0 && (best < 0 || v < best) do v else best end)
+    end
+  end
+  fn distance(a : NativeIntArr, i : Int) : Int do near_go(a, i, 0, if valid(i) do get(a, i) else -1 end) end
+  pfn sum(c : City, i : Int, kind : Int, total : Int) : Int do
+    if i >= count() do total else
+      let b = get(c.buildings, i)
+      let v = if kind == 0 do (if get(c.zones, i) == 1 do b * 16 else 0 end)
+        else if kind == 1 do (if get(c.zones, i) > 1 do b * 12 else 0 end)
+        else if kind == 2 do b * 4
+        else get(c.roads, i) + get(c.plants, i) * 30 end end end
+      sum(c, i + 1, kind, total + v)
+    end
+  end
+  fn population(c : City) : Int do sum(c, 0, 0, 0) end
+  fn jobs(c : City) : Int do sum(c, 0, 1, 0) end
+  fn load(c : City) : Int do sum(c, 0, 2, 0) end
+  pfn supply_go(c : City, a : NativeIntArr, i : Int, n : Int) : Int do
+    if i >= count() do n else supply_go(c, a, i + 1, n + (if get(c.plants, i) > 0 && distance(a, i) >= 0 do 100 else 0 end)) end
+  end
+  fn supply(c : City, a : NativeIntArr) : Int do supply_go(c, a, 0, 0) end
+  fn policy(c : City, tax_delta : Int, energy_delta : Int) : City do
+    { c with tax: clamp(c.tax + tax_delta, 0, 25), energy: clamp(c.energy + energy_delta, 1, 12) }
+  end
+  fn tool_name(t : Int) : String do
+    match t do
+      1 -> "Road / bridge"
+      2 -> "Housing zone"
+      3 -> "Employment zone"
+      4 -> "Power station"
+      5 -> "Density"
+      6 -> "Grade land"
+      7 -> "Clear parcel"
+      _ -> "Inspect" end
+  end
+  fn cost(c : City, i : Int, tool : Int) : Int do
+    match tool do
+      1 -> if get(c.heights, i) == 0 do 220 else 60 end
+      2 | 3 -> 20
+      4 -> 1800
+      5 -> 40
+      6 -> 180
+      7 -> 40
+      _ -> 0 end
+  end
+  fn act(c : City, i : Int, tool : Int) : City do
+    if !valid(i) || tool < 1 || tool > 7 do c
+    else
+      let h = get(c.heights, i)
+      let occupied = get(c.buildings, i) > 0 || get(c.plants, i) > 0 || get(c.roads, i) > 0
+      let same = (tool == 1 && get(c.roads, i) > 0) || (tool == 2 && get(c.zones, i) == 1) || (tool == 3 && get(c.zones, i) == 2)
+      let price = cost(c, i, tool)
+      if same do c
+      else if c.cash < price do { c with message: "Not enough funds. Wait for revenue or reduce investment." }
+      else if i == index(9, 21) do { c with message: "The harbour gateway must remain connected." }
+      else if tool != 1 && tool != 7 && h == 0 do { c with message: "Open water: use roads to build a bridge." }
+      else if occupied && tool != 7 && tool != 5 do { c with message: "Occupied parcel. Clear it before changing its use." }
+      else if h > 28 && tool != 6 && tool != 7 do { c with message: "Too steep for construction. Grade the land first." }
+      else if tool == 6 && h <= 4 do { c with message: "Coastal land cannot be lowered further." }
+      else if tool == 5 && (get(c.zones, i) == 0 || get(c.density, i) >= 3) do { c with message: "Zone land first. Maximum density is three." }
+      else if tool == 7 && !occupied && get(c.zones, i) == 0 do c
+      else
+        let paid = { c with cash: c.cash - price, message: tool_name(tool) ++ " approved." }
+        match tool do
+
+      1 -> { paid with roads: NativeArray.set_int(c.roads, i, 1), zones: NativeArray.set_int(c.zones, i, 0) }
+
+      2 | 3 -> { paid with zones: NativeArray.set_int(c.zones, i, tool - 1) }
+
+      4 -> { paid with plants: NativeArray.set_int(c.plants, i, 1), zones: NativeArray.set_int(c.zones, i, 0) }
+
+      5 -> { paid with density: NativeArray.set_int(c.density, i, get(c.density, i) + 1) }
+
+      6 -> { paid with heights: NativeArray.set_int(c.heights, i, clamp(h - 8, 4, 100)) }
+
+      7 -> { paid with roads: NativeArray.set_int(c.roads, i, 0), zones: NativeArray.set_int(c.zones, i, 0), buildings: NativeArray.set_int(c.buildings, i, 0), plants: NativeArray.set_int(c.plants, i, 0), density: NativeArray.set_int(c.density, i, 1) }
+
+      _ -> c
+        end
+      end end end end end end end end end
+    end
+  end
+  pfn blocked(c : City, a : NativeIntArr, i : Int, pop : Int, work : Int, power : Int, used : Int) : Development do
+    let zone = get(c.zones, i)
+    let dist = distance(a, i)
+    if zone == 0 do Unzoned else if get(c.buildings, i) >= get(c.density, i) do Full
+    else if dist < 0 do NoRoad
+    else if power < used + 4 do NoPower
+    else if c.tax >= 20 do HighTax
+    else if c.energy >= 9 do HighEnergy
+    else if dist > 45 do Remote
+    else if zone == 1 && pop >= work * 2 + 32 do NoJobs
+    else if zone == 2 && work >= pop + 24 do NoWorkers
+    else Ready end end end end end end end end end
+  end
+  fn reason(c : City, i : Int) : String do reason_with(c, i, stats(c)) end
+  fn reason_with(c : City, i : Int, st : Stats) : String do
+    if !valid(i) do "Select a parcel to inspect development"
+    else if get(c.roads, i) > 0 do (if get(st.routes, i) >= 0 do "Connected road: access to regional markets" else "Road is disconnected from the harbour" end)
+    else if get(c.plants, i) > 0 do (if distance(st.routes, i) >= 0 do "Power station: 100 units supplied" else "Power station needs a harbour road connection" end)
+    else if get(c.heights, i) == 0 do "Sea channel: bridges cost 220 per parcel"
+    else if get(c.heights, i) > 28 do "Mountain slope: grade before zoning"
+    else status_text(blocked(c, st.routes, i, st.people, st.work, st.power, st.used)) end end end end end
+  end
+  pfn develop(c : City, a : NativeIntArr, offset : Int, tries : Int, pop : Int, work : Int, power : Int, used : Int) : City do
+    if tries >= count() do c else
+      let i = (offset + tries) % count()
+      if is_ready(blocked(c, a, i, pop, work, power, used)) do
+        -- Taxes, energy and remoteness slow investment even before its hard limit.
+        if (c.month + i) % (1 + c.tax / 5 + c.energy / 3 + distance(a, i) / 12) == 0 do
+          { c with buildings: NativeArray.set_int(c.buildings, i, get(c.buildings, i) + 1) }
+        else develop(c, a, offset, tries + 1, pop, work, power, used) end
+      else develop(c, a, offset, tries + 1, pop, work, power, used) end
+    end
+  end
+  fn tick(c : City) : City do
+    let a = access(c)
+    let pop = population(c)
+    let work = jobs(c)
+    let used = load(c)
+    let power = supply(c, a)
+    let revenue = pop * c.tax / 10 + work * c.tax / 8 + used * c.energy / 4
+    let upkeep = sum(c, 0, 3, 0) + power / 5
+    let net = revenue - upkeep
+    let next = { c with month: c.month + 1, cash: c.cash + net, income: net }
+    develop(next, a, (c.month * 37) % count(), 0, pop, work, power, used)
+  end
+  fn advance(c : City, months : Int) : City do if months <= 0 do c else advance(tick(c), months - 1) end end
+end

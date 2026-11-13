@@ -1,0 +1,188 @@
+-- Quarter-metre voxel meshes. One planning parcel is 32 x 32 voxels (8 m).
+-- Keep renderer updates proportional to changed parcels, not frame rate.
+mod Ur.Scene do
+  needs IO.Console
+  needs IO.Process
+  needs IO.Foreign
+  needs Window
+  alias Strata.Ffi.Vk as Vk
+  alias Strata.Quad as Q
+  alias Ur.Sim as S
+  type Mesh = { words : NativeI32Arr, quads : Int }
+  fn empty() : Mesh do { words: NativeArray.make_i32(768, 0), quads: 0 } end
+  pfn face(m : Mesh, x : Int, y : Int, z : Int, w : Int, h : Int, f : Int, tex : Int) : Mesh do
+    let n = m.quads * 2
+    { words: NativeArray.set_i32(NativeArray.set_i32(m.words, n, Q.pack0(x, y, z, w, h, f)), n + 1, Q.pack1(tex, 255, 0)), quads: m.quads + 1 }
+  end
+  fn box(m : Mesh, x : Int, y : Int, z : Int, w : Int, h : Int, d : Int, side : Int, top : Int) : Mesh do
+    let a = face(m, x, y + h - 1, z, w, d, 0, top)
+    let b = face(a, x, y, z, w, d, 1, side)
+    let c = face(b, x + w - 1, y, z, d, h, 2, side)
+    let e = face(c, x, y, z, d, h, 3, side)
+    let f = face(e, x, y, z + d - 1, w, h, 4, side)
+    face(f, x, y, z, w, h, 5, side)
+  end
+  pfn upload(slot : Int, x : Int, y : Int, z : Int, m : Mesh) : Unit do
+    if Vk.chunk_begin(slot, x, y, z, 0) && Vk.chunk_part(0, m.words, m.quads) && Vk.chunk_commit() do ()
+    else Ur.AppError.stop("Strata refused a parcel mesh upload") end
+  end
+  fn colour(i : Int) : (Int, Int, Int) do
+    match i do
+
+      0 -> (108, 155, 108)
+      1 -> (157, 132, 103)
+      2 -> (145, 158, 156)
+      3 -> (66, 150, 173)
+
+      4 -> (69, 87, 96)
+      5 -> (242, 224, 184)
+      6 -> (203, 112, 84)
+      7 -> (84, 165, 170)
+
+      8 -> (224, 235, 222)
+      9 -> (98, 191, 220)
+      10 -> (255, 205, 104)
+      11 -> (146, 191, 120)
+
+      12 -> (115, 181, 211)
+      13 -> (129, 105, 79)
+      14 -> (63, 126, 94)
+      15 -> (248, 217, 129)
+
+      _ -> (217, 201, 158)
+    end
+  end
+  pfn textures(i : Int) : Unit do
+    if i > 16 do () else
+      let (r, g, b) = colour(i)
+      let a = NativeArray.set_u8(NativeArray.set_u8(NativeArray.set_u8(NativeArray.make_u8(4, 255), 0, r), 1, g), 2, b)
+      if Vk.texture_set(i, a) do textures(i + 1) else Ur.AppError.stop("Texture upload failed") end
+    end
+  end
+  pfn sea(i : Int) : Unit do
+    if i >= 16 do () else
+      let m = box(empty(), 0, 0, 0, 32, 1, 32, 3, 3)
+      if Vk.chunk_begin(7000 + i, (i % 4 - 1) * 1024, -33, (i / 4 - 1) * 1024, 5) && Vk.chunk_part(0, m.words, m.quads) && Vk.chunk_commit() do sea(i + 1)
+      else Ur.AppError.stop("Sea mesh upload failed") end
+    end
+  end
+  fn setup() : Unit do
+    if Vk.textures_create(1, 17) do textures(0) else Ur.AppError.stop("Texture allocation failed") end
+    if Vk.textures_commit() do () else Ur.AppError.stop("Texture commit failed") end
+    sea(0)
+    Vk.set_lighting(0)
+    Vk.set_sun(-0.5, 0.9, 0.3, 1.0, 0.95, 0.85)
+    Vk.set_fog(1000.0, 2000.0)
+  end
+  pfn ground(c : Ur.Sim.City, i : Int, layer : Int) : Unit do
+    if layer >= 3 do () else
+      let h = S.get(c.heights, i)
+      let remaining = h - layer * 32
+      let slot = i * 3 + layer
+      if h == 0 && layer == 0 do upload(slot, i % S.width() * 32, -1, i / S.width() * 32, box(empty(), 0, 0, 0, 32, 1, 32, 3, 3))
+      else if remaining > 0 do
+        let top = if h > 40 do 2 else if h <= 6 do 16 else 0 end end
+        upload(slot, i % S.width() * 32, layer * 32, i / S.width() * 32,
+          box(empty(), 0, 0, 0, 32, S.clamp(remaining, 1, 32), 32, if h > 40 do 2 else 1 end, if remaining > 32 do 1 else top end))
+      else Vk.chunk_free(slot) end end
+      ground(c, i, layer + 1)
+    end
+  end
+  pfn windows(m : Mesh, floor : Int, maxfloor : Int, tex : Int) : Mesh do
+    if floor >= maxfloor do m else
+      let y = 5 + floor * 8
+      let a = box(m, 8, y, 24, 4, 3, 1, tex, tex)
+      let b = box(a, 19, y, 24, 4, 3, 1, tex, tex)
+      windows(b, floor + 1, maxfloor, tex)
+    end
+  end
+  pfn structure(c : Ur.Sim.City, i : Int) : Mesh do
+    let h = S.get(c.heights, i)
+    let b = S.get(c.buildings, i)
+    let zone = S.get(c.zones, i)
+    if S.get(c.roads, i) > 0 do
+      let m = box(empty(), 0, 0, 0, 32, 1, 32, 4, 4)
+      let m = box(m, 15, 1, 2, 2, 1, 10, 8, 8)
+      let m = box(m, 15, 1, 20, 2, 1, 10, 8, 8)
+      if h == 0 do box(m, 2, 1, 0, 1, 3, 32, 8, 8) else m end
+    else if S.get(c.plants, i) > 0 do
+      let m = box(empty(), 4, 0, 4, 24, 3, 24, 8, 8)
+      let m = box(m, 7, 3, 7, 18, 8, 18, 7, 9)
+      box(m, 13, 11, 13, 6, 14, 6, 8, 9)
+    else if b > 0 do
+      let home = zone == 1
+      let m = box(empty(), 5, 0, 5, 22, b * 8 + 2, 20, if home do 5 else 8 end, if home do 6 else 7 end)
+      let m = box(m, 4, b * 8 + 2, 4, 24, 2, 22, if home do 6 else 7 end, if home do 6 else 7 end)
+      let m = windows(m, 0, b, if home do 15 else 9 end)
+      if home do box(m, 14, 0, 25, 4, 6, 1, 13, 13) else box(m, 5, 4, 25, 22, 2, 2, 7, 7) end
+    else if zone > 0 do
+      let tex = if zone == 1 do 11 else 12 end
+      let m = box(empty(), 2, 0, 2, 28, 1, 1, tex, tex)
+      let m = box(m, 2, 0, 29, 28, 1, 1, tex, tex)
+      let m = box(m, 2, 0, 2, 1, 1, 28, tex, tex)
+      box(m, 29, 0, 2, 1, 1, 28, tex, tex)
+    else if h > 8 && h < 45 && (i * 17) % 7 == 0 do
+      let m = box(empty(), 14, 0, 14, 4, 9, 4, 13, 13)
+      let m = box(m, 9, 7, 9, 14, 10, 14, 14, 14)
+      box(m, 12, 17, 12, 8, 5, 8, 14, 14)
+    else empty() end end end end end
+  end
+  pfn parcel(c : Ur.Sim.City, i : Int, land : Bool) : Unit do
+    if land do ground(c, i, 0) else () end
+    upload(4000 + i, i % S.width() * 32, S.get(c.heights, i), i / S.width() * 32, structure(c, i))
+  end
+  fn sync(old : Ur.Sim.City, c : Ur.Sim.City, i : Int, force : Bool) : Unit do
+    if i >= S.count() do () else
+      let land = force || S.get(old.heights, i) != S.get(c.heights, i)
+      let changed = land || S.get(old.roads, i) != S.get(c.roads, i) || S.get(old.zones, i) != S.get(c.zones, i) || S.get(old.buildings, i) != S.get(c.buildings, i) || S.get(old.plants, i) != S.get(c.plants, i)
+      if changed do parcel(c, i, land) else () end
+      sync(old, c, i + 1, force)
+    end
+  end
+  fn highlight(c : Ur.Sim.City, i : Int) : Unit do
+    if !S.valid(i) do Vk.chunk_free(6000) else
+      let m = box(empty(), 0, 0, 0, 32, 1, 1, 10, 10)
+      let m = box(m, 0, 0, 31, 32, 1, 1, 10, 10)
+      let m = box(m, 0, 0, 0, 1, 1, 32, 10, 10)
+      let m = box(m, 31, 0, 0, 1, 1, 32, 10, 10)
+      upload(6000, i % S.width() * 32, S.get(c.heights, i) + 2, i / S.width() * 32, m)
+    end
+  end
+  fn camera(cx : Float, cz : Float, zoom : Float, aspect : Float) : Unit do
+    let view = Strata.Math.Mat4.look_at(Strata.Math.Vec3.new(cx, 240.0, cz +. 240.0), Strata.Math.Vec3.new(cx, 0.0, cz), Strata.Math.Vec3.new(0.0, 1.0, 0.0))
+    let proj = Strata.Math.Mat4.orthographic(0.0 -. zoom, zoom, 0.0 -. zoom /. aspect, zoom /. aspect, 0.1, 1000.0)
+    Vk.set_camera(Strata.Math.Mat4.mul_into_f32(proj, view, NativeArray.make_f32(16, 0.0)))
+    Vk.set_eye(cx, 240.0, cz +. 240.0, 0.25)
+  end
+  -- In this camera, a ray has constant x and y = z - base. Intersect
+  -- full visible parcel/structure boxes, nearest (largest z) first.
+  pfn intersects(base : Float, z0 : Float, z1 : Float, y0 : Float, y1 : Float) : Bool do
+    let lo = if z0 > base +. y0 do z0 else base +. y0 end
+    let hi = if z1 < base +. y1 do z1 else base +. y1 end
+    lo <= hi
+  end
+  pfn pick_row(c : Ur.Sim.City, wx : Float, x : Int, z : Int, base : Float) : Int do
+    if z < 0 || x < 0 || x >= S.width() do -1 else
+      let i = S.index(x, z)
+      let ground = int_to_float(S.get(c.heights, i)) *. 0.25
+      let xlocal = wx -. int_to_float(x * 8)
+      let z0 = int_to_float(z * 8)
+      let b = S.get(c.buildings, i)
+      let building = b > 0 && xlocal >= 1.0 && xlocal <= 7.0 && intersects(base, z0 +. 1.0, z0 +. 6.75, ground, ground +. int_to_float(b * 8 + 4) *. 0.25)
+      let plant = S.get(c.plants, i) > 0 && xlocal >= 1.0 && xlocal <= 7.0 && intersects(base, z0 +. 1.0, z0 +. 7.0, ground, ground +. 6.25)
+      let road = S.get(c.roads, i) > 0 && intersects(base, z0, z0 +. 8.0, ground, ground +. 0.5)
+      if building || plant || road || intersects(base, z0, z0 +. 8.0, -0.25, ground) do i
+      else pick_row(c, wx, x, z - 1, base) end
+    end
+  end
+  fn pick_at(c : Ur.Sim.City, wx : Float, base : Float) : Int do
+    pick_row(c, wx, float_to_int(Math.floor(wx /. 8.0)), S.depth() - 1, base)
+  end
+  fn pick(c : Ur.Sim.City, mx : Float, my : Float, w : Float, h : Float, cx : Float, cz : Float, zoom : Float) : Int do
+    if w <= 0.0 || h <= 0.0 || mx < 0.0 || my < 0.0 || mx >= w || my >= h do -1 else
+      let wx = cx +. (mx /. w *. 2.0 -. 1.0) *. zoom
+      let sy = (1.0 -. my /. h *. 2.0) *. zoom *. h /. w
+      pick_at(c, wx, cz -. sy *. 1.41421356237)
+    end
+  end
+end
