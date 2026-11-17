@@ -372,7 +372,7 @@ mod Ur.Save do
         let? r = field(j, "route")
         let? route = items(r, parcel, 2640)
         let admitted = S.valid(facility) && bed >= 0 && bed < 4 && transport >= 2 && transport <= 121 &&
-          wait >= 0 && wait <= 120 && stay >= 1 && stay <= 100 && (outcome == 1 || outcome == 2) && !List.is_empty(route)
+          wait >= 0 && wait <= 120 && stay >= 1 && stay <= 133 && (outcome == 1 || outcome == 2) && !List.is_empty(route)
         let unadmitted = facility == -1 && bed == -1 && transport == 0 && wait == 0 && stay == 0 && outcome == 3 && List.is_empty(route)
         if admitted || unadmitted do Ok(Some({ facility: facility, bed: bed, transport: transport, wait: wait, stay: stay, outcome: outcome, route: route }))
         else Err("Invalid medical transfer.") end
@@ -462,12 +462,77 @@ mod Ur.Save do
        pickup_leg < 1 || pickup_leg >= List.length(route) - 1 do Err("Invalid trash route.")
     else Ok({ depot: depot, pickup: pickup, site: site, kind: kind, units: units, pickup_leg: pickup_leg, route: route }) end
   end
+  pfn encode_religion(r : Ur.Sim.Religion) : Json.JsonValue do
+    Json.encode_object([
+      ("state", Json.encode_array([
+        Json.encode_int(r.patron),
+        Json.encode_int(r.chosen),
+        Json.encode_int(r.unlocked),
+        Json.encode_int(r.festival_policy),
+        Json.encode_int(r.offering_policy),
+        Json.encode_int(r.offering_year),
+        Json.encode_int(r.offering_spend),
+        Json.encode_int(r.petition_day),
+        Json.encode_int(r.rolls),
+        Json.encode_int(r.dedication_target),
+        Json.encode_int(r.dedication_end),
+        Json.encode_int(r.curse_stamp),
+        Json.encode_int(r.epicenter + 1),
+        Json.encode_int(r.festival_stamp),
+        Json.encode_int(r.festival_hosts),
+        Json.encode_int(r.festival_attendees),
+        Json.encode_int(r.festival_site + 1),
+        Json.encode_int(r.favor.god),
+        Json.encode_int(r.favor.until_day),
+        Json.encode_int(r.favor.site + 1),
+        Json.encode_int(r.curse.god),
+        Json.encode_int(r.curse.until_day),
+        Json.encode_int(r.curse.site + 1),
+        Json.encode_int(r.wrath_god)
+      ])),
+      ("festival_feedback", enc_array(r.festival_feedback, 2639, Nil)),
+      ("festival_absence", enc_array(r.festival_absence, 2639, Nil)),
+      ("festival_attending", enc_array(r.festival_attending, 2639, Nil))
+    ])
+  end
+  pfn decode_religion(j : Json.JsonValue) : Result(Ur.Sim.Religion, String) do
+    let? raw = field(j, "state")
+    let? state = array(raw, 24, 2147483647)
+    let? feedback = optional_array(j, "festival_feedback", 20300)
+    let? absence = optional_array(j, "festival_absence", 2640)
+    let? attending = optional_array(j, "festival_attending", 12)
+    if S.get(state, 0) > 5 ||
+        S.get(state, 1) > 5 ||
+        S.get(state, 2) > 4 ||
+        S.get(state, 3) > 2 ||
+        S.get(state, 4) > 2 ||
+        S.get(state, 6) > 4200 ||
+        S.get(state, 9) > 5 ||
+        S.get(state, 12) > 2640 ||
+        S.get(state, 14) > 5 ||
+        S.get(state, 15) > 1000000 ||
+        S.get(state, 16) > 2640 ||
+        S.get(state, 17) > 5 ||
+        S.get(state, 19) > 2640 ||
+        S.get(state, 20) > 5 ||
+        S.get(state, 22) > 2640 || S.get(state, 23) > 5 do Err("Invalid public religion state.") else
+      Ok({ patron: S.get(state, 0), chosen: S.get(state, 1), unlocked: S.get(state, 2),
+        festival_policy: S.get(state, 3), offering_policy: S.get(state, 4), offering_year: S.get(state, 5),
+        offering_spend: S.get(state, 6), petition_day: S.get(state, 7), rolls: S.get(state, 8),
+        dedication_target: S.get(state, 9), dedication_end: S.get(state, 10), curse_stamp: S.get(state, 11),
+        epicenter: S.get(state, 12) - 1, festival_stamp: S.get(state, 13), festival_hosts: S.get(state, 14),
+        festival_attendees: S.get(state, 15), festival_site: S.get(state, 16) - 1,
+        favor: { god: S.get(state, 17), until_day: S.get(state, 18), site: S.get(state, 19) - 1 },
+        curse: { god: S.get(state, 20), until_day: S.get(state, 21), site: S.get(state, 22) - 1 },
+        wrath_god: S.get(state, 23), festival_feedback: feedback, festival_absence: absence, festival_attending: attending })
+    end
+  end
   pfn encode_city(v : Ur.Sim.City) : Json.JsonValue do
     let freight = match v.freight do
       Some(route) -> [("freight", encode_freight(route))]
       None -> Nil
     end
-    Json.encode_object(List.append(freight,
+    Json.encode_object(List.append(Cons(("religion", encode_religion(v.religion)), freight),
       Cons(("bus_fare", Json.encode_int(v.bus_fare)),
       Cons(("waste_live", Json.encode_bool(v.waste_live)),
       Cons(("waste_bins", enc_array(v.waste_bins, 2639, Nil)),
@@ -550,7 +615,7 @@ mod Ur.Save do
       Cons(("population_history", Json.encode_array(List.map(v.population_history, fn sample -> enc_array(sample, 5, Nil)))),
       Cons(("immigration", Json.encode_int(v.immigration)),
       Cons(("education", enc_array(v.education, 227, Nil)),
-      Cons(("specializations", enc_array(v.specializations, 56, Nil)),
+      Cons(("specializations", enc_array(v.specializations, NativeArray.length_int(v.specializations) - 1, Nil)),
       Cons(("business_sector", enc_array(v.business_sector, 2639, Nil)),
       Cons(("empty_homes", enc_array(v.empty_homes, 2639, Nil)),
       Cons(("home_arrivals", enc_array(v.home_arrivals, 2639, Nil)),
@@ -589,6 +654,10 @@ mod Ur.Save do
       None -> Ok(Nil)
     end
     let? council = optional_array(j, "council", 2147483647)
+    let? religion = match Json.get(j, "religion") do
+      Some(value) -> decode_religion(value)
+      None -> Ok(S.new_religion())
+    end
     let? raw_construction_spend = field(j, "construction_spend")
     let? construction_spend = integer(raw_construction_spend)
     let? raw_island_exports = field(j, "island_exports")
@@ -712,7 +781,13 @@ mod Ur.Save do
     end
     let? specializations = match Json.get(j, "specializations") do
       None -> Ok(S.new_specializations())
-      Some(raw) -> array(raw, 57, 1000000)
+      Some(raw) -> match raw do
+        Json.Array(xs) ->
+          let length = List.length(xs)
+          if length == 57 || length == 71 do decode_array(xs, S.new_specializations(), 0, length, 1000000)
+          else Err("Invalid specialization data.") end
+        _ -> Err("Missing specialization data.")
+      end
     end
     let? business_sector = optional_array(j, "business_sector", 7)
     let? empty_homes = optional_array(j, "empty_homes", 12)
@@ -733,7 +808,7 @@ mod Ur.Save do
     let? construction = array(raw_construction, 2640, 4)
     let? paused_facilities = optional_array(j, "paused_facilities", 1)
     let? raw_plants = field(j, "plants")
-    let? plants = array(raw_plants, 2640, 36)
+    let? plants = array(raw_plants, 2640, 41)
     let? raw_pipes = field(j, "pipes")
     let? pipes = array(raw_pipes, 2640, 2)
     let? raw_grid = field(j, "grid")
@@ -786,7 +861,7 @@ mod Ur.Save do
     if !((harbour == -1 || S.valid(harbour)) && (ferry_start == -1 || S.valid(ferry_start)) && month >= 0 && construction_spend >= 0 && tax >= 0 && tax <= 25 && energy >= 1 && energy <= 12) do Err("Invalid city values.") else
     Ok({ climate_seed: S.clamp(climate_seed, 0, 2147483646), storm_drains: storm_drains, seawalls: seawalls, surface_water: surface_water, flood_damage: flood_damage, flood_active: flood_active, rain_tanks: rain_tanks, subway_water: subway_water, soil_moisture: S.clamp(soil, 0, 100), pumping_cost: S.clamp(pumping, 0, 200000),
       waste_live: waste_live, waste_bins: waste_bins, waste_stock: waste_stock, waste_sites: waste_sites,
-      waste_last: waste_last, waste_log: waste_log, waste_runs: waste_runs, council: council, construction_spend: construction_spend, island_exports: island_exports, island_crops: island_crops, island_catch: island_catch,
+      waste_last: waste_last, waste_log: waste_log, waste_runs: waste_runs, council: council, religion: religion, construction_spend: construction_spend, island_exports: island_exports, island_crops: island_crops, island_catch: island_catch,
       shop_imports: shop_imports, harbour: harbour, ferry_start: ferry_start, trash: trash,
       cash: cash, month: month, tax: tax, business_rate: business_rate,
       import_rate: import_rate, export_rate: export_rate, energy: energy, income: income,

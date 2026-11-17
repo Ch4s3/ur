@@ -9,7 +9,7 @@ mod Ur do
   alias Ur.Build as Build
   alias Ur.Menu as Menu
   type Play = { sanitation : Ur.Scene.SanitationShift, truck_selected : Bool, activity : List(Ur.Activity.NeighborhoodEvent), fleet : List(Ur.Fleet.Run), fleet_routes : List(Ur.Food.Trip), city : Ur.Sim.City, stats : Ur.Sim.Stats, food : List(Ur.Food.Trip), citizens : List(Ur.Citizens.Citizen), traffic_time : Float, rotor_phases : NativeF32Arr, cloud_offset : (Float, Float), cx : Float, cz : Float, zoom : Float, yaw : Float, tool : Int, group : Int, page : Int, layer : Int, sidebar_visible : Bool, sidebar_tab : Int, crime_focus : Int, council_focus : Int, finance_view : Ur.Hud.FinanceView, paused : Bool, speed : Int,
-    sidewalk_spot : Int, keys : Int, mouse : Bool, anchor : Int, stroke : List(Int), hovered : Int, parcel_focus : Int, popup : Int, reason : String, preview : Ur.Build.Preview, undo : List(Ur.Sim.City), time : Float, elapsed : Float,
+    sidewalk_spot : Int, keys : Int, mouse : Bool, anchor : Int, stroke : List(Int), hovered : Int, parcel_focus : Int, popup : Int, religion_site : Int, religion_choice : Int, reason : String, preview : Ur.Build.Preview, undo : List(Ur.Sim.City), time : Float, elapsed : Float,
     frame : Int, drawn : Int, limit : Int, trace_input : Bool, tick_ms : Float,
     menu_open : Bool, boot : Bool, notice : String, confirm : Atom, save_path : String, saved : Bool, quit : Bool }
   pfn minimum(a : Float, b : Float) : Float do if a < b do a else b end end
@@ -65,7 +65,7 @@ mod Ur do
     Ur.Scene.citizen_vehicles(c, citizens, p.citizens, S.street_hour(clock_phase(c)) >= 18 || S.street_hour(clock_phase(c)) < 6, 0)
     { p with sanitation: Ur.Scene.empty_sanitation(), truck_selected: false, activity: Nil, fleet: Ur.Fleet.step(c, stats.traffic, Nil, fleet_routes, 0.0, true), fleet_routes: fleet_routes, city: c, stats: stats, food: food, citizens: citizens, cx: game.cx, cz: game.cz, zoom: game.zoom, yaw: game.yaw,
       paused: game.paused, speed: game.speed, menu_open: false, boot: false, confirm: :nothing,
-      notice: "", layer: layer, group: 1, page: 0, tool: 1, anchor: -1, stroke: Nil, hovered: -1, parcel_focus: -1, popup: -1, sidewalk_spot: -1, undo: Nil,
+      notice: "", layer: layer, group: 1, page: 0, tool: 1, anchor: -1, stroke: Nil, hovered: -1, parcel_focus: -1, popup: -1, religion_site: -1, religion_choice: 0, sidewalk_spot: -1, undo: Nil,
       preview: Build.preview(c, 0, -1, -1), elapsed: clock_phase(c), traffic_time: clock_phase(c), rotor_phases: rotor_phases, cloud_offset: (0.0, 0.0), sidebar_tab: 0, crime_focus: -1, council_focus: -1,
       sidebar_visible: false, finance_view: { month: 0, lines: false },
       reason: if c.harbour < 0 do "Choose a cyan shoreline parcel to land." else "Select a parcel to inspect development" end }
@@ -165,11 +165,22 @@ mod Ur do
       let diagnosis_lot = if diagnosis_row >= 0 do
         Ur.Diagnosis.target(Ur.Diagnosis.report(p.city, p.stats, p.parcel_focus), diagnosis_row)
       else -1 end
-      let sidebar_tab = if weather_clicked do 13 else if diagnosis_clicked do (if p.sidebar_tab == 7 do 12 else 7 end)
+      let religion_tab = if click && p.sidebar_visible && !over_toolbar do
+        Ur.Hud.religion_tab_at(p.city, mx, my, w, h, p.sidebar_tab, p.parcel_focus)
+      else -1 end
+      let popup_temple = popup_action == 10
+      let sidebar_tab = if popup_temple do 15 else if religion_tab >= 0 do religion_tab
+        else if weather_clicked do 13 else if diagnosis_clicked do (if p.sidebar_tab == 7 do 12 else 7 end)
         else if population_clicked do (if p.sidebar_tab == 11 do 0 else 11 end)
         else if market_clicked do 9
         else if education_clicked do (if p.sidebar_tab == 2 do 10 else 2 end)
-        else if clicked_sidebar_tab >= 0 do clicked_sidebar_tab else p.sidebar_tab end end end end end end
+        else if clicked_sidebar_tab >= 0 do clicked_sidebar_tab else p.sidebar_tab end end end end end end end end
+      let religion_site = if popup_temple do p.popup else if religion_tab == 15 do p.parcel_focus else p.religion_site end end
+      let (religion_action, religion_value) = if click && p.sidebar_visible && !over_toolbar && sidebar_tab == p.sidebar_tab do
+        Ur.Hud.religion_at(p.city, p.stats, mx, my, w, h, sidebar_tab, religion_site, p.religion_choice)
+      else (:none, 0) end
+      let religion_choice = if popup_temple || sidebar_tab != p.sidebar_tab do 0
+        else if religion_action == :offering_choice || religion_action == :signer_page do religion_value else p.religion_choice end end
       let activity_lot = if click && !over_toolbar && p.sidebar_visible && sidebar_tab == 7 do Ur.Hud.activity_at(mx, my, w, h, p.activity) else -1 end
       let cx = if S.valid(activity_lot) do int_to_float(activity_lot % S.width() * 8 + 4) else cx end
       let cz = if S.valid(activity_lot) do int_to_float(activity_lot / S.width() * 8 + 4) else cz end
@@ -186,8 +197,19 @@ mod Ur do
         else if key_group > 0 do key_group else p.group end end
       let page = if clicked_group > 0 || key_group > 0 do 0 else if clicked_page >= 0 do clicked_page else p.page end end
       let clicked_tool = if key_tool > 0 do key_tool else if p.group != 7 && option > 0 do option else 0 end end
+      let shrine_setup = clicked_tool == 103 && S.chosen_patron(p.city) == 0 && S.valid(p.city.harbour)
+      let place_shrine = religion_action == :place_shrine
+      let place_worship = clicked_tool >= 103 && clicked_tool <= 107 && !shrine_setup &&
+        (sidebar_tab == 14 || sidebar_tab == 15 || sidebar_tab == 16)
+      let sidebar_tab = if shrine_setup do 14 else sidebar_tab end
+      let sidebar_visible = if popup_temple || shrine_setup do true else if place_shrine || place_worship do false else sidebar_visible end end
+      let opening_religion = popup_temple || shrine_setup || religion_tab >= 14 ||
+        (sidebar_visible && !p.sidebar_visible && sidebar_tab >= 14 && sidebar_tab <= 16)
+      let group = if place_shrine do 5 else if opening_religion do 0 else group end end
+      let page = if place_shrine do 5 else if opening_religion do 0 else page end end
       let tool = if Vk.mouse_button(1) || (p.group == 7 && option >= 0) do 0 else if clicked_tool > 0 do clicked_tool
         else if (clicked_group > 0 && group > 0) || clicked_page >= 0 do 0 else p.tool end end end
+      let tool = if place_shrine do 103 else if sidebar_visible && sidebar_tab >= 14 && sidebar_tab <= 16 do 0 else tool end end
       let clicked_layer = if p.group == 7 do option else -1 end
       let layer = if clicked_layer < 0 do p.layer else if clicked_layer == p.layer do 0 else clicked_layer end end
       let changed_tool = clicked_tool > 0
@@ -218,6 +240,23 @@ mod Ur do
       let c = if Ur.Council.policy_block(c, p.city) do
         { c with tax: p.city.tax, message: Ur.Council.member(c, Ur.Council.sponsor(c)) ++ " blocked the tax increase. See Details / Council." }
       else c end
+      let before_religion = c
+      let c = match religion_action do
+        :patron -> S.dedicate(c, religion_value)
+        :festival_policy -> S.set_festival_policy(c, religion_value)
+        :offering_policy -> S.set_offering_policy(c, religion_value)
+        :offer -> S.make_offering(c, p.stats, religion_site, religion_value)
+        :rededicate -> Ur.Council.respond_rededication(c, religion_value == 1)
+        _ -> c
+      end
+      let rededication_answered = religion_action == :rededicate && Ur.Council.rededication_target(before_religion) > Ur.Council.rededication_target(c)
+      let ritual_committed = (religion_action == :offer && c.cash < before_religion.cash) || rededication_answered
+      let c = if ritual_committed do Ur.Council.observe_religion(c) else c end
+      let sidebar_tab = if rededication_answered do 8 else sidebar_tab end
+      let policy_changed = policy_changed || ritual_committed ||
+        S.chosen_patron(before_religion) != S.chosen_patron(c) ||
+        S.festival_policy(before_religion) != S.festival_policy(c) ||
+        S.offering_policy(before_religion) != S.offering_policy(c)
       let response = if click && !over_toolbar do Ur.Hud.council_at(c, mx, my, w, h, sidebar_tab, p.sidebar_visible) else 0 end
       let council_lot = if response == 3 do Ur.Council.target(c) else -1 end
       let c = if response == 1 || response == 2 do Ur.Council.respond(c, response == 1) else c end
@@ -234,8 +273,12 @@ mod Ur do
       let tool = if S.valid(council_lot) || S.valid(diagnosis_lot) || (sidebar_visible && sidebar_tab == 12) do 0 else tool end
       let point = Ur.Scene.tile_anchor(c, p.popup, w, h, cx, cz, zoom, yaw)
       let over_popup = tool == 0 && Ur.Hud.over_tile_popup(w, h, point, mx, my)
-      let over_ui = over_popup || truck_popup_over || over_toolbar || Toolbar.over(mx, my, w, h, group, page) || Ur.Hud.over_panel(mx, my, w, h, p.sidebar_visible) || Ur.Hud.over_starter(p.stats.startup_step, sidebar_visible, mx, my)
+      let over_ui = popup_temple || over_popup || truck_popup_over || over_toolbar || Toolbar.over(mx, my, w, h, group, page) || Ur.Hud.over_panel(mx, my, w, h, p.sidebar_visible) || Ur.Hud.over_starter(p.stats.startup_step, sidebar_visible, mx, my)
       let hovered = if over_ui do -1 else Ur.Scene.pick(c, mx, my, w, h, cx, cz, zoom, yaw) end
+      let temple_selected = click && !over_ui && sidebar_visible && (sidebar_tab == 14 || sidebar_tab == 15) && S.temple_tier(c, hovered) > 0
+      let sidebar_tab = if temple_selected do 15 else sidebar_tab end
+      let religion_site = if temple_selected do hovered else religion_site end
+      let religion_choice = if temple_selected || ritual_committed do 0 else religion_choice end
       let safety_open = sidebar_visible && sidebar_tab == 6
       let parcel_open = sidebar_visible && sidebar_tab == 1 && c.harbour >= 0
       let clicked_campus = S.campus_root(c, hovered)
@@ -263,14 +306,15 @@ mod Ur do
       let crime_focus = if safety_open && click && S.valid(hovered) && S.get(c.heights, hovered) > 0 do hovered
         else if safety_open && click && Ur.Hud.safety_reset(mx, my, w, h) do -1 else p.crime_focus end end
       let undo_pressed = pressed(keys, p.keys, 14) || (click && !over_toolbar && Ur.Hud.undo_at(mx, my, w))
+      let prior_undo = if ritual_committed do Nil else p.undo end
       let (c, undo, undone) = if undo_pressed do
-        match p.undo do
-          Nil -> (c, p.undo, false)
+        match prior_undo do
+          Nil -> (c, prior_undo, false)
           Cons(previous, rest) ->
             let message = if previous.month < c.month do "Build undone. Restored month " ++ int_to_string(previous.month) ++ "." else "Build undone." end
             ({ previous with message: message }, rest, true)
         end
-      else (c, p.undo, false) end
+      else (c, prior_undo, false) end
       let property_requested = parcel_open && click && !undone && Ur.Hud.property_at(mx, my, w, h) && S.property_action(c, parcel_focus) > 0
       let previous_property = S.get(c.property_status, parcel_focus)
       let next_property = if property_requested do S.transact_property(c, parcel_focus) else c end
@@ -278,7 +322,7 @@ mod Ur do
       let undo = if property_changed do Cons(stamp_clock(c, p.elapsed), List.take(undo, 15)) else undo end
       let operation_changed = popup_action == 2 && popup == p.popup && !undone && S.can_pause_facility(next_property, popup)
       let service_changed = (popup_action == 3 || popup_action == 4) && popup == p.popup && !undone && S.get(next_property.stops, popup) == 2
-      let freight_changed = popup_action >= 5 && popup == p.popup && !undone
+      let freight_changed = popup_action >= 5 && popup_action <= 9 && popup == p.popup && !undone
       let undo = if operation_changed || service_changed || freight_changed do Cons(stamp_clock(next_property, p.elapsed), List.take(undo, 15)) else undo end
       let c = if operation_changed do S.toggle_facility(next_property, popup)
         else if service_changed do
@@ -301,6 +345,7 @@ mod Ur do
       let paint = release && preview.valid && preview.changed
       let undo = if paint do Cons(stamp_clock(c, p.elapsed), List.take(undo, 15)) else undo end
       let c = if paint do Ur.Council.settle(Ur.Council.invest(c, preview.city, tool, preview.tiles)) else if release && !preview.valid do { c with message: preview.reason } else c end end
+      let undo = if paint && S.patron(p.city) == 0 && S.patron(c) > 0 do Nil else undo end
       let anchor = if mouse do active else -1 end
       let just_landed = p.city.harbour < 0 && c.harbour >= 0
       let unlanded = undone && p.city.harbour >= 0 && c.harbour < 0
@@ -327,6 +372,7 @@ mod Ur do
         let runs = List.filter(c.waste_runs, fn run -> List.any(p.sanitation.completed, fn site -> site == run.pickup))
         S.advance_day_with_traffic({ c with waste_runs: runs }, p.stats.traffic)
       else c end
+      let next = if midnight do Ur.Council.observe_religion(next) else next end
       let due = next.month != c.month
       let next = if midnight && !due do S.drift_pollution(next, p.stats.traffic) else next end
       let day_changed = next.street_day != c.street_day && (next.street_day >= 5 || c.street_day >= 5)
@@ -339,14 +385,16 @@ mod Ur do
       let paused = paused || campaign_opened || council_voted
       let sidebar_tab = if campaign_opened || council_voted do 8 else sidebar_tab end
       let sidebar_visible = sidebar_visible || campaign_opened || council_voted
+      let religion_event = S.last_festival(c) != S.last_festival(p.city) || S.favor_god(c) != S.favor_god(p.city) ||
+        S.curse_god(c) != S.curse_god(p.city) || S.curse_stamp(c) != S.curse_stamp(p.city) || S.patron(c) != S.patron(p.city)
       let activity = if undone do Nil
-        else if due || paint || policy_changed || day_changed do Ur.Activity.record(p.city, c, p.activity)
+        else if due || paint || policy_changed || day_changed || religion_event do Ur.Activity.record(p.city, c, p.activity)
         else p.activity end end
       let tick_ms = if due do (Vk.time() -. start) *. 1000.0 else p.tick_ms end
       let hint_appeared = st.startup_step > 0 && st.startup_step != p.stats.startup_step
       let paused = paused || hint_appeared
       let sidebar_visible = sidebar_visible && (!hint_appeared || campaign_opened || council_voted)
-      let scene_changed = paint || undone || due || policy_changed || day_changed || building_day
+      let scene_changed = paint || undone || due || policy_changed || day_changed || building_day || religion_event
       let old_hour = S.street_hour(p.elapsed)
       let hour = S.street_hour(elapsed)
       let signal_before = S.signal_tick(p.traffic_time)
@@ -376,7 +424,7 @@ mod Ur do
       let old_fleet = if undone do Nil else p.fleet end
       let fleet = Ur.Fleet.step_at(c, st.traffic, old_fleet, wanted, elapsed, game_dt, fleet_changed || p.frame == 0, st.junctions, signal_after)
       Ur.Scene.fleet(c, fleet, p.fleet)
-      let citizens = if undone do Ur.Citizens.refresh_with(c, Nil, st.routes, st.people, st.job_matches) else if operation_changed || ((paint || due || policy_changed || day_changed || building_day) && (st.people != p.stats.people || S.assignments_changed(p.stats.job_matches, st.job_matches) || Ur.Citizens.education_changed(c, p.city) || Ur.Citizens.changed(c, p.city, 0))) do Ur.Citizens.refresh_with(c, p.citizens, st.routes, st.people, st.job_matches) else p.citizens end end
+      let citizens = if undone do Ur.Citizens.refresh_with(c, Nil, st.routes, st.people, st.job_matches) else if operation_changed || ((paint || due || policy_changed || day_changed || building_day || religion_event) && (st.people != p.stats.people || S.assignments_changed(p.stats.job_matches, st.job_matches) || Ur.Citizens.education_changed(c, p.city) || Ur.Citizens.changed(c, p.city, 0))) do Ur.Citizens.refresh_with(c, p.citizens, st.routes, st.people, st.job_matches) else p.citizens end end
       let citizens = if steps == 0 do citizens else
         let advanced = move_citizens(S.operating_city(c, st.buses), st.running_transit, { routes: wanted, active: fleet }, citizens, calendar_time, dt, dt *. clock_rate, steps, st.junctions, motion_time)
         Ur.Scene.yield_to_vehicles(c, citizens, advanced, 0)
@@ -390,7 +438,7 @@ mod Ur do
       Ur.Scene.citizen_vehicles(c, citizens, p.citizens, night, 0)
       let truck_selected = truck_selected && sanitation.driver >= 0 && sanitation.pickup == p.sanitation.pickup && !undone
       let citizen_stats = Ur.Citizens.tally(c, citizens)
-      if layer != p.layer || (midnight && (layer == 29 || layer == 30 || layer == 26 || layer == 4 || layer == 3 || layer == 9 || layer == 32 || layer == 33 || Ur.Layers.is_utility(layer))) || (layer > 0 && (paint || undone || policy_changed || day_changed || (due && (layer == 3 || layer == 4 || layer == 9 || Ur.Layers.is_utility(layer) || layer >= 12)))) do Ur.Scene.map_layer(c, st, layer) else () end
+      if layer != p.layer || (layer > 0 && religion_event) || (midnight && (layer == 29 || layer == 30 || layer == 26 || layer == 4 || layer == 3 || layer == 9 || layer == 32 || layer == 33 || layer == 34 || Ur.Layers.is_utility(layer))) || (layer > 0 && (paint || undone || policy_changed || day_changed || (due && (layer == 3 || layer == 4 || layer == 9 || Ur.Layers.is_utility(layer) || layer >= 12)))) do Ur.Scene.map_layer(c, st, layer) else () end
       Ur.Scene.camera(cx, cz, zoom, if h > 0.0 do w /. h else 1.6 end, yaw)
       let weather = S.current_weather(c)
       let weather_time = int_to_float(c.month * S.days_per_month() + c.calendar_day) *. S.day_seconds() +. elapsed
@@ -400,7 +448,7 @@ mod Ur do
       let drift = dt *. int_to_float(wind.speed) /. 3.6
       let cloud_offset = (cloud_x +. Math.cos(wind.heading) *. drift, cloud_z +. Math.sin(wind.heading) *. drift)
       Ur.Scene.clouds(weather, cloud_offset, 0)
-      let hud = Ur.Hud.draw(c, st, tool, group, page, layer, hovered, inspect, mx, my, reason, sidebar_visible, sidebar_tab, finance_view, crime_focus, council_focus, paused, speed, S.street_hour(elapsed), weather, weather_time, citizen_stats, Build.caption(preview), !List.is_empty(undo), activity)
+      let hud = Ur.Hud.draw(c, st, tool, group, page, layer, hovered, inspect, mx, my, reason, sidebar_visible, sidebar_tab, finance_view, crime_focus, council_focus, religion_site, religion_choice, paused, speed, S.street_hour(elapsed), weather, weather_time, citizen_stats, Build.caption(preview), !List.is_empty(undo), activity)
       let point = Ur.Scene.tile_anchor(c, popup, w, h, cx, cz, zoom, yaw)
       let hud = if truck_selected do
         let view = { w: w, h: h, cx: cx, cz: cz, zoom: zoom, yaw: yaw }
@@ -416,7 +464,7 @@ mod Ur do
       if pressed(keys, p.keys, 13) || (p.limit > 0 && p.frame == p.limit - 1) do Vk.request_shot() else () end
       let drawn = p.drawn + (if Vk.frame() do 1 else 0 end)
       run_frames({ sanitation: sanitation, truck_selected: truck_selected, activity: activity, fleet: fleet, fleet_routes: wanted, city: c, stats: st, food: food, citizens: citizens, traffic_time: traffic_time, rotor_phases: rotor_phases, cloud_offset: cloud_offset, cx: cx, cz: cz, zoom: zoom, yaw: yaw, tool: tool, group: group, page: page, layer: layer, sidebar_visible: sidebar_visible && !S.valid(activity_lot) && !S.valid(council_lot) && !S.valid(diagnosis_lot), sidebar_tab: sidebar_tab, crime_focus: crime_focus, council_focus: council_focus, finance_view: finance_view, paused: paused, speed: speed,
-        sidewalk_spot: spot, keys: keys, mouse: mouse, anchor: anchor, stroke: if mouse do stroke else Nil end, hovered: hovered, parcel_focus: parcel_focus, popup: popup, reason: reason, preview: preview, undo: undo,
+        sidewalk_spot: spot, keys: keys, mouse: mouse, anchor: anchor, stroke: if mouse do stroke else Nil end, hovered: hovered, parcel_focus: parcel_focus, popup: popup, religion_site: religion_site, religion_choice: religion_choice, reason: reason, preview: preview, undo: undo,
         time: time, elapsed: elapsed, frame: p.frame + 1, drawn: drawn, limit: p.limit, trace_input: p.trace_input, tick_ms: tick_ms, menu_open: false, boot: false, notice: "", confirm: :nothing, save_path: p.save_path, saved: p.saved, quit: false })
     end end end
   end
@@ -565,7 +613,8 @@ mod Ur do
         else if demo == 20 do Ur.Scenario.advance_freight_days(Ur.Scenario.freight_demo(), 7)
         else if demo == 21 do Ur.Scenario.council_outcome_demo()
         else if demo == 22 do S.advance_day(Ur.Scenario.storm_site())
-        else if demo > 0 do S.advance(Ur.Scenario.civic_region(Ur.Scenario.connected_region()), 480) else Ur.Sim.unclaimed() end end end end end end end end end end end end end end end end end end end end end end
+        else if demo == 27 do Ur.Scenario.religious_city()
+        else if demo > 0 do S.advance(Ur.Scenario.civic_region(Ur.Scenario.connected_region()), 480) else Ur.Sim.unclaimed() end end end end end end end end end end end end end end end end end end end end end end end
       let demo_hour = Authority.must(Env.get_int("UR_CLOCK_HOUR", -1))
       let c = if demo > 0 && demo_hour >= 0 && demo_hour < 24 do
         { c with clock_ms: float_to_int(int_to_float(demo_hour) *. S.day_seconds() *. 1000.0 /. 24.0) }
@@ -579,7 +628,7 @@ mod Ur do
         { before: stats.junctions, after: stats.junctions, before_tick: signal_tick, after_tick: signal_tick }, stats.utilities.electric, stats.utilities.electric)
       let region = Authority.must(Env.get_int("UR_REGION_VIEW", 0)) > 0
       let channel = Authority.must(Env.get_int("UR_CHANNEL_VIEW", 0)) > 0
-      let layer = S.clamp(Authority.must(Env.get_int("UR_LAYER", if demo == 14 do 4 else if demo == 13 || demo == 21 do 28 else if demo == 19 do 2 else if c.harbour < 0 do 8 else 0 end end end end)), 0, 33)
+      let layer = S.clamp(Authority.must(Env.get_int("UR_LAYER", if demo == 14 do 4 else if demo == 13 || demo == 21 do 28 else if demo == 19 do 2 else if c.harbour < 0 do 8 else 0 end end end end)), 0, 34)
       if layer > 0 do Ur.Scene.map_layer(c, stats, layer) else () end
       let civic_demo = demo == 5
       let streets_demo = demo >= 6 && demo <= 10
@@ -587,7 +636,8 @@ mod Ur do
       let saved = Ur.Save.exists(save_path)
       let boot = demo == 0 && landing_x < 0 && landing_z < 0
       let finance_lines = Authority.must(Env.get_int("UR_FINANCE_LINES", 0)) > 0
-      let details_tab = S.clamp(Authority.must(Env.get_int("UR_DETAILS_TAB", if demo == 13 || demo == 21 do 8 else if demo == 17 do 12 else 0 end end)), 0, 13)
+      let initial_tab = if demo == 27 do 14 else if demo == 13 || demo == 21 do 8 else if demo == 17 do 12 else 0 end end end
+      let details_tab = S.clamp(Authority.must(Env.get_int("UR_DETAILS_TAB", initial_tab)), 0, 16)
       let (cx, cz, zoom) = match demo do
         0 -> (234.0, 176.0, 345.0)
         3 -> (72.0, 173.0, 42.0)
@@ -599,7 +649,7 @@ mod Ur do
         9 -> (249.0, 178.0, 52.0)
         10 -> (249.0, 178.0, 37.0)
         11 -> (107.0, 150.0, 71.0)
-        12 | 13 | 21 | 22 -> (78.0, 151.0, 52.0)
+        12 | 13 | 21 | 22 | 27 -> (78.0, 151.0, 52.0)
         14 -> (102.0, 174.0, 72.0)
         15 | 17 -> (105.0, 154.0, 62.0)
         16 -> (76.0, 155.0, 35.0)
@@ -615,8 +665,9 @@ mod Ur do
           { person with location: person.work, target: person.work, activity: 1 }
         else person end)
       else citizens end
-      run_frames({ sanitation: Ur.Scene.empty_sanitation(), truck_selected: false, activity: Nil, fleet: Ur.Fleet.step(c, stats.traffic, Nil, fleet_routes, 0.0, true), fleet_routes: fleet_routes, city: c, stats: stats, food: Ur.Food.producer_traffic(c, stats), citizens: citizens, traffic_time: clock_phase(c), rotor_phases: NativeArray.make_f32(S.count(), 0.0), cloud_offset: (0.0, 0.0), cx: cx, cz: cz, zoom: zoom, yaw: 0.55, tool: if layer > 0 || civic_demo || demo == 2 || demo == 15 || demo == 16 || demo == 17 || demo == 18 || demo == 20 || demo == 22 do 0 else 1 end, group: if layer > 0 && demo != 14 do 7 else if civic_demo || demo == 8 do 5 else if demo == 2 do 3 else if demo == 14 || demo == 15 do 0 else 1 end end end end, page: if layer == 4 || layer == 29 || layer == 30 || layer == 32 || layer == 33 do 2 else if layer >= 5 && layer <= 8 do 1 else if layer == 23 || layer == 24 || layer == 27 || layer == 28 do 6 else if layer >= 23 && layer != 31 do 5 else if layer >= 20 && layer != 31 do 4 else if layer >= 12 && layer != 31 do 3 else if demo == 7 && layer == 0 do 1 else if demo == 8 && layer == 0 do 2 else 0 end end end end end end end end, layer: layer, sidebar_visible: (demo > 0 && !streets_demo && demo != 11 && demo != 14 && demo != 15 && demo != 16 && demo != 18 && demo != 19 && demo != 20 && demo != 22) || details_tab >= 5, sidebar_tab: details_tab, crime_focus: -1, council_focus: -1, finance_view: { month: 0, lines: finance_lines }, paused: demo == 0 || demo == 13 || demo == 18 || demo == 19 || demo == 20 || demo == 21 || demo == 22, speed: 1,
-        sidewalk_spot: -1, keys: 0, mouse: false, anchor: -1, stroke: Nil, hovered: -1, parcel_focus: if demo == 17 do S.index(10, 17) else if details_tab == 12 do S.index(9, 19) else -1 end end, popup: if demo == 22 do Ur.Scenario.storm_station() else -1 end, preview: Build.preview(c, 0, -1, -1), undo: Nil, reason: if c.harbour < 0 do "Choose a cyan shoreline parcel to land." else "Select a parcel to inspect development" end,
+      let religion_site = if demo == 27 do S.index(8, 18) else -1 end
+      run_frames({ sanitation: Ur.Scene.empty_sanitation(), truck_selected: false, activity: Nil, fleet: Ur.Fleet.step(c, stats.traffic, Nil, fleet_routes, 0.0, true), fleet_routes: fleet_routes, city: c, stats: stats, food: Ur.Food.producer_traffic(c, stats), citizens: citizens, traffic_time: clock_phase(c), rotor_phases: NativeArray.make_f32(S.count(), 0.0), cloud_offset: (0.0, 0.0), cx: cx, cz: cz, zoom: zoom, yaw: 0.55, tool: if layer > 0 || civic_demo || demo == 2 || demo == 15 || demo == 16 || demo == 17 || demo == 18 || demo == 20 || demo == 22 || demo == 27 do 0 else 1 end, group: if layer > 0 && demo != 14 do 7 else if civic_demo || demo == 8 do 5 else if demo == 2 do 3 else if demo == 14 || demo == 15 do 0 else 1 end end end end, page: if layer == 4 || layer == 29 || layer == 30 || layer == 32 || layer == 33 do 2 else if layer >= 5 && layer <= 8 do 1 else if layer == 23 || layer == 24 || layer == 27 || layer == 28 do 6 else if layer >= 23 && layer != 31 do 5 else if layer >= 20 && layer != 31 do 4 else if layer >= 12 && layer != 31 do 3 else if demo == 7 && layer == 0 do 1 else if demo == 8 && layer == 0 do 2 else 0 end end end end end end end end, layer: layer, sidebar_visible: (demo > 0 && !streets_demo && demo != 11 && demo != 14 && demo != 15 && demo != 16 && demo != 18 && demo != 19 && demo != 20 && demo != 22) || details_tab >= 5, sidebar_tab: details_tab, crime_focus: -1, council_focus: -1, finance_view: { month: 0, lines: finance_lines }, paused: demo == 0 || demo == 13 || demo == 18 || demo == 19 || demo == 20 || demo == 21 || demo == 22 || demo == 27, speed: 1,
+        sidewalk_spot: -1, keys: 0, mouse: false, anchor: -1, stroke: Nil, hovered: -1, parcel_focus: if demo == 17 do S.index(10, 17) else if details_tab == 12 do S.index(9, 19) else -1 end end, popup: if demo == 22 do Ur.Scenario.storm_station() else -1 end, religion_site: religion_site, religion_choice: 0, preview: Build.preview(c, 0, -1, -1), undo: Nil, reason: if c.harbour < 0 do "Choose a cyan shoreline parcel to land." else "Select a parcel to inspect development" end,
         time: Vk.time(), elapsed: clock_phase(c), frame: 0, drawn: 0, limit: Authority.must(Env.get_int("UR_FRAMES", 0)), trace_input: Authority.must(Env.get_int("UR_INPUT_LOG", 0)) > 0, tick_ms: 0.0, menu_open: boot, boot: boot, notice: if saved do "" else "No saved city yet." end, confirm: :nothing, save_path: save_path, saved: saved, quit: false })
     else Ur.AppError.stop("Could not open Strata renderer; check Vulkan and GLFW installation") end end end end end end
   end

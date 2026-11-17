@@ -4,6 +4,7 @@ mod Ur.Hud do
   alias Strata.Ui as U
   alias Strata.Text as T
   alias Ur.Sim as S
+  alias Ur.ReligionUi as Religion
   pfn label(u : Strata.Ui.Ui, x : Float, y : Float, size : Float, text : String, bright : Bool) : Strata.Ui.Ui do
     T.text(u, 0, x, y, T.default_font(), size, if bright do (0.93, 0.95, 0.90, 1.0) else (0.58, 0.69, 0.70, 1.0) end, text)
   end
@@ -116,7 +117,8 @@ mod Ur.Hud do
         8 -> if pending do "Council •" else "Council" end
         _ -> "Market"
       end
-      let selected = i == active || (i == 2 && active == 10) || (i == 0 && (active == 11 || active == 13))
+      let selected = i == active || (i == 2 && (active == 10 || active == 14)) ||
+        (i == 0 && (active == 11 || active == 13)) || (i == 8 && active == 16)
       let a = U.rect(a, 0, x, y, width -. 3.0, 35.0,
         if selected do (0.18, 0.36, 0.39, 1.0) else (0.09, 0.17, 0.20, 1.0) end)
       let (text_width, _, _) = T.measure(T.default_font(), 13.0, name, 0.0)
@@ -272,6 +274,28 @@ mod Ur.Hud do
     let left = menu_x(w) +. menu_width(w) -. 145.0
     let top = menu_y(h) +. 51.0
     mx >= left && mx < left +. 128.0 && my >= top && my < top +. 27.0
+  end
+  fn religion_tab_at(c : Ur.Sim.City, mx : Float, my : Float, w : Float, h : Float, tab : Int, parcel : Int) : Int do
+    let x = mx -. menu_x(w)
+    let y = my -. menu_y(h)
+    let width = menu_width(w)
+    if tab == 1 && S.temple_tier(c, parcel) > 0 && x >= 18.0 && x < 156.0 && y >= 190.0 && y < 217.0 do 15
+    else if y < 51.0 || y >= 78.0 do -1
+    else if x >= width -. 145.0 && x < width -. 17.0 do
+      match tab do
+        8 -> 14
+        14 -> 2
+        15 -> 14
+        16 -> 8
+        _ -> -1
+      end
+    else if x >= width -. 279.0 && x < width -. 151.0 do
+      if tab == 2 || (tab == 3 && S.valid(c.harbour)) do 14
+      else if tab == 8 && Ur.Council.rededication_target(c) > 0 do 16 else -1 end end
+    else -1 end end end end
+  end
+  fn religion_at(c : Ur.Sim.City, st : Ur.Sim.Stats, mx : Float, my : Float, w : Float, h : Float, tab : Int, site : Int, choice : Int) : (Atom, Int) do
+    Religion.action(c, st, mx -. menu_x(w) -. 18.0, my -. menu_y(h), menu_width(w) -. 36.0, tab, site, choice)
   end
   fn tuition_at(mx : Float, my : Float, w : Float, h : Float) : (Int, Int) do
     let x = mx -. menu_x(w) -. menu_width(w) +. 96.0
@@ -646,7 +670,8 @@ mod Ur.Hud do
         let a = U.rect(a, 0, x, y, width -. 36.0, 33.0, (0.09, 0.17, 0.20, 1.0))
         let a = label(a, x +. 8.0, y +. 8.0, 11.0, "M" ++ int_to_string(event.month), false)
         let location = int_to_string(event.lot % S.width() / 6 + 1) ++ "/" ++ int_to_string(event.lot / S.width() / 6 + 1)
-        let a = label(a, x +. 53.0, y +. 8.0, 12.0, event.title, true)
+        let wrap_width = width -. (if width < 540.0 do 96.0 else 219.0 end)
+        let a = T.styled(a, 0, x +. 53.0, y +. 6.0, T.default_font(), 12.0, (0.93, 0.95, 0.90, 1.0), T.with_wrap(T.style(), wrap_width), event.title)
         let a = if width < 540.0 do a else label(a, x +. width -. 155.0, y +. 8.0, 11.0, if S.valid(event.lot) do "Neighborhood " ++ location else "Citywide" end, false) end
         activity_rows(a, rest, x, y +. 38.0, width)
     end
@@ -667,7 +692,7 @@ mod Ur.Hud do
     if !visible || tab != 8 do 0
     else if y >= 155.0 && y < 183.0 do
       let k = Ur.Council.kind(c)
-      let request = k == 1 || k == 5
+      let request = k == 1 || k == 5 || k == 9 || k == 10
       if request && x >= 18.0 && x < 112.0 do 1
       else if (request && x >= 120.0 && x < 214.0) || (k == 6 && x >= 18.0 && x < 112.0) do 2
       else if k > 0 && S.valid(Ur.Council.target(c)) && x >= 245.0 && x < 426.0 do 3
@@ -693,7 +718,7 @@ mod Ur.Hud do
       let a = if k > 0 do
         let a = label(a, x, y +. 109.0, 11.0, Ur.Council.member(c, Ur.Council.sponsor(c)) ++ "   ·   Expires month " ++ int_to_string(Ur.Council.expires(c)), false)
         let a = label(a, x, y +. 131.0, 11.0, Ur.Council.terms(c), false)
-        if k == 1 || k == 5 do
+        if k == 1 || k == 5 || k == 9 || k == 10 do
           finance_button(finance_button(a, x, y +. 155.0, 94.0, "Grant", true), x +. 102.0, y +. 155.0, 94.0, "Decline", false)
         else if k == 6 do finance_button(a, x, y +. 155.0, 94.0, "Decline", false)
         else if issue == 0 && (k == 3 || k == 4) do
@@ -710,7 +735,7 @@ mod Ur.Hud do
         let evidence = Ur.Council.issue_name(issue) ++ " · " ++ int_to_string(Ur.Council.baseline(c)) ++ "% at filing · " ++ observed
         let a = label(a, x, y +. 185.0, 11.0, evidence, true)
         let goal = "Target: " ++ int_to_string(Ur.Council.outcome_goal(c)) ++ "% or fewer for two months · " ++ int_to_string(Ur.Council.verified_months(c)) ++ "/2 verified"
-        label(a, x, y +. 201.0, 10.0, goal, false)
+        if k == 9 || k == 10 do a else label(a, x, y +. 201.0, 10.0, goal, false) end
       else a end
       let ward = Ur.Council.focus(c, selected)
       let campaign = Ur.Council.campaign(c)
@@ -718,8 +743,15 @@ mod Ur.Hud do
       let a = label(a, x +. 192.0, y +. 235.0, 12.0, title ++ int_to_string(Ur.Council.election_month(c)), true)
       let a = finance_button(finance_button(a, x, y +. 227.0, 86.0, "Prev. ward", false), x +. 92.0, y +. 227.0, 86.0, "Next ward", false)
       let a = label(a, x, y +. 261.0, 12.0, Ur.Council.member(c, ward), true)
+      let bonus = Ur.Council.patron_bonus(c, ward)
+      let penalty = Ur.Council.refusal_penalty(c, ward)
+      let modifier = (if bonus > 0 do " · Patron +" ++ int_to_string(bonus) else "" end) ++
+        (if penalty > 0 do " · Refusal −" ++ int_to_string(penalty) else "" end)
+      let a = label(a, x +. 249.0, y +. 261.0, 11.0, "Favors " ++ S.god_name(Ur.Council.favorite(c, ward)) ++ " · Relation " ++
+        int_to_string(Ur.Council.relationship(c, ward)) ++ modifier, true)
       let a = if campaign do
-        let a = label(a, x, y +. 283.0, 11.0, "Challenger: " ++ Ur.Council.challenger(c, ward), false)
+        let a = label(a, x, y +. 283.0, 11.0, "Challenger · " ++ Ur.Council.challenger(c, ward) ++
+          " · Favors " ++ S.god_name(Ur.Council.challenger_favorite(c, ward)), false)
         let side = Ur.Council.endorsement(c, ward)
         let a = finance_button(a, x, y +. 310.0, 129.0, "Endorse incumbent", side == 1)
         let a = finance_button(a, x +. 135.0, y +. 310.0, 143.0, "Endorse challenger", side == 2)
@@ -736,8 +768,9 @@ mod Ur.Hud do
       else if priority == 0 do "No pressing issue across " ++ int_to_string(report.homes) ++ " occupied homes."
       else Ur.Council.issue_name(priority) ++ " · " ++ int_to_string(Ur.Council.share(report, priority)) ++ "% of " ++ int_to_string(report.homes) ++ " occupied homes" end end
       let a = label(a, x, y +. 347.0, 11.0, conditions, true)
+      let hold = Ur.Council.offering_hold_status(c)
       let help = if campaign do "Endorsements can change until election day." else "Endorsements open four months before each election." end
-      label(a, x, y +. 367.0, 11.0, help, false)
+      label(a, x, y +. 367.0, 11.0, if Ur.Council.offering_hold(c) do hold else help end, Ur.Council.offering_hold(c))
     end
   end
   fn demand_at(x : Float, y : Float) : Bool do x >= 123.0 && x < 220.0 && y >= 12.0 && y < 74.0 end
@@ -838,11 +871,11 @@ mod Ur.Hud do
     end
   end
   pfn faculty_rows(a : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, x : Float, y : Float, rank : Int) : Strata.Ui.Ui do
-    if rank == 8 do a else
+    if rank == 9 do a else
       let row = S.specialization_name(rank) ++ "  ·  " ++ int_to_string(S.specialist_enrolled(c, rank)) ++ " enrolled  ·  " ++
         int_to_string(S.specialist_graduates(c, rank)) ++ " grads  ·  " ++ int_to_string(S.get(st.skill_jobs, rank)) ++ " jobs"
-      let a = label(a, x, y +. int_to_float((rank - 4) % 2) *. 22.0, 11.0, row, false)
-      faculty_rows(a, c, st, if rank == 5 do x +. 285.0 else x end, y, rank + 1)
+      let a = label(a, x, y +. int_to_float((rank - 4) % 3) *. 15.0, 11.0, row, false)
+      faculty_rows(a, c, st, if rank == 6 do x +. 285.0 else x end, y, rank + 1)
     end
   end
   pfn education_panel(a : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, x : Float, y : Float, width : Float) : Strata.Ui.Ui do
@@ -973,7 +1006,7 @@ mod Ur.Hud do
     if today > 0 do weather_rows(a, c, other, y +. 151.0, column, today, 1, false)
     else label(a, other, y +. 151.0, 11.0, "History begins tomorrow.", false) end
   end
-  pfn sidebar(a : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, w : Float, h : Float, visible : Bool, tab : Int, view : FinanceView, crime_focus : Int, council_focus : Int, layer : Int, hover : Int, reason : String, mx : Float, my : Float, paused : Bool, activity : List(Ur.Activity.NeighborhoodEvent)) : Strata.Ui.Ui do
+  pfn sidebar(a : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, w : Float, h : Float, visible : Bool, tab : Int, view : FinanceView, crime_focus : Int, council_focus : Int, religion_site : Int, religion_choice : Int, layer : Int, hover : Int, reason : String, mx : Float, my : Float, paused : Bool, activity : List(Ur.Activity.NeighborhoodEvent)) : Strata.Ui.Ui do
     let x = menu_x(w)
     let y = menu_y(h)
     let width = menu_width(w)
@@ -981,18 +1014,26 @@ mod Ur.Hud do
     let a = label(a, w -. 124.0, 99.0, 12.0, if visible do "Hide details  –" else "Show details  +" end, true)
     if !visible do a else
       let a = U.rect(a, 0, x +. 4.0, y +. 5.0, width, 392.0, (0.018, 0.035, 0.04, 0.57))
-      let a = tabs(panel(a, x, y, width, 392.0), x +. 8.0, y +. 8.0, tab_width(w), if tab == 12 do 7 else tab end, Ur.Council.kind(c) > 0 || (Ur.Council.established(c) && Ur.Council.campaign(c)), 0)
+      let pending = Ur.Council.kind(c) > 0 || Ur.Council.rededication_target(c) > 0 || (Ur.Council.established(c) && Ur.Council.campaign(c))
+      let a = tabs(panel(a, x, y, width, 392.0), x +. 8.0, y +. 8.0, tab_width(w), if tab == 12 do 7 else tab end, pending, 0)
       let inset = x +. 18.0
       let top = y -. 130.0
+      let right_button = x +. width -. 145.0
+      let secondary_button = x +. width -. 279.0
       match tab do
-        1 -> parcel(a, c, st, inset, top, hover, reason)
-        2 -> finance_button(services(a, st, inset, top, width), x +. width -. 145.0, y +. 51.0, 128.0, "Education and skills", true)
+        1 ->
+          let a = parcel(a, c, st, inset, top, hover, reason)
+          if S.temple_tier(c, hover) > 0 do finance_button(a, inset, y +. 190.0, 138.0, "Temple details", true) else a end
+        2 ->
+          let a = finance_button(services(a, st, inset, top, width), right_button, y +. 51.0, 128.0, "Education and skills", true)
+          finance_button(a, secondary_button, y +. 51.0, 128.0, "Religion", true)
         11 -> finance_button(population_panel(a, c, st, inset, y, width), x +. width -. 145.0, y +. 51.0, 128.0, "Back to overview", false)
         10 -> finance_button(education_panel(a, c, st, inset, y, width), x +. width -. 145.0, y +. 51.0, 128.0, "Back to services", false)
         3 ->
           let a = label(a, inset, top +. 188.0, 17.0, "Regional policy", true)
           if c.harbour < 0 do prose(a, inset, top +. 228.0, 13.0, "Establish a harbour to change regional policy.") else
-            let a = finance_button(a, x +. width -. 145.0, y +. 51.0, 128.0, "Immigration", true)
+            let a = finance_button(a, right_button, y +. 51.0, 128.0, "Immigration", true)
+            let a = finance_button(a, secondary_button, y +. 51.0, 128.0, "Religion", true)
             let a = policy_rows(a, c, x, top, 0)
             let a = if w >= 620.0 do
               let a = label(a, x +. 292.0, top +. 188.0, 14.0, "Citywide street policies", true)
@@ -1002,9 +1043,14 @@ mod Ur.Hud do
             label(a, inset, top +. 401.0, 11.0, "Tariffs $" ++ int_to_string(st.budget.tariffs) ++ "   Tolls $" ++ int_to_string(st.budget.toll_income) ++ "   Trade $" ++ int_to_string(st.budget.trade_income), false)
           end
         9 -> market_panel(a, c, st, inset, y, width, mx, my)
-        8 -> council_panel(a, c, st, inset, y, council_focus)
+        8 ->
+          let a = finance_button(council_panel(a, c, st, inset, y, council_focus), right_button, y +. 51.0, 128.0, "Religion", false)
+          if Ur.Council.rededication_target(c) > 0 do finance_button(a, secondary_button, y +. 51.0, 128.0, "Rededication request", true) else a end
         13 -> weather_panel(a, c, inset, y, width)
         12 -> diagnosis_panel(a, c, st, hover, inset, y, width)
+        14 -> finance_button(Religion.city_panel(a, c, st, inset, y, width -. 36.0), right_button, y +. 51.0, 128.0, "Back to services", false)
+        15 -> finance_button(Religion.temple_panel(a, c, st, inset, y, width -. 36.0, religion_site, religion_choice), right_button, y +. 51.0, 128.0, "Public religion", false)
+        16 -> finance_button(Religion.rededication_panel(a, c, inset, y, width -. 36.0, religion_choice), right_button, y +. 51.0, 128.0, "Back to council", false)
         7 ->
           let a = finance_button(a, x +. width -. 145.0, y +. 51.0, 128.0, "Diagnose area", true)
           let a = label(a, inset, y +. 57.0, 17.0, "Neighborhood activity", true)
@@ -1081,7 +1127,9 @@ mod Ur.Hud do
       else if S.get(c.stops, lot) == 2 && mx >= x +. 12.0 && mx < x +. width -. 12.0 &&
               my >= y +. 154.0 && my < y +. 190.0 do
         if mx < x +. width *. 0.55 do 3 else 4 end
-      else 0 end end end end
+      else if S.temple_tier(c, lot) > 0 && mx >= x +. 12.0 && mx < x +. width -. 12.0 &&
+              my >= y +. 154.0 && my < y +. 190.0 do 10
+      else 0 end end end end end
     end
   end
   pfn nearby_drivers(c : Ur.Sim.City, lot : Int, people : List(Ur.Citizens.Citizen), count : Int) : Int do
@@ -1307,7 +1355,12 @@ mod Ur.Hud do
       let heat = S.local_temperature(c, lot)
       let temp = int_to_string(heat / 10) ++ "." ++ int_to_string(heat % 10) ++ " °C"
       let box = label(box, x, y +. 32.0, 10.5, "Parcel " ++ int_to_string(lot % S.width()) ++ ", " ++ int_to_string(lot / S.width()) ++ " · " ++ temp, false)
-      if S.undeveloped_zone(c, lot) do zone_reason(box, x, y +. 57.0, width, reason)
+      if S.temple_tier(c, lot) > 0 do
+        let box = label(box, x, y +. 57.0, 12.0, S.god_name(S.patron(c)) ++ " · " ++ Religion.temple_status(c, st, lot), true)
+        let box = label(box, x, y +. 81.0, 11.0, "Upkeep $" ++ int_to_string(S.parcel_facility_upkeep(c, lot)) ++ " / month", false)
+        let box = U.rect(box, 0, x, y +. 154.0, width -. 24.0, 36.0, (0.18, 0.36, 0.39, 1.0))
+        label(box, x +. 10.0, y +. 164.0, 12.0, if S.temple_tier(c, lot) >= 3 do "View offerings" else "Temple details" end, true)
+      else if S.undeveloped_zone(c, lot) do zone_reason(box, x, y +. 57.0, width, reason)
       else if S.freight_port(c, lot) || (S.get(c.ferries, lot) > 0 && Option.is_none(c.freight)) do freight_popup(box, c, x, y, width)
       else if S.get(c.stops, lot) == 2 do bus_popup(box, c, st.buses, lot, x, y, width)
       else if S.get(c.stops, lot) == 4 do
@@ -1398,9 +1451,9 @@ mod Ur.Hud do
           label(box, x, y +. 181.0, 10.0, "Trash " ++ int_to_string(stock) ++ state ++ " · " ++ pickup, false)
         else box end
       end
-    end end end end end end end end
+    end end end end end end end end end
   end
-  fn draw(c : Ur.Sim.City, st : Ur.Sim.Stats, chosen : Int, group : Int, page : Int, layer : Int, hover : Int, parcel_focus : Int, mx : Float, my : Float, reason : String, sidebar_visible : Bool, sidebar_tab : Int, finance_view : FinanceView, crime_focus : Int, council_focus : Int, paused : Bool, speed : Int, hour : Int, weather : Int, weather_time : Float, citizens : Ur.Citizens.CitizenCounts, preview : String, can_undo : Bool, activity : List(Ur.Activity.NeighborhoodEvent)) : Strata.Ui.Ui do
+  fn draw(c : Ur.Sim.City, st : Ur.Sim.Stats, chosen : Int, group : Int, page : Int, layer : Int, hover : Int, parcel_focus : Int, mx : Float, my : Float, reason : String, sidebar_visible : Bool, sidebar_tab : Int, finance_view : FinanceView, crime_focus : Int, council_focus : Int, religion_site : Int, religion_choice : Int, paused : Bool, speed : Int, hour : Int, weather : Int, weather_time : Float, citizens : Ur.Citizens.CitizenCounts, preview : String, can_undo : Bool, activity : List(Ur.Activity.NeighborhoodEvent)) : Strata.Ui.Ui do
     let u = Strata.Render.ui_begin(1.0)
     let w = U.width(u)
     let a = if weather >= 2 do rain_streaks(u, w, U.height(u), weather_time, weather, 0) else u end
@@ -1437,6 +1490,14 @@ mod Ur.Hud do
       let a = label(panel(a, 18.0, 116.0, 468.0, 49.0), 24.0, 120.0, 11.0, Ur.Layers.legend(layer), true)
       label(a, 24.0, 140.0, 12.0, S.wind_caption(c, hover), false)
     else a end
+    let a = if layer == 34 do
+      let a = label(panel(a, 18.0, 116.0, 464.0, 44.0), 24.0, 119.0, 11.0, Ur.Layers.legend(layer), true)
+      let detail = if S.temple_tier(c, hover) > 0 do S.facility_name(S.get(c.plants, hover)) ++ " · " ++ Religion.temple_status(c, st, hover)
+        else if S.occupied_homes(c, hover) > 0 do
+          if S.worship_access(c, st, hover) do "Worship within walking distance" else "No worship coverage" end
+        else "Point at a home or worship site." end end
+      label(a, 24.0, 138.0, 11.0, detail, false)
+    else a end
     let a = if layer == 33 do
       let a = label(panel(a, 18.0, 116.0, 442.0, 44.0), 24.0, 119.0, 11.0, Ur.Layers.legend(layer), true)
       let detail = if S.get(c.seawalls, hover) > 0 do "Seawall · $26/month"
@@ -1467,7 +1528,7 @@ mod Ur.Hud do
     let a = if st.startup_step > 0 && !sidebar_visible do
       starter_guide(a, st.startup_step, 18.0, 207.0, 402.0, paused)
     else a end
-    let a = sidebar(a, c, st, w, U.height(u), sidebar_visible, sidebar_tab, finance_view, crime_focus, council_focus, layer, parcel_focus, reason, mx, my, paused, activity)
+    let a = sidebar(a, c, st, w, U.height(u), sidebar_visible, sidebar_tab, finance_view, crime_focus, council_focus, religion_site, religion_choice, layer, parcel_focus, reason, mx, my, paused, activity)
     let a = panel(a, w -. 346.0, 91.0, 100.0, 32.0)
     let a = label(a, w -. 333.0, 99.0, 12.0, "Game menu", true)
     let a = panel(a, w -. 238.0, 91.0, 94.0, 32.0)

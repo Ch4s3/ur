@@ -808,7 +808,302 @@ mod UrTest do
       Err(error) -> Test.assert_true(false, error)
     end
   end
+  pfn temple_checks(c : Ur.Sim.City) : Unit do
+    let base = S.new()
+    let shrine = S.index(8, 16)
+    let grand = S.index(8, 19)
+    Test.assert_eq_str(S.tool_name(103), "Shrine", "a shrine is a civic tool")
+    Test.assert_true(S.construction_requirement(base, 103) != "", "a shrine needs a patron selection")
+    Test.assert_true(S.construction_requirement(base, 104) != "", "a temple needs the shrine technology")
+    Test.assert_true(S.cost(c, shrine, 106) > S.cost(c, shrine, 105), "grand temples require a larger investment")
+    Test.assert_eq_int(S.patron(c), 4, "the first shrine establishes Namar as patron: " ++ c.message)
+    Test.assert_eq_int(S.patron(S.dedicate(c, 1)), 4, "another dedication needs rededication")
+    Test.assert_eq_int(S.temple_tier(c, grand), 4, "all four tiers can be built in order")
+    Test.assert_true(S.construction_requirement(c, 106) != "", "the grand temple limits the whole city to one")
+    Test.assert_true(S.parcel_facility_upkeep(c, grand) > S.parcel_facility_upkeep(c, shrine), "upkeep scales by tier")
+    let removed = S.act(c, shrine, 7)
+    Test.assert_eq_int(S.patron(removed), 4, "clearing the founding shrine preserves patronage")
+    let graduates = NativeArray.set_int(c.specializations, 57, 0)
+    let unstaffed = { c with specializations: graduates }
+    Test.assert_false(S.temple_open(unstaffed, S.stats(unstaffed), grand), "ordinary university graduates cannot staff the grand temple")
+    Test.assert_true(S.temple_open(c, S.stats(c), grand), "seminary graduates staff the grand temple")
+  end
+
+  pfn worship_education_checks(c : Ur.Sim.City) : Unit do
+    let shrine = S.index(8, 16)
+    let temple = S.index(8, 17)
+    let large = S.index(8, 18)
+    let grand = S.index(8, 19)
+    let city = { c with education: S.new_education(), specializations: S.new_specializations(), month: 0, calendar_day: 14 }
+    Test.assert_false(S.temple_open(city, S.stats(city), shrine), "a shrine needs a qualified attendant to open")
+    Test.assert_eq_int(S.last_festival(S.advance_day(city)), 0, "unstaffed worship sites cannot host a festival")
+
+    let secondary = { city with education: NativeArray.set_int(city.education, 1, 28) }
+    let stats = S.stats(secondary)
+    Test.assert_true(S.temple_open(secondary, stats, shrine), "a high-school graduate can run the shrine")
+    Test.assert_false(S.temple_open(secondary, stats, temple), "a high-school graduate cannot serve as a temple priest")
+    Test.assert_true(S.last_festival(S.advance_day(secondary)) > 0, "a staffed shrine can host even while temples are closed")
+
+    let college = { city with education: NativeArray.set_int(city.education, 3, 28) }
+    let stats = S.stats(college)
+    Test.assert_true(S.temple_open(college, stats, temple), "college graduates can staff a Temple")
+    Test.assert_true(S.temple_open(college, stats, large), "college graduates can staff a Large Temple")
+    Test.assert_false(S.temple_open(college, stats, grand), "a Grand Temple requires seminary training")
+  end
+
+  pfn roll_day(c : Ur.Sim.City, lot : Int, god : Int, day : Int, favor : Bool) : Int do
+    if day >= 240 do panic("No matching offering roll in the test month") else
+      let roll = Strata.Seed.cell(c.climate_seed, lot, day, 0, god) % 100
+      let matches = if favor do roll < 70 else roll >= 95 end
+      if matches do day else roll_day(c, lot, god, day + 1, favor) end
+    end
+  end
+
+  pfn offering_checks(c : Ur.Sim.City) : Unit do
+    let site = S.index(8, 18)
+    let faith = { c.religion with patron: 1 }
+    let today = roll_day(c, site, 1, 0, false)
+    let base = { c with religion: faith, month: today / 30, calendar_day: today % 30 }
+    let st = S.stats(base)
+    Test.assert_eq_int(S.favor_chance(2), 50, "generous offering favor odds")
+    Test.assert_eq_int(S.curse_chance(3), 5, "lavish offering wrath odds")
+    let cursed = S.make_offering(base, st, site, 3)
+    Test.assert_eq_int(cursed.cash, base.cash - S.offering_fee(3), "accepted offering debits once")
+    Test.assert_eq_int(S.curse_god(cursed), 1, "offering can trigger the patron’s curse")
+    Test.assert_eq_int(S.curse_days(cursed), 30, "Idra's rain lasts thirty days")
+    let final_day = today + 29
+    let expiry = today + 30
+    Test.assert_eq_int(S.current_weather(cursed), 4, "the curse controls today's weather")
+    Test.assert_eq_int(S.weather_on(cursed, final_day / 30, final_day % 30), 4, "the future forecast includes the active curse")
+    Test.assert_eq_int(S.weather_on(cursed, expiry / 30, expiry % 30), S.weather_on(base, expiry / 30, expiry % 30), "normal weather resumes at expiry")
+    let again = S.make_offering(cursed, S.stats(cursed), S.index(8, 19), 3)
+    Test.assert_eq_int(again.cash, cursed.cash, "a second temple cannot bypass the shared cooldown")
+    let game = { city: cursed, cx: 0.0, cz: 0.0, zoom: 60.0, yaw: 0.0, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(game)) do
+      Ok(restored) ->
+        Test.assert_eq_int(S.curse_days(restored.city), 30, "save preserves the committed curse")
+        Test.assert_eq_int(S.petition_wait(restored.city), 45, "save preserves the petition cooldown")
+        Test.assert_eq_int(S.offering_spend(restored.city), S.offering_fee(3), "save preserves offering spend")
+      Err(error) -> Test.assert_true(false, error)
+    end
+  end
+
+  pfn festival_checks(c : Ur.Sim.City) : Unit do
+    let home = S.index(10, 18)
+    let base = { c with month: 0, calendar_day: 14 }
+    let stats = S.stats(base)
+    let preview = S.festival_preview(base, stats)
+    Test.assert_true(S.worship_access(base, stats, home), "a connected household receives temple access")
+    Test.assert_true(preview.hosts == 1 && preview.attendees > 0 && preview.food > 0 && preview.trash > 0, "festival preview reports local resource needs")
+    let today = S.advance_day(base)
+    Test.assert_eq_int(S.last_festival(today), 16, "live advance starts the first festival on its scheduled date")
+    Test.assert_true(today.trash > base.trash, "celebration adds trash to the city")
+    let after = S.advance_day(today)
+    Test.assert_eq_int(S.last_festival(after), S.last_festival(today), "live advancement does not repeat the festival")
+    let bulk = S.tick(base)
+    Test.assert_eq_int(S.last_festival(bulk), S.last_festival(today), "bulk advancement processes the same festival date")
+    Test.assert_eq_int(S.last_festival_attendees(bulk), S.last_festival_attendees(today), "bulk and live use the same attendance rules")
+    let suspended = S.advance_day(S.set_festival_policy(base, 2))
+    Test.assert_eq_int(S.last_festival(suspended), 0, "suspending festivals leaves the holiday unobserved")
+    let shrine_only = S.act(S.act(S.act(base, S.index(8, 17), 7), S.index(8, 18), 7), S.index(8, 19), 7)
+    let small = S.festival_preview(shrine_only, S.stats(shrine_only))
+    Test.assert_eq_int(small.attendees, 32, "a shrine can share limited capacity with a dense housing block")
+  end
+
+  pfn fever_save_check(c : Ur.Sim.City) : Unit do
+    let site = S.index(8, 18)
+    let transfer = { facility: site, bed: 0, transport: 4, wait: 10, stay: 133, outcome: 2, route: [site] }
+    let call = { lot: site, kind: 4, reported: 0, station: site, response: 3, travel: 3, road: [site], spread: Nil, medical: Some(transfer) }
+    let game = { city: { c with crime_history: [{ month: c.month, calls: [call] }] }, cx: 0.0, cz: 0.0, zoom: 60.0, yaw: 0.0, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(game)) do
+      Ok(restored) -> Test.assert_true(!List.is_empty(restored.city.crime_history), "keep Fever's extended hospital stays on reload")
+      Err(message) -> Test.assert_true(false, message)
+    end
+  end
+
+  pfn wrath_day(c : Ur.Sim.City, day : Int) : Int do
+    if day >= 240 do panic("No matching wrath roll in the test window") else
+      let roll = Strata.Seed.cell(c.climate_seed, 97, day, 1, 4) % 100
+      if roll < S.wrath_chance() do day else wrath_day(c, day + 1) end
+    end
+  end
+
+  pfn reconsecration_checks(c : Ur.Sim.City) : Unit do
+    let day = wrath_day(c, 0)
+    let site = S.index(8, 18)
+    let curse = { god: 4, until_day: day + 1, site: site }
+    let base = { c with month: day / 30, calendar_day: day % 30,
+      religion: { c.religion with curse: curse, rolls: 1, curse_stamp: 1 } }
+    let pending = S.rededicate(base, 2)
+    Test.assert_eq_int(pending.cash, base.cash - S.rededication_fee(base), "rededication debits its quoted fee once")
+    Test.assert_eq_int(S.patron(pending), 4, "the old patron remains until the work is finished")
+    Test.assert_false(S.temple_open(pending, S.stats(pending), site), "temples close during reconsecration")
+    Test.assert_eq_int(S.curse_stamp(pending), 1, "the original wrath keeps its expiry")
+    let wrath = S.advance_day(pending)
+    Test.assert_eq_int(S.curse_stamp(wrath), 2, "queued wrath begins after the active curse expires")
+    Test.assert_eq_int(S.curse_god(wrath), 4, "wrath belongs to the outgoing patron")
+    Test.assert_eq_int(S.curse_days(wrath), 3, "queued wrath receives a full King Tide spell")
+    let finished = S.tick(S.tick(wrath))
+    Test.assert_eq_int(S.patron(finished), 2, "bulk calendar advancement completes rededication")
+    Test.assert_eq_int(S.rededication_days(finished), 0, "the reconsecration ends")
+  end
+
+  pfn shrine_risk_day(c : Ur.Sim.City, site : Int, day : Int) : Int do
+    if day >= 240 do panic("No offering roll near the curse boundary") else
+      let roll = Strata.Seed.cell(c.climate_seed, site, day, 0, S.patron(c)) % 100
+      if roll >= 92 && roll < 95 do day else shrine_risk_day(c, site, day + 1) end
+    end
+  end
+
+  pfn worship_layer_checks(c : Ur.Sim.City) : Unit do
+    let shrine = S.index(8, 16)
+    let temple = S.index(8, 17)
+    let home = S.index(10, 16)
+    let unstaffed = { c with education: S.new_education(), specializations: S.new_specializations() }
+    let stats = S.stats(unstaffed)
+    Test.assert_eq_int(Ur.Layers.material(unstaffed, stats, 34, shrine), 6, "the Religion layer marks a shrine without an attendant")
+    Test.assert_eq_int(Ur.Layers.material(unstaffed, stats, 34, temple), 6, "the Religion layer marks a temple without a priest")
+    Test.assert_eq_int(Ur.Layers.material(unstaffed, stats, 34, home), 17, "the Religion layer marks uncovered homes")
+    let stats = S.stats(c)
+    Test.assert_eq_int(Ur.Layers.material(c, stats, 34, shrine), 20, "the Religion layer marks an operating shrine")
+    Test.assert_eq_int(Ur.Layers.material(c, stats, 34, home), 11, "the Religion layer marks homes within walking reach")
+    let disconnected = { unstaffed with roads: NativeArray.set_int(unstaffed.roads, S.index(9, 16), 0) }
+    Test.assert_eq_int(Ur.Layers.material(disconnected, S.stats(disconnected), 34, shrine), 10, "a disconnected shrine shows a different closure reason")
+  end
+
+  pfn shrine_risk_checks(c : Ur.Sim.City) : Unit do
+    let shrine = S.index(8, 16)
+    let site = S.index(8, 18)
+    let day = shrine_risk_day(c, site, 0)
+    let c = S.act(S.act(c, S.index(8, 17), 7), S.index(8, 19), 7)
+    let college = NativeArray.set_int(S.new_education(), 3, 2)
+    let city = { c with education: college, specializations: S.new_specializations(), month: day / 30, calendar_day: day % 30 }
+    let stats = S.stats(city)
+    Test.assert_true(S.temple_open(city, stats, site), "the Large Temple has both priests")
+    Test.assert_false(S.temple_open(city, stats, shrine), "the shrine needs an attendant")
+    let curse = S.make_offering(city, stats, site, 3)
+    Test.assert_eq_int(S.curse_god(curse), S.patron(city), "a staffing vacancy turns a borderline roll from silence into a curse")
+    let staffed = { city with education: NativeArray.set_int(college, 1, 12) }
+    let stats = S.stats(staffed)
+    Test.assert_true(S.temple_open(staffed, stats, shrine), "filling the shrine job restores normal odds")
+    let silence = S.make_offering(staffed, stats, site, 3)
+    Test.assert_eq_int(S.curse_god(silence), 0, "the same roll is silent when the shrine is staffed")
+  end
+
+  pfn check_public_religion() : Unit do
+    fever_save_check(S.new())
+    let c = Ur.Scenario.religious_city()
+    temple_checks(c)
+    worship_education_checks(c)
+    worship_layer_checks(c)
+    shrine_risk_checks(c)
+    offering_checks(c)
+    festival_checks(c)
+    reconsecration_checks(c)
+  end
+
+  pfn council_fixture() : Ur.Sim.City do
+    let base = S.new()
+    let data = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(base.council, 8, 1), 9, 1), 10, 1)
+    -- Namar has the initial majority. The first ward replaces its incumbent at month 48.
+    let data = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(data, 810, 4), 811, 2), 812, 4)
+    { base with council: data, cash: 100000, month: 47, climate_seed: 0,
+      religion: { base.religion with patron: 4 } }
+  end
+
+  pfn recovery_hold_checks() : Unit do
+    let base = S.new()
+    let home = S.index(3, 3)
+    let ward = S.crime_district(home)
+    let curse = { god: 1, until_day: 30, site: -1 }
+    let flooded = { base with council: NativeArray.set_int(base.council, 8 + ward, 1),
+      heights: NativeArray.set_int(base.heights, home, 8),
+      buildings: NativeArray.set_int(base.buildings, home, 2),
+      zones: NativeArray.set_int(base.zones, home, 1),
+      surface_water: NativeArray.set_int(base.surface_water, home, 4),
+      religion: { base.religion with patron: 1, curse: curse, curse_stamp: 1 } }
+    let held = Ur.Council.observe_religion(flooded)
+    Test.assert_true(Ur.Council.offering_hold(held), "a temporarily inundated home counts toward a curse recovery hold")
+    let repaired = { held with month: 1, surface_water: NativeArray.set_int(held.surface_water, home, 0) }
+    Test.assert_false(Ur.Council.offering_hold(Ur.Council.observe_religion(repaired)), "the council lifts the hold after confirmed recovery")
+  end
+
+  pfn check_religious_council() : Unit do
+    recovery_hold_checks()
+    let city = council_fixture()
+    Test.assert_true(Ur.Council.relationship(city, 0) > Ur.Council.relationship(city, 1), "sharing a favorite patron improves cooperation")
+    let city = Ur.Council.file_agenda(city, 1, 5, 0)
+    let elected = Ur.Council.advance({ city with month: 48 }, 0)
+    Test.assert_eq_int(Ur.Council.favorite(elected, 0), 2, "the incoming cohort gives Saren the swing seat")
+    Test.assert_eq_int(Ur.Council.rededication_target(elected), 2, "a new majority asks the city to rededicate")
+    Test.assert_eq_int(Ur.Council.kind(elected), 5, "the request preserves ordinary council business")
+    Test.assert_true(Ur.Council.rededication_signer(elected, 0) && Ur.Council.rededication_signer(elected, 1) &&
+      !Ur.Council.rededication_signer(elected, 2), "only the new majority signs")
+    let poor = { elected with cash: 0 }
+    let waiting = Ur.Council.respond_rededication(poor, true)
+    Test.assert_eq_int(Ur.Council.rededication_target(waiting), 2, "an unaffordable rededication stays pending")
+    Test.assert_eq_int(waiting.cash, 0, "an unaffordable rededication charges nothing")
+
+    let refused = Ur.Council.respond_rededication(elected, false)
+    Test.assert_eq_int(S.patron(refused), 4, "declining leaves the current dedication in effect")
+    Test.assert_true(Ur.Council.relationship(refused, 0) < Ur.Council.relationship(elected, 0), "signatories carry a lasting grievance")
+    Test.assert_eq_int(Ur.Council.relationship(refused, 2), Ur.Council.relationship(elected, 2), "other councillors receive no refusal penalty")
+    Test.assert_eq_int(Ur.Council.relationship(Ur.Council.respond_rededication(refused, false), 0),
+      Ur.Council.relationship(refused, 0), "the same refusal cannot be applied twice")
+    let reelected = Ur.Council.advance({ refused with month: 96 }, 0)
+    Test.assert_true(Ur.Council.refusal_penalty(reelected, 0) > 0, "a reelected signatory carries the grievance into the next term")
+    Test.assert_eq_int(Ur.Council.refusal_penalty(reelected, 1), 0, "a replacement does not inherit the grievance")
+    let overdue = Ur.Council.advance({ elected with month: 96 }, 0)
+    Test.assert_eq_int(Ur.Council.refusal_penalty(overdue, 0), Ur.Council.refusal_penalty(reelected, 0),
+      "leaving a request unanswered through an election counts as a decline")
+
+    let accepted = Ur.Council.respond_rededication(elected, true)
+    Test.assert_true(accepted.cash < elected.cash && S.rededication_days(accepted) > 0, "accepting pays for reconsecration")
+    Test.assert_eq_int(Ur.Council.rededication_target(accepted), 0, "the approved request is closed")
+    Test.assert_eq_int(Ur.Council.kind(accepted), 5, "accepting preserves ordinary council business")
+    let game = { city: elected, cx: 100.0, cz: 100.0, zoom: 60.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(game)) do
+      Ok(saved) ->
+        Test.assert_eq_int(Ur.Council.rededication_target(saved.city), 2, "a pending request survives a save and reload")
+        Test.assert_true(Ur.Council.rededication_signer(saved.city, 1), "the petition's signatories survive a save and reload")
+      Err(message) -> Test.assert_true(false, message)
+    end
+  end
+
+  pfn check_religion_controls() : Unit do
+    let city = S.new()
+    let stats = S.stats(city)
+    let (picker, god) = Ur.Hud.religion_at(city, stats, 988.0, 515.0, 1440.0, 900.0, 14, -1, 0)
+    Test.assert_true(picker == :patron && god == 4, "Namar's patron row chooses Namar")
+    let staged = S.dedicate(city, god)
+    let (build, _) = Ur.Hud.religion_at(staged, stats, 400.0, 607.0, 1440.0, 900.0, 14, -1, 0)
+    Test.assert_true(build == :place_shrine, "Place shrine enters the construction workflow after patron choice")
+
+    let city = Ur.Scenario.religious_city()
+    let stats = S.stats(city)
+    let temple = S.index(8, 18)
+    Test.assert_eq_int(S.temple_tier(city, temple), 3, "the demo contains a large temple")
+    let (unselected, _) = Ur.Hud.religion_at(city, stats, 400.0, 607.0, 1440.0, 900.0, 15, temple, 0)
+    Test.assert_true(unselected == :none, "the confirmation button does not issue an action without a selected offering")
+    let (pick, tier) = Ur.Hud.religion_at(city, stats, 400.0, 456.0, 1440.0, 900.0, 15, temple, 0)
+    Test.assert_true(pick == :offering_choice && tier == 1, "the first offering row selects the modest tier")
+    let (pay, price_tier) = Ur.Hud.religion_at(city, stats, 400.0, 607.0, 1440.0, 900.0, 15, temple, 1)
+    Test.assert_true(pay == :offer && price_tier == tier, "confirming the selected row issues the corresponding offering")
+
+    let request = { city with council: NativeArray.set_int(city.council, 800, 2) }
+    let (accept, answer) = Ur.Hud.religion_at(request, stats, 400.0, 607.0, 1440.0, 900.0, 16, -1, 0)
+    Test.assert_true(accept == :rededicate && answer == 1, "an affordable rededication can be accepted")
+    let poor = { request with cash: 0 }
+    let (blocked, _) = Ur.Hud.religion_at(poor, stats, 400.0, 607.0, 1440.0, 900.0, 16, -1, 0)
+    Test.assert_true(blocked == :none, "an unaffordable rededication cannot be accepted")
+    let (decline, answer) = Ur.Hud.religion_at(poor, stats, 590.0, 607.0, 1440.0, 900.0, 16, -1, 0)
+    Test.assert_true(decline == :rededicate && answer == 0, "a player can decline regardless of the treasury")
+  end
+
   fn main(_cap : Cap(IO)) : Unit do
+    check_public_religion()
+    check_religious_council()
+    check_religion_controls()
     bus_depot_clearance()
     floodplain_checks()
     weather_checks()

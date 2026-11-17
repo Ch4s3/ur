@@ -173,6 +173,35 @@ Select **Layers → Civic services** to see coverage. Hover over a housing or
 mixed-use parcel to see which of the four services reach it. Try a serviced
 district with `UR_DEMO=5 ./run.sh`.
 
+## Public religion
+
+Open **Details → Services → Religion** to compare five patrons and their
+council supporters. Choose a patron, then use **Civic → Worship** to place
+the first shrine and dedicate the city. Build a Shrine, Temple, and Large
+Temple in order to unlock the Grand Temple. Shrines need one high-school
+graduate, Temples need one college-educated priest, and Large Temples need
+two. The city's single Grand Temple needs four seminary-trained clergy.
+Add a **Seminary** beside a university through **Civic → Faculties**.
+Inspect a worship site to see its staffing and whether it can operate.
+Use **Layers → Neighborhoods → Religion** to see which homes have worship
+coverage and which sites are open, understaffed, or closed for other reasons.
+
+The Religion panel previews seasonal festivals and their food and trash
+demands. Choose local observance, public holidays, or suspension. Festivals
+use nearby stores' supplies and the sanitation network. Inspect an operating
+Large or Grand Temple for offering fees and the chances of favor, silence,
+and a curse. Each shrine closed for staffing adds 3 percentage points to
+curse odds across the city, up to 15. The chance of silence falls by the same
+amount. The cooldown and annual budget are shared across all temples.
+
+Councillors favor particular gods. A new majority can request rededication
+after an election. The Council panel shows the signatories, fee, closure,
+and wrath risk. Declining costs goodwill with those councillors for the
+rest of their tenure.
+
+Try `UR_DEMO=27 ./run.sh` to inspect a city dedicated to Namar. Unpause to
+reach the approaching election, or select a temple to inspect offerings.
+
 ## Streets
 
 Choose **Local street**, **Avenue**, or **Pedestrian street** in **Roads**.

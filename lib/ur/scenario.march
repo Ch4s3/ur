@@ -495,6 +495,29 @@ mod Ur.Scenario do
       month: date / 30, calendar_day: date % 30 }
   end
 
+  pfn worship_blocks(c : Ur.Sim.City, row : Int) : Ur.Sim.City do
+    if row > 21 do c else
+      let west = S.index(8, row)
+      let main = S.index(9, row)
+      let east = S.index(10, row)
+      let heights = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(c.heights, west, 20), main, 20), east, 20)
+      let c = { c with heights: heights, zones: NativeArray.set_int(c.zones, east, 1),
+        buildings: NativeArray.set_int(c.buildings, east, 3) }
+      worship_blocks(c, row + 1)
+    end
+  end
+  fn religious_city() : Ur.Sim.City do
+    let base = S.new()
+    let c = worship_blocks(S.dedicate({ base with cash: 26000 }, 4), 16)
+    let c = S.act(S.act(S.act(S.act(c, S.index(8, 16), 103), S.index(8, 17), 104), S.index(8, 18), 105), S.index(8, 19), 106)
+    let store = S.index(8, 20)
+    let clergy = NativeArray.set_int(c.specializations, 57, 9)
+    let graduates = NativeArray.set_int(NativeArray.set_int(c.education, 1, 4), 3, 16)
+    let c = { c with specializations: clergy, education: graduates, month: 47, calendar_day: 28,
+      storefronts: NativeArray.set_int(c.storefronts, store, 1), shop_stock: NativeArray.set_int(c.shop_stock, store, 16) }
+    Ur.Council.advance(c, S.population(c))
+  end
+
   fn election_district() : Ur.Sim.City do
     let c = council_district()
     { c with month: 44 }

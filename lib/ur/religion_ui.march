@@ -1,0 +1,267 @@
+mod Ur.ReligionUi do
+  needs IO.Foreign
+  needs Window
+  alias Strata.Ui as U
+  alias Strata.Text as T
+  alias Ur.Sim as S
+
+  pfn label(a : Strata.Ui.Ui, x : Float, y : Float, size : Float, content : String, bright : Bool) : Strata.Ui.Ui do
+    let color = if bright do (0.93, 0.95, 0.90, 1.0) else (0.58, 0.69, 0.70, 1.0) end
+    T.text(a, 0, x, y, T.default_font(), size, color, content)
+  end
+
+  pfn wrap(a : Strata.Ui.Ui, x : Float, y : Float, width : Float, content : String) : Strata.Ui.Ui do
+    T.styled(a, 0, x, y, T.default_font(), 11.0, (0.58, 0.69, 0.70, 1.0),
+      T.with_wrap(T.style(), width), content)
+  end
+
+  pfn button(a : Strata.Ui.Ui, x : Float, y : Float, width : Float, content : String, active : Bool, enabled : Bool) : Strata.Ui.Ui do
+    let color = if active && enabled do (0.18, 0.36, 0.39, 1.0) else (0.09, 0.17, 0.20, 1.0) end
+    let a = U.rect(a, 0, x, y, width -. 2.0, 27.0, color)
+    label(a, x +. 8.0, y +. 6.0, 11.0, content, enabled)
+  end
+
+  pfn hit(x : Float, y : Float, left : Float, top : Float, width : Float) : Bool do
+    x >= left && x < left +. width && y >= top && y < top +. 27.0
+  end
+
+  pfn festival_policy_name(policy : Int) : String do
+    match policy do
+      1 -> "Public holidays"
+      2 -> "Suspend festivals"
+      _ -> "Local observance"
+    end
+  end
+
+  pfn offering_policy_name(policy : Int) : String do
+    match policy do
+      1 -> "Modest only"
+      2 -> "Suspend petitions"
+      _ -> "All tiers"
+    end
+  end
+
+  pfn tier_name(tier : Int) : String do
+    match tier do
+      2 -> "Generous"
+      3 -> "Lavish"
+      _ -> "Modest"
+    end
+  end
+
+  pfn patron_title(god : Int) : String do
+    match god do
+      4 -> "Namar, Keeper of the Harbor"
+      5 -> "Ishara, Guardian of the Hearth"
+      _ -> S.god_name(god)
+    end
+  end
+
+  pfn location(lot : Int) : String do
+    if S.valid(lot) do "Parcel " ++ int_to_string(lot % S.width()) ++ ", " ++ int_to_string(lot / S.width()) else "Citywide" end
+  end
+
+  pfn date(day : Int) : String do
+    "Month " ++ int_to_string(day / S.days_per_month()) ++ " · Day " ++ int_to_string(day % S.days_per_month() + 1)
+  end
+
+  pfn curse_description(god : Int) : String do
+    let effect = match god do
+      1 -> "heavy rain for " ++ int_to_string(S.curse_duration(god)) ++ " days"
+      2 -> int_to_string(S.curse_duration(god)) ++ " days of heat, dry soil, and extra power demand"
+      3 -> "one shock damages nearby buildings and roads"
+      4 -> int_to_string(S.curse_duration(god)) ++ " days of coastal flooding and ferry disruption"
+      _ -> int_to_string(S.curse_duration(god)) ++ " days of illness and strained clinics"
+    end
+    S.curse_name(god) ++ " · " ++ effect
+  end
+
+  pfn policy_buttons(a : Strata.Ui.Ui, x : Float, y : Float, step : Float, selected : Int, festival : Bool, policy : Int) : Strata.Ui.Ui do
+    if policy == 3 do a else
+      let title = if festival do festival_policy_name(policy) else offering_policy_name(policy) end
+      let a = button(a, x, y, step -. 4.0, title, selected == policy, true)
+      policy_buttons(a, x +. step, y, step, selected, festival, policy + 1)
+    end
+  end
+
+  pfn patron_rows(a : Strata.Ui.Ui, c : Ur.Sim.City, x : Float, y : Float, width : Float, god : Int) : Strata.Ui.Ui do
+    if god > 5 do a else
+      let selected = S.chosen_patron(c) == god
+      let a = label(a, x, y, 12.0, patron_title(god) ++ "  ·  " ++ S.god_domain(god) ++ "  ·  " ++ int_to_string(Ur.Council.religion_support(c, god)) ++ " councillors", true)
+      let a = label(a, x, y +. 14.0, 10.0, "Favor · " ++ S.favor_name(god), false)
+      let a = label(a, x, y +. 27.0, 10.0, "Curse · " ++ curse_description(god), false)
+      let a = button(a, x +. width -. 85.0, y +. 3.0, 85.0, if selected do "Selected" else "Choose" end, selected, true)
+      patron_rows(a, c, x, y +. 45.0, width, god + 1)
+    end
+  end
+
+  pfn effects(a : Strata.Ui.Ui, c : Ur.Sim.City, x : Float, y : Float) : Strata.Ui.Ui do
+    let favor = S.favor_god(c)
+    let curse = S.curse_god(c)
+    let closure = S.rededication_days(c)
+    let boon = if favor > 0 do S.god_name(favor) ++ "'s favor · " ++ int_to_string(S.favor_days(c)) ++ " days left" else "" end
+    let status = if closure > 0 do "Reconsecration · " ++ int_to_string(closure) ++ " days left" ++
+      (if boon != "" do "  |  " ++ boon else "" end)
+    else boon end
+    let a = if status != "" do label(a, x, y, 11.0, status, true) else a end
+    let y = if status != "" do y +. 17.0 else y end
+    if curse > 0 do label(a, x, y, 11.0, S.god_name(curse) ++ " · " ++ S.curse_name(curse) ++ " · " ++ int_to_string(S.curse_days(c)) ++ " days left", true)
+    else if favor == 0 && closure == 0 do label(a, x, y, 11.0, "No divine effects in progress.", false) else a end end
+  end
+
+  fn city_panel(a : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, x : Float, y : Float, width : Float) : Strata.Ui.Ui do
+    let a = label(a, x, y +. 57.0, 17.0, "Public religion", true)
+    let god = S.patron(c)
+    if god == 0 do
+      let a = label(a, x, y +. 86.0, 12.0, "Choose the patron to dedicate when you build the first shrine.", false)
+      let a = patron_rows(a, c, x, y +. 112.0, width, 1)
+      let chosen = S.chosen_patron(c) > 0 && S.valid(c.harbour)
+      let a = button(a, x, y +. 349.0, 110.0, "Place shrine", chosen, chosen)
+      label(a, x +. 122.0, y +. 355.0, 11.0, "Civic / Worship", false)
+    else
+      let a = label(a, x, y +. 87.0, 13.0, patron_title(god) ++ "  ·  " ++ S.god_domain(god), true)
+      let a = effects(a, c, x, y +. 112.0)
+      let step = width /. 3.0
+      let a = label(a, x, y +. 153.0, 13.0, "Festival calendar", true)
+      let a = policy_buttons(a, x, y +. 175.0, step, S.festival_policy(c), true, 0)
+      let festival = S.festival_preview(c, st)
+      let next = S.next_festival(c)
+      let label_date = if next >= 0 && S.festival_policy(c) != 2 do "Next date · " ++ date(next) else "Festivals suspended" end
+      let a = label(a, x, y +. 208.0, 11.0, label_date, true)
+      let host_count = int_to_string(festival.hosts) ++ (if festival.hosts == 1 do " host" else " hosts" end)
+      let attendance = int_to_string(festival.attendees) ++ (if festival.attendees == 1 do " attendee takes the day off" else " attendees take the day off" end)
+      let a = wrap(a, x, y +. 224.0, width, host_count ++ " · " ++ attendance ++ " · " ++ int_to_string(festival.food) ++ " extra food · " ++ int_to_string(festival.trash) ++ " extra trash")
+      let a = if List.is_empty(festival.sites) do a else
+        let title = if festival.hosts == 1 do "Host · " else "Hosts · " end
+        wrap(a, x, y +. 244.0, width, title ++ String.join(List.map(List.reverse(festival.sites), location), " · "))
+      end
+      let a = label(a, x, y +. 264.0, 13.0, "Offering policy", true)
+      let a = policy_buttons(a, x, y +. 282.0, step, S.offering_policy(c), false, 0)
+      let a = label(a, x, y +. 314.0, 11.0, "Offering budget · $" ++ int_to_string(S.offering_spend(c)) ++ " of $" ++ int_to_string(S.offering_budget()), false)
+      let hold = Ur.Council.offering_hold_status(c)
+      let a = if hold != "" do wrap(a, x, y +. 334.0, width, hold) else a end
+      label(a, x, y +. 366.0, 11.0, "Inspect a Large or Grand Temple to ask for favor.", false)
+    end
+  end
+
+  pfn staffing_role(tier : Int) : String do
+    match tier do
+      1 -> "High-school-educated attendant"
+      2 -> "College-educated priest"
+      3 -> "College-educated priests"
+      _ -> "Seminary-trained clergy"
+    end
+  end
+
+  fn temple_status(c : Ur.Sim.City, st : Ur.Sim.Stats, site : Int) : String do
+    if S.temple_open(c, st, site) do "Open"
+    else if S.rededication_days(c) > 0 do "Closed for reconsecration"
+    else if S.building_offline(c, site) do "Closed for repairs"
+    else if S.ground_closed(c, site) do "Closed by flooding"
+    else if S.building_access(c, st.routes, site) < 0 do "Closed · Needs a connected street"
+    else "Closed · Needs qualified staff" end end end end end
+  end
+
+  pfn offering_rows(a : Strata.Ui.Ui, st : Ur.Sim.Stats, x : Float, y : Float, selected : Int, tier : Int) : Strata.Ui.Ui do
+    if tier > 3 do a else
+      let favor = S.favor_chance(tier)
+      let curse = S.offering_curse_chance(st, tier)
+      let a = button(a, x, y, 110.0, tier_name(tier) ++ "  $" ++ int_to_string(S.offering_fee(tier)), selected == tier, true)
+      let a = label(a, x +. 122.0, y +. 6.0, 11.0, int_to_string(favor) ++ "% favor   ·   " ++ int_to_string(100 - favor - curse) ++ "% silence   ·   " ++ int_to_string(curse) ++ "% curse", selected == tier)
+      offering_rows(a, st, x, y +. 35.0, selected, tier + 1)
+    end
+  end
+
+  fn temple_panel(a : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, x : Float, y : Float, width : Float, site : Int, selected : Int) : Strata.Ui.Ui do
+    let tier = S.temple_tier(c, site)
+    if tier == 0 do label(a, x, y +. 57.0, 16.0, "Select a temple on the map", true) else
+      let a = label(a, x, y +. 57.0, 17.0, S.facility_name(S.get(c.plants, site)), true)
+      let a = label(a, x, y +. 86.0, 12.0, S.god_name(S.patron(c)) ++ "  ·  " ++ location(site), true)
+      let a = label(a, x, y +. 109.0, 11.0, temple_status(c, st, site) ++ "  ·  Upkeep $" ++ int_to_string(S.parcel_facility_upkeep(c, site)) ++ "/month", true)
+      let a = label(a, x, y +. 128.0, 11.0, staffing_role(tier) ++ "  ·  " ++
+        int_to_string(S.get(st.staffed_jobs, site)) ++ " of " ++ int_to_string(S.worship_staff(tier)) ++ " positions filled", false)
+      if tier < 3 do label(a, x, y +. 163.0, 12.0, "Offerings are made at Large and Grand Temples.", false) else
+        let a = label(a, x, y +. 154.0, 13.0, "Ask for favor", true)
+        let a = label(a, x, y +. 171.0, 11.0, "Favor · " ++ S.favor_name(S.patron(c)), false)
+        let a = label(a, x, y +. 185.0, 11.0, "Curse · " ++ curse_description(S.patron(c)), false)
+        let a = offering_rows(a, st, x, y +. 197.0, selected, 1)
+        let penalty = S.shrine_curse_penalty(st)
+        let a = if penalty > 0 do
+          let vacancy = if st.understaffed_shrines == 1 do " unstaffed shrine" else " unstaffed shrines" end
+          label(a, x, y +. 299.0, 11.0, int_to_string(st.understaffed_shrines) ++ vacancy ++
+            " · +" ++ int_to_string(penalty) ++ " percentage points to curse odds", true)
+        else a end
+        let block = if selected > 0 do S.offering_block(c, st, site, selected) else "" end
+        let hold = if Ur.Council.offering_hold(c) do Ur.Council.offering_hold_status(c) else block end
+        let ready = selected > 0 && hold == ""
+        let a = button(a, x, y +. 349.0, 150.0, if selected > 0 do "Confirm · $" ++ int_to_string(S.offering_fee(selected)) else "Confirm offering" end, ready, ready)
+        if hold != "" do wrap(a, x, y +. 320.0, width, hold)
+        else if selected > 0 do label(a, x, y +. 320.0, 11.0, "The treasury pays even if the patron stays silent.", false)
+        else if S.petition_wait(c) > 0 do label(a, x, y +. 320.0, 11.0, "Petition cooldown · " ++ int_to_string(S.petition_wait(c)) ++ " days left", false)
+        else a end end end
+      end
+    end
+  end
+
+  pfn signers(c : Ur.Sim.City, ward : Int, out : List(Int)) : List(Int) do
+    if ward < 0 do out else
+      signers(c, ward - 1, if Ur.Council.rededication_signer(c, ward) do Cons(ward, out) else out end)
+    end
+  end
+
+  pfn signer_rows(a : Strata.Ui.Ui, c : Ur.Sim.City, x : Float, y : Float, wards : List(Int), left : Int) : Strata.Ui.Ui do
+    if left <= 0 do a else match wards do
+      Nil -> a
+      Cons(ward, rest) ->
+        let a = label(a, x, y, 11.0, Ur.Council.member(c, ward), false)
+        signer_rows(a, c, x, y +. 16.0, rest, left - 1)
+    end end
+  end
+
+  fn rededication_panel(a : Strata.Ui.Ui, c : Ur.Sim.City, x : Float, y : Float, width : Float, page : Int) : Strata.Ui.Ui do
+    let a = label(a, x, y +. 57.0, 17.0, "Rededication request", true)
+    let goal = Ur.Council.rededication_target(c)
+    if goal == 0 do label(a, x, y +. 92.0, 12.0, "There is no pending request.", false) else
+      let wards = signers(c, 79, Nil)
+      let count = List.length(wards)
+      let a = label(a, x, y +. 86.0, 13.0, S.god_name(S.patron(c)) ++ " → " ++ S.god_name(goal) ++ "  ·  " ++ int_to_string(count) ++ " signatories", true)
+      let a = label(a, x, y +. 109.0, 11.0, "$" ++ int_to_string(S.rededication_fee(c)) ++ " reconsecration fee · Temples close for " ++ int_to_string(S.rededication_duration()) ++ " days", false)
+      let a = label(a, x, y +. 128.0, 11.0, int_to_string(S.wrath_chance()) ++ "% chance of " ++ S.god_name(S.patron(c)) ++ " invoking " ++ S.curse_name(S.patron(c)), false)
+      let a = label(a, x, y +. 147.0, 11.0, "Respond before the election in month " ++ int_to_string(Ur.Council.rededication_deadline(c)) ++ ".", false)
+      let a = wrap(a, x, y +. 169.0, width, "A refusal or unanswered request lowers relations with each signatory for the rest of their tenure.")
+      let a = signer_rows(a, c, x, y +. 207.0, List.drop(wards, page * 5), 5)
+      let a = if count > 5 do
+        let a = button(a, x, y +. 293.0, 98.0, "Prev. signers", false, page > 0)
+        button(a, x +. 104.0, y +. 293.0, 98.0, "Next signers", false, (page + 1) * 5 < count)
+      else a end
+      let affordable = c.cash >= S.rededication_fee(c)
+      let a = if affordable do a else label(a, x, y +. 328.0, 11.0, "Treasury cannot afford reconsecration.", true) end
+      let a = button(a, x, y +. 349.0, 150.0, "Accept rededication", affordable, affordable)
+      button(a, x +. 158.0, y +. 349.0, 132.0, "Decline request", false, true)
+    end
+  end
+
+  fn action(c : Ur.Sim.City, st : Ur.Sim.Stats, x : Float, y : Float, width : Float, tab : Int, site : Int, choice : Int) : (Atom, Int) do
+    if tab == 14 && S.patron(c) == 0 do
+      if x >= width -. 85.0 && x < width && y >= 115.0 && y < 322.0 && float_to_int(y -. 115.0) % 45 < 27 do
+        (:patron, 1 + float_to_int((y -. 115.0) /. 45.0))
+      else if hit(x, y, 0.0, 349.0, 110.0) && S.chosen_patron(c) > 0 && S.valid(c.harbour) do (:place_shrine, 0)
+      else (:none, 0) end end
+    else if tab == 14 && x >= 0.0 && x < width do
+      let policy = float_to_int(x /. (width /. 3.0))
+      if y >= 175.0 && y < 202.0 do (:festival_policy, policy)
+      else if y >= 282.0 && y < 309.0 do (:offering_policy, policy) else (:none, 0) end end
+    else if tab == 15 && S.temple_tier(c, site) >= 3 do
+      if x >= 0.0 && x < width && y >= 197.0 && y < 294.0 && float_to_int(y -. 197.0) % 35 < 27 do
+        (:offering_choice, 1 + float_to_int((y -. 197.0) /. 35.0))
+      else if hit(x, y, 0.0, 349.0, 150.0) && choice > 0 && !Ur.Council.offering_hold(c) && S.offering_block(c, st, site, choice) == "" do (:offer, choice)
+      else (:none, 0) end end
+    else if tab == 16 && Ur.Council.rededication_target(c) > 0 do
+      if hit(x, y, 0.0, 349.0, 150.0) && c.cash >= S.rededication_fee(c) do (:rededicate, 1)
+      else if hit(x, y, 158.0, 349.0, 132.0) do (:rededicate, 0)
+      else if hit(x, y, 0.0, 293.0, 98.0) && choice > 0 do (:signer_page, choice - 1)
+      else if hit(x, y, 104.0, 293.0, 98.0) && (choice + 1) * 5 < List.length(signers(c, 79, Nil)) do (:signer_page, choice + 1)
+      else (:none, 0) end end end end
+    else (:none, 0) end end end end
+  end
+end

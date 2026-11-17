@@ -29,6 +29,7 @@ mod Ur.Layers do
       30 -> "Trash collection"
       32 -> "Heat"
       33 -> "Floodplain"
+      34 -> "Religion"
       12 | 13 | 14 | 15 | 16 | 17 | 18 -> S.metric_name(layer - 12)
       _ -> "Off"
     end
@@ -48,6 +49,7 @@ mod Ur.Layers do
       24 -> "Painted overrides · Amber until 2 am / cyan until 10 pm / green no nightlife."
       25 -> "Transit foot traffic · Green low / amber medium / cyan high."
       30 -> "Green: contained / amber: piling up / red: overflowing / blue: disposal facility."
+      34 -> "Green covered · Gray uncovered · Cyan open · Red needs staff · Amber closed"
       33 -> "Amber: storm risk · Blue: flooded now · Green: protection"
       32 -> "Blue <25 °C · Green 25–27.9 · Amber 28–32.9 · Red 33+ °C"
       29 -> "Arrows point downwind. Gray: light / blue: moderate / amber: strong."
@@ -112,6 +114,12 @@ mod Ur.Layers do
         if risk > 0 do
           if S.severe_rain(c) do (if risk >= 6 do 31 else 12 end) else (if risk >= 6 do 15 else 18 end) end
         else if S.get(c.storm_drains, i) > 0 || S.get(c.seawalls, i) > 0 do 11 else -1 end end
+      34 ->
+        if !land do -1
+        else if S.temple_tier(c, i) > 0 do
+          if S.temple_open(c, st, i) do 20 else if S.worship_staff_shortage(c, st, i) do 6 else 10 end end
+        else if S.occupied_homes(c, i) > 0 do (if S.worship_access(c, st, i) do 11 else 17 end)
+        else -1 end end end
       32 -> if S.get(c.heights, i) == 0 do -1 else heat_color(S.local_temperature(c, i)) end
       1 | 2 | 31 ->
         let report = utility_layer(st, layer)

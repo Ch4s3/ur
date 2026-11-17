@@ -1904,15 +1904,20 @@ mod Ur.Scene do
         let z = i / S.width() * 32
         let deck = S.get(c.heights, i)
         let wall = layer == 33 && S.get(c.seawalls, i) > 0
-        let floor = if wall do 18 else if layer == 9 do (if deck == 0 do 2 else deck end) + 1 else layer_floor(c, x, z) end end
-        let mesh = if layer == 9 do traffic_mesh(c, st.traffic, i)
+        let worship_marker = layer == 34 && S.temple_tier(c, i) > 0
+        let floor = if worship_marker do
+          List.fold_left(L.structures(c, i, 0), deck, fn (height, piece) ->
+            if piece.y + piece.h > height do piece.y + piece.h else height end) + 3
+        else if wall do 18 else if layer == 9 do (if deck == 0 do 2 else deck end) + 1 else layer_floor(c, x, z) end end end
+        let mesh = if worship_marker do box({ words: NativeArray.make_i32(12, 0), quads: 0 }, 10, 0, 10, 12, 3, 12, tex)
+          else if layer == 9 do traffic_mesh(c, st.traffic, i)
           else if Ur.Layers.is_utility(layer) && (if layer == 2 do S.get(c.grid, i) > 0 else S.get(c.pipes, i) > 0 end) do utility_mesh(c, i, floor, layer, tex)
           else if layer == 32 || (layer == 33 && !wall) do heat_tiles(c, x, z, floor, tex, 0, { words: NativeArray.make_i32(32, 0), quads: 0 })
           else if layer == 27 do
             let m = { words: NativeArray.make_i32(12, 0), quads: 0 }
             street_policy_mesh(c, i, tex, 0, face(m, 12, 0, 12, 8, 8, 0, tex))
           else if layer == 28 && tex != 6 do ward_outline(c, i, tex, 0, { words: NativeArray.make_i32(8, 0), quads: 0 })
-          else layer_outline(tex, { words: NativeArray.make_i32(8, 0), quads: 0 }) end end end end end
+          else layer_outline(tex, { words: NativeArray.make_i32(8, 0), quads: 0 }) end end end end end end
         if mesh.quads == 0 do Vk.chunk_free(slot) else if Vk.chunk_begin(slot, x, floor, z, 0) && Vk.chunk_part(if layer == 9 do 2 else 0 end, mesh.words, mesh.quads) && Vk.chunk_commit() do ()
         else Ur.AppError.stop("Map layer upload failed") end end
       end end

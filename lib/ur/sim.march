@@ -11,9 +11,22 @@ mod Ur.Sim do
   type CrimeMonth = { month : Int, calls : List(Incident) }
   type CrimeReport = { incidents : Int, responses : Int, minutes : Int, harm : Int }
   type WasteRun = { depot : Int, pickup : Int, site : Int, kind : Int, units : Int, route : List(Int), pickup_leg : Int }
+  type DivineEffect = { god : Int, until_day : Int, site : Int }
+  type Religion = {
+    patron : Int, chosen : Int, unlocked : Int, festival_policy : Int, offering_policy : Int,
+    offering_year : Int, offering_spend : Int, petition_day : Int, rolls : Int,
+    dedication_target : Int, dedication_end : Int,
+    favor : DivineEffect, curse : DivineEffect, curse_stamp : Int, epicenter : Int, wrath_god : Int,
+    festival_stamp : Int, festival_hosts : Int, festival_attendees : Int, festival_site : Int,
+    festival_feedback : NativeIntArr, festival_absence : NativeIntArr, festival_attending : NativeIntArr
+  }
+  type FestivalSummary = { hosts : Int, attendees : Int, food : Int, trash : Int, sites : List(Int) }
+  type FestivalHost = { lot : Int, tier : Int, walk : ParkWalk, reachable : Int }
+  type FestivalAttendance = { sites : NativeIntArr, households : NativeIntArr, people : Int }
+  type FestivalPlan = { sites : List(FestivalHost), attendance : FestivalAttendance, summary : FestivalSummary }
   type City = {
     census : NativeIntArr, population_history : List(NativeIntArr), immigration : Int,
-    council : NativeIntArr,
+    council : NativeIntArr, religion : Religion,
     climate_seed : Int,
     storm_drains : NativeIntArr, seawalls : NativeIntArr,
     surface_water : NativeIntArr, flood_damage : NativeIntArr, flood_active : Bool,
@@ -120,7 +133,7 @@ mod Ur.Sim do
   type Labor = { workforce : Int, employed : Int, unemployed : Int, vacancies : Int, wages : Int, local_income : Option(NativeIntArr), fares : Option(NativeIntArr) }
   pfn labor_with_fares(labor : Labor, fares : NativeIntArr) : Labor do { labor with fares: Some(fares) } end
   type Budget = { revenue : Int, property_tax : Int, income_tax : Int, business_tax : Int, trade_income : Int, tariffs : Int, toll_income : Int, parking_income : Int, bus_fares : Int, bus_operations : Int, freight_operations : Int, infrastructure : Int, operations : Int, energy_income : Int, power_cost : Int, food_cost : Int, water_cost : Int, sanitation_cost : Int }
-  type Stats = { startup_step : Int, staffed_jobs : NativeIntArr, job_matches : List(JobMatch), buses : BusNetwork, school_seats : NativeIntArr, skill_jobs : NativeIntArr, market : NativeIntArr, rent_tiers : NativeIntArr, park_walk : ParkWalk, civic : NativeIntArr, riders : NativeIntArr, running_transit : NativeIntArr, labor : Labor, traffic : NativeIntArr, junctions : NativeIntArr, budget : Budget, growth_pressure : String, commutes : NativeIntArr, generation : Power, waste : Waste, services : Services, utilities : UtilityReport, project_capacity : UtilityReservation, people : Int, work : Int, used : Int, power : Int, routes : NativeIntArr }
+  type Stats = { startup_step : Int, staffed_jobs : NativeIntArr, job_matches : List(JobMatch), buses : BusNetwork, school_seats : NativeIntArr, skill_jobs : NativeIntArr, market : NativeIntArr, rent_tiers : NativeIntArr, park_walk : ParkWalk, worship : NativeIntArr, understaffed_shrines : Int, festival : FestivalSummary, civic : NativeIntArr, riders : NativeIntArr, running_transit : NativeIntArr, labor : Labor, traffic : NativeIntArr, junctions : NativeIntArr, budget : Budget, growth_pressure : String, commutes : NativeIntArr, generation : Power, waste : Waste, services : Services, utilities : UtilityReport, project_capacity : UtilityReservation, people : Int, work : Int, used : Int, power : Int, routes : NativeIntArr }
   type Development = Unzoned | Full | Market | NeedsSchoolOrClinic | NeedsCivicServices | Restricted | NoRoad | Flooded | Dirty | NoPower | NoPowerLine | PowerBottleneck | NoFood | NoWater | NoWaterLine | WaterBottleneck | NoSewer | SewerBottleneck | HighTax | HighEnergy | Remote | PoorJobAccess | NoJobs | NoWorkers | Unaffordable | Unprofitable | Ready
   fn stats(c : City) : Stats do
     let routes = access(c)
@@ -147,9 +160,11 @@ mod Ur.Sim do
     let riders = transport.riders
     let hiring = transport.hiring
     let labor = labor_with_fares(hiring.labor, transport.buses.fares)
-    let profit_tax = business_receipts(forecast, routes, hiring, people, work, 0, 0)
+    let profit_tax = business_receipts(forecast, routes, hiring, people, work)
     let commutes = economic_commutes(operating, traffic, running, transport.buses)
-    { startup_step: startup_step(c, routes, utilities, power, used, people, work), staffed_jobs: hiring.filled, job_matches: hiring.matches, buses: transport.buses, school_seats: school_seats(c, routes, 0, NativeArray.make_int(4, 0)), skill_jobs: skill_jobs(c, routes, 0, NativeArray.make_int(8, 0)), market: market_sample(c, routes, commutes, labor, people, work, 0, 0), rent_tiers: rent_tier_counts(c, routes, 0, NativeArray.make_int(10, 0)), park_walk: park_walk(c), civic: civic_access_with(c, routes), riders: riders, running_transit: running, labor: labor, traffic: traffic, junctions: junction_controls(c, traffic, 0, NativeArray.make_int(count(), 0)), commutes: commutes, generation: gen, waste: collection, people: people, work: work,
+    { startup_step: startup_step(c, routes, utilities, power, used, people, work), staffed_jobs: hiring.filled, job_matches: hiring.matches, buses: transport.buses, school_seats: school_seats(c, routes, 0, NativeArray.make_int(4, 0)), skill_jobs: skill_jobs(c, routes, 0, NativeArray.make_int(9, 0)), market: market_sample(c, routes, commutes, labor, people, work, 0, 0), rent_tiers: rent_tier_counts(c, routes, 0, NativeArray.make_int(10, 0)), park_walk: park_walk(c), worship: worship_field(c, routes, hiring.filled, 0, NativeArray.make_int(2640, 0)),
+      understaffed_shrines: count_understaffed_shrines(c, routes, hiring.filled, 0, 0),
+      festival: (plan_festivals(c, routes, hiring.filled)).summary, civic: civic_access_with(c, routes), riders: riders, running_transit: running, labor: labor, traffic: traffic, junctions: junction_controls(c, traffic, 0, NativeArray.make_int(count(), 0)), commutes: commutes, generation: gen, waste: collection, people: people, work: work,
       used: used, power: power, routes: routes, services: utilities, utilities: networks, project_capacity: reservations, growth_pressure: pressure,
       budget: budget(forecast, traffic, people, labor, profit_tax, networks.electric.total, power, utilities, collection, gen.cost, transport.buses.lines) }
   end
@@ -308,7 +323,7 @@ mod Ur.Sim do
   end
   pfn unclaimed_with_heights(heights : NativeIntArr) : City do
     let zero = NativeArray.make_int(2640, 0)
-    { census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(2640, 0), climate_seed: 0, storm_drains: zero, seawalls: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, soil_moisture: 70, pumping_cost: 0, grades: NativeArray.make_int(2640, 0), grade_cover: NativeArray.make_int(2640, 0), parks: NativeArray.make_int(2640, 0), park_tiers: NativeArray.make_int(2640, 0), streetscape: NativeArray.make_int(2640, 0), sidewalk_items: NativeArray.make_int(2640, 0), campus: NativeArray.make_int(2640, 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(2640, 0), empty_homes: NativeArray.make_int(2640, 0), home_arrivals: NativeArray.make_int(2640, 0), neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(2640, 0), property_status: NativeArray.make_int(2640, 0), property_arrears: NativeArray.make_int(2640, 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(2640, 0), calendar_day: 0, clock_ms: 675, street_day: 0, car_free_days: NativeArray.make_int(2640, 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(2640, 0), quiet_areas: NativeArray.make_int(2640, 0), storefronts: NativeArray.make_int(2640, 0), footfall: NativeArray.make_int(2640, 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, freight: None, shop_stock: zero, shop_sales: zero, shop_delivered: zero, shop_imports: 0, shipments: Nil, harbour: -1, founding_map: true, heights: heights, roads: zero, tolls: zero, public_parking: zero,
+    { census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(2640, 0), religion: new_religion(), climate_seed: 0, storm_drains: zero, seawalls: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, soil_moisture: 70, pumping_cost: 0, grades: NativeArray.make_int(2640, 0), grade_cover: NativeArray.make_int(2640, 0), parks: NativeArray.make_int(2640, 0), park_tiers: NativeArray.make_int(2640, 0), streetscape: NativeArray.make_int(2640, 0), sidewalk_items: NativeArray.make_int(2640, 0), campus: NativeArray.make_int(2640, 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(2640, 0), empty_homes: NativeArray.make_int(2640, 0), home_arrivals: NativeArray.make_int(2640, 0), neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(2640, 0), property_status: NativeArray.make_int(2640, 0), property_arrears: NativeArray.make_int(2640, 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(2640, 0), calendar_day: 0, clock_ms: 675, street_day: 0, car_free_days: NativeArray.make_int(2640, 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(2640, 0), quiet_areas: NativeArray.make_int(2640, 0), storefronts: NativeArray.make_int(2640, 0), footfall: NativeArray.make_int(2640, 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, freight: None, shop_stock: zero, shop_sales: zero, shop_delivered: zero, shop_imports: 0, shipments: Nil, harbour: -1, founding_map: true, heights: heights, roads: zero, tolls: zero, public_parking: zero,
       transit: zero, stops: zero, ferries: zero, ferry_start: -1, service: NativeArray.make_int(2640, 1), bus_headways: NativeArray.make_int(2640, 0), bus_fare: 1,
       zones: zero, density: NativeArray.make_int(2640, 3), nuisance: NativeArray.make_int(2640, 3),
       buildings: zero, housing_losses: zero, business_losses: zero, construction: zero, plants: zero, paused_facilities: zero, pipes: zero, grid: zero, pollution: zero, land_pollution: zero, air_pollution: zero,
@@ -342,7 +357,7 @@ mod Ur.Sim do
   end
   fn new() : City do
     let zero = NativeArray.make_int(2640, 0)
-    seed({ census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(2640, 0), climate_seed: 0, storm_drains: zero, seawalls: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, soil_moisture: 70, pumping_cost: 0, grades: NativeArray.make_int(2640, 0), grade_cover: NativeArray.make_int(2640, 0), parks: NativeArray.make_int(2640, 0), park_tiers: NativeArray.make_int(2640, 0), streetscape: NativeArray.make_int(2640, 0), sidewalk_items: NativeArray.make_int(2640, 0), campus: NativeArray.make_int(2640, 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(2640, 0), empty_homes: NativeArray.make_int(2640, 0), home_arrivals: NativeArray.make_int(2640, 0), neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(2640, 0), property_status: NativeArray.make_int(2640, 0), property_arrears: NativeArray.make_int(2640, 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(2640, 0), calendar_day: 0, clock_ms: 0, street_day: 0, car_free_days: NativeArray.make_int(2640, 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(2640, 0), quiet_areas: NativeArray.make_int(2640, 0), storefronts: NativeArray.make_int(2640, 0), footfall: NativeArray.make_int(2640, 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, freight: None, shop_stock: NativeArray.make_int(2640, 0), shop_sales: NativeArray.set_int(NativeArray.make_int(2640, 0), index(8, 20), 8), shop_delivered: NativeArray.make_int(2640, 0), shop_imports: 0, shipments: Nil, harbour: index(9, 21), founding_map: false, heights: terrain_fill(NativeArray.make_int(2640, 0), 0), roads: NativeArray.make_int(2640, 0), tolls: NativeArray.make_int(2640, 0), public_parking: NativeArray.make_int(2640, 0), transit: NativeArray.make_int(2640, 0), stops: NativeArray.make_int(2640, 0), ferries: NativeArray.make_int(2640, 0), ferry_start: -1, service: NativeArray.make_int(2640, 1), bus_headways: NativeArray.make_int(2640, 0), bus_fare: 1,
+    seed({ census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(2640, 0), religion: new_religion(), climate_seed: 0, storm_drains: zero, seawalls: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, soil_moisture: 70, pumping_cost: 0, grades: NativeArray.make_int(2640, 0), grade_cover: NativeArray.make_int(2640, 0), parks: NativeArray.make_int(2640, 0), park_tiers: NativeArray.make_int(2640, 0), streetscape: NativeArray.make_int(2640, 0), sidewalk_items: NativeArray.make_int(2640, 0), campus: NativeArray.make_int(2640, 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(2640, 0), empty_homes: NativeArray.make_int(2640, 0), home_arrivals: NativeArray.make_int(2640, 0), neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(2640, 0), property_status: NativeArray.make_int(2640, 0), property_arrears: NativeArray.make_int(2640, 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(2640, 0), calendar_day: 0, clock_ms: 0, street_day: 0, car_free_days: NativeArray.make_int(2640, 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(2640, 0), quiet_areas: NativeArray.make_int(2640, 0), storefronts: NativeArray.make_int(2640, 0), footfall: NativeArray.make_int(2640, 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, freight: None, shop_stock: NativeArray.make_int(2640, 0), shop_sales: NativeArray.set_int(NativeArray.make_int(2640, 0), index(8, 20), 8), shop_delivered: NativeArray.make_int(2640, 0), shop_imports: 0, shipments: Nil, harbour: index(9, 21), founding_map: false, heights: terrain_fill(NativeArray.make_int(2640, 0), 0), roads: NativeArray.make_int(2640, 0), tolls: NativeArray.make_int(2640, 0), public_parking: NativeArray.make_int(2640, 0), transit: NativeArray.make_int(2640, 0), stops: NativeArray.make_int(2640, 0), ferries: NativeArray.make_int(2640, 0), ferry_start: -1, service: NativeArray.make_int(2640, 1), bus_headways: NativeArray.make_int(2640, 0), bus_fare: 1,
       zones: NativeArray.make_int(2640, 0), density: NativeArray.make_int(2640, 3), nuisance: NativeArray.make_int(2640, 3), buildings: NativeArray.make_int(2640, 0), housing_losses: NativeArray.make_int(2640, 0), business_losses: NativeArray.make_int(2640, 0), construction: NativeArray.make_int(2640, 0),
       plants: NativeArray.set_int(NativeArray.set_int(NativeArray.make_int(2640, 0), index(8, 21), 1), index(9, 22), 3),
       paused_facilities: NativeArray.make_int(2640, 0), pipes: NativeArray.set_int(NativeArray.make_int(2640, 0), index(9, 21), 1), grid: NativeArray.make_int(2640, 0), pollution: NativeArray.make_int(2640, 0), land_pollution: NativeArray.make_int(2640, 0), air_pollution: NativeArray.make_int(2640, 0), trash: 0, waste_live: false, waste_bins: NativeArray.make_int(count(), 0), waste_stock: NativeArray.make_int(count(), 0), waste_sites: NativeArray.make_int(count(), 0), waste_last: NativeArray.make_int(count(), 0), waste_log: NativeArray.make_int(count(), 0), waste_runs: Nil,
@@ -352,6 +367,246 @@ mod Ur.Sim do
   -- Each reachable road enters the queue once. O(parcels), no all-pairs routing.
   fn day_seconds() : Float do 1.8 end
   fn days_per_month() : Int do 30 end
+  fn new_religion() : Religion do
+    let empty = { god: 0, until_day: 0, site: -1 }
+    let zero = NativeArray.make_int(2640, 0)
+    { patron: 0, chosen: 0, unlocked: 0, festival_policy: 0, offering_policy: 0,
+      offering_year: 0, offering_spend: 0, petition_day: 0, rolls: 0,
+      dedication_target: 0, dedication_end: 0, favor: empty, curse: empty, curse_stamp: 0,
+      epicenter: -1, wrath_god: 0, festival_stamp: 0, festival_hosts: 0, festival_attendees: 0,
+      festival_site: -1, festival_feedback: zero, festival_absence: zero, festival_attending: zero }
+  end
+  fn god_name(god : Int) : String do
+    match god do
+      1 -> "Idra"
+      2 -> "Saren"
+      3 -> "Tarek"
+      4 -> "Namar"
+      5 -> "Ishara"
+      _ -> "No patron"
+    end
+  end
+  fn god_domain(god : Int) : String do
+    match god do
+      1 -> "Rivers and rain"
+      2 -> "Sun and harvest"
+      3 -> "Stone and building"
+      4 -> "Sea, fishing, and trade"
+      5 -> "Health, households, and healing"
+      _ -> ""
+    end
+  end
+  fn favor_name(god : Int) : String do
+    match god do
+      1 -> "Filled rain collectors and stronger crops for 30 days"
+      2 -> "Bountiful farm yields for 30 days"
+      3 -> "Faster construction and repairs for 30 days"
+      4 -> "Larger catches and ferry cargo holds for 30 days"
+      5 -> "Faster treatment and fewer sick days for 30 days"
+      _ -> ""
+    end
+  end
+  fn curse_name(god : Int) : String do
+    match god do
+      1 -> "Unending Rain"
+      2 -> "Scorching Sun"
+      3 -> "Earthquake"
+      4 -> "King Tide"
+      5 -> "The Fever"
+      _ -> ""
+    end
+  end
+  fn curse_duration(god : Int) : Int do
+    match god do
+      1 -> 30
+      2 -> 21
+      3 -> 10
+      4 -> 3
+      5 -> 14
+      _ -> 0
+    end
+  end
+  fn patron(c : City) : Int do c.religion.patron end
+  fn chosen_patron(c : City) : Int do if patron(c) > 0 do patron(c) else c.religion.chosen end end
+  fn dedicate(c : City, god : Int) : City do
+    if patron(c) > 0 || god < 1 || god > 5 do c else
+      { c with religion: { c.religion with chosen: god }, message: "Build a shrine to dedicate the city to " ++ god_name(god) ++ "." }
+    end
+  end
+  fn festival_policy(c : City) : Int do c.religion.festival_policy end
+  fn set_festival_policy(c : City, policy : Int) : City do
+    if policy < 0 || policy > 2 || policy == festival_policy(c) do c else
+      { c with religion: { c.religion with festival_policy: policy }, message: "Festival policy updated." }
+    end
+  end
+  fn offering_policy(c : City) : Int do c.religion.offering_policy end
+  fn set_offering_policy(c : City, policy : Int) : City do
+    if policy < 0 || policy > 2 || policy == offering_policy(c) do c else
+      { c with religion: { c.religion with offering_policy: policy }, message: "Offering policy updated." }
+    end
+  end
+  fn absolute_day(c : City) : Int do c.month * days_per_month() + c.calendar_day end
+  fn rededication_duration() : Int do 30 end
+  fn rededication_days(c : City) : Int do clamp(c.religion.dedication_end - absolute_day(c), 0, rededication_duration()) end
+  fn favor_days(c : City) : Int do clamp(c.religion.favor.until_day - absolute_day(c), 0, 30) end
+  fn curse_days(c : City) : Int do clamp(c.religion.curse.until_day - absolute_day(c), 0, 30) end
+  fn favor_god(c : City) : Int do if favor_days(c) > 0 do c.religion.favor.god else 0 end end
+  fn curse_god(c : City) : Int do if curse_days(c) > 0 do c.religion.curse.god else 0 end end
+  fn favor_site(c : City) : Int do c.religion.favor.site end
+  fn curse_site(c : City) : Int do c.religion.curse.site end
+  fn curse_epicenter(c : City) : Int do c.religion.epicenter end
+  fn curse_stamp(c : City) : Int do c.religion.curse_stamp end
+  fn petition_wait(c : City) : Int do clamp(c.religion.petition_day - absolute_day(c), 0, 90) end
+  fn offering_budget() : Int do 4200 end
+  fn offering_spend(c : City) : Int do
+    if c.religion.offering_year == c.month / 12 do c.religion.offering_spend else 0 end
+  end
+  fn offering_fee(tier : Int) : Int do
+    match tier do
+      1 -> 240
+      2 -> 620
+      3 -> 1450
+      _ -> 0
+    end
+  end
+  fn favor_chance(tier : Int) : Int do
+    match tier do
+      1 -> 30
+      2 -> 50
+      3 -> 70
+      _ -> 0
+    end
+  end
+  fn curse_chance(tier : Int) : Int do
+    match tier do
+      1 -> 10
+      2 -> 8
+      3 -> 5
+      _ -> 0
+    end
+  end
+  fn shrine_curse_penalty(st : Stats) : Int do clamp(3 * st.understaffed_shrines, 0, 15) end
+  fn offering_curse_chance(st : Stats, tier : Int) : Int do curse_chance(tier) + shrine_curse_penalty(st) end
+  fn wrath_chance() : Int do 25 end
+  fn temple_tier(c : City, lot : Int) : Int do
+    let kind = get(c.plants, lot)
+    if kind >= 37 && kind <= 40 do kind - 36 else 0 end
+  end
+  fn worship_staff(tier : Int) : Int do
+    match tier do
+      1 | 2 -> 1
+      3 -> 2
+      4 -> 4
+      _ -> 0
+    end
+  end
+  fn next_festival(c : City) : Int do
+    let day = absolute_day(c)
+    let next = day / 90 * 90 + 15
+    if day <= next do next else next + 90 end
+  end
+  fn last_festival(c : City) : Int do c.religion.festival_stamp end
+  fn last_festival_hosts(c : City) : Int do c.religion.festival_hosts end
+  fn last_festival_attendees(c : City) : Int do c.religion.festival_attendees end
+  fn last_festival_site(c : City) : Int do c.religion.festival_site end
+  fn festival_feedback(c : City, lot : Int) : Int do
+    let value = get(c.religion.festival_feedback, lot)
+    if value == 0 do 0 else value / 101 - 100 end
+  end
+  fn festival_happiness_duration() : Int do 7 end
+  fn festival_result_happiness(c : City, lot : Int) : Int do
+    let quality = get(c.religion.festival_feedback, lot) % 101
+    quality * 9 * festival_household_share(c, lot) / 10000
+  end
+  fn festival_happiness(c : City, lot : Int) : Int do
+    let day = last_festival(c) - 1
+    if day >= 0 && absolute_day(c) >= day && absolute_day(c) < day + festival_happiness_duration() do
+      festival_result_happiness(c, lot)
+    else 0 end
+  end
+  fn temple_open(c : City, st : Stats, lot : Int) : Bool do
+    temple_operating(c, st.routes, st.staffed_jobs, lot)
+  end
+  pfn temple_operating(c : City, routes : NativeIntArr, hires : NativeIntArr, lot : Int) : Bool do
+    temple_ready(c, routes, lot) && get(hires, lot) >= worship_staff(temple_tier(c, lot))
+  end
+  pfn temple_ready(c : City, routes : NativeIntArr, lot : Int) : Bool do
+    temple_tier(c, lot) > 0 && patron(c) > 0 && c.religion.dedication_target == 0 && !building_offline(c, lot) &&
+      !ground_closed(c, lot) && building_access(c, routes, lot) >= 0
+  end
+  fn worship_staff_shortage(c : City, st : Stats, lot : Int) : Bool do
+    temple_ready(c, st.routes, lot) && get(st.staffed_jobs, lot) < worship_staff(temple_tier(c, lot))
+  end
+  pfn count_understaffed_shrines(c : City, routes : NativeIntArr, hires : NativeIntArr, lot : Int, total : Int) : Int do
+    if lot == count() || patron(c) == 0 || c.religion.dedication_target > 0 do total else
+      let vacant = temple_tier(c, lot) == 1 && get(hires, lot) == 0 && temple_ready(c, routes, lot)
+      count_understaffed_shrines(c, routes, hires, lot + 1, total + (if vacant do 1 else 0 end))
+    end
+  end
+  pfn rededication_sites(c : City, lot : Int, fee : Int) : Int do
+    if lot >= count() do fee else
+      let tier = temple_tier(c, lot)
+      rededication_sites(c, lot + 1, fee + tier * tier * 90)
+    end
+  end
+  fn rededication_fee(c : City) : Int do rededication_sites(c, 0, 900) end
+  fn offering_block(c : City, st : Stats, lot : Int, tier : Int) : String do
+    if tier < 1 || tier > 3 do "Choose an offering."
+    else if c.religion.dedication_target > 0 do "Reconsecration is in progress."
+    else if temple_tier(c, lot) < 3 || !temple_open(c, st, lot) do "Use an operating Large or Grand Temple."
+    else if get(c.council, 804) > 0 do "The council has placed a recovery hold on offerings."
+    else if offering_policy(c) == 2 || (offering_policy(c) == 1 && tier > 1) do "The council offering policy bars this offering."
+    else if offering_spend(c) + offering_fee(tier) > offering_budget() do "The annual offering budget is exhausted."
+    else if petition_wait(c) > 0 do "The city must wait before petitioning again."
+    else if favor_days(c) > 0 || curse_days(c) > 0 do "A divine effect is already active."
+    else if c.cash < offering_fee(tier) do "The treasury cannot cover this offering."
+    else "" end end end end end end end end end
+  end
+  pfn divine_roll(c : City, god : Int, salt : Int) : Int do
+    Strata.Seed.cell(c.climate_seed, salt, absolute_day(c), c.religion.rolls, god) % 100
+  end
+  pfn begin_favor(c : City, god : Int, site : Int) : City do
+    let favor = { god: god, until_day: absolute_day(c) + 30, site: site }
+    let cisterns = if god == 1 do collect_rain(c, weather_sites(c, 0, Nil), rain_tank_capacity()) else c end
+    { cisterns with religion: { c.religion with favor: favor }, message: god_name(god) ++ " granted favor for 30 days." }
+  end
+  pfn quake_epicenter(c : City, offset : Int, tried : Int) : Int do
+    if tried == count() do c.harbour else
+      let lot = (offset + tried) % count()
+      if get(c.buildings, lot) > 0 && !building_offline(c, lot) do lot else quake_epicenter(c, offset, tried + 1) end
+    end
+  end
+  pfn begin_curse(c : City, god : Int, site : Int) : City do
+    let curse = { god: god, until_day: absolute_day(c) + curse_duration(god), site: site }
+    let center = if god == 3 do quake_epicenter(c, (absolute_day(c) * 31 + c.religion.rolls * 173) % count(), 0) else -1 end
+    { c with religion: { c.religion with curse: curse, curse_stamp: c.religion.rolls, epicenter: center },
+      message: god_name(god) ++ " sent " ++ curse_name(god) ++ "." }
+  end
+  fn make_offering(c : City, st : Stats, lot : Int, tier : Int) : City do
+    let reason = offering_block(c, st, lot, tier)
+    if reason != "" do { c with message: reason } else
+      let fee = offering_fee(tier)
+      let roll = divine_roll(c, patron(c), lot)
+      let paid = { c with cash: c.cash - fee,
+        religion: { c.religion with offering_year: c.month / 12, offering_spend: offering_spend(c) + fee,
+          rolls: c.religion.rolls + 1, petition_day: absolute_day(c) + 45 } }
+      if roll < favor_chance(tier) do begin_favor(paid, patron(c), lot)
+      else if roll >= 100 - offering_curse_chance(st, tier) do begin_curse(paid, patron(c), lot)
+      else { paid with message: god_name(patron(c)) ++ " gave no answer." } end end
+    end
+  end
+  fn rededicate(c : City, target : Int) : City do
+    let fee = rededication_fee(c)
+    if patron(c) == 0 || target < 1 || target > 5 || target == patron(c) || c.religion.dedication_target > 0 || c.cash < fee do c else
+      let paid = { c with cash: c.cash - fee, religion: { c.religion with dedication_target: target,
+        dedication_end: absolute_day(c) + rededication_duration(), rolls: c.religion.rolls + 1 },
+        message: "Reconsecration to " ++ god_name(target) ++ " has begun." }
+      if divine_roll(c, patron(c), 97) >= wrath_chance() do paid
+      else if curse_days(c) == 0 do begin_curse(paid, patron(c), -1)
+      else { paid with religion: { paid.religion with wrath_god: patron(c) }, message: "The outgoing patron will send a curse after the current curse ends." }
+      end end
+    end
+  end
   fn climate_rain(c : City) : Int do
     if c.climate_seed == 0 do 0 else c.climate_seed / 9 % 21 - 10 end
   end
@@ -368,8 +623,14 @@ mod Ur.Sim do
     else if roll < 66 + wetness do 1 else 0 end end end end end
   end
   fn weather(month : Int, day : Int) : Int do weather_pattern(0, 0, month, day) end
+  pfn curse_on(c : City, month : Int, day : Int) : Int do
+    let target = month * days_per_month() + day
+    let effect = c.religion.curse
+    if target >= effect.until_day - curse_duration(effect.god) && target < effect.until_day do effect.god else 0 end
+  end
   fn weather_on(c : City, month : Int, day : Int) : Int do
-    weather_pattern(c.climate_seed, climate_rain(c), month, day)
+    let curse = curse_on(c, month, day)
+    if curse == 1 do 4 else if curse == 2 do 0 else weather_pattern(c.climate_seed, climate_rain(c), month, day) end end
   end
   fn current_weather(c : City) : Int do weather_on(c, c.month, c.calendar_day) end
   fn weather_name(kind : Int) : String do
@@ -385,7 +646,7 @@ mod Ur.Sim do
     let season = 21 + 2 * (6 - int_abs(month % 12 - 6))
     let variation = Strata.Seed.cell(509, month, day / 2, 0, 0) % 7 - 3
     let cooling = clamp(weather_on(c, month, day) - 1, 0, 3) * 2
-    season + variation - cooling + climate_heat(c)
+    season + variation - cooling + climate_heat(c) + (if curse_on(c, month, day) == 2 do 13 else 0 end)
   end
   fn temperature(c : City) : Int do temperature_on(c, c.month, c.calendar_day) end
   -- Temperatures at a parcel are in tenths of a degree Celsius.
@@ -498,14 +759,42 @@ mod Ur.Sim do
       clamp(exposed - (if get(c.storm_drains, lot) > 0 && get(c.roads, lot) > 0 do 10 else 0 end), 0, 16)
     end
   end
+  pfn tide_depth(c : City, lot : Int) : Int do
+    let height = get(c.heights, lot)
+    if curse_god(c) != 4 || height <= 0 || height >= 16 do 0 else
+      let coast = shore_level(c, lot % width(), lot / width(), 0, 0)
+      if coast > 0 do clamp(coast + 2 - height, 0, 16) else 0 end
+    end
+  end
   fn surface_flood(c : City, lot : Int) : Int do
     let stored = get(c.surface_water, lot)
     let storm = if severe_rain(c) do floodplain_depth(c, lot) else 0 end
-    if storm > stored do storm else stored end
+    let tide = tide_depth(c, lot)
+    clamp(stored, clamp(storm, tide, 16), 16)
+  end
+  pfn quake_near(c : City, lot : Int, radius : Int) : Bool do
+    let center = curse_epicenter(c)
+    curse_god(c) == 3 && valid(center) && valid(lot) && span_distance(lot, center) <= radius
+  end
+  fn curse_impact(c : City, lot : Int) : Bool do
+    if !valid(lot) || homes_at(c, lot) == 0 do false else
+      match c.religion.curse.god do
+        1 | 4 -> get(c.surface_water, lot) >= 2 || flood_repair_days(c, lot) > 0 ||
+          (curse_god(c) > 0 && surface_flood(c, lot) >= 2)
+        2 -> curse_god(c) == 2 && local_temperature(c, lot) > 360
+        3 -> quake_near(c, lot, 3)
+        5 -> curse_god(c) == 5 && !clinic_nearby(c, lot, 0)
+        _ -> false
+      end
+    end
   end
   fn flood_repair_days(c : City, lot : Int) : Int do get(c.flood_damage, lot) end
+  fn ground_closed(c : City, lot : Int) : Bool do surface_flood(c, lot) >= 2 || (get(c.roads, lot) > 0 && quake_near(c, lot, 2)) end
+  fn building_inundated(c : City, lot : Int) : Bool do
+    (get(c.buildings, lot) > 0 || get(c.plants, lot) > 0) && surface_flood(c, lot) >= 4
+  end
   fn storm_road_closed(c : City, lot : Int) : Bool do
-    motor_street(c, lot) && surface_flood(c, lot) >= 2
+    motor_street(c, lot) && ground_closed(c, lot)
   end
   pfn solar_output(c : City) : Int do
     let clear = if c.month % 12 < 5 do 48 else 80 end
@@ -976,7 +1265,7 @@ mod Ur.Sim do
     end
   end
   fn pedestrian_tile(c : City, i : Int) : Bool do
-    valid(i) && get(c.heights, i) > 0 && (get(c.roads, i) > 0 || get(c.transit, i) == 1) && surface_flood(c, i) < 2
+    valid(i) && get(c.heights, i) > 0 && (get(c.roads, i) > 0 || get(c.transit, i) == 1) && !ground_closed(c, i)
   end
   fn pedestrian_edge(c : City, i : Int, j : Int) : Bool do
     valid(i) && valid(j) && span_distance(i, j) == 1 && int_abs(get(c.heights, i) - get(c.heights, j)) <= 12
@@ -1030,6 +1319,141 @@ mod Ur.Sim do
       let park = park_end(field, entry)
       let quality = clamp(get(c.parks, park), 1, 15) + 6 * get(c.park_tiers, park)
       clamp(77 + quality - 3 * steps, 0, 100)
+    end
+  end
+  pfn temple_range(tier : Int) : Int do 4 + tier * 3 end
+  pfn temple_capacity(tier : Int) : Int do 32 * tier * tier end
+  pfn temple_walk(c : City, lot : Int) : ParkWalk do
+    let empty = NativeArray.make_int(2640, -1)
+    let field = { steps: NativeArray.set_int(empty, lot, 0), next: NativeArray.set_int(empty, lot, lot) }
+    park_walk_flood(c, field, NativeArray.set_int(NativeArray.make_int(2640, 0), 0, lot), 0, 1)
+  end
+  pfn walking_route(field : ParkWalk, lot : Int) : List(Int) do
+    let next = get(field.next, lot)
+    if next == lot || !valid(next) do Cons(lot, Nil) else Cons(lot, walking_route(field, next)) end
+  end
+  fn festival_walk_route(c : City, from : Int, host : Int) : List(Int) do
+    if !valid(from) || temple_tier(c, host) == 0 do Nil else
+      let field = temple_walk(c, host)
+      let entry = park_entry(c, field, from)
+      if !valid(entry) do Nil
+      else if entry == from do walking_route(field, entry)
+      else Cons(from, walking_route(field, entry)) end end
+    end
+  end
+  pfn walking_steps(c : City, field : ParkWalk, lot : Int) : Int do
+    let entry = park_entry(c, field, lot)
+    if !valid(entry) do 2640 else get(field.steps, entry) + (if entry == lot do 0 else 1 end) end
+  end
+  pfn temple_bonuses(c : City, field : ParkWalk, i : Int, tier : Int, bonus : NativeIntArr) : NativeIntArr do
+    if i == count() do bonus else
+      let value = 3 + 3 * tier
+      let bonus = if get(bonus, i) < value && occupied_homes(c, i) > 0 &&
+        walking_steps(c, field, i) <= temple_range(tier) do NativeArray.set_int(bonus, i, value) else bonus end
+      temple_bonuses(c, field, i + 1, tier, bonus)
+    end
+  end
+  pfn worship_field(c : City, routes : NativeIntArr, hires : NativeIntArr, lot : Int, bonus : NativeIntArr) : NativeIntArr do
+    if patron(c) == 0 || c.religion.dedication_target > 0 || lot == count() do bonus else
+      let tier = temple_tier(c, lot)
+      let bonus = if tier > 0 && temple_operating(c, routes, hires, lot) do
+        temple_bonuses(c, temple_walk(c, lot), 0, tier, bonus)
+      else bonus end
+      worship_field(c, routes, hires, lot + 1, bonus)
+    end
+  end
+  fn worship_access(st_city : City, st : Stats, lot : Int) : Bool do patron(st_city) > 0 && get(st.worship, lot) > 0 end
+  pfn blank_festival() : FestivalSummary do { hosts: 0, attendees: 0, food: 0, trash: 0, sites: Nil } end
+  fn festival_preview(c : City, st : Stats) : FestivalSummary do
+    if festival_policy(c) == 2 do blank_festival() else st.festival end
+  end
+  pfn festival_attendance(c : City, host : FestivalHost, i : Int, tally : FestivalAttendance, book : Bool) : FestivalAttendance do
+    let remaining = temple_capacity(host.tier) - tally.people
+    if i == count() || remaining == 0 do tally else
+      let households = clamp(occupied_homes(c, i), 0, remaining / 4)
+      let attends = households > 0 && get(tally.sites, i) == 0 && walking_steps(c, host.walk, i) <= temple_range(host.tier)
+      let next = if !attends do tally else
+        let counted = { tally with people: tally.people + households * 4 }
+        if book do { counted with sites: NativeArray.set_int(tally.sites, i, host.lot + 1),
+          households: NativeArray.set_int(tally.households, i, households) }
+        else counted end
+      end
+      festival_attendance(c, host, i + 1, next, book)
+    end
+  end
+  pfn festival_candidates(c : City, routes : NativeIntArr, hires : NativeIntArr, lot : Int, hosts : List(FestivalHost)) : List(FestivalHost) do
+    if lot == count() do List.reverse(hosts) else
+      let hosts = if temple_operating(c, routes, hires, lot) do
+        Cons({ lot: lot, walk: temple_walk(c, lot), tier: temple_tier(c, lot), reachable: 0 }, hosts)
+      else hosts end
+      festival_candidates(c, routes, hires, lot + 1, hosts)
+    end
+  end
+  pfn best_festival(c : City, hosts : List(FestivalHost), attendance : FestivalAttendance, best : Option(FestivalHost)) : Option(FestivalHost) do
+    match hosts do
+      Nil -> best
+      Cons(host, rest) ->
+        let reachable = (festival_attendance(c, host, 0, { attendance with people: 0 }, false)).people
+        let previous = match best do
+          Some(h) -> h.reachable
+          None -> 0
+        end
+        let best = if reachable > previous do Some({ host with reachable: reachable }) else best end
+        best_festival(c, rest, attendance, best)
+    end
+  end
+  pfn festival_food(people : Int) : Int do (people + 11) / 12 end
+  pfn festival_trash(people : Int) : Int do (people + 7) / 8 end
+  pfn choose_festivals(c : City, hosts : List(FestivalHost), left : Int, plan : FestivalPlan) : FestivalPlan do
+    if left == 0 do plan else match best_festival(c, hosts, plan.attendance, None) do
+      None -> plan
+      Some(host) ->
+        let attendance = festival_attendance(c, host, 0, { plan.attendance with people: 0 }, true)
+        let people = attendance.people
+        let summary = plan.summary
+        let next = { sites: Cons(host, plan.sites), attendance: attendance, summary: { hosts: summary.hosts + 1,
+          attendees: summary.attendees + people, food: summary.food + festival_food(people),
+          trash: summary.trash + festival_trash(people), sites: Cons(host.lot, summary.sites) } }
+        choose_festivals(c, List.filter(hosts, fn h -> h.lot != host.lot), left - 1, next)
+    end end
+  end
+  pfn plan_festivals(c : City, routes : NativeIntArr, hires : NativeIntArr) : FestivalPlan do
+    let zero = NativeArray.make_int(2640, 0)
+    let blank = { sites: Nil, attendance: { sites: zero, households: zero, people: 0 }, summary: blank_festival() }
+    if patron(c) == 0 || festival_policy(c) == 2 || c.religion.dedication_target > 0 do blank else
+      let sites = festival_candidates(c, routes, hires, 0, Nil)
+      let limit = if festival_policy(c) == 0 do 1 else 5 end
+      choose_festivals(c, sites, limit, blank)
+    end
+  end
+  fn festival_destination(c : City, home : Int) : Int do
+    if last_festival(c) == absolute_day(c) + 1 do get(c.religion.festival_absence, home) - 1 else -1 end
+  end
+  pfn festival_household_share(c : City, lot : Int) : Int do
+    let households = occupied_homes(c, lot)
+    if households == 0 do 0 else clamp(get(c.religion.festival_attending, lot) * 100 / households, 0, 100) end
+  end
+  fn attends_festival(c : City, home : Int, resident : Int) : Bool do
+    valid(festival_destination(c, home)) && Strata.Seed.cell(317, 1, resident, home, 0) % 100 < festival_household_share(c, home)
+  end
+  fn essential_work(c : City, lot : Int) : Bool do
+    let kind = get(c.plants, lot)
+    kind == 16 || kind == 19 || kind == 20 || kind == 21 || kind == 22 || kind == 25 || temple_tier(c, lot) > 0 ||
+      power_plant(kind)
+  end
+  fn fever_absence(c : City, home : Int, worker : Int) : Bool do
+    let illness = if curse_god(c) == 5 do (if clinic_nearby(c, home, 0) do 13 else 34 end) else 0 end
+    let normal = if favor_god(c) == 5 || patron(c) == 0 do 0 else 2 end
+    illness + normal > 0 && (worker * 73 + absolute_day(c) * 37) % 100 < illness + normal
+  end
+  pfn clinic_nearby(c : City, home : Int, lot : Int) : Bool do
+    if lot == 49 do false else
+      let x = home % width() + lot % 7 - 3
+      let z = home / width() + lot / 7 - 3
+      let site = index(x, z)
+      (x >= 0 && x < width() && z >= 0 && z < depth() && (get(c.plants, site) == 19 || get(c.plants, site) == 22) &&
+        !building_offline(c, site) && !facility_paused(c, site) && int_abs(x - home % width()) + int_abs(z - home / width()) <= 3) ||
+        clinic_nearby(c, home, lot + 1)
     end
   end
   pfn parking_nuisance(c : City, i : Int, d : Int, total : Int) : Int do
@@ -1088,9 +1512,15 @@ mod Ur.Sim do
       metric_sum(c, routes, commutes, civic, walk, i, metric + 1, sum + metric_value(c, routes, commutes, civic, walk, i, metric))
     end
   end
+  fn base_happiness(c : City, st : Stats, i : Int) : Int do
+    if !valid(i) || get(c.heights, i) == 0 do 0 else metric_sum(c, st.routes, st.commutes, st.civic, st.park_walk, i, 1, 0) / 6 end
+  end
+  fn religious_happiness(c : City, st : Stats, i : Int) : Int do
+    clamp(get(st.worship, i) + festival_happiness(c, i), 0, 100 - base_happiness(c, st, i))
+  end
   fn measure(c : City, st : Stats, i : Int, metric : Int) : Int do
     if !valid(i) || get(c.heights, i) == 0 do 0
-    else if metric == 0 do metric_sum(c, st.routes, st.commutes, st.civic, st.park_walk, i, 1, 0) / 6
+    else if metric == 0 do clamp(base_happiness(c, st, i) + get(st.worship, i) + festival_happiness(c, i), 0, 100)
     else metric_value(c, st.routes, st.commutes, st.civic, st.park_walk, i, metric) end end
   end
   pfn add_measures(c : City, routes : NativeIntArr, commutes : NativeIntArr, civic : NativeIntArr, walk : ParkWalk, i : Int, metric : Int, residents : Int, sums : NativeIntArr) : NativeIntArr do
@@ -1166,7 +1596,11 @@ mod Ur.Sim do
     if valid(lot) do frontage_distance(c, routes, lot, 0, get(routes, lot)) else -1 end
   end
   fn fire_offline(c : City, i : Int) : Bool do get(c.fire_recovery, i) > 0 end
-  fn building_offline(c : City, i : Int) : Bool do fire_offline(c, i) || flood_repair_days(c, i) > 0 end
+  fn building_offline(c : City, i : Int) : Bool do
+    fire_offline(c, i) || flood_repair_days(c, i) > 0 ||
+      ((get(c.buildings, i) > 0 || get(c.plants, i) > 0) &&
+        (quake_near(c, i, 3) || ((curse_god(c) == 1 || curse_god(c) == 4) && building_inundated(c, i))))
+  end
   fn fire_rebuilding(c : City, i : Int) : Bool do get(c.fire_recovery, i) >= 4 end
   fn fire_months_left(c : City, i : Int) : Int do
     let recovery = get(c.fire_recovery, i)
@@ -1202,7 +1636,11 @@ mod Ur.Sim do
   end
   fn job_slots(c : City, i : Int) : Int do
     if building_offline(c, i) || business_closed(c, i) do 0
-    else if get(c.plants, i) == 16 do 4 else job_capacity(c, i) end end
+    else if get(c.plants, i) == 16 do 4
+    else
+      let staff = worship_staff(temple_tier(c, i))
+      if staff > 0 do staff else job_capacity(c, i) end
+    end end
   end
   fn workforce(c : City, people : Int) : Int do D.workforce(c.census, people) end
   fn wage_rate(labor : Labor) : Int do
@@ -1230,7 +1668,7 @@ mod Ur.Sim do
     let university = clamp(graduates(c, 3), 0, workers)
     let trade = clamp(graduates(c, 2), 0, workers - university)
     let secondary = clamp(graduates(c, 1), 0, workers - university - trade)
-    let skills = specialist_supply(c, university, 4, NativeArray.make_int(8, 0))
+    let skills = specialist_supply(c, university, 4, NativeArray.make_int(9, 0))
     let skills = NativeArray.set_int(skills, 3, university - specialization_total(skills))
     let skills = NativeArray.set_int(NativeArray.set_int(skills, 2, trade), 1, secondary)
     NativeArray.set_int(skills, 0, workers - university - trade - secondary)
@@ -1262,7 +1700,7 @@ mod Ur.Sim do
           let seats = if valid(route) do bus_seats() * frequency(c, board) - get(matched.seats_used, route) else 0 end
           let takes_bus = seats > 0 && affordable_bus(c, site.rank) && bus_trip <= commute_limit() && bus_trip + c.bus_fare < ordinary
           let minutes = if takes_bus do bus_trip else ordinary end
-          let municipal_priority = if get(c.plants, site.lot) == 16 do 12 else 0 end
+          let municipal_priority = if get(c.plants, site.lot) == 16 || site.rank == 8 do 12 else 0 end
           let score = minutes + (if takes_bus do c.bus_fare else 0 end) - credential_premium(site.rank) * 2 - municipal_priority
           if minutes > commute_limit() || score >= best.score do best else
             { lot: site.lot, minutes: minutes, board: if takes_bus do board else -1 end,
@@ -1317,7 +1755,7 @@ mod Ur.Sim do
     let matched = if workers == 0 || work == 0 || !valid(c.harbour) do blank else
       let sites = jobsites(c, routes, network, 0, Nil)
       let housing = sum(c, 0, 0, 0) / 4
-      match_skills(c, network, sites, worker_credentials(c, workers), housing, 7, blank)
+      match_skills(c, network, sites, worker_credentials(c, workers), housing, 8, blank)
     end
     let labor = { workforce: workers, employed: matched.employed, unemployed: workers - matched.employed, vacancies: work - matched.employed, wages: 0, local_income: None, fares: None }
     let base = wage_rate(labor)
@@ -1351,16 +1789,17 @@ mod Ur.Sim do
     NativeArray.set_int(NativeArray.set_int(NativeArray.make_int(228, 0), 8, 4), 9, 9)
   end
   -- Each faculty has a graduate count, a fractional attrition carry, and 12 monthly cohorts.
-  fn new_specializations() : NativeIntArr do NativeArray.make_int(57, 0) end
+  fn new_specializations() : NativeIntArr do NativeArray.make_int(71, 0) end
   fn specialization_name(rank : Int) : String do
     match rank do
       4 -> "Medicine"
       5 -> "Sciences"
       6 -> "Business"
-      _ -> "Law"
+      7 -> "Law"
+      _ -> "Seminary"
     end
   end
-  pfn specialization_start(rank : Int) : Int do (rank - 4) * 14 end
+  pfn specialization_start(rank : Int) : Int do if rank == 8 do 57 else (rank - 4) * 14 end end
   fn specialist_graduates(c : City, rank : Int) : Int do get(c.specializations, specialization_start(rank)) end
   pfn specialist_students(data : NativeIntArr, slot : Int, last : Int, students : Int) : Int do
     if slot == last do students else specialist_students(data, slot + 1, last, students + get(data, slot)) end
@@ -1369,14 +1808,14 @@ mod Ur.Sim do
     let first = specialization_start(rank)
     specialist_students(c.specializations, first + 2, first + 14, 0)
   end
-  pfn specialization_total(values : NativeIntArr) : Int do get(values, 4) + get(values, 5) + get(values, 6) + get(values, 7) end
+  pfn specialization_total(values : NativeIntArr) : Int do get(values, 4) + get(values, 5) + get(values, 6) + get(values, 7) + get(values, 8) end
   pfn specialist_supply(c : City, remaining : Int, rank : Int, supply : NativeIntArr) : NativeIntArr do
-    if rank == 8 do supply else
+    if rank == 9 do supply else
       let graduates = clamp(specialist_graduates(c, rank), 0, remaining)
       specialist_supply(c, remaining - graduates, rank + 1, NativeArray.set_int(supply, rank, graduates))
     end
   end
-  fn faculty_rank(kind : Int) : Int do if kind >= 29 && kind <= 32 do kind - 25 else -1 end end
+  fn faculty_rank(kind : Int) : Int do if kind == 41 do 8 else if kind >= 29 && kind <= 32 do kind - 25 else -1 end end end
   fn can_pause_facility(c : City, lot : Int) : Bool do
     let kind = get(c.plants, lot)
     kind == 11 || kind == 35 || kind == 36 || faculty_rank(kind) >= 4
@@ -1423,6 +1862,12 @@ mod Ur.Sim do
   end
   fn construction_requirement(c : City, tool : Int) : String do
     match tool do
+      103 -> if chosen_patron(c) == 0 do "Choose a patron in Details / Religion" else "" end
+      104 -> if c.religion.unlocked < 1 do "Build a Shrine first" else "" end
+      105 -> if c.religion.unlocked < 2 do "Build a Temple first" else "" end
+      106 -> if has_facility(c, 40, 0) do "The city already has a Grand Temple"
+        else if c.religion.unlocked < 3 do "Build a Large Temple first" else "" end end
+      107 -> if has_facility(c, 28, 0) do "" else "Build a university first" end
       16 | 86 -> if has_facility(c, 27, 0) do "" else "Build a trade school first" end
       22 -> if has_facility(c, 30, 0) do "" else "Add a Faculty of Sciences to a university first" end
       78 -> if has_facility(c, 20, 0) do "" else "Build a basic fire station first" end
@@ -1462,7 +1907,12 @@ mod Ur.Sim do
     end
   end
   fn job_requirement(c : City, i : Int) : Int do
-    if get(c.zones, i) == 2 do get(c.business_sector, i) else 0 end
+    match temple_tier(c, i) do
+      1 -> 1
+      2 | 3 -> 3
+      4 -> 8
+      _ -> if get(c.zones, i) == 2 do get(c.business_sector, i) else 0 end
+    end
   end
   fn sector_name(requirement : Int) : String do
     match requirement do
@@ -1473,6 +1923,7 @@ mod Ur.Sim do
       5 -> "Science laboratories"
       6 -> "Business consultancies"
       7 -> "Law firms"
+      8 -> "Clergy"
       _ -> "General employment"
     end
   end
@@ -1481,7 +1932,7 @@ mod Ur.Sim do
       1 -> 2
       2 -> 5
       3 -> 8
-      4 | 5 | 6 | 7 -> 12
+      4 | 5 | 6 | 7 | 8 -> 12
       _ -> 0
     end
   end
@@ -1544,7 +1995,7 @@ mod Ur.Sim do
     end
   end
   pfn choose_faculty(c : City, spaces : NativeIntArr, positions : NativeIntArr, rank : Int, best : Int, score : Int) : Int do
-    if rank == 8 do best else
+    if rank == 9 do best else
       let demand = get(positions, rank) - specialist_graduates(c, rank)
       let appeal = clamp(demand, 0, 30) + (rank + c.month) % 4
       if get(spaces, rank) > 0 && appeal > score do choose_faculty(c, spaces, positions, rank + 1, rank, appeal)
@@ -1572,7 +2023,7 @@ mod Ur.Sim do
     else defer_cohorts(NativeArray.set_int(data, slot, get(data, slot - 1)), first, slot - 1, last) end
   end
   pfn finish_specialists(c : City, seats : NativeIntArr, rank : Int, spaces : NativeIntArr, data : NativeIntArr) : (NativeIntArr, NativeIntArr) do
-    if rank == 8 do (spaces, data) else
+    if rank == 9 do (spaces, data) else
       let first = specialization_start(rank)
       let slot = first + 2 + c.month % 12
       if get(seats, rank) == 0 && specialist_enrolled(c, rank) > 0 && paused_faculty(c, rank, 0) do
@@ -1587,13 +2038,13 @@ mod Ur.Sim do
     end
   end
   pfn advance_specializations(c : City, routes : NativeIntArr, university_done : Int) : NativeIntArr do
-    let seats = faculty_seats(c, routes, 0, NativeArray.make_int(8, 0))
-    let (spaces, data) = finish_specialists(c, seats, 4, NativeArray.make_int(8, 0), c.specializations)
+    let seats = faculty_seats(c, routes, 0, NativeArray.make_int(9, 0))
+    let (spaces, data) = finish_specialists(c, seats, 4, NativeArray.make_int(9, 0), c.specializations)
     if specialization_total(spaces) == 0 do data else
       let candidates = university_done + get(data, 56)
       let data = NativeArray.set_int(data, 56, candidates % 2)
       if candidates < 2 do data else
-        admit_specialists(c, spaces, skill_jobs(c, routes, 0, NativeArray.make_int(8, 0)), candidates / 2, data)
+        admit_specialists(c, spaces, skill_jobs(c, routes, 0, NativeArray.make_int(9, 0)), candidates / 2, data)
       end
     end
   end
@@ -1612,7 +2063,7 @@ mod Ur.Sim do
       let primary = get(data, 0) + get(data, course_slot(0, month))
       let secondary = clamp(primary, 0, available_seats(c, seats, 1, month))
       let finished = get(data, course_slot(1, month))
-      let positions = if finished > 0 do skill_jobs(c, routes, 0, NativeArray.make_int(8, 0)) else NativeArray.make_int(4, 0) end
+      let positions = if finished > 0 do skill_jobs(c, routes, 0, NativeArray.make_int(9, 0)) else NativeArray.make_int(4, 0) end
       let trade_appeal = if get(seats, 2) > 0 do study_appeal(c, labor, positions, 2) else 0 end
       let university_appeal = if get(seats, 3) > 0 do study_appeal(c, labor, positions, 3) else 0 end
       let weights = 35 + trade_appeal + university_appeal
@@ -1662,7 +2113,11 @@ mod Ur.Sim do
       26 -> 10
       27 -> 15
       28 -> 23
-      29 | 30 | 31 | 32 -> 14
+      29 | 30 | 31 | 32 | 41 -> 14
+      37 -> 4
+      38 -> 11
+      39 -> 24
+      40 -> 48
       33 -> 18
       19 -> 8
       20 -> 7
@@ -1698,7 +2153,7 @@ mod Ur.Sim do
   end
   fn advance_population(c : City, census : NativeIntArr, labor : Labor, routes : NativeIntArr) : City do
     let homes = sum(c, 0, 0, 0) / 4
-    let positions = skill_jobs(c, routes, 0, NativeArray.make_int(8, 0))
+    let positions = skill_jobs(c, routes, 0, NativeArray.make_int(9, 0))
     let connected_jobs = get(positions, 0) + get(positions, 1) + get(positions, 2) + get(positions, 3) + specialization_total(positions)
     let unemployment = if labor.workforce == 0 do 0 else labor.unemployed * 12 / labor.workforce end
     let cost_pressure = clamp(c.tax - 17, 0, 8) + clamp(c.energy - 7, 0, 5) * 2
@@ -1714,7 +2169,7 @@ mod Ur.Sim do
     { c with census: change.census, education: education, specializations: specializations, population_history: Cons(sample, List.take(c.population_history, 23)) }
   end
   pfn lose_specialists(data : NativeIntArr, workers : Int, exits : Int, rank : Int) : NativeIntArr do
-    if rank == 8 || exits == 0 do data else
+    if rank == 9 || exits == 0 do data else
       let first = specialization_start(rank)
       let graduates = get(data, first)
       let loss = get(data, first + 1) + graduates * exits * 1000 / clamp(workers, 1, 1000000)
@@ -1764,6 +2219,9 @@ mod Ur.Sim do
   pfn connected_count(c : City, a : NativeIntArr, kind : Int, i : Int, total : Int) : Int do
     if i >= count() do total
     else connected_count(c, a, kind, i + 1, total + (if get(c.plants, i) == kind && building_access(c, a, i) >= 0 do 1 else 0 end)) end
+  end
+  fn power_plant(kind : Int) : Bool do
+    kind == 1 || kind == 2 || (kind >= 12 && kind <= 15) || kind == 33
   end
   pfn utility_count(c : City, roads : NativeIntArr, pipes : NativeIntArr, kind : Int, i : Int, total : Int) : Int do
     if i >= count() do total else
@@ -1889,10 +2347,13 @@ mod Ur.Sim do
   fn pollution_at(c : City, i : Int) : Int do clamp(coastal_plume(c, i, 0, 0), 0, 100) end
   pfn crop_yield(c : City, i : Int) : Int do
     let potential = if food_island(c, i) == 1 do 144 else 96 end
-    potential * clamp(c.soil_moisture * 2, 0, 100) / 100
+    let deity = favor_god(c)
+    let blessing = if deity == 1 do 120 else if deity == 2 do 135 else 100 end end
+    potential * clamp(c.soil_moisture * 2, 0, 100) * blessing / 10000
   end
   pfn catch_yield(c : City, i : Int) : Int do
-    (if food_island(c, i) == 2 do 224 else 128 end) * (100 - pollution_at(c, i)) / 100
+    let blessing = if favor_god(c) == 4 do 135 else 100 end
+    (if food_island(c, i) == 2 do 224 else 128 end) * (100 - pollution_at(c, i)) * blessing / 10000
   end
   pfn catch_total(c : City, roads : NativeIntArr, i : Int, total : Int) : Int do
     if i >= count() do total else
@@ -2238,18 +2699,24 @@ mod Ur.Sim do
       23 -> "Bus depot"
       24 -> "Warehouse"
       25 -> "Upgraded fire station"
+      37 -> "Shrine"
+      38 -> "Temple"
+      39 -> "Large Temple"
+      40 -> "Grand Temple"
+      41 -> "Seminary"
       _ -> "Facility"
     end
   end
   fn facility_kind(tool : Int) : Int do
-    if tool >= 93 && tool <= 95 do tool - 59
+    if tool >= 103 && tool <= 107 do tool - 66
+    else if tool >= 93 && tool <= 95 do tool - 59
     else if tool >= 79 && tool <= 86 do tool - 53
     else if tool == 76 || tool == 77 do tool - 53
     else if tool == 62 do 22
     else if tool >= 44 && tool <= 47 do tool - 26
     else if tool >= 20 && tool <= 25 do tool - 8
     else if tool == 4 do 1
-    else if tool >= 8 && tool <= 17 do tool - 6 else 0 end end end end end end end end
+    else if tool >= 8 && tool <= 17 do tool - 6 else 0 end end end end end end end end end
   end
   pfn open_sea_edges(c : City, lot : Int, d : Int) : Bool do
     if d == 4 do true else
@@ -2262,7 +2729,7 @@ mod Ur.Sim do
       "Place offshore wind in open water, clear of crossings and transit."
     else if kind == 36 && (population(c) < 500 || !has_facility(c, 27, 0)) do
       "Incineration requires 500 residents and a trade school."
-    else if kind >= 34 && !valid(fleet_frontage(c, i, 0)) do "Connect the waste facility to a local street or avenue."
+    else if kind >= 34 && kind <= 36 && !valid(fleet_frontage(c, i, 0)) do "Connect the waste facility to a local street or avenue."
     else if (kind == 23 || kind == 24) && !valid(fleet_frontage(c, i, 0)) do "Build beside a local street or avenue."
     else if kind == 2 && !geothermal(c, i) do "Geothermal stations need a volcanic field."
     else if kind == 3 && !freshwater(c, i) do "No local freshwater aquifer. Try desalination."
@@ -2372,7 +2839,11 @@ mod Ur.Sim do
       79 -> 1050
       80 -> 1480
       81 -> 2600
-      82 | 83 | 84 | 85 -> 1900
+      82 | 83 | 84 | 85 | 107 -> 1900
+      103 -> 300
+      104 -> 900
+      105 -> 2200
+      106 -> 4800
       86 -> 1350
       48 -> if get(c.roads, i) > 0 do 65 else 120 end
       49 -> if get(c.roads, i) > 0 do 35 else 75 end
@@ -2516,7 +2987,8 @@ mod Ur.Sim do
   end
   pfn home_trips(c : City, i : Int) : Int do
     let homes = occupied_homes(c, i)
-    if get(c.zones, i) == 3 do homes else (homes * 3 + 3) / 4 end
+    let trips = if get(c.zones, i) == 3 do homes else (homes * 3 + 3) / 4 end
+    if valid(festival_destination(c, i)) do trips - trips * festival_household_share(c, i) / 200 else trips end
   end
   pfn assign_traffic(c : City, routes : NativeIntArr, riders : NativeIntArr, reference : NativeIntArr, traffic : NativeIntArr, induce : Bool, i : Int) : NativeIntArr do
     if i >= count() do traffic else
@@ -2735,7 +3207,7 @@ mod Ur.Sim do
     let before = get(street, i)
     let old_ride = get(riding, i)
     let peer = get(c.ferries, i) - 1
-    let ferry = if valid(peer) do get(street, peer) + 5 + segment_wait(c, i, peer, 5) else 999 end
+    let ferry = if valid(peer) && (curse_god(c) != 4 || (!ground_closed(c, i) && !ground_closed(c, peer))) do get(street, peer) + 5 + segment_wait(c, i, peer, 5) else 999 end
     let ramp = grade_peer(c, i)
     let grade = if valid(ramp) do get(street, ramp) + 3 * span_distance(i, ramp) + delay_for(c, i, lane_demand(traffic, i, direction(i, ramp))) else 999 end
     let ground = if ferry < before do ferry else before end
@@ -2886,11 +3358,13 @@ mod Ur.Sim do
       Nil -> tally
       Cons(hire, rest) ->
         let id = get(buses.line_at, hire.board) - 1
-        let tally = if !valid(id) do tally else {
-          riders: NativeArray.set_int(tally.riders, hire.home, get(tally.riders, hire.home) + hire.workers),
-          fares: NativeArray.set_int(tally.fares, hire.home, get(tally.fares, hire.home) + hire.workers * c.bus_fare),
-          requested: NativeArray.set_int(tally.requested, id, get(tally.requested, id) + hire.workers),
-          boarded: NativeArray.set_int(tally.boarded, id, get(tally.boarded, id) + hire.workers)
+        let holiday = if valid(festival_destination(c, hire.home)) && !essential_work(c, hire.workplace) do festival_household_share(c, hire.home) else 0 end
+        let trips = hire.workers - hire.workers * holiday / 100
+        let tally = if !valid(id) || trips == 0 do tally else {
+          riders: NativeArray.set_int(tally.riders, hire.home, get(tally.riders, hire.home) + trips),
+          fares: NativeArray.set_int(tally.fares, hire.home, get(tally.fares, hire.home) + trips * c.bus_fare),
+          requested: NativeArray.set_int(tally.requested, id, get(tally.requested, id) + trips),
+          boarded: NativeArray.set_int(tally.boarded, id, get(tally.boarded, id) + trips)
         } end
         reserve_commutes(c, rest, buses, tally)
     end
@@ -3092,7 +3566,7 @@ mod Ur.Sim do
   end
   pfn apply_tool(c : City, i : Int, tool : Int) : City do
     if c.harbour < 0 do land(c, i)
-    else if !valid(i) || tool < 1 || (tool > 86 && (tool < 93 || tool > 95) && !utility_upgrade(tool)) do c
+    else if !valid(i) || tool < 1 || (tool > 86 && (tool < 93 || tool > 95) && !utility_upgrade(tool) && (tool < 103 || tool > 107)) do c
     else if get(c.property_status, i) > 0 do { c with message: "Manage this condemned property in the Parcel inspector." }
     else if tool == 78 do
       let price = cost(c, i, tool)
@@ -3217,7 +3691,7 @@ mod Ur.Sim do
           business_sector: NativeArray.set_int(c.business_sector, i, 0), empty_homes: NativeArray.set_int(c.empty_homes, i, 0), home_arrivals: NativeArray.set_int(c.home_arrivals, i, 0),
           housing_losses: NativeArray.set_int(c.housing_losses, i, 0), business_losses: NativeArray.set_int(c.business_losses, i, 0), business_age: NativeArray.set_int(c.business_age, i, 0) }
 
-      4 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 20 | 21 | 22 | 23 | 24 | 25 | 44 | 45 | 46 | 47 | 62 | 76 | 77 | 79 | 80 | 81 | 82 | 83 | 84 | 85 | 86 | 93 | 94 | 95 -> { paid with plants: NativeArray.set_int(c.plants, i, kind), paused_facilities: NativeArray.set_int(c.paused_facilities, i, 0), zones: NativeArray.set_int(c.zones, i, 0) }
+      4 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 20 | 21 | 22 | 23 | 24 | 25 | 44 | 45 | 46 | 47 | 62 | 76 | 77 | 79 | 80 | 81 | 82 | 83 | 84 | 85 | 86 | 93 | 94 | 95 | 103 | 104 | 105 | 106 | 107 -> { paid with plants: NativeArray.set_int(c.plants, i, kind), paused_facilities: NativeArray.set_int(c.paused_facilities, i, 0), zones: NativeArray.set_int(c.zones, i, 0) }
 
       5 -> { paid with density: NativeArray.set_int(c.density, i, get(c.density, i) % 3 + 1) }
 
@@ -3337,7 +3811,7 @@ mod Ur.Sim do
         let next = apply_tool(c, root, tool)
         if get(next.plants, root) != 0 do next else release_campus(next, root, 0) end
       end end
-    else if tool >= 82 && tool <= 85 && valid(i) && c.harbour >= 0 do add_faculty(c, i, tool)
+    else if ((tool >= 82 && tool <= 85) || tool == 107) && valid(i) && c.harbour >= 0 do add_faculty(c, i, tool)
     else if campus_tool(tool) && valid(i) && c.harbour >= 0 do
       let requirement = school_requirement(c, tool)
       let tiles = campus_footprint(c, tool, i)
@@ -3484,7 +3958,14 @@ mod Ur.Sim do
       { next with flood_damage: NativeArray.set_int(next.flood_damage, i, 0) }
     else next end
     let built = get(c.plants, i) != get(next.plants, i)
-    let next = if built && get(next.plants, i) >= 34 do
+    let tier = temple_tier(next, i)
+    let next = if built && tier > 0 do
+      let god = chosen_patron(c)
+      { next with religion: { next.religion with patron: god, chosen: 0,
+        unlocked: clamp(c.religion.unlocked, tier, 4) },
+        message: tool_name(tool) ++ " dedicated to " ++ god_name(god) ++ "." }
+    else next end
+    let next = if built && get(next.plants, i) >= 34 && get(next.plants, i) <= 36 do
       let next = enable_sanitation(next)
       { next with paused_facilities: NativeArray.set_int(next.paused_facilities, i, if get(next.plants, i) == 35 do 1 else 0 end) }
     else next end
@@ -3775,7 +4256,32 @@ mod Ur.Sim do
     { c with housing_losses: moves.losses, empty_homes: moves.empty, home_arrivals: moves.arrivals,
       neighborhood_rents: update_neighborhood_rents(c.neighborhood_rents, moves.by_neighborhood, 0, c.neighborhood_rents) }
   end
-  pfn business_receipts(c : City, routes : NativeIntArr, hiring : Employment, people : Int, jobs : Int, i : Int, taxable_profit : Int) : Int do
+  pfn month_fever_days(c : City) : Int do
+    let effect = c.religion.curse
+    if effect.god != 5 do 0 else
+      let first = c.month * days_per_month()
+      let end_day = clamp(effect.until_day, first, first + days_per_month())
+      let start = clamp(effect.until_day - curse_duration(5), first, end_day)
+      end_day - start
+    end
+  end
+  pfn workday_losses(c : City, hires : List(JobMatch), festival : Bool, fever_days : Int, lost : NativeIntArr) : NativeIntArr do
+    if !festival && fever_days == 0 do lost else match hires do
+      Nil -> lost
+      Cons(hire, rest) ->
+        let holiday = if festival && !essential_work(c, hire.workplace) do festival_household_share(c, hire.home) else 0 end
+        let fever = if fever_days == 0 do 0 else if clinic_nearby(c, hire.home, 0) do 13 else 34 end end
+        let missed = hire.workers * (holiday + fever * fever_days)
+        let lost = if missed == 0 do lost else waste_increment(lost, hire.workplace, missed) end
+        workday_losses(c, rest, festival, fever_days, lost)
+    end end
+  end
+  pfn business_receipts(c : City, routes : NativeIntArr, hiring : Employment, people : Int, jobs : Int) : Int do
+    let holiday = last_festival(c) > 0 && (last_festival(c) - 1) / days_per_month() == c.month
+    let lost = workday_losses(c, hiring.matches, holiday, month_fever_days(c), NativeArray.make_int(2640, 0))
+    taxable_business(c, routes, hiring, people, jobs, lost, 0, 0)
+  end
+  pfn taxable_business(c : City, routes : NativeIntArr, hiring : Employment, people : Int, jobs : Int, lost : NativeIntArr, i : Int, taxable_profit : Int) : Int do
     if i >= count() do taxable_profit * c.business_rate / 100 else
       let staffed = get(hiring.filled, i)
       if staffed > 0 && job_capacity(c, i) > 0 do
@@ -3786,8 +4292,10 @@ mod Ur.Sim do
           else clamp(accounts.earnings - accounts.rent - accounts.costs, 0, 1000) * staffed end
           None -> clamp(accounts.earnings - accounts.rent - accounts.costs, 0, 1000) * staffed
         end
-        business_receipts(c, routes, hiring, people, jobs, i + 1, taxable_profit + profit)
-      else business_receipts(c, routes, hiring, people, jobs, i + 1, taxable_profit) end
+        let staffed_days = staffed * days_per_month() * 100
+        let production = clamp(staffed_days - get(lost, i), 0, staffed_days)
+        taxable_business(c, routes, hiring, people, jobs, lost, i + 1, taxable_profit + profit * production / staffed_days)
+      else taxable_business(c, routes, hiring, people, jobs, lost, i + 1, taxable_profit) end
     end
   end
   type Occupancy = { firms : NativeIntArr, age : NativeIntArr, exposed : Int, closed : Int, reopened : Bool }
@@ -4254,7 +4762,13 @@ mod Ur.Sim do
       Cons(i, rest) -> road_end(rest, i)
     end
   end
+  pfn health_pressure(c : City) : Int do
+    if curse_god(c) == 5 do 1 else if favor_god(c) == 5 do -1 else 0 end end
+  end
   fn transfer_patient(c : City, traffic : NativeIntArr, sites : List(Int), busy : NativeIntArr, beds : NativeIntArr, call : Incident) : (Incident, NativeIntArr, NativeIntArr) do
+    transfer_with_health(c, traffic, sites, busy, beds, call, health_pressure(c))
+  end
+  pfn transfer_with_health(c : City, traffic : NativeIntArr, sites : List(Int), busy : NativeIntArr, beds : NativeIntArr, call : Incident, health : Int) : (Incident, NativeIntArr, NativeIntArr) do
     let unadmitted = { facility: -1, bed: -1, transport: 0, wait: 0, stay: 0, outcome: 3, route: Nil }
     let pickup = road_end(call.road, -1)
     if call.response < 0 || !valid(pickup) do ({ call with medical: Some(unadmitted) }, busy, beds) else
@@ -4269,6 +4783,7 @@ mod Ur.Sim do
         let target = if urgent do 32 else 55 end
         let outcome = if option.start - call.reported <= target do 1 else 2 end
         let stay = if outcome == 2 do 100 else if urgent do 75 else 55 end end
+        let stay = stay * (3 + health) / 3
         let transfer = { facility: option.facility, bed: option.bed, transport: option.transport, wait: option.start - ready - option.transport,
           stay: stay, outcome: outcome, route: route }
         let beds = NativeArray.set_int(beds, option.facility * 4 + option.bed, option.start + stay)
@@ -4293,26 +4808,29 @@ mod Ur.Sim do
         carry_beds(rest, beds, elapsed)
     end
   end
-  pfn crime_shift(c : City, traffic : NativeIntArr, stations : List(Int), busy : NativeIntArr, beds : NativeIntArr, labor : Labor, shift : Int, i : Int, calls : List(Incident)) : List(Incident) do
+  pfn crime_shift(c : City, traffic : NativeIntArr, stations : List(Int), busy : NativeIntArr, beds : NativeIntArr, labor : Labor, health : Int, shift : Int, i : Int, calls : List(Incident)) : List(Incident) do
     if shift == 6 do List.reverse(calls)
-    else if i == count() do crime_shift(c, traffic, stations, busy, beds, labor, shift + 1, 0, calls)
+    else if i == count() do crime_shift(c, traffic, stations, busy, beds, labor, health, shift + 1, 0, calls)
     else
       let exposure = residential_floors(c, i) + (job_slots(c, i) + 5) / 6
       let seed = ((i + 31) * 73856093 + (c.month + 73) * 19349663) % 1000003
       let roll = (seed * seed % 100003) % 1000
       let pressure = 5 + clamp(exposure * 3, 0, 25) + (if labor.workforce > 0 do labor.unemployed * 22 / labor.workforce else 0 end)
       let fire_risk = if get(c.buildings, i) > 0 do 3 + get(c.buildings, i) else 0 end
-      let medical_risk = 5 + clamp(exposure, 0, 12)
+      let medical_risk = 5 + clamp(exposure, 0, 12) + (if health > 0 do 8 else 0 end)
       if exposure > 0 && seed % 6 == shift && roll < pressure + fire_risk + medical_risk do
         let kind = if roll < pressure do 1 + seed / 6 % 2 else if roll < pressure + fire_risk do 3 else 4 end end
         let call = { lot: i, kind: kind, reported: shift * 20, station: -1, response: -1, travel: 0, road: Nil, spread: Nil, medical: None }
         let (call, busy) = run_emergency(c, traffic, stations, busy, call)
-        let (call, busy, beds) = if kind == 4 do transfer_patient(c, traffic, stations, busy, beds, call) else (call, busy, beds) end
-        crime_shift(c, traffic, stations, busy, beds, labor, shift, i + 1, Cons(call, calls))
-      else crime_shift(c, traffic, stations, busy, beds, labor, shift, i + 1, calls) end
+        let (call, busy, beds) = if kind == 4 do transfer_with_health(c, traffic, stations, busy, beds, call, health) else (call, busy, beds) end
+        crime_shift(c, traffic, stations, busy, beds, labor, health, shift, i + 1, Cons(call, calls))
+      else crime_shift(c, traffic, stations, busy, beds, labor, health, shift, i + 1, calls) end
     end end
   end
   fn simulate_crime(c : City, traffic : NativeIntArr, labor : Labor) : CrimeMonth do
+    simulate_with_health(c, traffic, labor, health_pressure(c))
+  end
+  pfn simulate_with_health(c : City, traffic : NativeIntArr, labor : Labor, health : Int) : CrimeMonth do
     let stations = emergency_stations(c, 0, Nil)
     let beds = NativeArray.make_int(10560, 0)
     let beds = match c.crime_history do
@@ -4320,7 +4838,7 @@ mod Ur.Sim do
       Cons(previous, Nil) -> carry_beds(previous.calls, beds, 120)
       Nil -> beds
     end
-    { month: c.month, calls: crime_shift(c, traffic, stations, NativeArray.make_int(2640, 0), beds, labor, 0, 0, Nil) }
+    { month: c.month, calls: crime_shift(c, traffic, stations, NativeArray.make_int(2640, 0), beds, labor, health, 0, 0, Nil) }
   end
   fn civic_density(c : City, coverage : NativeIntArr, i : Int, potential : Int) : Int do
     let zone = get(c.zones, i)
@@ -4428,6 +4946,9 @@ mod Ur.Sim do
   fn reason_with(c : City, i : Int, st : Stats) : String do
     if c.harbour < 0 do (if can_land(c, i) do "Suitable landing. Click to establish the harbour." else "Choose a low shoreline parcel." end)
     else if !valid(i) do "Select a parcel to inspect development"
+    else if ((get(c.buildings, i) > 0 || get(c.plants, i) > 0) && quake_near(c, i, 3)) ||
+      (get(c.roads, i) > 0 && quake_near(c, i, 2)) do
+      "Earthquake damage · Repairs in progress (" ++ int_to_string(curse_days(c)) ++ " days left)"
     else if get(c.public_parking, i) > 0 && !undeveloped_zone(c, i) do
       let kind = get(c.public_parking, i)
       parking_name(kind) ++ " · " ++ int_to_string(parking_spaces(kind)) ++ " spaces · $" ++ int_to_string(parking_fee(kind)) ++ " per visit" ++
@@ -4489,7 +5010,7 @@ mod Ur.Sim do
         NoFood -> if local_food_shortage(c, i) do "Local food shortage · Restore sailings or fund backup imports" else status_text(status) end
         Ready -> if undeveloped_zone(c, i) do "Eligible for development. Waiting for private investment." else status_text(status) end
         _ -> status_text(status)
-      end
+      end end
     end end end end end end end end end end end end end end end end end end end
   end
   pfn food_room(c : City, a : NativeIntArr, people : Int, utilities : UtilityReport, gen : Power) : Bool do
@@ -4518,8 +5039,8 @@ mod Ur.Sim do
       let next = if stage == 0 do c
       else if level >= get(c.density, i) || use_nuisance(get(c.zones, i)) > get(c.nuisance, i) do
         { c with construction: NativeArray.set_int(c.construction, i, 0) }
-      else if building_access(c, roads, i) < 0 do c
-      else if stage > level do
+      else if quake_near(c, i, 3) || building_access(c, roads, i) < 0 do c
+      else if stage + (if favor_god(c) == 3 do 1 else 0 end) > level do
         { c with construction: NativeArray.set_int(c.construction, i, 0),
           buildings: NativeArray.set_int(c.buildings, i, level + 1) }
       else { c with construction: NativeArray.set_int(c.construction, i, stage + 1) } end end end end
@@ -4597,7 +5118,7 @@ mod Ur.Sim do
   type FreightSearch = { links : NativeIntArr, queue : NativeIntArr, tail : Int }
   type Freight = { island_crops : Int, island_catch : Int, supply : NativeIntArr, ferry_room : NativeIntArr, stock : NativeIntArr, sales : NativeIntArr, arrived : NativeIntArr, loads : List(Shipment) }
 
-  pfn freight_stop(c : City, i : Int) : Bool do motor_road(c, i) || get(c.ferries, i) > 0 end
+  pfn freight_stop(c : City, i : Int) : Bool do motor_road(c, i) || (get(c.ferries, i) > 0 && (curse_god(c) != 4 || !ground_closed(c, i))) end
   pfn freight_add(r : FreightSearch, i : Int, toward : Int) : FreightSearch do
     { links: NativeArray.set_int(r.links, i, toward), queue: NativeArray.set_int(r.queue, r.tail, i), tail: r.tail + 1 }
   end
@@ -4631,6 +5152,10 @@ mod Ur.Sim do
       if valid(j) && get(links, j) >= 0 && int_abs(get(c.heights, i) - get(c.heights, j)) <= 12 do j
       else freight_entrance(c, links, i, d + 1) end
     end
+  end
+  pfn ferry_cargo_capacity(c : City, lot : Int) : Int do
+    let capacity = 32 + 64 * (frequency(c, lot) - 1)
+    if favor_god(c) == 4 do capacity * 5 / 4 else capacity end
   end
   pfn ferry_leg(c : City, a : Int, b : Int) : Bool do get(c.ferries, a) == b + 1 end
   pfn trace_freight(c : City, links : NativeIntArr, ferries : NativeIntArr, i : Int, path : List(Int), legs : Int, room : Int) : (Int, List(Int), Int, Int) do
@@ -4692,7 +5217,7 @@ mod Ur.Sim do
       let units = if managed do 0 else if farm do crop_yield(c, i)
         else if kind == 6 && linked do catch_yield(c, i) else 0 end end end
       let supply = if units > 0 do NativeArray.set_int(supply, i, units) else supply end
-      let ferries = if get(c.ferries, i) > 0 do NativeArray.set_int(ferries, i, 32 + 64 * (frequency(c, i) - 1)) else ferries end
+      let ferries = if get(c.ferries, i) > 0 do NativeArray.set_int(ferries, i, ferry_cargo_capacity(c, i)) else ferries end
       supply_parcels(c, roads, pipes, irrigation, i + 1, if farm && !island do farms - 1 else farms end, if farm && island do island_farms - 1 else island_farms end, supply, ferries)
     end
   end
@@ -4872,7 +5397,8 @@ mod Ur.Sim do
       Some(route) ->
         let mainland = freight_from(c, route.port)
         let island = freight_from(c, route.island)
-        let link = get(c.ferries, route.port) == route.island + 1 && get(c.ferries, route.island) == route.port + 1
+        let link = get(c.ferries, route.port) == route.island + 1 && get(c.ferries, route.island) == route.port + 1 &&
+          (curse_god(c) != 4 || (!ground_closed(c, route.port) && !ground_closed(c, route.island)))
         let access = freight_from(c, c.harbour)
         let harbour = link && get(access, route.port) >= 0
         let market = retail_kind(c, route.market) > 0 && !building_offline(c, route.market) && get(c.property_status, route.market) == 0 &&
@@ -4891,7 +5417,7 @@ mod Ur.Sim do
         let production = if !producing do 0 else if kind == 6 do catch_yield(c, route.producer) / 10 else crop_yield(c, route.producer) / 8 end end
         let conditions = { day: day, open: harbour, mainland: market && get(access, route.port) >= 0, production: production, plant: plant, waste: waste,
           demand: demand, spending: demand * clamp(13 - c.tax / 5 - c.energy / 3, 6, 12),
-          capacity: 32 + 64 * (frequency(c, route.port) - 1), handling: handling,
+          capacity: ferry_cargo_capacity(c, route.port), handling: handling,
           cash: clamp(c.cash, 0, 1000000), tariff: c.import_rate }
         let next = Ur.FreightNetwork.step(route, conditions)
         let waste_sites = if waste > 0 do NativeArray.set_int(c.waste_sites, route.waste_site, get(c.waste_sites, route.waste_site) - waste) else c.waste_sites end
@@ -5129,7 +5655,7 @@ mod Ur.Sim do
     let riders = transport.riders
     let hiring = transport.hiring
     let labor = labor_with_fares(hiring.labor, transport.buses.fares)
-    let profit_tax = business_receipts(c, a, hiring, pop, work, 0, 0)
+    let profit_tax = business_receipts(c, a, hiring, pop, work)
     let monthly = budget(c, traffic, pop, labor, profit_tax, networks.electric.total, power, r, trash, gen.cost, transport.buses.lines)
     let net = balance(monthly)
     let commutes = economic_commutes(operating, traffic, running, transport.buses)
@@ -5150,7 +5676,7 @@ mod Ur.Sim do
     let reservations = reserve_utilities(c, a, networks)
     let civic = civic_access_with(c, a)
     let walk = park_walk(c)
-    let incident_month = simulate_crime(next, traffic, labor)
+    let incident_month = simulate_with_health(next, traffic, labor, health_pressure(c))
     let next = apply_building_fires(next, incident_month.calls)
     let (arrears, recovered) = property_ledger(next, 0, c.property_arrears, 0)
     let receipts = recovered + c.property_sales
@@ -5232,8 +5758,8 @@ mod Ur.Sim do
       let stored = get(c.surface_water, lot)
       let land = get(c.heights, lot)
       let level = if land <= 0 do 0
-        else if storm do
-          let incoming = floodplain_depth(c, lot)
+        else if storm || tide_depth(c, lot) > 0 do
+          let incoming = clamp(if storm do floodplain_depth(c, lot) else 0 end, tide_depth(c, lot), 16)
           if incoming > stored do incoming else stored end
         else if stored == 0 do 0 else
           let coast = if land < 16 do shore_level(c, lot % width(), lot / width(), 0, 0) else 0 end
@@ -5245,7 +5771,7 @@ mod Ur.Sim do
       let building = get(c.buildings, lot) > 0 || get(c.plants, lot) > 0
       let repairs = if !building do 0
         else if level >= 4 do clamp(2 + level / 2, previous, 10)
-        else if level == 0 do clamp(previous - 1, 0, 10) else previous end end end
+        else if level == 0 do clamp(previous - (if favor_god(c) == 3 do 2 else 1 end), 0, 10) else previous end end end
       let water = if stored == level do c.surface_water else NativeArray.set_int(c.surface_water, lot, level) end
       let damage = if previous == repairs do c.flood_damage else NativeArray.set_int(c.flood_damage, lot, repairs) end
       surface_day({ c with surface_water: water, flood_damage: damage }, lot + 1, storm, evaporation, active || level > 0 || repairs > 0)
@@ -5329,6 +5855,86 @@ mod Ur.Sim do
     end
   end
 
+  pfn gather_festival_food(c : City, host : FestivalHost, lot : Int, need : Int) : (City, Int) do
+    if lot == count() || need == 0 do (c, need) else
+      if retail(c, lot) <= 0 || walking_steps(c, host.walk, lot) > temple_range(host.tier) + 2 do
+        gather_festival_food(c, host, lot + 1, need)
+      else
+        let (c, managed) = match c.freight do
+          Some(route) ->
+            if route.market != lot do (c, 0) else
+              let (left, bought) = Ur.FreightNetwork.take(route.shop, need)
+              ({ c with freight: Some({ route with shop: left }) }, bought.units)
+            end
+          None -> (c, 0)
+        end
+        let available = get(c.shop_stock, lot)
+        let sold = clamp(need - managed, 0, available)
+        let c = if sold == 0 do c else { c with shop_stock: NativeArray.set_int(c.shop_stock, lot, available - sold) } end
+        gather_festival_food(c, host, lot + 1, need - managed - sold)
+      end
+    end
+  end
+  pfn grade_festival(assigned : NativeIntArr, owner : Int, score : Int, lot : Int, out : NativeIntArr) : NativeIntArr do
+    if lot == count() do out else
+      let out = if get(assigned, lot) == owner do NativeArray.set_int(out, lot, score) else out end
+      grade_festival(assigned, owner, score, lot + 1, out)
+    end
+  end
+  pfn run_festival_sites(c : City, sites : List(FestivalHost), assigned : NativeIntArr, feedback : NativeIntArr) : City do
+    match sites do
+      Nil -> { c with religion: { c.religion with festival_feedback: feedback } }
+      Cons(host, rest) ->
+        let need = festival_food(host.reachable)
+        let (c, short) = gather_festival_food(c, host, 0, need)
+        let produced = festival_trash(host.reachable)
+        let stock = waste_increment(c.waste_stock, host.lot, produced)
+        let c = { c with waste_stock: stock, trash: c.trash + produced, waste_log: waste_increment(c.waste_log, 0, produced) }
+        let overflow = waste_overflow(c, host.lot)
+        let supplied = (need - short) * 100 / need
+        let quality = clamp(supplied - clamp(overflow * 6, 0, 48), 0, 100)
+        let opinion = if short > 0 || overflow > 0 do clamp(quality - 100, -99, -1) else 100 end
+        -- Keep the happiness score and the council's assessment of service gaps together.
+        let score = (100 + opinion) * 101 + quality
+        let next = grade_festival(assigned, host.lot + 1, score, 0, feedback)
+        run_festival_sites(c, rest, assigned, next)
+    end
+  end
+  pfn start_festivals(c : City) : City do
+    let routes = access(c)
+    let hires = workplace_hiring(c, routes, population(c))
+    let plan = plan_festivals(c, routes, hires)
+    if plan.summary.hosts == 0 do c else
+      let queued = if c.waste_live do c else enable_sanitation(c) end
+      let site = match plan.sites do
+        Nil -> -1
+        Cons(host, _) -> host.lot
+      end
+      let day = absolute_day(c) + 1
+      let active = { queued with religion: { queued.religion with festival_stamp: day, festival_hosts: plan.summary.hosts,
+        festival_attendees: plan.summary.attendees, festival_site: site,
+        festival_absence: plan.attendance.sites, festival_attending: plan.attendance.households },
+        message: "Festival day. " ++ int_to_string(plan.summary.attendees) ++ " residents are celebrating." }
+      run_festival_sites(active, plan.sites, plan.attendance.sites, NativeArray.make_int(2640, 0))
+    end
+  end
+  pfn open_religion_day(c : City) : City do
+    if patron(c) == 0 do c else
+      let complete = c.religion.dedication_target > 0 && absolute_day(c) >= c.religion.dedication_end
+      let c = if complete do
+        let god = c.religion.dedication_target
+        { c with religion: { c.religion with patron: god, dedication_target: 0, dedication_end: 0 },
+          message: "The city has rededicated its temples to " ++ god_name(god) ++ "." }
+      else c end
+      let c = if c.religion.wrath_god > 0 && curse_days(c) == 0 do
+        let god = c.religion.wrath_god
+        begin_curse({ c with religion: { c.religion with wrath_god: 0 } }, god, -1)
+      else c end
+      if next_festival(c) != absolute_day(c) || last_festival(c) == absolute_day(c) + 1 ||
+        festival_policy(c) == 2 || c.religion.dedication_target > 0 do c
+      else start_festivals(c) end
+    end
+  end
   pfn weather_day(c : City, sites : List(Int)) : City do
     let rain = current_weather(c)
     let catchment = match rain do
@@ -5338,11 +5944,11 @@ mod Ur.Sim do
       _ -> 0
     end
     let recharge = if rain >= 2 do 24 + 15 * (rain - 2) else 0 end
-    let dry = if temperature(c) >= 30 do 11 else 7 end
+    let dry = if curse_god(c) == 2 do 20 else if temperature(c) >= 30 do 11 else 7 end end
     let c = { c with soil_moisture: clamp(c.soil_moisture + recharge - dry, 0, 100) }
     let c = if rain >= 3 do rain_runoff(c, 0, rain - 1) else c end
     let evaporation = if rain >= 3 do 0 else if temperature(c) >= 30 do 2 else 1 end end
-    let c = if rain == 4 || c.flood_active do surface_day(c, 0, rain == 4, evaporation, false) else c end
+    let c = if rain == 4 || curse_god(c) == 4 || c.flood_active do surface_day(c, 0, rain == 4, evaporation, false) else c end
     if List.is_empty(sites) do c else
       let c = collect_rain(c, sites, catchment)
       let needs_network = List.any(sites, fn lot -> get(c.rain_tanks, lot) > 0 || (rain < 4 && (get(c.subway_water, lot) > 0 || valid(pump_target(c, lot)))))
@@ -5356,13 +5962,14 @@ mod Ur.Sim do
   end
 
   fn advance_day_with_traffic(city : City, traffic : NativeIntArr) : City do
+    let city = open_religion_day(city)
     let day_number = waste_date(city)
     let c = weather_day(city, weather_sites(city, 0, Nil))
     let c = freight_day(sanitation_day(c, traffic, day_number), traffic, day_number)
     let day = c.calendar_day + 1
     let weekday = (c.street_day + 1) % 7
     if day < days_per_month() do
-      let c = { c with calendar_day: day, street_day: weekday, clock_ms: 0 }
+      let c = open_religion_day({ c with calendar_day: day, street_day: weekday, clock_ms: 0 })
       if valid(c.harbour) && (day % 3 == 0 || day % 5 == 0) do
         let roads = access(c)
         let c = if day % 3 == 0 do advance_construction(c, roads, 0) else c end
@@ -5370,7 +5977,7 @@ mod Ur.Sim do
       else c end
     else
       let next = settle_month(c)
-      { next with calendar_day: 0, street_day: weekday, clock_ms: 0 }
+      open_religion_day({ next with calendar_day: 0, street_day: weekday, clock_ms: 0 })
     end
   end
   fn advance_day(c : City) : City do
@@ -5378,7 +5985,7 @@ mod Ur.Sim do
     advance_day_with_traffic(c, traffic)
   end
   pfn play_month(c : City, traffic : NativeIntArr, day : Int, sites : List(Int), haul : Bool) : City do
-    let c = { c with calendar_day: day }
+    let c = open_religion_day({ c with calendar_day: day })
     let c = weather_day(c, sites)
     let day_number = waste_date(c)
     let c = if haul do freight_day(sanitation_day(c, traffic, day_number), traffic, day_number) else c end
@@ -5388,7 +5995,7 @@ mod Ur.Sim do
     end
   end
   fn tick(c : City) : City do
-    let haul = Option.is_some(c.freight) || (c.waste_live && valid(c.harbour) &&
+    let haul = patron(c) > 0 || Option.is_some(c.freight) || (c.waste_live && valid(c.harbour) &&
       (c.calendar_day > 0 || valid(waste_depot(c, 0)) || !List.is_empty(c.waste_runs)))
     let zero = NativeArray.make_int(10560, 0)
     let traffic = if haul do road_traffic(c, access(c)) else zero end
@@ -5403,8 +6010,9 @@ mod Ur.Sim do
     else c end
     -- Bulk advances settle from the starting day's economic snapshot. The
     -- weather, cargo, and sanitation state still advances through every day.
-    let monthly = settle_month({ c with calendar_day: snapshot_day, street_day: snapshot_weekday })
-    { monthly with calendar_day: 0, clock_ms: 0, street_day: snapshot_weekday }
+    let month_end = if patron(c) > 0 do c.calendar_day else snapshot_day end
+    let monthly = settle_month({ c with calendar_day: month_end, street_day: snapshot_weekday })
+    open_religion_day({ monthly with calendar_day: 0, clock_ms: 0, street_day: snapshot_weekday })
   end
   fn advance(c : City, months : Int) : City do if months <= 0 do c else advance(tick(c), months - 1) end end
 end

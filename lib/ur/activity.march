@@ -41,6 +41,46 @@ mod Ur.Activity do
     end
   end
 
+  pfn end_date(c : Ur.Sim.City, days : Int) : String do
+    let day = c.month * S.days_per_month() + c.calendar_day + days
+    "ends M" ++ int_to_string(day / S.days_per_month()) ++ "/D" ++ int_to_string(day % S.days_per_month() + 1)
+  end
+
+  pfn religion(before : Ur.Sim.City, after : Ur.Sim.City, events : List(NeighborhoodEvent)) : List(NeighborhoodEvent) do
+    let patron = S.patron(after)
+    let events = if patron > 0 && patron != S.patron(before) do
+      Cons({ month: after.month, lot: -1, title: "City dedicated to " ++ S.god_name(patron) }, events)
+    else events end
+    let request = Ur.Council.rededication_target(after)
+    let events = if request > 0 && request != Ur.Council.rededication_target(before) do
+      Cons({ month: after.month, lot: -1, title: "Council requests rededication to " ++ S.god_name(request) }, events)
+    else events end
+    let events = if S.rededication_days(before) == 0 && S.rededication_days(after) > 0 do
+      let title = "Temples closed for reconsecration · " ++ end_date(after, S.rededication_days(after))
+      Cons({ month: after.month, lot: -1, title: title }, events)
+    else events end
+    let events = if S.last_festival(after) != S.last_festival(before) && S.last_festival_hosts(after) > 0 do
+      let title = "Festival · " ++ int_to_string(S.last_festival_attendees(after)) ++ " attended across " ++ int_to_string(S.last_festival_hosts(after)) ++ " sites"
+      let site = if S.last_festival_hosts(after) == 1 do S.last_festival_site(after) else -1 end
+      Cons({ month: after.month, lot: site, title: title }, events)
+    else events end
+    let favor = S.favor_god(after)
+    let events = if favor != S.favor_god(before) do
+      if favor > 0 do
+        let title = "Offering to " ++ S.god_name(favor) ++ " granted favor · " ++ end_date(after, S.favor_days(after))
+        Cons({ month: after.month, lot: -1, title: title }, events)
+      else Cons({ month: after.month, lot: -1, title: S.god_name(S.favor_god(before)) ++ "'s favor ended" }, events) end
+    else events end
+    let curse = S.curse_god(after)
+    if curse != S.curse_god(before) || S.curse_stamp(after) != S.curse_stamp(before) do
+      if curse > 0 do
+        let cause = if S.valid(S.curse_site(after)) do "Offering" else "Rededication" end
+        let title = cause ++ " · " ++ S.god_name(curse) ++ " sent " ++ S.curse_name(curse) ++ " · " ++ end_date(after, S.curse_days(after))
+        Cons({ month: after.month, lot: S.curse_epicenter(after), title: title }, events)
+      else Cons({ month: after.month, lot: S.curse_epicenter(before), title: S.curse_name(S.curse_god(before)) ++ " ended" }, events) end
+    else events end
+  end
+
   fn record(before : Ur.Sim.City, after : Ur.Sim.City, history : List(NeighborhoodEvent)) : List(NeighborhoodEvent) do
     let events = collect(before, after, 0, Nil, 7)
     let events = if before.ground_rule == after.ground_rule do events else
@@ -56,6 +96,7 @@ mod Ur.Activity do
     else if !Ur.Council.campaign(before) && Ur.Council.campaign(after) && Ur.Council.established(after) do
       Cons({ month: after.month, lot: -1, title: "Council campaigns opened" }, events)
     else events end end
+    let events = religion(before, after, events)
     List.take(List.append(events, history), 7)
   end
 end

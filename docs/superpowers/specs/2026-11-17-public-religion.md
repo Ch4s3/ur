@@ -22,14 +22,14 @@ The first shrine dedicates the city to a patron. Show each deity’s domain, fav
 
 Unlock the tiers in order. Each step increases construction cost, monthly upkeep, the local happiness bonus, and the number of people the site can serve. Use the existing walking network to determine reach. A household receives the strongest passive bonus from an operating site it can reach, so overlapping sites mainly help with festival capacity.
 
-| Tier | What it adds |
-| --- | --- |
-| **Shrine** | Low-upkeep neighborhood happiness and a small festival site. |
-| **Temple** | Broader walkable coverage and larger celebrations. |
-| **Large Temple** | Greater coverage and capacity, plus the ability to accept offerings for favor. |
-| **Grand Temple** | The strongest local bonus and largest festival capacity. Only one may exist across the city, including while closed. |
+| Tier | Staffing | What it adds |
+| --- | --- | --- |
+| **Shrine** | One attendant with a high-school education | Low-upkeep neighborhood happiness and a small festival site. |
+| **Temple** | One college-educated priest | Broader walkable coverage and larger celebrations. |
+| **Large Temple** | Two college-educated priests | Greater coverage and capacity, plus the ability to accept offerings for favor. |
+| **Grand Temple** | Four seminary-trained clergy | The strongest local bonus and largest festival capacity. Only one may exist across the city, including while closed. |
 
-The **Seminary** is a university specialization that trains qualified clergy through the existing education and hiring systems. The Grand Temple needs qualified staff to operate. While understaffed it retains its site and upkeep charges, while its happiness service, festivals, and petitions are suspended. Show staffing and the reason for closure in the building inspector.
+The **Seminary** is a university specialization that trains qualified clergy through the existing education and hiring systems. Each tier needs a full qualified staff to operate. An understaffed site retains its monthly upkeep and suspends happiness service, festivals, and any petitions. The building inspector shows staffing and the reason for closure. The Religion map layer shows homes with and without walkable worship coverage. Site markers distinguish operating sites, staffing closures, and other closures.
 
 ## Festivals and public policy
 
@@ -52,6 +52,8 @@ At an operating Large or Grand Temple, the player can pick an offering tier. The
 | Modest | Low | 30% | 60% | 10% |
 | Generous | Medium | 50% | 42% | 8% |
 | Lavish | High | 70% | 25% | 5% |
+
+Each shrine closed for staffing adds 3 percentage points to the citywide curse chance, up to 15 points. Subtract the increase from silence and keep the favor chance steady. Count shrines that would otherwise be ready to open. Show this adjustment in the offering panel and apply it to the roll.
 
 The council can limit petitions to modest offerings, allow all tiers within a public budget, or suspend them. When a curse causes disruption, affected wards can request recovery based on local conditions. A councillor can also sponsor a temporary hold on petitions with a measurable recovery target. These rules use the existing agenda and hold mechanics.
 

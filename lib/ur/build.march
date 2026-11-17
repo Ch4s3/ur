@@ -63,7 +63,9 @@ mod Ur.Build do
             " · +$" ++ int_to_string((c.cash - next.cash) / S.cost(c, i, tool) * (S.utility_upkeep(2) - S.utility_upkeep(1))) ++ "/month"
           else if (tool == 99 || tool == 100) && moved do
             " · +$" ++ int_to_string((c.cash - next.cash) / S.cost(c, i, tool) * S.flood_upkeep(next, i)) ++ "/month"
-          else draft.reason end end
+          else if tool >= 103 && tool <= 107 && moved do
+            " · +$" ++ int_to_string(S.parcel_facility_upkeep(next, i) - S.parcel_facility_upkeep(before, i)) ++ "/month"
+          else draft.reason end end end
           apply(c, tool, rest, { draft with city: next, cost: c.cash - next.cash, changed: draft.changed || moved, reason: upkeep }, i)
         end end
     end

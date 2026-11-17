@@ -24,6 +24,104 @@ mod Ur.Council do
   fn last_election(c : Ur.Sim.City) : Int do S.get(c.council, 6) end
   fn campaign(c : Ur.Sim.City) : Bool do c.month % 48 >= 44 end
   fn election_month(c : Ur.Sim.City) : Int do (c.month / 48 + 1) * 48 end
+
+  -- Religion uses slots 800–809 for citywide state and 810–1209 for five
+  -- 80-seat fields: favorite, refusal identity, signer identity, and samples.
+  fn rededication_target(c : Ur.Sim.City) : Int do S.get(c.council, 800) end
+  fn rededication_deadline(c : Ur.Sim.City) : Int do S.get(c.council, 802) end
+  fn offering_hold(c : Ur.Sim.City) : Bool do S.get(c.council, 804) > 0 end
+
+  fn favorite(c : Ur.Sim.City, ward : Int) : Int do
+    if ward < 0 || ward >= 80 || !seated(c, ward) do 0 else
+      let stored = S.get(c.council, 810 + ward)
+      if stored >= 1 && stored <= 5 do stored else
+        1 + int_mod_euclid(ward * 17 + incumbent(c, ward) * 11 + c.climate_seed, 5)
+      end
+    end
+  end
+
+  pfn next_favorite(c : Ur.Sim.City, ward : Int, term : Int) : Int do
+    let shift = int_mod_euclid(c.climate_seed + term, 5)
+    let local = int_mod_euclid(ward * 17 + (incumbent(c, ward) + 1) * 11 + term * 19, 5)
+    if local < 4 do shift + 1 else 1 + int_mod_euclid(ward + shift + 1, 5) end
+  end
+
+  fn challenger_favorite(c : Ur.Sim.City, ward : Int) : Int do next_favorite(c, ward, election_month(c) / 48) end
+
+  fn patron_bonus(c : Ur.Sim.City, ward : Int) : Int do
+    if S.patron(c) > 0 && favorite(c, ward) == S.patron(c) do 12 else 0 end
+  end
+
+  fn refusal_penalty(c : Ur.Sim.City, ward : Int) : Int do
+    if ward >= 0 && ward < 80 && seated(c, ward) && S.get(c.council, 890 + ward) == incumbent(c, ward) + 1 do 16 else 0 end
+  end
+
+  fn rededication_signer(c : Ur.Sim.City, ward : Int) : Bool do
+    rededication_target(c) > 0 && ward >= 0 && ward < 80 && seated(c, ward) &&
+      S.get(c.council, 970 + ward) == incumbent(c, ward) + 1
+  end
+
+  pfn count_favorites(c : Ur.Sim.City, ward : Int, totals : NativeIntArr) : NativeIntArr do
+    if ward == 80 do totals else
+      let god = favorite(c, ward)
+      let next = if god == 0 do totals else
+        NativeArray.set_int(NativeArray.set_int(totals, 0, S.get(totals, 0) + 1), god, S.get(totals, god) + 1)
+      end
+      count_favorites(c, ward + 1, next)
+    end
+  end
+
+  fn religion_support(c : Ur.Sim.City, god : Int) : Int do
+    if god < 1 || god > 5 do 0 else S.get(count_favorites(c, 0, NativeArray.make_int(6, 0)), god) end
+  end
+
+  pfn majority(totals : NativeIntArr, god : Int) : Int do
+    if god > 5 do 0 else
+      if S.get(totals, god) * 2 > S.get(totals, 0) do god else majority(totals, god + 1) end
+    end
+  end
+
+  pfn petition_signers(c : Ur.Sim.City, god : Int, ward : Int, data : NativeIntArr) : NativeIntArr do
+    if ward == 80 do data else
+      let id = if favorite(c, ward) == god do incumbent(c, ward) + 1 else 0 end
+      petition_signers(c, god, ward + 1, NativeArray.set_int(data, 970 + ward, id))
+    end
+  end
+
+  pfn request_rededication(c : Ur.Sim.City) : Ur.Sim.City do
+    if S.patron(c) == 0 || S.rededication_days(c) > 0 || S.get(c.council, 801) == c.month do c else
+      let god = majority(count_favorites(c, 0, NativeArray.make_int(6, 0)), 1)
+      if god == 0 || god == S.patron(c) do c else
+        let request = NativeArray.set_int(NativeArray.set_int(c.council, 800, god), 801, c.month)
+        let data = petition_signers(c, god, 0, NativeArray.set_int(request, 802, election_month(c)))
+        { c with council: data, message: "The new council majority requests rededication to " ++ S.god_name(god) ++ "." }
+      end
+    end
+  end
+
+  pfn mark_refusals(c : Ur.Sim.City, ward : Int, data : NativeIntArr) : NativeIntArr do
+    if ward == 80 do data else
+      let next = if rededication_signer(c, ward) do NativeArray.set_int(data, 890 + ward, incumbent(c, ward) + 1) else data end
+      mark_refusals(c, ward + 1, next)
+    end
+  end
+
+  fn respond_rededication(c : Ur.Sim.City, accept : Bool) : Ur.Sim.City do
+    let god = rededication_target(c)
+    if god == 0 || S.rededication_days(c) > 0 do c else
+      if accept do
+        let next = S.rededicate(c, god)
+        if S.rededication_days(next) == 0 do next else
+          { next with council: NativeArray.set_int(next.council, 800, 0) }
+        end
+      else
+        let data = mark_refusals(c, 0, c.council)
+        { c with council: NativeArray.set_int(data, 800, 0),
+          message: "The city kept its patron. The signatories will remember the refusal." }
+      end
+    end
+  end
+
   pfn candidate(ward : Int, generation : Int) : String do
     let given = match (ward + generation * 5) % 8 do
       0 -> "Ari"
@@ -56,13 +154,18 @@ mod Ur.Council do
       if seated(c, cell) do cell else S.get(c.council, 88 + cell) - 1 end
     end
   end
-  pfn relationship(c : Ur.Sim.City, ward : Int) : Int do
+  pfn working_relationship(c : Ur.Sim.City, ward : Int) : Int do
     let value = S.get(c.council, 328 + ward)
     if value == 0 do 0 else value - 51 end
   end
+  fn relationship(c : Ur.Sim.City, ward : Int) : Int do
+    if ward < 0 || ward >= 80 || !seated(c, ward) do 0 else
+      working_relationship(c, ward) + patron_bonus(c, ward) - refusal_penalty(c, ward)
+    end
+  end
   pfn adjust_relation(c : Ur.Sim.City, ward : Int, delta : Int) : Ur.Sim.City do
     if ward < 0 || !seated(c, ward) do c else
-      { c with council: NativeArray.set_int(c.council, 328 + ward, 51 + S.clamp(relationship(c, ward) + delta, -50, 50)) }
+      { c with council: NativeArray.set_int(c.council, 328 + ward, 51 + S.clamp(working_relationship(c, ward) + delta, -50, 50)) }
     end
   end
   fn endorse(c : Ur.Sim.City, ward : Int, side : Int) : Ur.Sim.City do
@@ -164,6 +267,80 @@ mod Ur.Council do
     if d == 4 do false else S.street_link(c, lot, d) || street_access(c, lot, d + 1) end
   end
 
+  pfn curse_damage(c : Ur.Sim.City, ward : Int, offset : Int, homes : Int, damaged : Int, example : Int) : (Int, Int, Int) do
+    if offset == 180 do (homes, damaged, example) else
+      let lot = ward_lot(ward, offset)
+      -- Temporarily displaced households remain in the recovery count.
+      let residents = if ward_at(c, lot) != ward || S.housing_vacant(c, lot) do 0 else
+        let capacity = S.homes_at(c, lot)
+        S.clamp(capacity - S.get(c.empty_homes, lot), 0, capacity)
+      end
+      let affected = residents > 0 && S.curse_impact(c, lot)
+      curse_damage(c, ward, offset + 1, homes + residents, damaged + (if affected do residents else 0 end),
+        if affected && example < 0 do lot else example end)
+    end
+  end
+
+  pfn recovery_candidate(c : Ur.Sim.City, ward : Int, best : (Int, Int, Int, Int)) : (Int, Int, Int, Int) do
+    if ward == 80 do best else if !seated(c, ward) do recovery_candidate(c, ward + 1, best) else
+      let (homes, damaged, example) = curse_damage(c, ward, 0, 0, 0, -1)
+      let (_, _, _, prior) = best
+      let affected = if homes > 0 do damaged * 100 / homes else 0 end
+      recovery_candidate(c, ward + 1, if affected > prior do (ward, homes, example, affected) else best end)
+    end end
+  end
+
+  fn offering_hold_status(c : Ur.Sim.City) : String do
+    if !offering_hold(c) do "" else
+      let ward = S.get(c.council, 804) - 1
+      let goal = S.get(c.council, 806) * 2 / 3
+      let affected = S.get(c.council, 807)
+      let status = if affected > 100 do "Too few occupied homes to verify recovery."
+        else int_to_string(affected) ++ "% of homes affected. Target " ++ int_to_string(goal) ++ "% or less." end
+      "Petitions on hold · " ++ ward_name(ward) ++ " · " ++ status
+    end
+  end
+
+  pfn review_offering_hold(c : Ur.Sim.City) : Ur.Sim.City do
+    let ward = S.get(c.council, 804) - 1
+    let (homes, damaged, _) = curse_damage(c, ward, 0, 0, 0, -1)
+    let goal = S.get(c.council, 806) * 2 / 3
+    let affected = if homes > 0 do damaged * 100 / homes else 0 end
+    let comparable = homes > 0 && homes * 5 >= S.get(c.council, 809) * 4
+    if S.waste_date(c) >= S.get(c.council, 808) do
+      { c with council: NativeArray.set_int(c.council, 804, 0), message: "The council hold on divine offerings expired." }
+    else if comparable && affected <= goal do
+      let c = adjust_relation(c, ward, 8)
+      { c with council: NativeArray.set_int(c.council, 804, 0), message: member(c, ward) ++ " lifted the offering hold after local recovery." }
+    else { c with council: NativeArray.set_int(c.council, 807, if comparable do affected else 101 end) } end end
+  end
+
+  fn observe_religion(c : Ur.Sim.City) : Ur.Sim.City do
+    if offering_hold(c) do review_offering_hold(c) else
+      let stamp = S.curse_stamp(c)
+      if stamp <= 0 || S.curse_god(c) == 0 || S.get(c.council, 803) == stamp || !established(c) do c else
+        let (ward, homes, lot, affected) = recovery_candidate(c, 0, (-1, 0, -1, 0))
+        if affected < 20 || (affected < 40 && kind(c) > 0) do c else
+          let data = NativeArray.set_int(c.council, 803, stamp)
+          if affected >= 40 do
+            let data = NativeArray.set_int(NativeArray.set_int(data, 804, ward + 1), 806, affected)
+            let data = NativeArray.set_int(NativeArray.set_int(data, 807, affected), 808, S.waste_date(c) + 240)
+            { c with council: NativeArray.set_int(data, 809, homes),
+              message: member(c, ward) ++ " suspended divine offerings pending recovery." }
+          else
+            let data = NativeArray.set_int(NativeArray.set_int(data, 0, 6), 1, ward)
+            let data = NativeArray.set_int(NativeArray.set_int(data, 2, c.month + 8), 7, 15)
+            let data = NativeArray.set_int(NativeArray.set_int(data, 4, 0), 5, lot + 1)
+            let data = NativeArray.set_int(NativeArray.set_int(data, 728, affected), 729, affected)
+            let data = NativeArray.set_int(NativeArray.set_int(data, 730, 0), 731, c.month)
+            { c with council: NativeArray.set_int(data, 732, homes),
+              message: member(c, ward) ++ " requested recovery from the curse." }
+          end
+        end
+      end
+    end
+  end
+
   type WardReport = { homes : Int, affected : NativeIntArr, examples : NativeIntArr }
 
   fn issue_name(issue : Int) : String do
@@ -179,6 +356,10 @@ mod Ur.Council do
       9 -> "Household budgets under strain"
       10 -> "Poor walking access to parks"
       11 -> "Poor school access"
+      12 -> "Poor walking access to worship"
+      13 -> "Support for more festivals"
+      14 -> "Festival strain on services"
+      15 -> "Homes affected by the curse"
       _ -> "No pressing issue"
     end
   end
@@ -213,6 +394,14 @@ mod Ur.Council do
     let report = add_affected(report, 9, lot, homes, S.margin(accounts) <= 4)
     let report = add_affected(report, 10, lot, homes, S.measure(c, st, lot, 1) < 20)
     let report = add_affected(report, 11, lot, homes, !S.has_civic(S.get(st.civic, lot), 1))
+    let report = if S.patron(c) == 0 || S.rededication_days(c) > 0 do report else
+      let feedback = S.festival_feedback(c, lot)
+      let policy = S.festival_policy(c)
+      let overflow = feedback > 0 && S.waste_overflow(c, lot) > 0
+      let report = add_affected(report, 12, lot, homes, !S.worship_access(c, st, lot))
+      let report = add_affected(report, 13, lot, homes, policy == 0 && feedback >= 90 && !overflow && !food)
+      add_affected(report, 14, lot, homes, policy < 2 && (feedback < 0 || (feedback > 0 && (feedback < 85 || overflow || food))))
+    end
     { report with homes: report.homes + homes }
   end
 
@@ -226,12 +415,12 @@ mod Ur.Council do
   end
 
   fn ward_report(c : Ur.Sim.City, st : Ur.Sim.Stats, ward : Int) : WardReport do
-    let report = { homes: 0, affected: NativeArray.make_int(12, 0), examples: NativeArray.make_int(12, 0) }
+    let report = { homes: 0, affected: NativeArray.make_int(15, 0), examples: NativeArray.make_int(15, 0) }
     if ward < 0 || !seated(c, ward) do report else survey_ward(c, st, ward, 0, report) end
   end
 
   fn share(report : WardReport, issue : Int) : Int do
-    if report.homes == 0 || issue < 1 || issue > 11 do 0
+    if report.homes == 0 || issue < 1 || issue > 14 do 0
     else NativeArray.get_int(report.affected, issue) * 100 / report.homes end
   end
 
@@ -240,6 +429,7 @@ mod Ur.Council do
       1 | 2 | 3 | 4 | 7 -> 25
       5 | 6 | 8 -> 40
       9 -> 60
+      13 | 14 -> 35
       _ -> 75
     end
     let affected = share(report, issue)
@@ -247,7 +437,7 @@ mod Ur.Council do
   end
 
   pfn leading(report : WardReport, issue : Int, best : Int, pressure : Int) : Int do
-    if issue > 11 do best else
+    if issue > 14 do best else
       let score = issue_pressure(report, issue)
       if score > pressure do leading(report, issue + 1, issue, score)
       else leading(report, issue + 1, best, pressure) end
@@ -326,24 +516,69 @@ mod Ur.Council do
     let support = if side == 1 do 9 else if side == 2 do -9 else 0 end end
     S.clamp(50 + (happiness - 50) * 3 / 4 + support, 8, 92)
   end
-  pfn sentiment(c : Ur.Sim.City, st : Ur.Sim.Stats, ward : Int, offset : Int, total : Int, residents : Int) : Int do
-    if offset == 180 do (if residents > 0 do total / residents else 40 end) else
+  pfn sentiment(c : Ur.Sim.City, st : Ur.Sim.Stats, ward : Int, festival_days : Int, offset : Int, total : Int, residents : Int) : Int do
+    if offset == 180 do (if residents > 0 do total / residents else if festival_days >= 0 do 0 else 40 end end) else
       let lot = ward_lot(ward, offset)
       let floors = if ward_at(c, lot) == ward do S.residential_floors(c, lot) else 0 end
-      let score = if floors > 0 do S.measure(c, st, lot, 0) else 0 end
-      sentiment(c, st, ward, offset + 1, total + score * floors, residents + floors)
+      let score = if floors == 0 do 0 else
+        let base = S.base_happiness(c, st, lot)
+        if festival_days < 0 do base else
+          let worship = S.clamp(S.get(st.worship, lot), 0, 100 - base)
+          let festival = S.clamp(S.festival_result_happiness(c, lot), 0, 100 - base - worship)
+          worship * S.days_per_month() + festival * festival_days
+        end
+      end
+      sentiment(c, st, ward, festival_days, offset + 1, total + score * floors, residents + floors)
+    end
+  end
+  pfn record_campaign(c : Ur.Sim.City, st : Ur.Sim.Stats, ward : Int, reset : Bool, festival_days : Int, data : NativeIntArr) : NativeIntArr do
+    if ward == 80 do data else
+      let total = if reset do 0 else S.get(data, 1050 + ward) end
+      let samples = if reset do 0 else S.get(data, 1130 + ward) end
+      let score = if seated(c, ward) do sentiment(c, st, ward, festival_days, 0, 0, 0) else 0 end
+      let next = if seated(c, ward) do
+        NativeArray.set_int(NativeArray.set_int(data, 1050 + ward, total + score), 1130 + ward, samples + 1)
+      else if reset do NativeArray.set_int(NativeArray.set_int(data, 1050 + ward, 0), 1130 + ward, 0) else data end end
+      record_campaign(c, st, ward + 1, reset, festival_days, next)
+    end
+  end
+  pfn sample_campaign(c : Ur.Sim.City, snapshot : (Ur.Sim.City) -> Ur.Sim.Stats) : Ur.Sim.City do
+    let last = S.get(c.council, 805)
+    let phase = c.month % 48
+    if (phase > 0 && phase < 46) || c.month == 0 || last == c.month || !established(c) || S.patron(c) == 0 do c else
+      -- Record the three completed months leading into the election.
+      -- A short festival is weighted by its active days, even between snapshots.
+      let end_day = c.month * S.days_per_month()
+      let festival_day = S.last_festival(c) - 1
+      let start_day = S.clamp(festival_day, end_day - S.days_per_month(), end_day)
+      let festival_days = if festival_day < 0 do 0 else
+        S.clamp(festival_day + S.festival_happiness_duration(), start_day, end_day) - start_day
+      end
+      let reset = last <= 0 || (last - 1) / 48 != (c.month - 1) / 48
+      let data = record_campaign(c, snapshot(c), 0, reset, festival_days, c.council)
+      { c with council: NativeArray.set_int(data, 805, c.month) }
+    end
+  end
+  pfn campaign_average(c : Ur.Sim.City, ward : Int) : Int do
+    let days = S.get(c.council, 1130 + ward) * S.days_per_month()
+    if days == 0 || S.get(c.council, 805) < c.month - 2 do 0 else
+      (S.get(c.council, 1050 + ward) + days / 2) / days
     end
   end
   pfn elect(c : Ur.Sim.City, st : Ur.Sim.Stats, ward : Int) : Ur.Sim.City do
     if ward == 80 do c else if !seated(c, ward) do elect(c, st, ward + 1) else
       let side = endorsement(c, ward)
-      let support = vote_support(sentiment(c, st, ward, 0, 0, 0), side)
+      let happiness = S.clamp(sentiment(c, st, ward, -1, 0, 0, 0) + campaign_average(c, ward), 0, 100)
+      let support = vote_support(happiness, side)
       let stays = roll(c, ward, incumbent(c, ward) + 89) < support
       let backs_winner = (stays && side == 1) || (!stays && side == 2)
       let backs_loser = side > 0 && !backs_winner
       let prior_backlash = S.get(c.council, 408 + ward)
       let backlash = if backs_loser do 2 else if stays do S.clamp(prior_backlash - 1, 0, 2) else 0 end end
-      let data = if stays do c.council else NativeArray.set_int(NativeArray.set_int(c.council, 168 + ward, incumbent(c, ward) + 1), 328 + ward, 0) end
+      let data = if stays do c.council else
+        let replaced = NativeArray.set_int(NativeArray.set_int(c.council, 168 + ward, incumbent(c, ward) + 1), 328 + ward, 0)
+        NativeArray.set_int(NativeArray.set_int(replaced, 810 + ward, next_favorite(c, ward, c.month / 48)), 890 + ward, 0)
+      end
       let data = NativeArray.set_int(NativeArray.set_int(data, 248 + ward, 0), 408 + ward, backlash)
       let status = if stays do 1 else 2 end
       let data = NativeArray.set_int(NativeArray.set_int(data, 568 + ward, status), 488 + ward, if backs_loser do 1 else 0 end)
@@ -391,10 +626,13 @@ mod Ur.Council do
         4 -> if holds do 4 else 6 end
         7 -> if holds do 7 else 6 end
         9 -> if c.tax >= 16 && holds do 2 else if c.tax >= 10 do 1 else 6 end end
+        13 -> 9
+        14 -> 10
         _ -> 6
       end
+      let festival = if issue == 13 do 1 else if issue == 14 && S.festival_policy(c) == 0 do 2 else 0 end end
       let data = NativeArray.set_int(NativeArray.set_int(c.council, 0, agenda), 1, ward)
-      let data = NativeArray.set_int(NativeArray.set_int(data, 2, c.month + 8), 4, 0)
+      let data = NativeArray.set_int(NativeArray.set_int(data, 2, c.month + 8), 4, festival)
       let data = NativeArray.set_int(NativeArray.set_int(data, 5, NativeArray.get_int(report.examples, issue)), 7, issue)
       let data = NativeArray.set_int(NativeArray.set_int(data, 728, affected), 729, affected)
       let data = NativeArray.set_int(NativeArray.set_int(data, 730, 0), 731, c.month)
@@ -408,10 +646,17 @@ mod Ur.Council do
   pfn observe_agenda(c : Ur.Sim.City, st : Ur.Sim.Stats) : Ur.Sim.City do
     let issue = agenda_issue(c)
     let last = S.get(c.council, 731)
-    if kind(c) == 0 || issue == 0 || c.month <= last do c else
-      let report = ward_report(c, st, sponsor(c))
-      let affected = share(report, issue)
-      let comparable = report.homes > 0 && report.homes * 5 >= S.get(c.council, 732) * 4 && (issue != 4 || Option.is_some(c.freight))
+    if kind(c) == 9 || kind(c) == 10 do
+      if S.festival_policy(c) == demand(c) do clear(adjust_relation(c, sponsor(c), 8), "The council recorded the festival policy change.") else c end
+    else if kind(c) == 0 || issue == 0 || c.month <= last do c else
+      let (homes, affected) = if issue == 15 do
+        let (homes, damaged, _) = curse_damage(c, sponsor(c), 0, 0, 0, -1)
+        (homes, if homes > 0 do damaged * 100 / homes else 0 end)
+      else
+        let report = ward_report(c, st, sponsor(c))
+        (report.homes, share(report, issue))
+      end
+      let comparable = homes > 0 && homes * 5 >= S.get(c.council, 732) * 4 && (issue != 4 || Option.is_some(c.freight))
       let checks = if comparable && affected <= outcome_goal(c) do
         if c.month == last + 1 do verified_months(c) + 1 else 1 end
       else 0 end
@@ -422,7 +667,7 @@ mod Ur.Council do
       if checks >= 2 do
         clear(adjust_relation(c, sponsor(c), 8), member(c, sponsor(c)) ++ " closed the item after two months of improvement.")
       else c end
-    end
+    end end
   end
 
   pfn expire_agenda(c : Ur.Sim.City) : Ur.Sim.City do
@@ -436,15 +681,18 @@ mod Ur.Council do
       let floors = counts(c, 0, NativeArray.make_int(80, 0))
       { c with council: extend_wards(draw_wards(c.council, floors, 0), floors, 0) }
     else c end
+    let c = observe_religion(c)
     let vote = c.month > 0 && c.month % 48 == 0 && last_election(c) < c.month && established(c)
     if vote do
+      let c = respond_rededication(c, false)
       let old = incumbent(c, sponsor(c))
       let st = snapshot(c)
-      let c = elect(c, st, 0)
+      let c = elect(sample_campaign(c, fn _ -> st), st, 0)
       let c = if kind(c) > 0 && old != incumbent(c, sponsor(c)) do clear(c, "The new councillor dropped the previous agenda item.")
         else expire_agenda(observe_agenda(c, st)) end
-      { c with council: NativeArray.set_int(c.council, 6, c.month), message: "Council election results are available under Details / Council." }
+      request_rededication({ c with council: NativeArray.set_int(c.council, 6, c.month), message: "Council election results are available under Details / Council." })
     else
+      let c = sample_campaign(c, snapshot)
       let c = settle(c)
       if kind(c) > 0 do
         let c = if agenda_issue(c) > 0 && c.month > S.get(c.council, 731) do observe_agenda(c, snapshot(c)) else c end
@@ -468,6 +716,8 @@ mod Ur.Council do
       5 -> "Request: set quiet hours to 10 pm"
       6 -> "Request: improve neighborhood conditions"
       7 -> "Hold: new high-nuisance facilities"
+      9 -> "Request: expand festival celebrations"
+      10 -> "Request: reduce festival disruption"
       _ -> "No pending council business"
     end
   end
@@ -491,6 +741,8 @@ mod Ur.Council do
         9 -> "Request: ease household costs"
         10 -> "Request: improve walking access to parks"
         11 -> "Request: improve school access"
+        12 -> "Request: improve walking access to worship"
+        15 -> "Request: repair curse damage"
         _ -> agenda_title(agenda)
       end
     end end end
@@ -508,6 +760,10 @@ mod Ur.Council do
       8 -> "Reduce exposure to loud streets or late bars."
       9 -> "Improve what households have left after bills."
       10 -> "Connect more homes to parks on foot."
+      12 -> "Open a shrine or temple within walking distance of more homes."
+      13 -> "Adopt Public Holidays to serve more residents."
+      14 -> if demand(c) == 2 do "Suspend festivals while local services recover." else "Return to Local Observance to reduce demand." end
+      15 -> "Restore affected homes and services in this ward."
       _ -> "Extend school access to more homes."
     end) else match demand(c) do
       1 -> "Build a new school with street access in this ward."
@@ -523,14 +779,18 @@ mod Ur.Council do
 
   fn respond(c : Ur.Sim.City, accept : Bool) : Ur.Sim.City do
     let agenda = kind(c)
-    if (agenda != 1 && agenda != 5 && agenda != 6) || (agenda == 6 && accept) do c else
+    if agenda == 9 || agenda == 10 do
+      let next = if accept do S.set_festival_policy(c, demand(c)) else c end
+      clear(adjust_relation(next, sponsor(c), if accept do 10 else -8 end),
+        if accept do "Council festival policy granted." else "Council festival policy declined." end)
+    else if (agenda != 1 && agenda != 5 && agenda != 6) || (agenda == 6 && accept) do c else
       let next = if !accept do c else if agenda == 1 do S.policy(c, -1, 0) else { c with quiet_rule: 2 } end end
       if accept && agenda_issue(c) > 0 do
         { next with council: NativeArray.set_int(next.council, 0, 6), message: "Income tax lowered. The council will review household budgets." }
       else
         clear(adjust_relation(next, sponsor(c), if accept do 10 else -8 end), if accept do "Council request granted." else "Council request declined." end)
       end
-    end
+    end end
   end
 
   fn policy_block(c : Ur.Sim.City, before : Ur.Sim.City) : Bool do
