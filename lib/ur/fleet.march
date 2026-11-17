@@ -1,0 +1,199 @@
+mod Ur.Fleet do
+  alias Ur.Sim as S
+  alias Ur.Food as F
+  type Run = { slot : Int, trip : Ur.Food.Trip, progress : Float, stop_wait : Float }
+
+  pfn last_stop(c : Ur.Sim.City, line : Ur.Food.Routes, start : Int, head : Int) : Int do
+    if head <= 0 do -1 else
+      let i = S.get(line.queue, head)
+      if i != start && S.get(c.stops, i) == 2 do i else last_stop(c, line, start, head - 1) end
+    end
+  end
+
+  pfn bus_lines(c : Ur.Sim.City, running : NativeIntArr, depots : NativeIntArr, harbour : NativeIntArr, seen : NativeIntArr, i : Int, out : List(Ur.Food.Trip)) : List(Ur.Food.Trip) do
+    if i >= S.count() do out else
+      let start = S.get(c.stops, i) == 2 && S.get(running, i) == 2 && S.get(seen, i) == 0
+      if !start do bus_lines(c, running, depots, harbour, seen, i + 1, out) else
+        let line = F.fleet_search(c, i, 3)
+        let seen = mark_line(seen, line, 0)
+        let (first, links) = line_origin(c, line, depots, harbour, 0)
+        let out = if !S.valid(first) do out else
+          let route = F.fleet_search(c, first, 3)
+          let last = last_stop(c, route, first, route.tail - 1)
+          if !S.valid(last) do out else
+            let service = F.path_to(route.next, last, Nil)
+            let stops = F.path_to(links, first, List.drop(service, 1))
+            let source = match stops do
+              Cons(lot, _) -> lot
+              Nil -> first
+            end
+            Cons({ mode: 2, stops: stops, legs: List.length(stops) - 1, source: source }, out)
+          end end
+        bus_lines(c, running, depots, harbour, seen, i + 1, out)
+      end
+    end
+  end
+
+  pfn mark_line(seen : NativeIntArr, line : Ur.Food.Routes, i : Int) : NativeIntArr do
+    if i >= line.tail do seen else
+      mark_line(NativeArray.set_int(seen, S.get(line.queue, i), 1), line, i + 1)
+    end
+  end
+
+  pfn line_origin(c : Ur.Sim.City, line : Ur.Food.Routes, depots : NativeIntArr, harbour : NativeIntArr, i : Int) : (Int, NativeIntArr) do
+    if i >= line.tail do harbour_origin(c, line, harbour, 0) else
+      let lot = S.get(line.queue, i)
+      if S.get(c.stops, lot) == 2 && S.get(depots, lot) >= 0 do (lot, depots)
+      else line_origin(c, line, depots, harbour, i + 1) end
+    end
+  end
+
+  pfn harbour_origin(c : Ur.Sim.City, line : Ur.Food.Routes, links : NativeIntArr, i : Int) : (Int, NativeIntArr) do
+    if i >= line.tail do (-1, links) else
+      let lot = S.get(line.queue, i)
+      if S.get(c.stops, lot) == 2 && S.get(links, lot) >= 0 do (lot, links)
+      else harbour_origin(c, line, links, i + 1) end
+    end
+  end
+
+  fn routes_with(c : Ur.Sim.City, running : NativeIntArr, network : Ur.Sim.BusNetwork) : List(Ur.Food.Trip) do
+    if !S.valid(c.harbour) do Nil else
+      let depots = F.yard_routes(c, 23, 2)
+      let harbour = F.fleet_search(c, c.harbour, 2)
+      let buses = bus_lines(c, running, depots, harbour.next, NativeArray.make_int(2640, 0), 0, Nil)
+      let scheduled = List.flat_map(buses, fn bus ->
+        let (_, terminal) = F.leg(bus.stops, bus.legs - 1)
+        match S.bus_line_at(network, terminal) do
+          Some(line) -> List.map(List.range(0, line.departures), fn _ -> bus)
+          None -> Nil
+        end)
+      List.append(scheduled, F.deliveries(c))
+    end
+  end
+  fn routes(c : Ur.Sim.City, running : NativeIntArr) : List(Ur.Food.Trip) do
+    routes_with(c, running, S.bus_network(c, S.access(c), running))
+  end
+
+  fn duration(trip : Ur.Food.Trip) : Float do
+    int_to_float(trip.legs) *. 2.0 +. 1.4
+  end
+  fn forward(trip : Ur.Food.Trip, progress : Float) : Bool do
+    progress < duration(trip) *. 0.5
+  end
+  fn position(trip : Ur.Food.Trip, progress : Float) : Float do
+    let span = int_to_float(trip.legs)
+    let u = (if forward(trip, progress) do progress else duration(trip) -. progress end) -. 0.35
+    if u < 0.0 do 0.0 else if u > span do span else u end end
+  end
+
+  fn bus_rotation(run : Run) : Float do
+    let phase = run.progress
+    let span = int_to_float(run.trip.legs)
+    let end_time = duration(run.trip)
+    if phase < 0.35 do (phase /. 0.35 -. 1.0) *. 1.570796327
+    else if phase > end_time -. 0.35 do 3.141592654 +. (phase -. end_time +. 0.35) /. 0.35 *. 1.570796327
+    else if phase >= span +. 0.35 && phase <= span +. 1.05 do
+      (phase -. span -. 0.35) /. 0.70 *. 3.141592654
+    else if forward(run.trip, phase) do 0.0 else 3.141592654 end end end end
+  end
+  pfn stop_index(stops : List(Int), stop : Int, i : Int) : Int do
+    match stops do
+      Nil -> -1
+      Cons(lot, rest) -> if lot == stop do i else stop_index(rest, stop, i + 1) end
+    end
+  end
+
+  fn serves(trips : List(Ur.Food.Trip), board : Int, alight : Int) : Bool do
+    List.any(trips, fn trip -> trip.mode == 2 && stop_index(trip.stops, board, 0) >= 0 && stop_index(trip.stops, alight, 0) >= 0)
+  end
+
+  fn boarding(active : List(Run), board : Int, alight : Int, seats : NativeIntArr) : (Int, Float) do
+    match active do
+      Nil -> (-1, 0.0)
+      Cons(run, rest) ->
+        if run.trip.mode != 2 || NativeArray.get_int(seats, run.slot) >= S.bus_seats() do boarding(rest, board, alight, seats) else
+          let at = position(run.trip, run.progress)
+          let outbound = forward(run.trip, run.progress)
+          let start = stop_index(run.trip.stops, board, 0)
+          let stop = stop_index(run.trip.stops, alight, 0)
+          let delta = at -. int_to_float(start)
+          let near = delta >= -0.22 && delta <= 0.22
+          let toward = if outbound do stop > start else stop < start end
+          if start < 0 || stop < 0 || !near || !toward do boarding(rest, board, alight, seats) else
+            let arrival = int_to_float(stop) +. 0.35
+            (run.slot, if outbound do arrival else duration(run.trip) -. arrival end)
+          end
+        end
+    end
+  end
+
+  fn progress(active : List(Run), slot : Int) : Float do
+    match active do
+      Nil -> -1.0
+      Cons(run, rest) ->
+        if run.slot == slot && run.trip.mode == 2 do run.progress else progress(rest, slot) end
+    end
+  end
+
+  pfn advance(c : Ur.Sim.City, traffic : NativeIntArr, run : Run, time : Float, dt : Float, junctions : NativeIntArr, signal_tick : Int) : Run do
+    let trip = run.trip
+    let at = position(trip, run.progress)
+    let outbound = forward(trip, run.progress)
+    let leg = S.clamp(if outbound do float_to_int(at) else float_to_int(Math.ceil(at)) - 1 end, 0, trip.legs - 1)
+    let (a, b) = F.leg(trip.stops, leg)
+    let peer = if outbound do b else a end
+    let road = if outbound do a else b end
+    let on_road = trip.mode == 2 || trip.mode == 6
+    let blocked = (on_road && S.storm_road_closed(c, peer)) || (trip.mode == 6 && S.car_free_now(c, peer) && !S.car_free_now(c, road))
+    let pace = if on_road do S.rain_road_pace(c) else 1.0 end
+    let delay = S.delay_for(c, road, S.road_load(traffic, road))
+    let speed = if trip.mode == 2 do 0.65 else 0.85 end
+    let step = if blocked do 0.0 else dt *. speed *. pace *. S.traffic_pace(c.street_day, S.street_hour(time)) /. (1.0 +. int_to_float(delay) *. 0.08) end
+    let progress = run.progress +. step
+    let direction = S.direction(road, peer)
+    let control = if S.span_distance(road, peer) == 1 && S.junction_arm(c, peer, S.opposite(direction)) do S.get(junctions, peer) else 0 end
+    let stop = 0.35 +. (if outbound do int_to_float(leg) else int_to_float(trip.legs * 2 - leg - 1) +. 0.70 end) +. S.stop_line()
+    let wait = if control == 1 && run.progress == stop do run.stop_wait +. dt else 0.0 end
+    let can_enter = if control == 1 do run.stop_wait >= 0.45 else S.signal_green(peer, direction, signal_tick) end
+    if control > 0 && run.progress <= stop && progress > stop && !can_enter do
+      { run with progress: stop, stop_wait: wait }
+    else { run with progress: progress, stop_wait: 0.0 } end
+  end
+
+  pfn same_run(a : Ur.Food.Trip, b : Ur.Food.Trip) : Bool do
+    let (_, a_end) = F.leg(a.stops, a.legs - 1)
+    let (_, b_end) = F.leg(b.stops, b.legs - 1)
+    a.mode == b.mode && a.source == b.source && (a.mode == 6 || a_end == b_end)
+  end
+
+  pfn can_dispatch(trip : Ur.Food.Trip, active : List(Run), planned : List(Ur.Food.Trip)) : Bool do
+    let running = List.filter(active, fn run -> same_run(run.trip, trip))
+    if trip.mode != 2 do List.is_empty(running) else
+      let count = List.length(List.filter(planned, fn other -> same_run(other, trip)))
+      let spacing = duration(trip) /. int_to_float(S.clamp(count, 1, 3))
+      List.length(running) < count && List.all(running, fn run -> run.progress >= spacing)
+    end
+  end
+  pfn dispatch(wanted : List(Ur.Food.Trip), planned : List(Ur.Food.Trip), active : List(Run), slot : Int, i : Int) : List(Run) do
+    if slot >= 180 || i >= 180 do active else
+      match wanted do
+        Nil -> active
+        Cons(trip, rest) ->
+          if !can_dispatch(trip, active, planned) do dispatch(rest, planned, active, slot, i + 1)
+          else if List.any(active, fn run -> run.slot == slot) do dispatch(wanted, planned, active, slot + 1, i)
+          else dispatch(rest, planned, Cons({ slot: slot, trip: trip, progress: 0.0, stop_wait: 0.0 }, active), slot + 1, i + 1) end end
+      end
+    end
+  end
+  fn step_at(c : Ur.Sim.City, traffic : NativeIntArr, active : List(Run), wanted : List(Ur.Food.Trip), time : Float, dt : Float, refresh : Bool, junctions : NativeIntArr, signal_tick : Int) : List(Run) do
+    if dt <= 0.0 && !refresh do active else
+      let advanced = List.map(active, fn run -> advance(c, traffic, run, time, dt, junctions, signal_tick))
+      let running = List.filter(advanced, fn run -> run.progress < duration(run.trip))
+      if refresh || List.length(running) < List.length(wanted) do dispatch(wanted, wanted, running, 0, 0) else running end
+    end
+  end
+  fn step(c : Ur.Sim.City, traffic : NativeIntArr, active : List(Run), wanted : List(Ur.Food.Trip), dt : Float, refresh : Bool) : List(Run) do
+    step_at(c, traffic, active, wanted, 0.0, dt, refresh, S.junction_controls(c, traffic, 0, NativeArray.make_int(S.count(), 0)), 0)
+  end
+
+end

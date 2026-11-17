@@ -1,0 +1,134 @@
+-- Capacity is shared by the four arms of each installed segment.
+-- A segment is split into an inlet and an outlet so reverse residual paths can
+-- reroute earlier deliveries without withdrawing service from a customer.
+mod Ur.UtilitiesNetwork do
+  type Network = { width : Int, size : Int, capacity : NativeIntArr, source : NativeIntArr, flow : NativeIntArr }
+  type Search = { next : NativeIntArr, queue : NativeIntArr, tail : Int, origin : Int }
+
+  fn new(width : Int, size : Int, capacity : NativeIntArr) : Network do
+    { width: width, size: size, capacity: capacity, source: NativeArray.make_int(size, 0), flow: NativeArray.make_int(size * 5, 0) }
+  end
+  fn capacity(n : Network, lot : Int) : Int do
+    if lot < 0 || lot >= n.size do 0 else NativeArray.get_int(n.capacity, lot) end
+  end
+  fn used(n : Network, lot : Int) : Int do NativeArray.get_int(n.flow, lot * 5 + 4) end
+  fn remaining(n : Network, lot : Int) : Int do NativeArray.get_int(n.source, lot) end
+  fn add_source(n : Network, lot : Int, units : Int) : Network do
+    if capacity(n, lot) == 0 || units <= 0 do n else
+      { n with source: NativeArray.set_int(n.source, lot, remaining(n, lot) + units) }
+    end
+  end
+  fn peer(n : Network, lot : Int, arm : Int) : Int do
+    match arm do
+      0 -> if lot % n.width == 0 do -1 else lot - 1 end
+      1 -> if lot % n.width == n.width - 1 do -1 else lot + 1 end
+      2 -> if lot < n.width do -1 else lot - n.width end
+      _ -> if lot + n.width >= n.size do -1 else lot + n.width end
+    end
+  end
+  pfn direction(n : Network, from : Int, to : Int) : Int do
+    if from / n.width == to / n.width do (if to < from do 0 else 1 end)
+    else if to < from do 2 else 3 end end
+  end
+  fn tap(n : Network, lot : Int, arm : Int) : Int do
+    if lot < 0 || lot >= n.size do -1
+    else if capacity(n, lot) > 0 do lot
+    else if arm == 4 do -1 else
+      let beside = peer(n, lot, arm)
+      if capacity(n, beside) > 0 do beside else tap(n, lot, arm + 1) end
+    end end end
+  end
+  pfn edge(n : Network, from : Int, to : Int, units : Int) : (Int, Int) do
+    let a = from / 2
+    let b = to / 2
+    if a == b do (a * 5 + 4, if from % 2 == 0 do units else 0 - units end)
+    else if from % 2 == 1 do (a * 5 + direction(n, a, b), units)
+    else (b * 5 + direction(n, b, a), 0 - units) end end
+  end
+  pfn push(s : Search, from : Int, to : Int) : Search do
+    if NativeArray.get_int(s.next, from) >= 0 do s else
+      { s with next: NativeArray.set_int(s.next, from, to), queue: NativeArray.set_int(s.queue, s.tail, from), tail: s.tail + 1 }
+    end
+  end
+  pfn incoming(n : Network, s : Search, node : Int, arm : Int) : Search do
+    if arm == 4 do s else
+      let lot = node / 2
+      let j = peer(n, lot, arm)
+      let s = if capacity(n, j) > 0 do
+        if node % 2 == 0 do push(s, 2 * j + 1, node)
+        else if NativeArray.get_int(n.flow, lot * 5 + arm) > 0 do push(s, 2 * j, node) else s end end
+      else s end
+      incoming(n, s, node, arm + 1)
+    end
+  end
+  pfn search(n : Network, s : Search, head : Int) : Search do
+    if head == s.tail do s else
+      let node = NativeArray.get_int(s.queue, head)
+      let lot = node / 2
+      let inlet = node % 2 == 0
+      if inlet && remaining(n, lot) > 0 do { s with origin: node } else
+        let internal = if inlet do used(n, lot) else capacity(n, lot) - used(n, lot) end
+        let s = if internal > 0 do push(s, if inlet do node + 1 else node - 1 end, node) else s end
+        search(n, incoming(n, s, node, 0), head + 1)
+      end
+    end
+  end
+  pfn path_room(n : Network, next : NativeIntArr, from : Int, target : Int, amount : Int) : Int do
+    if from == target do amount else
+      let to = NativeArray.get_int(next, from)
+      let (index, direction) = edge(n, from, to, 1)
+      let flow = NativeArray.get_int(n.flow, index)
+      let room = if direction < 0 do flow else
+        if from / 2 == to / 2 do capacity(n, from / 2) - flow else amount end end
+      path_room(n, next, to, target, if room < amount do room else amount end)
+    end
+  end
+  pfn transfer(n : Network, next : NativeIntArr, from : Int, target : Int, units : Int) : Network do
+    if from == target do n else
+      let to = NativeArray.get_int(next, from)
+      let (index, change) = edge(n, from, to, units)
+      let flow = NativeArray.set_int(n.flow, index, NativeArray.get_int(n.flow, index) + change)
+      transfer({ n with flow: flow }, next, to, target, units)
+    end
+  end
+  pfn draw_to(n : Network, target : Int, units : Int, delivered : Int) : (Network, Int) do
+    if delivered == units do (n, delivered) else
+      let start = { next: NativeArray.set_int(NativeArray.make_int(n.size * 2, -1), target, target),
+        queue: NativeArray.set_int(NativeArray.make_int(n.size * 2, 0), 0, target), tail: 1, origin: -1 }
+      let route = search(n, start, 0)
+      if route.origin < 0 do (n, delivered) else
+        let lot = route.origin / 2
+        let supply = remaining(n, lot)
+        let request = units - delivered
+        let amount = path_room(n, route.next, route.origin, target, if supply < request do supply else request end)
+        let n = { n with source: NativeArray.set_int(n.source, lot, supply - amount) }
+        draw_to(transfer(n, route.next, route.origin, target, amount), target, units, delivered + amount)
+      end
+    end
+  end
+  fn draw(n : Network, lot : Int, units : Int) : (Network, Int) do
+    let site = tap(n, lot, 0)
+    if site < 0 || units <= 0 do (n, 0) else draw_to(n, site * 2 + 1, units, 0) end
+  end
+  -- Reachability ignores capacity usage. It distinguishes a local restriction
+  -- from a parcel that has no path to an installed source at all.
+  pfn reach_edges(n : Network, s : Search, lot : Int, arm : Int) : Search do
+    if arm == 4 do s else
+      let j = peer(n, lot, arm)
+      let s = if capacity(n, j) > 0 do push(s, j, lot) else s end
+      reach_edges(n, s, lot, arm + 1)
+    end
+  end
+  pfn reach_from(n : Network, s : Search, head : Int) : NativeIntArr do
+    if head == s.tail do s.next else reach_from(n, reach_edges(n, s, NativeArray.get_int(s.queue, head), 0), head + 1) end
+  end
+  pfn seed(n : Network, s : Search, lot : Int) : Search do
+    if lot == n.size do s else
+      let s = if remaining(n, lot) > 0 do push(s, lot, lot) else s end
+      seed(n, s, lot + 1)
+    end
+  end
+  fn connected(n : Network) : NativeIntArr do
+    reach_from(n, seed(n, { next: NativeArray.make_int(n.size, -1), queue: NativeArray.make_int(n.size, 0), tail: 0, origin: -1 }, 0), 0)
+  end
+end

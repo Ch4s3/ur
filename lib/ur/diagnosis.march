@@ -1,0 +1,56 @@
+mod Ur.Diagnosis do
+  alias Ur.Sim as S
+  type Report = { homes : Int, shops : Int, bars : Int, stops : Int, footfall : Int, road : Int, road_load : Int, pressure : Int,
+    late_homes : Int, noise_source : Int, overflow : Int, waste_lot : Int, worst_pile : Int }
+
+  pfn late_bar(c : Ur.Sim.City, lot : Int) : Bool do
+    S.valid(lot) && S.nightlife(c, lot) && S.quiet_at(c, lot) == 1
+  end
+  pfn nearest_bar(c : Ur.Sim.City, lot : Int, side : Int) : Int do
+    if side == 4 do -1 else
+      let peer = S.neighbour(lot, side)
+      if late_bar(c, peer) do peer else nearest_bar(c, lot, side + 1) end
+    end
+  end
+  pfn read_lot(c : Ur.Sim.City, st : Ur.Sim.Stats, lot : Int, report : Report) : Report do
+    let homes = S.occupied_homes(c, lot)
+    let source = if homes == 0 do -1 else if late_bar(c, lot) do lot else nearest_bar(c, lot, 0) end end
+    let capacity = S.road_capacity(c, lot)
+    let load = if capacity > 0 do S.road_load(st.traffic, lot) else 0 end
+    let pressure = if capacity > 0 && S.motor_road(c, lot) do load * 100 / capacity else 0 end
+    let waste = S.waste_overflow(c, lot)
+    let footfall = S.get(c.footfall, lot)
+    { homes: report.homes + homes, shops: report.shops + (if S.storefront(c, lot) == 1 do 1 else 0 end),
+      bars: report.bars + (if S.nightlife(c, lot) do 1 else 0 end),
+      stops: report.stops + (if S.get(c.stops, lot) >= 2 && S.get(st.running_transit, lot) > 0 do 1 else 0 end),
+      footfall: if footfall > report.footfall do footfall else report.footfall end,
+      road: if pressure > report.pressure do lot else report.road end,
+      road_load: if pressure > report.pressure do load else report.road_load end,
+      pressure: if pressure > report.pressure do pressure else report.pressure end,
+      late_homes: report.late_homes + (if S.valid(source) do homes else 0 end),
+      noise_source: if S.valid(report.noise_source) do report.noise_source else source end,
+      overflow: report.overflow + waste,
+      waste_lot: if waste > report.worst_pile do lot else report.waste_lot end,
+      worst_pile: if waste > report.worst_pile do waste else report.worst_pile end }
+  end
+  pfn scan(c : Ur.Sim.City, st : Ur.Sim.Stats, focus : Int, offset : Int, report : Report) : Report do
+    if offset == 25 || !S.valid(focus) do report else
+      let x = focus % S.width() + offset % 5 - 2
+      let z = focus / S.width() + offset / 5 - 2
+      let report = if x >= 0 && x < S.width() && z >= 0 && z < S.depth() do read_lot(c, st, S.index(x, z), report) else report end
+      scan(c, st, focus, offset + 1, report)
+    end
+  end
+  fn report(c : Ur.Sim.City, st : Ur.Sim.Stats, focus : Int) : Report do
+    scan(c, st, focus, 0, { homes: 0, shops: 0, bars: 0, stops: 0, footfall: 0, road: -1, road_load: 0, pressure: 0,
+      late_homes: 0, noise_source: -1, overflow: 0, waste_lot: -1, worst_pile: 0 })
+  end
+  fn target(report : Report, row : Int) : Int do
+    match row do
+      0 -> report.road
+      1 -> report.noise_source
+      2 -> report.waste_lot
+      _ -> -1
+    end
+  end
+end

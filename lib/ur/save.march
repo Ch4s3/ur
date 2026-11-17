@@ -1,0 +1,866 @@
+-- Versioned city snapshots. The staging file sits beside the save so the
+-- final rename can replace the previous save atomically.
+mod Ur.Save do
+  needs IO.FileRead
+  needs IO.FileWrite
+  needs IO.Process
+  alias Ur.Sim as S
+  type Game = { city : Ur.Sim.City, cx : Float, cz : Float, zoom : Float, yaw : Float, paused : Bool, speed : Int }
+
+  fn path() : String do
+    let home = Authority.must(Env.get("HOME", "."))
+    Authority.must(Env.get("UR_SAVE_PATH", home ++ "/.ur-save.json"))
+  end
+
+  pfn integer(j : Json.JsonValue) : Result(Int, String) do
+    match j do
+      Json.Number(n) ->
+        if n >= -2147483648.0 && n <= 2147483647.0 && Math.floor(n) == n do Ok(float_to_int(n))
+        else Err("Invalid integer.") end
+      _ -> Err("Invalid integer.")
+    end
+  end
+  pfn number(j : Json.JsonValue) : Result(Float, String) do
+    match j do
+      Json.Number(n) -> if n >= -100000.0 && n <= 100000.0 do Ok(n) else Err("Invalid camera.") end
+      _ -> Err("Invalid camera.")
+    end
+  end
+  pfn boolean(j : Json.JsonValue) : Result(Bool, String) do
+    match j do
+      Json.Bool(v) -> Ok(v)
+      _ -> Err("Invalid flag.")
+    end
+  end
+  pfn string(j : Json.JsonValue) : Result(String, String) do
+    match j do
+      Json.Str(v) -> Ok(v)
+      _ -> Err("Invalid message.")
+    end
+  end
+  pfn field(j : Json.JsonValue, key : String) : Result(Json.JsonValue, String) do
+    match Json.get(j, key) do
+      Some(value) -> Ok(value)
+      None -> Err("Missing save field " ++ key ++ ".")
+    end
+  end
+  pfn enc_array(a : NativeIntArr, i : Int, acc : List(Json.JsonValue)) : Json.JsonValue do
+    if i < 0 do Json.encode_array(acc)
+    else enc_array(a, i - 1, Cons(Json.encode_int(NativeArray.get_int(a, i)), acc)) end
+  end
+  pfn decode_array(xs : List(Json.JsonValue), a : NativeIntArr, i : Int, length : Int, limit : Int) : Result(NativeIntArr, String) do
+    match xs do
+      Nil -> if i == length do Ok(a) else Err("Incomplete parcel data.") end
+      Cons(value, rest) ->
+        let? n = integer(value)
+        if i >= length || n < 0 || n > limit do Err("Invalid parcel data.")
+        else decode_array(rest, NativeArray.set_int(a, i, n), i + 1, length, limit) end
+    end
+  end
+  pfn array(j : Json.JsonValue, length : Int, limit : Int) : Result(NativeIntArr, String) do
+    match j do
+      Json.Array(xs) -> decode_array(xs, NativeArray.make_int(length, 0), 0, length, limit)
+      _ -> Err("Missing parcel array.")
+    end
+  end
+  pfn decode_items(xs : List(Json.JsonValue), decode : (Json.JsonValue) -> Result(a, String), out : List(a), limit : Int) : Result(List(a), String) do
+    match xs do
+      Nil -> Ok(List.reverse(out))
+      Cons(value, rest) ->
+        if limit <= 0 do Err("Too many save entries.") else
+          let? item = decode(value)
+          decode_items(rest, decode, Cons(item, out), limit - 1)
+        end
+    end
+  end
+  pfn items(j : Json.JsonValue, decode : (Json.JsonValue) -> Result(a, String), limit : Int) : Result(List(a), String) do
+    match j do
+      Json.Array(xs) -> decode_items(xs, decode, Nil, limit)
+      _ -> Err("Missing save array.")
+    end
+  end
+  pfn parcel(j : Json.JsonValue) : Result(Int, String) do
+    let? i = integer(j)
+    if S.valid(i) do Ok(i) else Err("Invalid shipment stop.") end
+  end
+  pfn encode_budget(v : Ur.Sim.Budget) : Json.JsonValue do
+    Json.encode_object(
+      Cons(("revenue", Json.encode_int(v.revenue)),
+      Cons(("property_tax", Json.encode_int(v.property_tax)),
+      Cons(("income_tax", Json.encode_int(v.income_tax)),
+      Cons(("business_tax", Json.encode_int(v.business_tax)),
+      Cons(("trade_income", Json.encode_int(v.trade_income)),
+      Cons(("tariffs", Json.encode_int(v.tariffs)),
+      Cons(("parking_income", Json.encode_int(v.parking_income)),
+      Cons(("toll_income", Json.encode_int(v.toll_income)),
+      Cons(("infrastructure", Json.encode_int(v.infrastructure)),
+      Cons(("operations", Json.encode_int(v.operations)),
+      Cons(("energy_income", Json.encode_int(v.energy_income)),
+      Cons(("power_cost", Json.encode_int(v.power_cost)),
+      Cons(("food_cost", Json.encode_int(v.food_cost)),
+      Cons(("water_cost", Json.encode_int(v.water_cost)),
+      Cons(("sanitation_cost", Json.encode_int(v.sanitation_cost)),
+      Cons(("bus_fares", Json.encode_int(v.bus_fares)), Cons(("bus_operations", Json.encode_int(v.bus_operations)), Cons(("freight_operations", Json.encode_int(v.freight_operations)), Nil)))))))))))))))))))
+  end
+  pfn decode_budget(j : Json.JsonValue) : Result(Ur.Sim.Budget, String) do
+    let? raw_revenue = field(j, "revenue")
+    let? revenue = integer(raw_revenue)
+    let? raw_property_tax = field(j, "property_tax")
+    let? property_tax = integer(raw_property_tax)
+    let? raw_income_tax = field(j, "income_tax")
+    let? income_tax = integer(raw_income_tax)
+    let? raw_business_tax = field(j, "business_tax")
+    let? business_tax = integer(raw_business_tax)
+    let? raw_trade_income = field(j, "trade_income")
+    let? trade_income = integer(raw_trade_income)
+    let? raw_tariffs = field(j, "tariffs")
+    let? tariffs = integer(raw_tariffs)
+    let? raw_toll_income = field(j, "toll_income")
+    let? toll_income = integer(raw_toll_income)
+    let? parking_income = match Json.get(j, "parking_income") do
+      Some(value) -> integer(value)
+      None -> Ok(0)
+    end
+    let? raw_infrastructure = field(j, "infrastructure")
+    let? infrastructure = integer(raw_infrastructure)
+    let? raw_operations = field(j, "operations")
+    let? operations = integer(raw_operations)
+    let? raw_energy_income = field(j, "energy_income")
+    let? energy_income = integer(raw_energy_income)
+    let? raw_power_cost = field(j, "power_cost")
+    let? power_cost = integer(raw_power_cost)
+    let? raw_food_cost = field(j, "food_cost")
+    let? food_cost = integer(raw_food_cost)
+    let? raw_water_cost = field(j, "water_cost")
+    let? water_cost = integer(raw_water_cost)
+    let? raw_sanitation_cost = field(j, "sanitation_cost")
+    let? sanitation_cost = integer(raw_sanitation_cost)
+    let? bus_fares = match Json.get(j, "bus_fares") do
+      Some(value) -> integer(value)
+      None -> Ok(0)
+    end
+    let? bus_operations = match Json.get(j, "bus_operations") do
+      Some(value) -> integer(value)
+      None -> Ok(0)
+    end
+    let? freight_operations = match Json.get(j, "freight_operations") do
+      Some(value) -> integer(value)
+      None -> Ok(0)
+    end
+    Ok({ revenue: revenue, property_tax: property_tax, income_tax: income_tax, business_tax: business_tax,
+      bus_fares: bus_fares, bus_operations: bus_operations, freight_operations: freight_operations,
+      trade_income: trade_income, tariffs: tariffs, toll_income: toll_income, parking_income: parking_income, infrastructure: infrastructure,
+      operations: operations, energy_income: energy_income, power_cost: power_cost, food_cost: food_cost,
+      water_cost: water_cost, sanitation_cost: sanitation_cost })
+  end
+  pfn encode_expansion(v : Ur.Sim.Expansion) : Json.JsonValue do
+    Json.encode_object(
+      Cons(("island", Json.encode_int(v.island)),
+      Cons(("invested", Json.encode_int(v.invested)),
+      Cons(("recovered", Json.encode_int(v.recovered)),
+      Cons(("exports", Json.encode_int(v.exports)),
+      Cons(("net", Json.encode_int(v.net)), Nil))))))
+  end
+  pfn decode_expansion(j : Json.JsonValue) : Result(Ur.Sim.Expansion, String) do
+    let? raw_island = field(j, "island")
+    let? island = integer(raw_island)
+    let? raw_invested = field(j, "invested")
+    let? invested = integer(raw_invested)
+    let? raw_recovered = field(j, "recovered")
+    let? recovered = integer(raw_recovered)
+    let? raw_exports = field(j, "exports")
+    let? exports = integer(raw_exports)
+    let? raw_net = field(j, "net")
+    let? net = integer(raw_net)
+    if !(island >= 0 && island <= 2 && invested >= 0) do Err("Invalid expansion values.") else
+    Ok({ island: island, invested: invested, recovered: recovered, exports: exports,
+      net: net })
+    end
+  end
+  pfn encode_month(v : Ur.Sim.FinanceMonth) : Json.JsonValue do
+    Json.encode_object(
+      Cons(("month", Json.encode_int(v.month)),
+      Cons(("revenue", Json.encode_int(v.revenue)),
+      Cons(("expenditures", Json.encode_int(v.expenditures)),
+      Cons(("construction", Json.encode_int(v.construction)),
+      Cons(("property_receipts", Json.encode_int(v.property_receipts)),
+      Cons(("budget", encode_budget(v.budget)), Nil)))))))
+  end
+  pfn decode_month(j : Json.JsonValue) : Result(Ur.Sim.FinanceMonth, String) do
+    let? raw_month = field(j, "month")
+    let? month = integer(raw_month)
+    let? raw_revenue = field(j, "revenue")
+    let? revenue = integer(raw_revenue)
+    let? raw_expenditures = field(j, "expenditures")
+    let? expenditures = integer(raw_expenditures)
+    let? raw_construction = field(j, "construction")
+    let? construction = integer(raw_construction)
+    let? raw_budget = field(j, "budget")
+    let? budget = decode_budget(raw_budget)
+    let? property_receipts = match Json.get(j, "property_receipts") do
+      None -> Ok(0)
+      Some(raw) -> integer(raw)
+    end
+    Ok({ month: month, revenue: revenue, expenditures: expenditures, construction: construction, property_receipts: property_receipts,
+      budget: budget })
+  end
+  pfn encode_shipment(v : Ur.Sim.Shipment) : Json.JsonValue do
+    Json.encode_object(
+      Cons(("source", Json.encode_int(v.source)),
+      Cons(("legs", Json.encode_int(v.legs)),
+      Cons(("units", Json.encode_int(v.units)),
+      Cons(("stops", Json.encode_array(List.map(v.stops, Json.encode_int))), Nil)))))
+  end
+  pfn decode_shipment(j : Json.JsonValue) : Result(Ur.Sim.Shipment, String) do
+    let? raw_source = field(j, "source")
+    let? source = integer(raw_source)
+    let? raw_legs = field(j, "legs")
+    let? legs = integer(raw_legs)
+    let? raw_units = field(j, "units")
+    let? units = integer(raw_units)
+    let? raw_stops = field(j, "stops")
+    let? stops = items(raw_stops, parcel, 2640)
+    if !(S.valid(source) && legs >= 1 && legs + 1 == List.length(stops) && units > 0) do Err("Invalid shipment values.") else
+    Ok({ source: source, legs: legs, units: units, stops: stops })
+    end
+  end
+  pfn freight_number(j : Json.JsonValue, name : String) : Result(Int, String) do
+    let? value = field(j, name)
+    integer(value)
+  end
+  pfn encode_inventory(v : Ur.FreightNetwork.Inventory) : Json.JsonValue do
+    Json.encode_object([("units", Json.encode_int(v.units)), ("value", Json.encode_int(v.value))])
+  end
+  pfn decode_inventory(j : Json.JsonValue) : Result(Ur.FreightNetwork.Inventory, String) do
+    let? units = freight_number(j, "units")
+    let? value = freight_number(j, "value")
+    if units >= 0 && units <= 64 && value >= 0 && value <= units * 20 do Ok({ units: units, value: value })
+    else Err("Invalid freight inventory.") end
+  end
+  pfn encode_voyage(v : Ur.FreightNetwork.Voyage) : Json.JsonValue do
+    Json.encode_object([("id", Json.encode_int(v.id)), ("left", Json.encode_int(v.left)), ("age", Json.encode_int(v.age)),
+      ("food", encode_inventory(v.food)), ("fuel", Json.encode_int(v.fuel)), ("waste", Json.encode_int(v.waste))])
+  end
+  pfn decode_voyage(j : Json.JsonValue) : Result(Ur.FreightNetwork.Voyage, String) do
+    let? id = freight_number(j, "id")
+    let? left = freight_number(j, "left")
+    let? age = freight_number(j, "age")
+    let? raw_food = field(j, "food")
+    let? food = decode_inventory(raw_food)
+    let? fuel = freight_number(j, "fuel")
+    let? waste = freight_number(j, "waste")
+    if id > 0 && left >= 0 && left <= 2 && age >= 0 && fuel >= 0 && fuel <= 24 && waste >= 0 && waste <= 64 do
+      Ok({ id: id, left: left, age: age, food: food, fuel: fuel, waste: waste })
+    else Err("Invalid freight voyage.") end
+  end
+  pfn encode_freight(v : Ur.FreightNetwork.Route) : Json.JsonValue do
+    let voyage = match v.voyage do
+      Some(boat) -> [("voyage", encode_voyage(boat))]
+      None -> Nil
+    end
+    Json.encode_object(List.append(voyage, [
+      ("port", Json.encode_int(v.port)), ("island", Json.encode_int(v.island)), ("producer", Json.encode_int(v.producer)),
+      ("market", Json.encode_int(v.market)), ("plant", Json.encode_int(v.plant)), ("waste_site", Json.encode_int(v.waste_site)),
+      ("priority", Json.encode_int(v.priority)), ("producer_stock", Json.encode_int(v.producer_stock)), ("dock_food", Json.encode_int(v.dock_food)),
+      ("dock_waste", Json.encode_int(v.dock_waste)), ("fuel", Json.encode_int(v.fuel)), ("landed_fuel", Json.encode_int(v.landed_fuel)),
+      ("next_id", Json.encode_int(v.next_id)), ("departure", Json.encode_int(v.departure)), ("price", Json.encode_int(v.price)),
+      ("demand", Json.encode_int(v.demand)), ("sold", Json.encode_int(v.sold)), ("sales", Json.encode_int(v.sales)),
+      ("cost_sold", Json.encode_int(v.cost_sold)), ("spoiled", Json.encode_int(v.spoiled)), ("wallet", Json.encode_int(v.wallet)),
+      ("duty", Json.encode_int(v.duty)), ("expenses", Json.encode_int(v.expenses)), ("delivered", Json.encode_int(v.delivered)),
+      ("exported", Json.encode_int(v.exported)), ("month_waste", Json.encode_int(v.month_waste)), ("month_sales", Json.encode_int(v.month_sales)),
+      ("month_cost", Json.encode_int(v.month_cost)), ("month_days", Json.encode_int(v.month_days)), ("coverage", Json.encode_int(v.coverage)), ("backup", Json.encode_bool(v.backup)),
+      ("reserve", Json.encode_bool(v.reserve)), ("suspended", Json.encode_bool(v.suspended)), ("shop", encode_inventory(v.shop))]))
+  end
+  pfn decode_freight(j : Json.JsonValue) : Result(Ur.FreightNetwork.Route, String) do
+    let? port = freight_number(j, "port")
+    let? island = freight_number(j, "island")
+    let? producer = freight_number(j, "producer")
+    let? market = freight_number(j, "market")
+    let? plant = freight_number(j, "plant")
+    let? waste_site = freight_number(j, "waste_site")
+    let? priority = freight_number(j, "priority")
+    let? producer_stock = freight_number(j, "producer_stock")
+    let? dock_food = freight_number(j, "dock_food")
+    let? dock_waste = freight_number(j, "dock_waste")
+    let? fuel = freight_number(j, "fuel")
+    let? landed_fuel = freight_number(j, "landed_fuel")
+    let? next_id = freight_number(j, "next_id")
+    let? departure = freight_number(j, "departure")
+    let? price = freight_number(j, "price")
+    let? demand = freight_number(j, "demand")
+    let? sold = freight_number(j, "sold")
+    let? sales = freight_number(j, "sales")
+    let? cost_sold = freight_number(j, "cost_sold")
+    let? spoiled = freight_number(j, "spoiled")
+    let? wallet = freight_number(j, "wallet")
+    let? duty = freight_number(j, "duty")
+    let? expenses = freight_number(j, "expenses")
+    let? delivered = freight_number(j, "delivered")
+    let? exported = freight_number(j, "exported")
+    let? month_waste = freight_number(j, "month_waste")
+    let? month_sales = freight_number(j, "month_sales")
+    let? month_cost = freight_number(j, "month_cost")
+    let? month_days = freight_number(j, "month_days")
+    let? coverage = freight_number(j, "coverage")
+    let? raw_backup = field(j, "backup")
+    let? backup = boolean(raw_backup)
+    let? raw_reserve = field(j, "reserve")
+    let? reserve = boolean(raw_reserve)
+    let? raw_suspended = field(j, "suspended")
+    let? suspended = boolean(raw_suspended)
+    let? raw_shop = field(j, "shop")
+    let? shop = decode_inventory(raw_shop)
+    let? voyage = match Json.get(j, "voyage") do
+      Some(value) -> Result.map(decode_voyage(value), fn boat -> Some(boat))
+      None -> Ok(None)
+    end
+    if !S.valid(port) || !S.valid(island) || !S.valid(producer) || !S.valid(market) ||
+      !(plant == -1 || S.valid(plant)) || !(waste_site == -1 || S.valid(waste_site)) ||
+      priority < 0 || priority > 2 || producer_stock < 0 || producer_stock > 72 || dock_food < 0 || dock_food > 64 ||
+      dock_waste < 0 || dock_waste > 64 || fuel < 0 || landed_fuel < 0 || fuel + landed_fuel > 32 ||
+      coverage < 0 || coverage > 100 || next_id < 1 || departure < 0 || wallet < 0 || duty < 0 ||
+      expenses < 0 || demand < 0 || sold < 0 || sold > demand || price <= 0 do Err("Invalid freight route.")
+    else
+      Ok({
+        port: port, island: island, producer: producer, market: market, plant: plant,
+        waste_site: waste_site, priority: priority, producer_stock: producer_stock, dock_food: dock_food, dock_waste: dock_waste,
+        fuel: fuel, landed_fuel: landed_fuel, next_id: next_id, departure: departure, price: price,
+        demand: demand, sold: sold, sales: sales, cost_sold: cost_sold, spoiled: spoiled,
+        wallet: wallet, duty: duty, expenses: expenses, delivered: delivered, exported: exported,
+        month_waste: month_waste, month_sales: month_sales, month_cost: month_cost, month_days: month_days, coverage: coverage, backup: backup,
+        reserve: reserve, suspended: suspended, shop: shop, voyage: voyage })
+    end
+  end
+  pfn optional_array(j : Json.JsonValue, name : String, limit : Int) : Result(NativeIntArr, String) do
+    match Json.get(j, name) do
+      None -> Ok(NativeArray.make_int(2640, 0))
+      Some(value) -> array(value, 2640, limit)
+    end
+  end
+  pfn encode_livability(sample : NativeIntArr) : Json.JsonValue do
+    enc_array(sample, 7, Nil)
+  end
+  pfn decode_livability(j : Json.JsonValue) : Result(NativeIntArr, String) do
+    array(j, 8, 2147483647)
+  end
+  pfn encode_transfer(v : Option(Ur.Sim.MedicalTransfer)) : Json.JsonValue do
+    match v do
+      None -> Json.encode_array(Nil)
+      Some(t) -> Json.encode_object(
+        Cons(("facility", Json.encode_int(t.facility)), Cons(("bed", Json.encode_int(t.bed)),
+        Cons(("transport", Json.encode_int(t.transport)), Cons(("wait", Json.encode_int(t.wait)),
+        Cons(("stay", Json.encode_int(t.stay)), Cons(("outcome", Json.encode_int(t.outcome)),
+        Cons(("route", Json.encode_array(List.map(t.route, Json.encode_int))), Nil))))))))
+    end
+  end
+  pfn decode_transfer(j : Json.JsonValue) : Result(Option(Ur.Sim.MedicalTransfer), String) do
+    match j do
+      Json.Array(Nil) -> Ok(None)
+      _ ->
+        let? a = field(j, "facility")
+        let? facility = integer(a)
+        let? b = field(j, "bed")
+        let? bed = integer(b)
+        let? t = field(j, "transport")
+        let? transport = integer(t)
+        let? w = field(j, "wait")
+        let? wait = integer(w)
+        let? s = field(j, "stay")
+        let? stay = integer(s)
+        let? o = field(j, "outcome")
+        let? outcome = integer(o)
+        let? r = field(j, "route")
+        let? route = items(r, parcel, 2640)
+        let admitted = S.valid(facility) && bed >= 0 && bed < 4 && transport >= 2 && transport <= 121 &&
+          wait >= 0 && wait <= 120 && stay >= 1 && stay <= 100 && (outcome == 1 || outcome == 2) && !List.is_empty(route)
+        let unadmitted = facility == -1 && bed == -1 && transport == 0 && wait == 0 && stay == 0 && outcome == 3 && List.is_empty(route)
+        if admitted || unadmitted do Ok(Some({ facility: facility, bed: bed, transport: transport, wait: wait, stay: stay, outcome: outcome, route: route }))
+        else Err("Invalid medical transfer.") end
+    end
+  end
+  pfn encode_incident(v : Ur.Sim.Incident) : Json.JsonValue do
+    Json.encode_object(
+      Cons(("lot", Json.encode_int(v.lot)),
+      Cons(("kind", Json.encode_int(v.kind)),
+      Cons(("reported", Json.encode_int(v.reported)),
+      Cons(("station", Json.encode_int(v.station)),
+      Cons(("response", Json.encode_int(v.response)),
+      Cons(("travel", Json.encode_int(v.travel)),
+      Cons(("road", Json.encode_array(List.map(v.road, Json.encode_int))),
+      Cons(("spread", Json.encode_array(List.map(v.spread, Json.encode_int))),
+      Cons(("medical", encode_transfer(v.medical)), Nil))))))))))
+  end
+  pfn decode_incident(j : Json.JsonValue) : Result(Ur.Sim.Incident, String) do
+    let? raw_lot = field(j, "lot")
+    let? lot = parcel(raw_lot)
+    let? raw_kind = field(j, "kind")
+    let? kind = integer(raw_kind)
+    let? raw_reported = field(j, "reported")
+    let? reported = integer(raw_reported)
+    let? raw_station = field(j, "station")
+    let? station = integer(raw_station)
+    let? raw_response = field(j, "response")
+    let? response = integer(raw_response)
+    let? raw_travel = field(j, "travel")
+    let? travel = integer(raw_travel)
+    let? raw_road = field(j, "road")
+    let? road = items(raw_road, parcel, 2640)
+    let? spread = match Json.get(j, "spread") do
+      None -> Ok(Nil)
+      Some(data) -> items(data, parcel, 24)
+    end
+    let? medical = match Json.get(j, "medical") do
+      None -> Ok(None)
+      Some(data) -> decode_transfer(data)
+    end
+    let answered = S.valid(station) && response >= 0 && response <= 45 && travel >= 2 && travel <= response && !List.is_empty(road)
+    let unanswered = station == -1 && response == -1 && travel == 0 && List.is_empty(road)
+    if kind < 1 || kind > 4 || reported < 0 || reported > 100 || !(answered || unanswered) do Err("Invalid incident data.")
+    else Ok({ lot: lot, kind: kind, reported: reported, station: station, response: response, travel: travel, road: road, spread: spread, medical: medical }) end
+  end
+  pfn encode_crime(v : Ur.Sim.CrimeMonth) : Json.JsonValue do
+    Json.encode_object(Cons(("month", Json.encode_int(v.month)), Cons(("calls", Json.encode_array(List.map(v.calls, encode_incident))), Nil)))
+  end
+  pfn decode_crime(j : Json.JsonValue) : Result(Ur.Sim.CrimeMonth, String) do
+    let? raw_month = field(j, "month")
+    let? month = integer(raw_month)
+    let? raw_calls = field(j, "calls")
+    let? calls = items(raw_calls, decode_incident, 2640)
+    if month < 0 do Err("Invalid incident month.") else Ok({ month: month, calls: calls }) end
+  end
+  pfn rule_or(j : Json.JsonValue, key : String, default : Int) : Result(Int, String) do
+    match Json.get(j, key) do
+      None -> Ok(default)
+      Some(raw) ->
+        let? rule = integer(raw)
+        if rule >= 1 && rule <= 3 do Ok(rule) else Err("Invalid neighborhood rule.") end
+    end
+  end
+  pfn encode_waste_run(run : Ur.Sim.WasteRun) : Json.JsonValue do
+    Json.encode_object([
+      ("depot", Json.encode_int(run.depot)), ("pickup", Json.encode_int(run.pickup)),
+      ("site", Json.encode_int(run.site)), ("kind", Json.encode_int(run.kind)),
+      ("units", Json.encode_int(run.units)), ("pickup_leg", Json.encode_int(run.pickup_leg)),
+      ("route", Json.encode_array(List.map(run.route, Json.encode_int)))])
+  end
+  pfn decode_waste_run(j : Json.JsonValue) : Result(Ur.Sim.WasteRun, String) do
+    let? raw_depot = field(j, "depot")
+    let? depot = parcel(raw_depot)
+    let? raw_pickup = field(j, "pickup")
+    let? pickup = parcel(raw_pickup)
+    let? raw_site = field(j, "site")
+    let? site = parcel(raw_site)
+    let? raw_kind = field(j, "kind")
+    let? kind = integer(raw_kind)
+    let? raw_units = field(j, "units")
+    let? units = integer(raw_units)
+    let? raw_pickup_leg = field(j, "pickup_leg")
+    let? pickup_leg = integer(raw_pickup_leg)
+    let? raw = field(j, "route")
+    let? route = items(raw, parcel, 2640)
+    if (kind != 15 && kind != 17 && (kind < 34 || kind > 36)) || units <= 0 || units > 48 ||
+       pickup_leg < 1 || pickup_leg >= List.length(route) - 1 do Err("Invalid trash route.")
+    else Ok({ depot: depot, pickup: pickup, site: site, kind: kind, units: units, pickup_leg: pickup_leg, route: route }) end
+  end
+  pfn encode_city(v : Ur.Sim.City) : Json.JsonValue do
+    let freight = match v.freight do
+      Some(route) -> [("freight", encode_freight(route))]
+      None -> Nil
+    end
+    Json.encode_object(List.append(freight,
+      Cons(("bus_fare", Json.encode_int(v.bus_fare)),
+      Cons(("waste_live", Json.encode_bool(v.waste_live)),
+      Cons(("waste_bins", enc_array(v.waste_bins, 2639, Nil)),
+      Cons(("waste_stock", enc_array(v.waste_stock, 2639, Nil)),
+      Cons(("waste_sites", enc_array(v.waste_sites, 2639, Nil)),
+      Cons(("waste_last", enc_array(v.waste_last, 2639, Nil)),
+      Cons(("waste_log", enc_array(v.waste_log, 2639, Nil)),
+      Cons(("waste_runs", Json.encode_array(List.map(v.waste_runs, encode_waste_run))),
+      Cons(("council", enc_array(v.council, 2639, Nil)),
+      Cons(("construction_spend", Json.encode_int(v.construction_spend)),
+      Cons(("island_exports", Json.encode_int(v.island_exports)),
+      Cons(("island_crops", Json.encode_int(v.island_crops)),
+      Cons(("island_catch", Json.encode_int(v.island_catch)),
+      Cons(("shop_imports", Json.encode_int(v.shop_imports)),
+      Cons(("harbour", Json.encode_int(v.harbour)),
+      Cons(("ferry_start", Json.encode_int(v.ferry_start)),
+      Cons(("trash", Json.encode_int(v.trash)),
+      Cons(("cash", Json.encode_int(v.cash)),
+      Cons(("month", Json.encode_int(v.month)),
+      Cons(("tax", Json.encode_int(v.tax)),
+      Cons(("business_rate", Json.encode_int(v.business_rate)),
+      Cons(("import_rate", Json.encode_int(v.import_rate)),
+      Cons(("export_rate", Json.encode_int(v.export_rate)),
+      Cons(("energy", Json.encode_int(v.energy)),
+      Cons(("income", Json.encode_int(v.income)),
+      Cons(("island_spend", enc_array(v.island_spend, NativeArray.length_int(v.island_spend) - 1, Nil)),
+      Cons(("shop_stock", enc_array(v.shop_stock, NativeArray.length_int(v.shop_stock) - 1, Nil)),
+      Cons(("shop_sales", enc_array(v.shop_sales, NativeArray.length_int(v.shop_sales) - 1, Nil)),
+      Cons(("shop_delivered", enc_array(v.shop_delivered, NativeArray.length_int(v.shop_delivered) - 1, Nil)),
+      Cons(("heights", enc_array(v.heights, NativeArray.length_int(v.heights) - 1, Nil)),
+      Cons(("grades", enc_array(v.grades, 2639, Nil)),
+      Cons(("grade_cover", enc_array(v.grade_cover, 2639, Nil)),
+      Cons(("park_tiers", enc_array(v.park_tiers, 2639, Nil)),
+      Cons(("sidewalk_items", enc_array(v.sidewalk_items, 2639, Nil)),
+      Cons(("streetscape", enc_array(v.streetscape, 2639, Nil)),
+      Cons(("fire_recovery", enc_array(v.fire_recovery, 2639, Nil)),
+      Cons(("calendar_day", Json.encode_int(v.calendar_day)),
+      Cons(("clock_ms", Json.encode_int(v.clock_ms)),
+      Cons(("street_day", Json.encode_int(v.street_day)),
+      Cons(("car_free_days", enc_array(v.car_free_days, 2639, Nil)),
+      Cons(("ground_rule", Json.encode_int(v.ground_rule)),
+      Cons(("quiet_rule", Json.encode_int(v.quiet_rule)),
+      Cons(("ground_areas", enc_array(v.ground_areas, 2639, Nil)),
+      Cons(("quiet_areas", enc_array(v.quiet_areas, 2639, Nil)),
+      Cons(("storefronts", enc_array(v.storefronts, 2639, Nil)),
+      Cons(("footfall", enc_array(v.footfall, 2639, Nil)),
+      Cons(("parks", enc_array(v.parks, 2639, Nil)),
+      Cons(("roads", enc_array(v.roads, NativeArray.length_int(v.roads) - 1, Nil)),
+      Cons(("public_parking", enc_array(v.public_parking, 2639, Nil)),
+      Cons(("tolls", enc_array(v.tolls, NativeArray.length_int(v.tolls) - 1, Nil)),
+      Cons(("transit", enc_array(v.transit, NativeArray.length_int(v.transit) - 1, Nil)),
+      Cons(("stops", enc_array(v.stops, NativeArray.length_int(v.stops) - 1, Nil)),
+      Cons(("ferries", enc_array(v.ferries, NativeArray.length_int(v.ferries) - 1, Nil)),
+      Cons(("service", enc_array(v.service, NativeArray.length_int(v.service) - 1, Nil)),
+      Cons(("zones", enc_array(v.zones, NativeArray.length_int(v.zones) - 1, Nil)),
+      Cons(("density", enc_array(v.density, NativeArray.length_int(v.density) - 1, Nil)),
+      Cons(("nuisance", enc_array(v.nuisance, NativeArray.length_int(v.nuisance) - 1, Nil)),
+      Cons(("buildings", enc_array(v.buildings, NativeArray.length_int(v.buildings) - 1, Nil)),
+      Cons(("housing_losses", enc_array(v.housing_losses, NativeArray.length_int(v.housing_losses) - 1, Nil)),
+      Cons(("business_losses", enc_array(v.business_losses, NativeArray.length_int(v.business_losses) - 1, Nil)),
+      Cons(("construction", enc_array(v.construction, NativeArray.length_int(v.construction) - 1, Nil)),
+      Cons(("paused_facilities", enc_array(v.paused_facilities, 2639, Nil)),
+      Cons(("plants", enc_array(v.plants, NativeArray.length_int(v.plants) - 1, Nil)),
+      Cons(("pipes", enc_array(v.pipes, NativeArray.length_int(v.pipes) - 1, Nil)),
+      Cons(("grid", enc_array(v.grid, NativeArray.length_int(v.grid) - 1, Nil)),
+      Cons(("pollution", enc_array(v.pollution, NativeArray.length_int(v.pollution) - 1, Nil)),
+      Cons(("air_pollution", enc_array(v.air_pollution, 2639, Nil)),
+      Cons(("land_pollution", enc_array(v.land_pollution, NativeArray.length_int(v.land_pollution) - 1, Nil)),
+      Cons(("founding_map", Json.encode_bool(v.founding_map)),
+      Cons(("expansion", encode_expansion(v.expansion)),
+      Cons(("shipments", Json.encode_array(List.map(v.shipments, encode_shipment))),
+      Cons(("crime_history", Json.encode_array(List.map(v.crime_history, encode_crime))),
+      Cons(("livability_history", Json.encode_array(List.map(v.livability_history, encode_livability))),
+      Cons(("property_status", enc_array(v.property_status, 2639, Nil)),
+      Cons(("property_arrears", enc_array(v.property_arrears, 2639, Nil)),
+      Cons(("property_sales", Json.encode_int(v.property_sales)),
+      Cons(("business_age", enc_array(v.business_age, 2639, Nil)),
+      Cons(("campus", enc_array(v.campus, 2639, Nil)),
+      Cons(("census", enc_array(v.census, 16, Nil)),
+      Cons(("population_history", Json.encode_array(List.map(v.population_history, fn sample -> enc_array(sample, 5, Nil)))),
+      Cons(("immigration", Json.encode_int(v.immigration)),
+      Cons(("education", enc_array(v.education, 227, Nil)),
+      Cons(("specializations", enc_array(v.specializations, 56, Nil)),
+      Cons(("business_sector", enc_array(v.business_sector, 2639, Nil)),
+      Cons(("empty_homes", enc_array(v.empty_homes, 2639, Nil)),
+      Cons(("home_arrivals", enc_array(v.home_arrivals, 2639, Nil)),
+      Cons(("neighborhood_rents", enc_array(v.neighborhood_rents, 79, Nil)),
+      Cons(("rent_pressure", enc_array(v.rent_pressure, 4, Nil)),
+      Cons(("market_history", Json.encode_array(List.map(v.market_history, fn sample -> enc_array(sample, 17, Nil)))),
+      Cons(("finance_history", Json.encode_array(List.map(v.finance_history, encode_month))),
+      Cons(("climate_seed", Json.encode_int(v.climate_seed)),
+      Cons(("surface_water", enc_array(v.surface_water, 2639, Nil)),
+      Cons(("flood_damage", enc_array(v.flood_damage, 2639, Nil)),
+      Cons(("flood_active", Json.encode_bool(v.flood_active)),
+      Cons(("storm_drains", enc_array(v.storm_drains, 2639, Nil)),
+      Cons(("seawalls", enc_array(v.seawalls, 2639, Nil)),
+      Cons(("rain_tanks", enc_array(v.rain_tanks, 2639, Nil)),
+      Cons(("subway_water", enc_array(v.subway_water, 2639, Nil)),
+      Cons(("soil_moisture", Json.encode_int(v.soil_moisture)),
+      Cons(("pumping_cost", Json.encode_int(v.pumping_cost)),
+      Cons(("message", Json.encode_string(v.message)), Nil)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+  end
+  pfn decode_city(j : Json.JsonValue) : Result(Ur.Sim.City, String) do
+    let? freight = match Json.get(j, "freight") do
+      Some(value) -> Result.map(decode_freight(value), fn route -> Some(route))
+      None -> Ok(None)
+    end
+    let? waste_live = match Json.get(j, "waste_live") do
+      Some(value) -> boolean(value)
+      None -> Ok(false)
+    end
+    let? waste_bins = optional_array(j, "waste_bins", 2)
+    let? waste_stock = optional_array(j, "waste_stock", 2147483647)
+    let? waste_sites = optional_array(j, "waste_sites", 2400)
+    let? waste_last = optional_array(j, "waste_last", 2147483647)
+    let? waste_log = optional_array(j, "waste_log", 2147483647)
+    let? waste_runs = match Json.get(j, "waste_runs") do
+      Some(value) -> items(value, decode_waste_run, 3)
+      None -> Ok(Nil)
+    end
+    let? council = optional_array(j, "council", 2147483647)
+    let? raw_construction_spend = field(j, "construction_spend")
+    let? construction_spend = integer(raw_construction_spend)
+    let? raw_island_exports = field(j, "island_exports")
+    let? island_exports = integer(raw_island_exports)
+    let? raw_island_crops = field(j, "island_crops")
+    let? island_crops = integer(raw_island_crops)
+    let? raw_island_catch = field(j, "island_catch")
+    let? island_catch = integer(raw_island_catch)
+    let? raw_shop_imports = field(j, "shop_imports")
+    let? shop_imports = integer(raw_shop_imports)
+    let? raw_harbour = field(j, "harbour")
+    let? harbour = integer(raw_harbour)
+    let? raw_ferry_start = field(j, "ferry_start")
+    let? ferry_start = integer(raw_ferry_start)
+    let? raw_trash = field(j, "trash")
+    let? trash = integer(raw_trash)
+    let? raw_cash = field(j, "cash")
+    let? cash = integer(raw_cash)
+    let? raw_month = field(j, "month")
+    let? month = integer(raw_month)
+    let? raw_tax = field(j, "tax")
+    let? tax = integer(raw_tax)
+    let? raw_business_rate = field(j, "business_rate")
+    let? business_rate = integer(raw_business_rate)
+    let? raw_import_rate = field(j, "import_rate")
+    let? import_rate = integer(raw_import_rate)
+    let? raw_export_rate = field(j, "export_rate")
+    let? export_rate = integer(raw_export_rate)
+    let? raw_energy = field(j, "energy")
+    let? energy = integer(raw_energy)
+    let? raw_income = field(j, "income")
+    let? income = integer(raw_income)
+    let? raw_island_spend = field(j, "island_spend")
+    let? island_spend = array(raw_island_spend, 3, 2147483647)
+    let? raw_shop_stock = field(j, "shop_stock")
+    let? shop_stock = array(raw_shop_stock, 2640, 16)
+    let? raw_shop_sales = field(j, "shop_sales")
+    let? shop_sales = array(raw_shop_sales, 2640, 8)
+    let? raw_shop_delivered = field(j, "shop_delivered")
+    let? shop_delivered = array(raw_shop_delivered, 2640, 16)
+    let? raw_heights = field(j, "heights")
+    let? heights = array(raw_heights, 2640, 200)
+    let? public_parking = optional_array(j, "public_parking", 3)
+    let? grades = optional_array(j, "grades", 10563)
+    let? grade_cover = optional_array(j, "grade_cover", 2640)
+    let? park_tiers = optional_array(j, "park_tiers", 2)
+    let? sidewalk_items = optional_array(j, "sidewalk_items", 4095)
+    let? streetscape = optional_array(j, "streetscape", 5)
+    let? fire_recovery = optional_array(j, "fire_recovery", 15)
+    let? calendar_day = match Json.get(j, "calendar_day") do
+      None -> Ok(0)
+      Some(value) -> integer(value)
+    end
+    let? clock_ms = match Json.get(j, "clock_ms") do
+      None -> Ok(0)
+      Some(value) -> integer(value)
+    end
+    let? street_day = match Json.get(j, "street_day") do
+      None -> Ok(0)
+      Some(value) -> integer(value)
+    end
+    let? car_free_days = optional_array(j, "car_free_days", 4)
+    let? ground_rule = rule_or(j, "ground_rule", 2)
+    let? quiet_rule = rule_or(j, "quiet_rule", 1)
+    let? ground_areas = optional_array(j, "ground_areas", 3)
+    let? quiet_areas = optional_array(j, "quiet_areas", 3)
+    let? storefronts = optional_array(j, "storefronts", 3)
+    let? footfall = optional_array(j, "footfall", 48)
+    let? parks = optional_array(j, "parks", 2640)
+    let? raw_roads = field(j, "roads")
+    let? roads = array(raw_roads, 2640, 3)
+    let? raw_tolls = field(j, "tolls")
+    let? tolls = array(raw_tolls, 2640, 1)
+    let? raw_transit = field(j, "transit")
+    let? transit = array(raw_transit, 2640, 4)
+    let? raw_stops = field(j, "stops")
+    let? stops = array(raw_stops, 2640, 4)
+    let? raw_ferries = field(j, "ferries")
+    let? ferries = array(raw_ferries, 2640, 2640)
+    let? bus_fare = match Json.get(j, "bus_fare") do
+      Some(amount) -> integer(amount)
+      None -> Ok(1)
+    end
+    let? raw_service = field(j, "service")
+    let? service = array(raw_service, 2640, 3)
+    let? raw_zones = field(j, "zones")
+    let? zones = array(raw_zones, 2640, 3)
+    let? raw_density = field(j, "density")
+    let? density = array(raw_density, 2640, 3)
+    let? raw_nuisance = field(j, "nuisance")
+    let? nuisance = array(raw_nuisance, 2640, 3)
+    let? raw_buildings = field(j, "buildings")
+    let? buildings = array(raw_buildings, 2640, 3)
+    let? raw_housing_losses = field(j, "housing_losses")
+    let? housing_losses = array(raw_housing_losses, 2640, 120)
+    let? raw_business_losses = field(j, "business_losses")
+    let? business_losses = array(raw_business_losses, 2640, 120)
+    let? business_age = optional_array(j, "business_age", 120)
+    let? property_status = optional_array(j, "property_status", 2)
+    let? property_arrears = optional_array(j, "property_arrears", 1000000)
+    let? property_sales = match Json.get(j, "property_sales") do
+      None -> Ok(0)
+      Some(raw) -> integer(raw)
+    end
+    let? campus = optional_array(j, "campus", 2640)
+    let? census = match Json.get(j, "census") do
+      None -> Ok(Ur.Demography.empty())
+      Some(raw) -> array(raw, 17, 1000000)
+    end
+    let? population_history = match Json.get(j, "population_history") do
+      None -> Ok(Nil)
+      Some(raw) -> items(raw, fn row -> array(row, 6, 2147483647), 24)
+    end
+    let? immigration = match Json.get(j, "immigration") do
+      None -> Ok(1)
+      Some(raw) -> integer(raw)
+    end
+    let? education = match Json.get(j, "education") do
+      None -> Ok(S.new_education())
+      Some(raw) -> array(raw, 228, 1000000)
+    end
+    let? specializations = match Json.get(j, "specializations") do
+      None -> Ok(S.new_specializations())
+      Some(raw) -> array(raw, 57, 1000000)
+    end
+    let? business_sector = optional_array(j, "business_sector", 7)
+    let? empty_homes = optional_array(j, "empty_homes", 12)
+    let? home_arrivals = optional_array(j, "home_arrivals", 12)
+    let? neighborhood_rents = match Json.get(j, "neighborhood_rents") do
+      None -> Ok(NativeArray.make_int(80, 0))
+      Some(raw) -> array(raw, 80, 180)
+    end
+    let? rent_pressure = match Json.get(j, "rent_pressure") do
+      None -> Ok(S.neutral_rent_pressure())
+      Some(raw) -> array(raw, 5, 500)
+    end
+    let? market_history = match Json.get(j, "market_history") do
+      None -> Ok(Nil)
+      Some(samples) -> items(samples, fn sample -> array(sample, 18, 2147483647), 24)
+    end
+    let? raw_construction = field(j, "construction")
+    let? construction = array(raw_construction, 2640, 4)
+    let? paused_facilities = optional_array(j, "paused_facilities", 1)
+    let? raw_plants = field(j, "plants")
+    let? plants = array(raw_plants, 2640, 36)
+    let? raw_pipes = field(j, "pipes")
+    let? pipes = array(raw_pipes, 2640, 2)
+    let? raw_grid = field(j, "grid")
+    let? grid = array(raw_grid, 2640, 2)
+    let? raw_pollution = field(j, "pollution")
+    let? pollution = array(raw_pollution, 2640, 2147483647)
+    let? air_pollution = optional_array(j, "air_pollution", 100)
+    let? climate_seed = match Json.get(j, "climate_seed") do
+      None -> Ok(0)
+      Some(value) -> integer(value)
+    end
+    let? surface_water = optional_array(j, "surface_water", 16)
+    let? flood_damage = optional_array(j, "flood_damage", 10)
+    let? flood_active = match Json.get(j, "flood_active") do
+      None -> Ok(false)
+      Some(value) -> boolean(value)
+    end
+    let? storm_drains = optional_array(j, "storm_drains", 1)
+    let? seawalls = optional_array(j, "seawalls", 1)
+    let? rain_tanks = optional_array(j, "rain_tanks", S.rain_tank_capacity())
+    let? subway_water = optional_array(j, "subway_water", 72)
+    let? soil = match Json.get(j, "soil_moisture") do
+      None -> Ok(70)
+      Some(value) -> integer(value)
+    end
+    let? pumping = match Json.get(j, "pumping_cost") do
+      None -> Ok(0)
+      Some(value) -> integer(value)
+    end
+    let? raw_land_pollution = field(j, "land_pollution")
+    let? land_pollution = array(raw_land_pollution, 2640, 2147483647)
+    let? raw_founding_map = field(j, "founding_map")
+    let? founding_map = boolean(raw_founding_map)
+    let? raw_expansion = field(j, "expansion")
+    let? expansion = decode_expansion(raw_expansion)
+    let? raw_shipments = field(j, "shipments")
+    let? shipments = items(raw_shipments, decode_shipment, 2640)
+    let? raw_finance_history = field(j, "finance_history")
+    let? finance_history = items(raw_finance_history, decode_month, 24)
+    let? crime_history = match Json.get(j, "crime_history") do
+      None -> Ok(Nil)
+      Some(samples) -> items(samples, decode_crime, 24)
+    end
+    let? livability_history = match Json.get(j, "livability_history") do
+      None -> Ok(Nil)
+      Some(samples) -> items(samples, decode_livability, 24)
+    end
+    let? raw_message = field(j, "message")
+    let? message = string(raw_message)
+    if !((harbour == -1 || S.valid(harbour)) && (ferry_start == -1 || S.valid(ferry_start)) && month >= 0 && construction_spend >= 0 && tax >= 0 && tax <= 25 && energy >= 1 && energy <= 12) do Err("Invalid city values.") else
+    Ok({ climate_seed: S.clamp(climate_seed, 0, 2147483646), storm_drains: storm_drains, seawalls: seawalls, surface_water: surface_water, flood_damage: flood_damage, flood_active: flood_active, rain_tanks: rain_tanks, subway_water: subway_water, soil_moisture: S.clamp(soil, 0, 100), pumping_cost: S.clamp(pumping, 0, 200000),
+      waste_live: waste_live, waste_bins: waste_bins, waste_stock: waste_stock, waste_sites: waste_sites,
+      waste_last: waste_last, waste_log: waste_log, waste_runs: waste_runs, council: council, construction_spend: construction_spend, island_exports: island_exports, island_crops: island_crops, island_catch: island_catch,
+      shop_imports: shop_imports, harbour: harbour, ferry_start: ferry_start, trash: trash,
+      cash: cash, month: month, tax: tax, business_rate: business_rate,
+      import_rate: import_rate, export_rate: export_rate, energy: energy, income: income,
+      island_spend: island_spend, freight: freight, shop_stock: shop_stock, shop_sales: shop_sales, shop_delivered: shop_delivered,
+      heights: heights, roads: roads, grades: grades, grade_cover: grade_cover, parks: parks, calendar_day: S.clamp(calendar_day, 0, S.days_per_month() - 1), clock_ms: S.clamp(clock_ms, 0, float_to_int(S.day_seconds() *. 1000.0) - 1), street_day: S.clamp(street_day, 0, 6), car_free_days: car_free_days, ground_rule: ground_rule, quiet_rule: quiet_rule, ground_areas: ground_areas, quiet_areas: quiet_areas, storefronts: storefronts, footfall: footfall, fire_recovery: fire_recovery, park_tiers: park_tiers, streetscape: streetscape, sidewalk_items: sidewalk_items, tolls: tolls, public_parking: public_parking, transit: transit,
+      stops: stops, ferries: ferries, service: service, bus_fare: S.clamp(bus_fare, 0, 6), bus_headways: NativeArray.make_int(2640, 0), zones: zones,
+      density: density, nuisance: nuisance, buildings: buildings, housing_losses: housing_losses,
+      business_losses: business_losses, construction: construction, plants: plants, paused_facilities: paused_facilities, pipes: pipes,
+      grid: grid, pollution: pollution, land_pollution: land_pollution, air_pollution: air_pollution, founding_map: founding_map,
+      expansion: expansion, shipments: shipments, finance_history: finance_history, market_history: market_history, campus: campus, census: census, population_history: population_history, immigration: S.clamp(immigration, 0, 2), education: education, specializations: specializations, business_sector: business_sector, empty_homes: empty_homes, home_arrivals: home_arrivals, neighborhood_rents: neighborhood_rents, rent_pressure: rent_pressure, business_age: business_age, property_status: property_status, property_arrears: property_arrears, property_sales: property_sales, crime_history: crime_history, livability_history: livability_history, message: message })
+    end
+  end
+  pfn encode_game(v : Game) : Json.JsonValue do
+    Json.encode_object(
+      Cons(("speed", Json.encode_int(v.speed)),
+      Cons(("city", encode_city(v.city)),
+      Cons(("cx", Json.encode_number(v.cx)),
+      Cons(("cz", Json.encode_number(v.cz)),
+      Cons(("zoom", Json.encode_number(v.zoom)),
+      Cons(("yaw", Json.encode_number(v.yaw)),
+      Cons(("paused", Json.encode_bool(v.paused)), Nil))))))))
+  end
+  pfn decode_game(j : Json.JsonValue) : Result(Game, String) do
+    let? raw_speed = field(j, "speed")
+    let? speed = integer(raw_speed)
+    let? raw_city = field(j, "city")
+    let? city = decode_city(raw_city)
+    let? raw_cx = field(j, "cx")
+    let? cx = number(raw_cx)
+    let? raw_cz = field(j, "cz")
+    let? cz = number(raw_cz)
+    let? raw_zoom = field(j, "zoom")
+    let? zoom = number(raw_zoom)
+    let? raw_yaw = field(j, "yaw")
+    let? yaw = number(raw_yaw)
+    let? raw_paused = field(j, "paused")
+    let? paused = boolean(raw_paused)
+    if !(zoom >= 18.0 && zoom <= 380.0 && speed >= 1 && speed <= 3) do Err("Invalid game values.") else
+    Ok({ speed: speed, city: city, cx: cx, cz: cz,
+      zoom: zoom, yaw: yaw, paused: paused })
+    end
+  end
+  fn encode(game : Game) : String do
+    Json.to_string(Json.encode_object(Cons(("version", Json.encode_int(1)), Cons(("game", encode_game(game)), Nil))))
+  end
+  fn decode(text : String) : Result(Game, String) do
+    let? json = Json.parse(text)
+    let? tag = field(json, "version")
+    let? version = integer(tag)
+    if version == 1 do
+      let? game = field(json, "game")
+      decode_game(game)
+    else Err("Unsupported save version.") end
+  end
+  fn exists(path : String) : Bool do
+    match File.exists(path) do
+      Ok(present) -> present
+      Err(_) -> false
+    end
+  end
+  fn load(path : String) : Result(Game, String) do
+    match File.read(path) do
+      Ok(Ok(text)) -> decode(text)
+      _ -> Err("Could not read the saved city.")
+    end
+  end
+  fn save(path : String, game : Game) : Result(Unit, String) do
+    let staging = path ++ "." ++ int_to_string(Authority.must(Process.pid())) ++ ".tmp"
+    match File.write(staging, encode(game)) do
+      Ok(Ok(_)) -> match File.rename(staging, path) do
+        Ok(Ok(_)) -> Ok(())
+        _ -> Err("Could not replace the saved city.")
+      end
+      _ -> Err("Could not write the saved city.")
+    end
+  end
+end

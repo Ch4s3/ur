@@ -1,0 +1,143 @@
+mod Ur.Build do
+  alias Ur.Sim as S
+  type Preview = { city : Ur.Sim.City, tiles : List(Int), cost : Int, valid : Bool, changed : Bool, reason : String }
+
+  pfn line(i : Int, target : Int) : List(Int) do
+    if i == target do Cons(i, Nil) else
+      let x = i % S.width()
+      let tx = target % S.width()
+      let next = if x < tx do i + 1 else if x > tx do i - 1
+        else if i < target do i + S.width() else i - S.width() end end end
+      Cons(i, line(next, target))
+    end
+  end
+
+  pfn rectangle(x : Int, z : Int, left : Int, right : Int, bottom : Int, out : List(Int)) : List(Int) do
+    if z > bottom do List.reverse(out) else
+      let out = Cons(S.index(x, z), out)
+      if x == right do rectangle(left, z + 1, left, right, bottom, out)
+      else rectangle(x + 1, z, left, right, bottom, out) end
+    end
+  end
+
+  fn footprint(tool : Int, anchor : Int, target : Int) : List(Int) do
+    if !S.valid(target) do Nil else
+      let anchor = if S.valid(anchor) do anchor else target end
+      if S.area_policy_tool(tool) || tool == 2 || tool == 3 || tool == 28 || (tool >= 29 && tool <= 32) do
+        let ax = anchor % S.width()
+        let az = anchor / S.width()
+        let bx = target % S.width()
+        let bz = target / S.width()
+        let left = if ax < bx do ax else bx end
+        let top = if az < bz do az else bz end
+        rectangle(left, top, left, if ax > bx do ax else bx end, if az > bz do az else bz end, Nil)
+      else if tool == 99 || tool == 100 || S.utility_upgrade(tool) || S.timed_street_tool(tool) || S.street_planting_tool(tool) || S.grade_tool(tool) || S.road_tool(tool) || tool == 7 || tool == 18 || tool == 19 || tool == 26 || tool == 27 || (tool >= 33 && tool <= 36) do
+        line(anchor, target)
+      else Cons(target, Nil) end end
+    end
+  end
+
+  pfn changed(old : Ur.Sim.City, next : Ur.Sim.City, i : Int) : Bool do
+    old.cash != next.cash || S.get(old.seawalls, i) != S.get(next.seawalls, i) || S.get(old.waste_bins, i) != S.get(next.waste_bins, i) || old.harbour != next.harbour || old.ferry_start != next.ferry_start ||
+      S.get(old.car_free_days, i) != S.get(next.car_free_days, i) || S.get(old.ground_areas, i) != S.get(next.ground_areas, i) || S.get(old.quiet_areas, i) != S.get(next.quiet_areas, i) ||
+      S.get(old.streetscape, i) != S.get(next.streetscape, i) || S.get(old.parks, i) != S.get(next.parks, i) || S.get(old.grade_cover, i) != S.get(next.grade_cover, i) || S.get(old.pipes, i) != S.get(next.pipes, i) || S.get(old.grid, i) != S.get(next.grid, i) ||
+      S.get(old.public_parking, i) != S.get(next.public_parking, i) || S.get(old.nuisance, i) != S.get(next.nuisance, i) || S.get(old.tolls, i) != S.get(next.tolls, i) ||
+      S.get(old.transit, i) != S.get(next.transit, i) || S.get(old.stops, i) != S.get(next.stops, i) ||
+      S.get(old.ferries, i) != S.get(next.ferries, i) || S.get(old.service, i) != S.get(next.service, i)
+  end
+
+  pfn apply(c : Ur.Sim.City, tool : Int, tiles : List(Int), draft : Preview, previous : Int) : Preview do
+    match tiles do
+      Nil -> draft
+      Cons(i, rest) ->
+        let surface = S.road_tool(tool) || (tool >= 33 && tool <= 35)
+        let steep = surface && S.valid(previous) && int_abs(S.get(c.heights, previous) - S.get(c.heights, i)) > 12
+        if steep do { draft with city: c, valid: false, changed: false, reason: "This route is too steep. Grade the land first." } else
+        -- An empty message distinguishes a no-op from a rejected action.
+        let before = { draft.city with message: "" }
+        let next = S.draft_act(before, i, tool)
+        let moved = changed(before, next, i)
+        if !moved && next.message != "" && !(tool >= 29 && tool <= 32 && S.get(before.nuisance, i) == tool - 29 && S.get(before.heights, i) > 0) do { draft with city: c, valid: false, changed: false, reason: next.message } else
+          let next = if moved do next else draft.city end
+          let upkeep = if S.utility_upgrade(tool) && moved do
+            " · +$" ++ int_to_string((c.cash - next.cash) / S.cost(c, i, tool) * (S.utility_upkeep(2) - S.utility_upkeep(1))) ++ "/month"
+          else if (tool == 99 || tool == 100) && moved do
+            " · +$" ++ int_to_string((c.cash - next.cash) / S.cost(c, i, tool) * S.flood_upkeep(next, i)) ++ "/month"
+          else draft.reason end end
+          apply(c, tool, rest, { draft with city: next, cost: c.cash - next.cash, changed: draft.changed || moved, reason: upkeep }, i)
+        end end
+    end
+  end
+
+  pfn stroke_has(tiles : List(Int), i : Int) : Bool do
+    match tiles do
+      Nil -> false
+      Cons(j, rest) -> i == j || stroke_has(rest, i)
+    end
+  end
+  pfn add_stroke(tiles : List(Int), incoming : List(Int)) : List(Int) do
+    match incoming do
+      Nil -> tiles
+      Cons(i, rest) -> add_stroke(if stroke_has(tiles, i) do tiles else Cons(i, tiles) end, rest)
+    end
+  end
+  fn park_stroke(tiles : List(Int), previous : Int, target : Int) : List(Int) do
+    if !S.valid(target) do tiles else add_stroke(tiles, line(if S.valid(previous) do previous else target end, target)) end
+  end
+  fn park_preview(c : Ur.Sim.City, tiles : List(Int)) : Preview do
+    let draft = { city: c, tiles: tiles, cost: 0, valid: true, changed: false, reason: "" }
+    let p = apply(c, 53, tiles, draft, -1)
+    if p.changed do { p with city: S.resize_parks(p.city) } else p end
+  end
+  pfn upgraded_tiles(before : NativeIntArr, after : NativeIntArr, i : Int, tiles : List(Int)) : List(Int) do
+    if i == S.count() do List.reverse(tiles) else
+      upgraded_tiles(before, after, i + 1, if S.get(before, i) != S.get(after, i) do Cons(i, tiles) else tiles end)
+    end
+  end
+  fn preview(c : Ur.Sim.City, tool : Int, anchor : Int, target : Int) : Preview do
+    let tiles = if c.harbour < 0 do footprint(0, -1, target) else footprint(tool, anchor, target) end
+    let tiles = if tool == 0 && c.harbour >= 0 do Nil else tiles end
+    let campus = if S.campus_tool(tool) && c.harbour >= 0 do S.campus_footprint(c, tool, target) else Nil end
+    let clicked_campus = S.campus_root(c, target)
+    let clear_campus = tool == 7 && S.valid(clicked_campus) && List.length(tiles) == 1
+    let tiles = if !List.is_empty(campus) do campus
+      else if clear_campus do
+        upgraded_tiles(c.campus, (S.draft_act(c, target, tool)).campus, 0, Nil)
+      else tiles end end
+    let draft = { city: c, tiles: tiles, cost: 0, valid: true, changed: false, reason: "" }
+    if c.harbour < 0 && S.valid(target) && !S.can_land(c, target) do
+      { draft with valid: false, reason: "Choose a low shoreline parcel for the harbour." }
+    else if Ur.Council.building_block(c, tool, tiles) do
+      { draft with valid: false, reason: Ur.Council.member(c, Ur.Council.sponsor(c)) ++ " placed a hold. See Details / Council." }
+    else if S.campus_tool(tool) && c.harbour >= 0 && S.valid(target) do
+      apply(c, tool, Cons(target, Nil), draft, -1)
+    else if S.grade_tool(tool) && c.harbour >= 0 && S.valid(target) do
+      let next = S.build_grade(c, anchor, target, tool)
+      let spent = c.cash - next.cash
+      { draft with city: next, cost: spent, valid: spent > 0, changed: spent > 0, reason: next.message }
+    else if tool == 53 && c.harbour >= 0 do park_preview(c, tiles)
+    else
+      let placement = if clear_campus do Cons(target, Nil) else tiles end
+      let p = apply(c, tool, placement, draft, -1)
+      if tool == 7 && p.changed do { p with city: S.resize_parks(p.city) }
+      else if tool == 55 && p.changed do { p with tiles: upgraded_tiles(c.park_tiers, p.city.park_tiers, 0, Nil) }
+      else p end end
+    end end end end end
+  end
+
+  fn sidewalk_preview(c : Ur.Sim.City, lot : Int, spot : Int, tool : Int) : Preview do
+    let (x, _) = S.sidewalk_point(c, lot, spot)
+    if x < 0 do { city: c, tiles: Nil, cost: 0, valid: false, changed: false, reason: "Aim at a sidewalk position." } else
+      let next = S.place_sidewalk({ c with message: "" }, lot, spot, tool)
+      let changed = S.get(c.sidewalk_items, lot) != S.get(next.sidewalk_items, lot)
+      { city: if changed do next else c end, tiles: [lot], cost: c.cash - next.cash, changed: changed,
+        valid: changed || next.message == "", reason: if changed do "" else next.message end }
+    end
+  end
+  fn caption(p : Preview) : String do
+    if !p.valid do p.reason
+    else if !p.changed do ""
+    else if p.cost > 0 do "Build preview  ·  $" ++ int_to_string(p.cost) ++ p.reason ++ "  ·  Release to build"
+    else "Build preview  ·  Release to confirm" end end end
+  end
+end

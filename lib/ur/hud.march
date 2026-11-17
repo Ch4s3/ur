@@ -10,58 +10,1472 @@ mod Ur.Hud do
   pfn panel(u : Strata.Ui.Ui, x : Float, y : Float, w : Float, h : Float) : Strata.Ui.Ui do
     U.rect(u, 0, x, y, w, h, (0.055, 0.105, 0.13, 0.96))
   end
-  fn tool_at(mx : Float, my : Float) : Int do
-    if mx >= 18.0 && mx < 218.0 && my >= 120.0 && my < 442.0 do
-      float_to_int((my -. 120.0) /. 46.0) + 1
-    else 0 end
+  pfn menu_width(w : Float) : Float do if w < 752.0 do w -. 32.0 else 720.0 end end
+  pfn menu_x(w : Float) : Float do (w -. menu_width(w)) *. 0.5 end
+  pfn menu_y(h : Float) : Float do
+    let centered = (h -. 392.0) *. 0.5
+    if centered < 124.0 do 124.0 else centered end
   end
-  fn over_panel(mx : Float, my : Float, w : Float, h : Float) : Bool do
-    my < 94.0 || my >= h -. 86.0 || (mx < 234.0 && my < 464.0) || (mx >= w -. 294.0 && my < 580.0)
+  pfn tab_width(w : Float) : Float do (menu_width(w) -. 16.0) /. 10.0 end
+  fn menu_at(mx : Float, my : Float, w : Float) : Bool do
+    mx >= w -. 346.0 && mx < w -. 246.0 && my >= 91.0 && my < 123.0
   end
-  pfn tools(u : Strata.Ui.Ui, i : Int, chosen : Int) : Strata.Ui.Ui do
-    if i > 7 do u else
-      let y = 120.0 +. int_to_float(i - 1) *. 46.0
-      let bg = U.rect(u, 0, 18.0, y, 200.0, 40.0, if i == chosen do (0.22, 0.40, 0.40, 1.0) else (0.075, 0.14, 0.17, 1.0) end)
-      let txt = int_to_string(i) ++ "   " ++ S.tool_name(i)
-      tools(label(bg, 30.0, y +. 10.0, 14.0, txt, true), i + 1, chosen)
+  fn undo_at(mx : Float, my : Float, w : Float) : Bool do
+    mx >= w -. 238.0 && mx < w -. 144.0 && my >= 91.0 && my < 123.0
+  end
+  fn toggle_at(mx : Float, my : Float, w : Float) : Bool do
+    mx >= w -. 136.0 && mx < w -. 18.0 && my >= 91.0 && my < 123.0
+  end
+  fn weather_at(mx : Float, my : Float, w : Float) : Bool do
+    mx >= w -. 192.0 && mx < w -. 18.0 && my >= 130.0 && my < 175.0
+  end
+  fn weather_button_at(mx : Float, my : Float, w : Float, h : Float) : Bool do
+    let x = mx -. menu_x(w)
+    let y = my -. menu_y(h)
+    x >= menu_width(w) -. 279.0 && x < menu_width(w) -. 151.0 && y >= 51.0 && y < 79.0
+  end
+  fn panel_tab_at(mx : Float, my : Float, w : Float, h : Float, visible : Bool) : Int do
+    let relative = mx -. menu_x(w) -. 8.0
+    let local_y = my -. menu_y(h)
+    if !visible || local_y < 8.0 || local_y >= 43.0 || relative < 0.0 || relative >= menu_width(w) -. 16.0 do -1
+    else float_to_int(relative /. tab_width(w)) end
+  end
+  fn over_panel(mx : Float, my : Float, w : Float, h : Float, visible : Bool) : Bool do
+    my < 80.0 || toggle_at(mx, my, w) || undo_at(mx, my, w) || menu_at(mx, my, w) || weather_at(mx, my, w) ||
+      (visible && mx >= menu_x(w) && mx < w -. menu_x(w) && my >= menu_y(h) && my < menu_y(h) +. 392.0)
+  end
+  pfn civic_label(mask : Int) : String do
+    if mask == 0 do "Civic access  |  None" else
+      "Civic  | " ++ (if S.has_civic(mask, 1) do " School" else "" end) ++
+      (if S.has_civic(mask, 2) do " Clinic" else "" end) ++
+      (if S.has_civic(mask, 4) do " Fire" else "" end) ++
+      (if S.has_civic(mask, 8) do " Police" else "" end)
     end
   end
-  fn draw(c : Ur.Sim.City, st : Ur.Sim.Stats, chosen : Int, hover : Int, reason : String, paused : Bool, speed : Int, ms : Float) : Strata.Ui.Ui do
-    let u = Strata.Render.ui_begin(1.0)
+  pfn expansion_panel(a : Strata.Ui.Ui, c : Ur.Sim.City, x : Float, top : Float) : Strata.Ui.Ui do
+    let ledger = c.expansion
+    let style = T.with_wrap(T.style(), 220.0)
+    if ledger.island == 0 do
+      T.styled(a, 0, x, top +. 280.0, T.default_font(), 12.0, (0.70, 0.82, 0.76, 1.0), style,
+        "Ship surplus food from the farming island or fishing shoals. Exports earn $3 per unit.")
+    else
+      let name = if ledger.island == 1 do "Farming island" else "Fishing shoals" end
+      let status = if ledger.recovered >= ledger.invested do "Paid back" else "Payback" end
+      let a = label(a, x, top +. 280.0, 12.0, name ++ "   |   " ++ status, true)
+      let a = label(a, x, top +. 302.0, 12.0, "$" ++ int_to_string(ledger.recovered) ++ " recovered / $" ++ int_to_string(ledger.invested), false)
+      label(a, x, top +. 324.0, 12.0, int_to_string(ledger.exports) ++ " exported   |   Net $" ++ int_to_string(ledger.net) ++ " last month", ledger.net > 0)
+    end
+  end
+  fn policy_at(mx : Float, my : Float, w : Float, h : Float, visible : Bool, tab : Int) : (Int, Int) do
+    let right = mx -. menu_x(w)
+    let y = my -. menu_y(h) +. 130.0
+    if visible && tab == 11 && y >= 422.0 && y < 449.0 && right >= 18.0 && right < 306.0 do
+      (7 + float_to_int((right -. 18.0) /. 96.0), 1)
+    else if visible && tab == 3 && w >= 620.0 && y >= 222.0 && y < 282.0 && right >= 470.0 && right < 538.0 do
+      (5 + float_to_int((y -. 222.0) /. 30.0), if right < 504.0 do -1 else 1 end)
+    else if !visible || tab != 3 || y < 222.0 || y >= 372.0 || right < 186.0 || right >= 254.0 do (-1, 0)
+    else (float_to_int((y -. 222.0) /. 30.0), if right < 220.0 do -1 else 1 end) end end end
+  end
+  pfn policy_rows(a : Strata.Ui.Ui, c : Ur.Sim.City, x : Float, top : Float, row : Int) : Strata.Ui.Ui do
+    if row >= 5 do a else
+      let y = top +. 222.0 +. int_to_float(row) *. 30.0
+      let value = match row do
+        0 -> "Income tax   " ++ int_to_string(c.tax) ++ "%"
+        1 -> "Business tax   " ++ int_to_string(c.business_rate) ++ "%"
+        2 -> "Import tariff   " ++ int_to_string(c.import_rate) ++ "%"
+        3 -> "Export tariff   " ++ int_to_string(c.export_rate) ++ "%"
+        _ -> "Energy price   $" ++ int_to_string(c.energy)
+      end
+      let a = label(a, x +. 18.0, y +. 3.0, 13.0, value, true)
+      let a = U.rect(a, 0, x +. 186.0, y, 32.0, 25.0, (0.15, 0.26, 0.29, 1.0))
+      let a = U.rect(a, 0, x +. 220.0, y, 32.0, 25.0, (0.15, 0.26, 0.29, 1.0))
+      let a = label(a, x +. 197.0, y +. 2.0, 13.0, "-", true)
+      policy_rows(label(a, x +. 231.0, y +. 2.0, 13.0, "+", true), c, x, top, row + 1)
+    end
+  end
+  pfn account_line(a : Strata.Ui.Ui, x : Float, y : Float, name : String, account : Ur.Sim.Accounts) : Strata.Ui.Ui do
+    let net = S.margin(account)
+    let a = label(a, x, y, 12.0, name ++ "  $" ++ int_to_string(net), net >= 0)
+    label(a, x, y +. 17.0, 11.0, "Income $" ++ int_to_string(account.earnings) ++ "   Rent $" ++ int_to_string(account.rent) ++
+      "   Tax $" ++ int_to_string(account.tax) ++ "   Costs $" ++ int_to_string(account.costs), false)
+  end
+  pfn prose(a : Strata.Ui.Ui, x : Float, y : Float, size : Float, message : String) : Strata.Ui.Ui do
+    T.styled(a, 0, x, y, T.default_font(), size, (0.87, 0.94, 0.91, 1.0), T.with_wrap(T.style(), 240.0), message)
+  end
+  pfn tabs(a : Strata.Ui.Ui, x : Float, y : Float, width : Float, active : Int, pending : Bool, i : Int) : Strata.Ui.Ui do
+    if i >= 10 do a else
+      let name = match i do
+        0 -> "Overview"
+        1 -> "Parcel"
+        2 -> "Services"
+        3 -> "Policy"
+        4 -> "Finance"
+        5 -> "Livability"
+        6 -> "Safety"
+        7 -> "Activity"
+        8 -> if pending do "Council •" else "Council" end
+        _ -> "Market"
+      end
+      let selected = i == active || (i == 2 && active == 10) || (i == 0 && (active == 11 || active == 13))
+      let a = U.rect(a, 0, x, y, width -. 3.0, 35.0,
+        if selected do (0.18, 0.36, 0.39, 1.0) else (0.09, 0.17, 0.20, 1.0) end)
+      let (text_width, _, _) = T.measure(T.default_font(), 13.0, name, 0.0)
+      let a = label(a, x +. (width -. text_width -. 3.0) *. 0.5, y +. 9.0, 13.0, name, selected)
+      tabs(a, x +. width, y, width, active, pending, i + 1)
+    end
+  end
+  fn over_starter(step : Int, sidebar : Bool, x : Float, y : Float) : Bool do
+    step > 0 && !sidebar && x >= 18.0 && x < 420.0 && y >= 207.0 && y < 315.0
+  end
+  pfn starter_guide(a : Strata.Ui.Ui, step : Int, x : Float, y : Float, width : Float, paused : Bool) : Strata.Ui.Ui do
+    let (title, instruction, detail) = match step do
+      1 -> ("Choose a harbour", "Click a cyan parcel on a low shoreline.", "The harbour opens trade and starts your utility networks.")
+      2 -> ("Build your first street", "Roads / Streets / Local street", "Drag inland from the harbour to give buildings frontage.")
+      3 -> ("Connect a power source", "Utilities / Power / Solar array", "Use Lay power line to connect it to the harbour.")
+      4 -> ("Secure fresh water", "Utilities / Water / Rain collector or Freshwater well", "Lay pipe to connect it. Collectors fill after rainfall.")
+      5 -> ("Set up sewage", "Utilities / Water / Ocean outfall", "Pipe it to the shore. A trade school unlocks water recycling.")
+      6 -> ("Zone your first blocks", "Zoning / Land use / Housing zone and Employment zone", "Zone beside the street, within reach of pipes and power.")
+      _ -> ("Wait for construction", if paused do "Press Space to resume." else "Let time run so homes and workplaces can finish." end,
+        "Check a parcel for any remaining service or demand limits.")
+    end
+    let a = panel(a, x, y, width, 108.0)
+    let a = label(a, x +. 12.0, y +. 8.0, 10.0, "START YOUR TOWN  ·  " ++ int_to_string(step) ++ " / 7", false)
+    let a = label(a, x +. 12.0, y +. 25.0, 17.0, title, true)
+    let a = label(a, x +. 12.0, y +. 53.0, 11.0, instruction, true)
+    let a = label(a, x +. 12.0, y +. 75.0, 11.0, detail, false)
+    if paused && step < 7 do label(a, x +. 12.0, y +. 91.0, 10.0, "Paused · Space to resume", false) else a end
+  end
+  pfn overview(a : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, x : Float, top : Float, paused : Bool) : Strata.Ui.Ui do
+    if c.harbour < 0 do
+      let a = label(a, x, top +. 188.0, 17.0, "Archipelago survey", true)
+      let a = prose(a, x, top +. 221.0, 13.0, "Choose a cyan shoreline parcel to land. The harbour starts with 64 water, 24 power and access to imports.")
+      let a = label(a, x, top +. 294.0, 12.0, "West  ·  City plain and groundwater", true)
+      let a = label(a, x, top +. 330.0, 12.0, "Northeast  ·  Geothermal slopes", true)
+      let a = label(a, x, top +. 366.0, 12.0, "Southeast  ·  Fertile land and freshwater", true)
+      label(a, x, top +. 402.0, 12.0, "Far east  ·  Productive fishing shoals", true)
+    else if st.startup_step > 0 do starter_guide(a, st.startup_step, x, top +. 180.0, 430.0, paused)
+    else
+      let a = label(a, x, top +. 188.0, 17.0, "Regional development", true)
+      let a = prose(a, x, top +. 224.0, 14.0, st.growth_pressure)
+      if c.founding_map do expansion_panel(a, c, x, top)
+      else prose(a, x, top +. 280.0, 13.0, if st.people >= 500 && c.income > 0 do "Milestone reached: a thriving town." else "First milestone: 500 residents and a positive monthly balance." end) end
+    end end
+  end
+  pfn district_policy(a : Strata.Ui.Ui, c : Ur.Sim.City, x : Float, top : Float, row : Int) : Strata.Ui.Ui do
+    if row == 2 do a else
+      let y = top +. 222.0 +. int_to_float(row) *. 30.0
+      let value = if row == 0 do S.ground_name(c.ground_rule) else S.quiet_name(c.quiet_rule) end
+      let a = label(a, x +. 292.0, y +. 3.0, 12.0, value, true)
+      let a = U.rect(a, 0, x +. 470.0, y, 32.0, 25.0, (0.15, 0.26, 0.29, 1.0))
+      let a = U.rect(a, 0, x +. 504.0, y, 32.0, 25.0, (0.15, 0.26, 0.29, 1.0))
+      let a = label(a, x +. 481.0, y +. 2.0, 13.0, "-", true)
+      district_policy(label(a, x +. 515.0, y +. 2.0, 13.0, "+", true), c, x, top, row + 1)
+    end
+  end
+  pfn parcel_measures(a : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, i : Int, x : Float, y : Float, metric : Int) : Strata.Ui.Ui do
+    if metric == 7 do a else
+      let score = S.measure(c, st, i, metric)
+      let a = label(a, x, y, 11.0, S.metric_name(metric), metric == 0)
+      let a = label(a, x +. 129.0, y, 11.0, int_to_string(score) ++ "/100", true)
+      parcel_measures(a, c, st, i, x, y +. 21.0, metric + 1)
+    end
+  end
+  fn property_at(mx : Float, my : Float, w : Float, h : Float) : Bool do
+    let left = menu_x(w) +. menu_width(w) -. 196.0
+    let top = menu_y(h) +. 315.0
+    mx >= left && mx < left +. 158.0 && my >= top && my < top +. 26.0
+  end
+  pfn property_panel(a : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, i : Int, top : Float) : Strata.Ui.Ui do
+    let debt = S.get(c.property_arrears, i)
+    let action = S.property_action(c, i)
+    if debt <= 0 && action == 0 do a else
+      let w = U.width(a)
+      let left = menu_x(w) +. menu_width(w) -. 196.0
+      let y = top +. 445.0
+      let a = label(a, left, y -. 21.0, 11.0, "Back taxes  $" ++ int_to_string(debt), true)
+      let title = match action do
+        1 -> "Condemn vacant building"
+        2 -> "Take possession"
+        3 -> "Sell for $" ++ int_to_string(S.property_price(c, st.routes, i))
+        _ -> "Three months required"
+      end
+      let active = action > 0 && (action != 3 || S.distance(st.routes, i) >= 0)
+      let a = U.rect(a, 0, left, y, 158.0, 26.0, if active do (0.18, 0.36, 0.39, 1.0) else (0.09, 0.17, 0.20, 1.0) end)
+      let a = label(a, left +. 8.0, y +. 5.0, 11.0, title, active)
+      if action == 3 do label(a, left, y +. 29.0, 10.0, if active do "Clears building for redevelopment" else "Road connection required" end, false) else a end
+    end
+  end
+  pfn parcel(a : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, x : Float, top : Float, hover : Int, reason : String) : Strata.Ui.Ui do
+    if !S.valid(hover) do prose(a, x, top +. 190.0, 14.0, "Click a parcel to inspect it.") else
+      let name = S.building_name(c, hover)
+      let a = label(a, x, top +. 188.0, 16.0, if name == "" do "Parcel" else name end, true)
+      let a = label(a, x, top +. 212.0, 11.0, int_to_string(hover % S.width()) ++ " / " ++ int_to_string(hover / S.width()) ++
+        "   ·   " ++ int_to_string(S.get(c.heights, hover) / 4) ++ " m elevation", false)
+      let a = prose(a, x, top +. 235.0, 13.0, reason)
+      let zone = S.get(c.zones, hover)
+      let a = label(a, x, top +. 282.0, 11.0, "Pollution " ++ int_to_string(S.land_pollution_at(c, hover)) ++ "%   ·   " ++ S.nuisance_name(S.get(c.nuisance, hover)) ++ " nuisance limit", false)
+      let trip = S.commute(st.commutes, hover)
+      let travel = if S.get(c.ferries, hover) > 0 || S.get(c.transit, hover) >= 2 do
+        let running = S.get(c.ferries, hover) > 0 || S.get(st.running_transit, hover) > 0
+        (if running do "Service running" else "Service inactive" end) ++ "   ·   Frequency " ++ int_to_string(S.frequency(c, hover)) ++ "/3"
+      else if S.get(c.roads, hover) > 0 do
+        let load = S.road_load(st.traffic, hover)
+        let capacity = S.road_capacity(c, hover)
+        if capacity == 0 do "Walking access · No motor traffic" else
+          "Busiest direction " ++ int_to_string(load) ++ " / " ++ int_to_string(capacity) ++ "   ·   Delay +" ++ int_to_string(S.delay_for(c, hover, load)) ++ " min"
+        end
+      else if trip < 999 do "Nearest jobs   " ++ int_to_string(trip) ++ " min"
+      else "" end end end
+      let a = label(a, x, top +. 304.0, 11.0, travel, false)
+      let a = if zone > 0 do label(a, x, top +. 325.0, 11.0, "Storeys " ++ int_to_string(S.get(c.buildings, hover)) ++ " / " ++ int_to_string(S.get(c.density, hover)) ++ "   ·   " ++ civic_label(S.get(st.civic, hover)), false) else a end
+      let homes = S.homes_at(c, hover)
+      let a = if homes > 0 do
+        let title = "Homes " ++ int_to_string(S.occupied_homes(c, hover)) ++ "/" ++ int_to_string(homes) ++ " occupied · After bills"
+        let a = account_line(a, x, top +. 349.0, title, S.household_accounts(c, st.routes, st.commutes, st.labor, hover))
+        let a = label(a, x, top +. 383.0, 11.0, S.home_market_reason(c, st, hover), S.occupied_homes(c, hover) == 0)
+        if S.neighborhood_rent(c, hover) > 0 && U.width(a) >= 650.0 && S.job_slots(c, hover) == 0 do
+          label(a, x +. 279.0, top +. 349.0, 11.0, "Rent pressure from move-ins  +$" ++ int_to_string(S.neighborhood_rent(c, hover)), false)
+        else a end
+      else a end
+      let a = if S.get(c.buildings, hover) > 0 && (zone == 2 || S.shop_space(c, hover)) do
+        let a = account_line(a, x, top +. 404.0, "Business net", S.business_accounts(c, st.routes, st.labor, st.people, st.work, hover))
+        label(a, x, top +. 438.0, 11.0, S.shop_market_reason(c, st, hover), S.business_closed(c, hover) || S.storefront(c, hover) == 3)
+      else a end
+      let note = if !S.fire_offline(c, hover) && S.retail_kind(c, hover) > 0 do
+        "Food stock " ++ int_to_string(S.get(c.shop_stock, hover)) ++ "   ·   Delivered " ++ int_to_string(S.get(c.shop_delivered, hover)) ++
+        (if S.get(c.shop_sales, hover) < 8 do "   ·   Shortage" else "" end)
+      else if S.freshwater(c, hover) do "Freshwater aquifer"
+      else if S.geothermal(c, hover) do "Geothermal field"
+      else if S.get(c.pipes, hover) > 0 do "Water pipe installed"
+      else if S.get(c.grid, hover) > 0 do "Power line installed"
+      else "" end end end end end
+      let a = label(a, x, top +. 455.0, 11.0, note, true)
+      let a = if zone > 0 do
+        let a = label(a, x, top +. 474.0, 11.0, S.ground_name(S.ground_at(c, hover)) ++ " · " ++ S.quiet_name(S.quiet_at(c, hover)), false)
+        label(a, x, top +. 493.0, 11.0, "Transit foot traffic " ++ int_to_string(S.get(c.footfall, hover)) ++ " · Neighborhood noise " ++ int_to_string(S.street_noise(c, hover)), false)
+      else a end
+      let a = if S.job_slots(c, hover) > 0 do
+        let jobs_x = if homes == 0 do x else x +. 279.0 end
+        let required = S.job_requirement(c, hover)
+        let category = int_to_string(S.get(st.staffed_jobs, hover)) ++ " / " ++ int_to_string(S.job_slots(c, hover)) ++ " jobs filled"
+        let a = label(a, jobs_x, top +. 349.0, 12.0, category, true)
+        let a = label(a, jobs_x, top +. 366.0, 11.0, S.job_vacancy_reason(c, st, hover), false)
+        if required > 0 do label(a, jobs_x, top +. 383.0, 11.0, S.sector_name(required) ++ " · " ++ S.education_name(required), true) else a end
+      else a end
+      let a = property_panel(a, c, st, hover, top)
+      if S.get(c.heights, hover) > 0 && U.width(a) >= 560.0 do
+        parcel_measures(a, c, st, hover, x +. 279.0, top +. 188.0, 0)
+      else a end
+    end
+  end
+  fn detail_button_at(mx : Float, my : Float, w : Float, h : Float) : Bool do
+    let left = menu_x(w) +. menu_width(w) -. 145.0
+    let top = menu_y(h) +. 51.0
+    mx >= left && mx < left +. 128.0 && my >= top && my < top +. 27.0
+  end
+  fn tuition_at(mx : Float, my : Float, w : Float, h : Float) : (Int, Int) do
+    let x = mx -. menu_x(w) -. menu_width(w) +. 96.0
+    let y = my -. menu_y(h)
+    let stage = if y >= 188.0 && y < 215.0 do 2 else if y >= 229.0 && y < 256.0 do 3 else -1 end end
+    if stage < 0 || x < 0.0 || x >= 66.0 do (-1, 0) else (stage, if x < 33.0 do -1 else 1 end) end
+  end
+  pfn services(a : Strata.Ui.Ui, st : Ur.Sim.Stats, x : Float, top : Float, width : Float) : Strata.Ui.Ui do
+    let r = st.services
+    let p = st.generation
+    let t = st.waste
+    let wide = width >= 584.0
+    let waste_x = if wide do x +. width *. 0.50 else x end
+    let waste_top = if wide do top -. 181.0 else top end
+    let a = label(a, x, top +. 187.0, 14.0, "Power   " ++ int_to_string(st.utilities.electric.total) ++ " delivered / " ++ int_to_string(st.used - r.treatment_power) ++ " in demand", true)
+    let a = label(a, x, top +. 207.0, 11.0, "Wind " ++ int_to_string(p.wind) ++ "   Solar " ++ int_to_string(p.solar) ++ "   Biogas " ++ int_to_string(p.biogas), false)
+    let a = label(a, x, top +. 224.0, 11.0, "Gas " ++ int_to_string(p.gas) ++ "   Geothermal " ++ int_to_string(p.geothermal) ++ "   Nuclear " ++ int_to_string(p.nuclear), false)
+    let a = label(a, x, top +. 253.0, 14.0, "Household water   " ++ int_to_string(st.utilities.water.total) ++ " / " ++ int_to_string(st.people) ++ " delivered", true)
+    let a = label(a, x, top +. 273.0, 11.0, "Pumped " ++ int_to_string(r.wells) ++ "   Rain / starter " ++ int_to_string(r.rain) ++ "   Desal " ++ int_to_string(r.desal), false)
+    let a = label(a, x, top +. 290.0, 11.0, "Recycled " ++ int_to_string(r.recycled) ++ "   Imported " ++ int_to_string(r.imported_water), false)
+    let a = label(a, x, top +. 319.0, 14.0, "Food   " ++ int_to_string(r.farms + r.fish + r.imports) ++ " / " ++ int_to_string(r.food_used), true)
+    let a = label(a, x, top +. 339.0, 11.0, "Farm " ++ int_to_string(r.farms) ++ "   Fish " ++ int_to_string(r.fish) ++ "   Imports " ++ int_to_string(r.imports), false)
+    let a = label(a, waste_x, waste_top +. 368.0, 14.0, "Sewage   " ++ int_to_string(st.utilities.sewer.total) ++ " / " ++ int_to_string(r.wastewater) ++ " collected", true)
+    let a = label(a, waste_x, waste_top +. 388.0, 11.0, "Discharged " ++ int_to_string(r.discharged) ++ "   Fishing revenue $" ++ int_to_string(r.fish_revenue), false)
+    let a = label(a, waste_x, waste_top +. 417.0, 14.0, "Trash   " ++ int_to_string(t.collected) ++ " collected   ·   " ++ int_to_string(t.pending) ++ " pending", true)
+    let a = label(a, waste_x, waste_top +. 437.0, 11.0, "Digested " ++ int_to_string(t.digested) ++ "   Buried " ++ int_to_string(t.buried), false)
+    label(a, waste_x, waste_top +. 455.0, 11.0, "Exported " ++ int_to_string(t.exported) ++ " · Dumped " ++ int_to_string(t.dumped) ++ " · Burned " ++ int_to_string(t.burned), false)
+  end
+  type FinancePoint = { month : Int, revenue : Int, expenditures : Int, projected : Bool }
+  pfn forecast_horizon() : Int do 12 end
+  pfn project_months(month : Int, revenue : Int, expenses : Int, revenue_change : Int, expense_change : Int, period : Int, offset : Int) : List(FinancePoint) do
+    if offset >= forecast_horizon() do Nil else
+      let income = revenue + revenue_change * offset / period
+      let spending = expenses + expense_change * offset / period
+      let point = { month: month + offset, revenue: if income < 0 do 0 else income end,
+        expenditures: if spending < 0 do 0 else spending end, projected: true }
+      Cons(point, project_months(month, revenue, expenses, revenue_change, expense_change, period, offset + 1))
+    end
+  end
+  fn forecast(c : Ur.Sim.City, current : Ur.Sim.Budget) : List(FinancePoint) do
+    let expenses = current.infrastructure + current.operations
+    match c.finance_history do
+      Nil -> if c.harbour < 0 do Nil else project_months(c.month + 1, current.revenue, expenses, 0, 0, 1, 0) end
+      Cons(latest, _) ->
+        let oldest = match List.reverse(List.take(c.finance_history, 6)) do
+          Cons(m, _) -> m
+          Nil -> latest
+        end
+        let period = latest.month - oldest.month
+        let recurring_change = latest.budget.infrastructure + latest.budget.operations - oldest.budget.infrastructure - oldest.budget.operations
+        project_months(c.month + 1, current.revenue, expenses, latest.revenue - oldest.revenue, recurring_change,
+          if period > 0 do period else 1 end, 0)
+    end
+  end
+  fn first_deficit(months : List(FinancePoint)) : Int do
+    match months do
+      Nil -> 0
+      Cons(m, rest) -> if m.expenditures > m.revenue do m.month else first_deficit(rest) end
+    end
+  end
+  pfn finance_peak(months : List(FinancePoint), peak : Int) : Int do
+    match months do
+      Nil -> peak
+      Cons(m, rest) ->
+        let value = if m.revenue > m.expenditures do m.revenue else m.expenditures end
+        finance_peak(rest, if value > peak do value else peak end)
+    end
+  end
+  pfn income_colour() : (Float, Float, Float, Float) do (0.33, 0.78, 0.69, 1.0) end
+  pfn spending_colour() : (Float, Float, Float, Float) do (0.98, 0.61, 0.44, 1.0) end
+  type FinanceView = { month : Int, lines : Bool }
+  type FinancePlot = { x : Float, bottom : Float, step : Float, count : Int }
+  pfn finance_plot(w : Float, h : Float, count : Int) : FinancePlot do
+    { x: menu_x(w) +. 70.0, bottom: menu_y(h) +. 212.0,
+      step: (menu_width(w) -. 90.0) /. int_to_float(count + forecast_horizon()), count: count }
+  end
+  fn finance_click(c : Ur.Sim.City, mx : Float, my : Float, w : Float, h : Float, view : FinanceView) : FinanceView do
+    let top = menu_y(h)
+    let right = w -. menu_x(w)
+    if my >= top +. 57.0 && my < top +. 84.0 && mx >= right -. 146.0 && mx < right -. 18.0 do
+      { view with lines: mx >= right -. 82.0 }
+    else if mx < right -. 18.0 && my >= top +. 89.0 && my < top +. 110.0 && mx >= right -. 110.0 do
+      { view with month: 0 }
+    else
+      let plot = finance_plot(w, h, List.length(c.finance_history))
+      if mx >= plot.x && mx < plot.x +. plot.step *. int_to_float(plot.count) &&
+        my >= plot.bottom -. 104.0 && my < plot.bottom +. 21.0 do
+        let index = float_to_int((mx -. plot.x) /. plot.step)
+        { view with month: c.month - plot.count + 1 + index }
+      else view end
+    end end
+  end
+  pfn month_or_latest(months : List(Ur.Sim.FinanceMonth), wanted : Int, latest : Ur.Sim.FinanceMonth) : Ur.Sim.FinanceMonth do
+    match months do
+      Nil -> latest
+      Cons(m, rest) -> if m.month == wanted do m else month_or_latest(rest, wanted, latest) end
+    end
+  end
+  -- Draw a line with adjacent vertical strips in the rectangle-only UI.
+  pfn segment(a : Strata.Ui.Ui, x : Float, y : Float, dx : Float, dy : Float, ink : (Float, Float, Float, Float), offset : Float) : Strata.Ui.Ui do
+    if offset >= dx do a else
+      let width = if dx -. offset < 1.0 do dx -. offset else 1.0 end
+      let from = y +. dy *. offset /. dx
+      let to = y +. dy *. (offset +. width) /. dx
+      let top = if from < to do from else to end
+      let height = if from < to do to -. from else from -. to end
+      segment(U.rect(a, 0, x +. offset, top -. 1.0, width, height +. 2.0, ink), x, y, dx, dy, ink, offset +. width)
+    end
+  end
+  pfn line_mark(a : Strata.Ui.Ui, x : Float, y : Float, step : Float, next_y : Float, has_next : Bool, ink : (Float, Float, Float, Float)) : Strata.Ui.Ui do
+    let a = if has_next do segment(a, x, y, step, next_y -. y, ink, 0.0) else a end
+    U.rect(a, 0, x -. 2.0, y -. 2.0, 4.0, 4.0, ink)
+  end
+  pfn finance_marks(a : Strata.Ui.Ui, months : List(FinancePoint), plot : FinancePlot, scale : Float, view : FinanceView, i : Int) : Strata.Ui.Ui do
+    match months do
+      Nil -> a
+      Cons(m, rest) ->
+        let x = plot.x +. int_to_float(i) *. plot.step
+        let center = x +. plot.step *. 0.5
+        let income = int_to_float(m.revenue) *. scale
+        let expenses = int_to_float(m.expenditures) *. scale
+        let income_ink = if m.projected do (0.33, 0.78, 0.69, 0.48) else income_colour() end
+        let expense_ink = if m.projected do (0.98, 0.61, 0.44, 0.48) else spending_colour() end
+        let a = if view.lines do
+          let (next_income, next_expenses, has_next) = match rest do
+            Nil -> (0.0, 0.0, false)
+            Cons(n, _) -> (int_to_float(n.revenue) *. scale, int_to_float(n.expenditures) *. scale, true)
+          end
+          let a = line_mark(a, center, plot.bottom -. income, plot.step, plot.bottom -. next_income, has_next, income_ink)
+          line_mark(a, center, plot.bottom -. expenses, plot.step, plot.bottom -. next_expenses, has_next, expense_ink)
+        else
+          let inset = plot.step *. 0.12
+          let bar = plot.step *. 0.34
+          let a = if income > 0.0 do U.rect(a, 0, x +. inset, plot.bottom -. income, bar, income, income_ink) else a end
+          if expenses > 0.0 do U.rect(a, 0, x +. inset +. bar, plot.bottom -. expenses, bar, expenses, expense_ink) else a end
+        end
+        let selected = m.month == view.month
+        let a = if selected do U.rect(a, 0, x +. 2.0, plot.bottom +. 2.0, plot.step -. 4.0, 2.0, (0.93, 0.95, 0.90, 1.0)) else a end
+        let a = if i == 0 || i == plot.count || i == plot.count + forecast_horizon() - 1 || (i % 6 == 0 && (i < plot.count - 2 || i > plot.count + 2) && i < plot.count + forecast_horizon() - 2) do
+          label(a, x, plot.bottom +. 7.0, 10.0, int_to_string(m.month), selected)
+        else a end
+        finance_marks(a, rest, plot, scale, view, i + 1)
+    end
+  end
+  pfn money_rows(a : Strata.Ui.Ui, x : Float, y : Float, width : Float, rows : List((String, Int))) : Strata.Ui.Ui do
+    match rows do
+      Nil -> a
+      Cons((name, amount), rest) ->
+        let value = "$" ++ int_to_string(amount)
+        let (size, _, _) = T.measure(T.default_font(), 11.0, value, 0.0)
+        let a = label(a, x, y, 11.0, name, false)
+        let a = label(a, x +. width -. size, y, 11.0, value, true)
+        money_rows(a, x, y +. 15.0, width, rest)
+    end
+  end
+  pfn finance_button(a : Strata.Ui.Ui, x : Float, y : Float, width : Float, name : String, active : Bool) : Strata.Ui.Ui do
+    let a = U.rect(a, 0, x, y, width -. 2.0, 27.0,
+      if active do (0.18, 0.36, 0.39, 1.0) else (0.09, 0.17, 0.20, 1.0) end)
+    label(a, x +. 9.0, y +. 6.0, 11.0, name, true)
+  end
+  pfn finance(a : Strata.Ui.Ui, c : Ur.Sim.City, current : Ur.Sim.Budget, x : Float, y : Float, width : Float, view : FinanceView) : Strata.Ui.Ui do
+    let a = label(a, x, y +. 58.0, 20.0, "City finances", true)
+    if c.harbour < 0 do prose(a, x, y +. 105.0, 14.0, "Establish a harbour to see the forecast.") else
+        let latest = match c.finance_history do
+          Nil -> { month: c.month, revenue: current.revenue, expenditures: current.infrastructure + current.operations, budget: current, construction: 0, property_receipts: 0 }
+          Cons(m, _) -> m
+        end
+        let chosen = month_or_latest(c.finance_history, view.month, latest)
+        let b = chosen.budget
+        let a = finance_button(a, x +. width -. 164.0, y +. 57.0, 64.0, "Bars", !view.lines)
+        let a = finance_button(a, x +. width -. 100.0, y +. 57.0, 64.0, "Lines", view.lines)
+        let a = if chosen.month != latest.month do label(a, x +. width -. 126.0, y +. 91.0, 11.0, "Show latest", true) else a end
+        let a = U.rect(a, 0, x, y +. 95.0, 8.0, 8.0, income_colour())
+        let a = label(a, x +. 13.0, y +. 91.0, 11.0, "Income", true)
+        let a = U.rect(a, 0, x +. 83.0, y +. 95.0, 8.0, 8.0, spending_colour())
+        let a = label(a, x +. 96.0, y +. 91.0, 11.0, "Expenditures", true)
+        let projected = forecast(c, current)
+        let deficit = first_deficit(projected)
+        let history = List.reverse(List.map(c.finance_history, fn m -> { month: m.month, revenue: m.revenue, expenditures: m.expenditures, projected: false }))
+        let points = List.append(history, projected)
+        let peak = ((finance_peak(points, 1) + 99) / 100) * 100
+        let plot = finance_plot(U.width(a), U.height(a), List.length(c.finance_history))
+        let guide = (0.32, 0.45, 0.48, 0.45)
+        let plot_w = width -. 90.0
+        let selected_x = plot.x +. int_to_float(chosen.month - latest.month + plot.count - 1) *. plot.step
+        let projected_x = plot.x +. int_to_float(plot.count) *. plot.step
+        let a = U.rect(a, 0, projected_x, plot.bottom -. 104.0, int_to_float(forecast_horizon()) *. plot.step, 104.0, (0.32, 0.45, 0.48, 0.18))
+        let a = if plot.count > 0 do
+          U.rect(a, 0, selected_x +. 1.0, plot.bottom -. 104.0, plot.step -. 2.0, 104.0, (0.31, 0.55, 0.55, 0.26))
+        else a end
+        let a = U.rect(a, 0, plot.x, plot.bottom -. 96.0, plot_w, 1.0, guide)
+        let a = U.rect(a, 0, plot.x, plot.bottom -. 48.0, plot_w, 1.0, guide)
+        let a = U.rect(a, 0, plot.x, plot.bottom, plot_w, 1.0, guide)
+        let a = label(a, x, plot.bottom -. 102.0, 10.0, "$" ++ int_to_string(peak), false)
+        let a = label(a, x, plot.bottom -. 54.0, 10.0, "$" ++ int_to_string(peak / 2), false)
+        let a = label(a, x, plot.bottom -. 6.0, 10.0, "$0", false)
+        let a = finance_marks(a, points, plot, 96.0 /. int_to_float(peak), { view with month: chosen.month }, 0)
+        let a = if deficit > 0 do
+          let marker = projected_x +. (int_to_float(deficit - c.month - 1) +. 0.5) *. plot.step
+          U.rect(a, 0, marker -. 1.0, plot.bottom -. 104.0, 2.0, 104.0, (0.98, 0.26, 0.28, 1.0))
+        else a end
+        let outlook = if deficit > 0 do "Projected deficit in month " ++ int_to_string(deficit) else "12-month forecast" end
+        let outlook_ink = if deficit > 0 do (1.0, 0.47, 0.45, 1.0) else (0.75, 0.84, 0.83, 1.0) end
+        let a = T.text(a, 0, x +. 196.0, y +. 91.0, T.default_font(), 11.0, outlook_ink, outlook)
+        if plot.count == 0 do
+          prose(a, x, y +. 244.0, 14.0, "The monthly breakdown appears after the first completed month.")
+        else
+          let a = label(a, x, y +. 238.0, 14.0, "Month " ++ int_to_string(chosen.month) ++ "   ·   Net $" ++ int_to_string(chosen.revenue - chosen.expenditures), true)
+          let column = (width -. 56.0) *. 0.5
+          let expense_x = x +. column +. 20.0
+          let a = label(a, x, y +. 260.0, 12.0, "Income  $" ++ int_to_string(chosen.revenue), true)
+          let a = label(a, expense_x, y +. 260.0, 12.0, "Expenditures  $" ++ int_to_string(chosen.expenditures), true)
+          let a = money_rows(a, x, y +. 280.0, column,
+            Cons(("Property tax", b.property_tax), Cons(("Income tax", b.income_tax), Cons(("Business tax", b.business_tax),
+            Cons(("Electricity sales", b.energy_income), Cons(("Trade", b.trade_income), Cons(("Tariffs", b.tariffs), Cons(("Road tolls", b.toll_income), Cons(("Parking fees", b.parking_income), Cons(("Bus fares", b.bus_fares), Nil))))))))))
+          let a = if chosen.property_receipts > 0 do label(a, expense_x, y +. 240.0, 10.0, "Property recoveries included: $" ++ int_to_string(chosen.property_receipts), false) else a end
+          money_rows(a, expense_x, y +. 280.0, column,
+            Cons(("Construction", chosen.construction), Cons(("Infrastructure upkeep", b.infrastructure), Cons(("Power generation", b.power_cost),
+            Cons(("Food imports", b.food_cost), Cons(("Water supply", b.water_cost), Cons(("Waste and sewage", b.sanitation_cost), Cons(("Bus operations", b.bus_operations), Cons(("Freight operations", b.freight_operations), Nil)))))))))
+        end
+    end
+  end
+  pfn trend_bars(a : Strata.Ui.Ui, samples : List(NativeIntArr), metric : Int, x : Float, bottom : Float, step : Float) : Strata.Ui.Ui do
+    match samples do
+      Nil -> a
+      Cons(month, rest) ->
+        let score = S.clamp(S.get(month, metric), 0, 100)
+        let bar = 1.0 +. int_to_float(score) *. 0.23
+        let ink = if metric == 0 do (0.38, 0.78, 0.72, 1.0) else (0.42, 0.60, 0.66, 1.0) end
+        trend_bars(U.rect(a, 0, x, bottom -. bar, step -. 2.0, bar, ink), rest, metric, x +. step, bottom, step)
+    end
+  end
+  pfn trend_rows(a : Strata.Ui.Ui, samples : List(NativeIntArr), latest : NativeIntArr, x : Float, y : Float, width : Float, metric : Int) : Strata.Ui.Ui do
+    if metric == 7 do a else
+      let a = label(a, x, y +. 4.0, 12.0, S.metric_name(metric), true)
+      let a = label(a, x +. width -. 72.0, y +. 4.0, 12.0, int_to_string(S.get(latest, metric)) ++ "/100", true)
+      let chart_width = width -. 278.0
+      let a = U.rect(a, 0, x +. 170.0, y, chart_width, 25.0, (0.05, 0.10, 0.13, 1.0))
+      let a = trend_bars(a, samples, metric, x +. 170.0, y +. 25.0, chart_width /. 24.0)
+      trend_rows(a, samples, latest, x, y +. 35.0, width, metric + 1)
+    end
+  end
+  pfn livability_trends(a : Strata.Ui.Ui, c : Ur.Sim.City, x : Float, y : Float, width : Float) : Strata.Ui.Ui do
+    let a = label(a, x, y +. 56.0, 17.0, "Resident livability over time", true)
+    match c.livability_history do
+      Nil -> label(a, x, y +. 104.0, 13.0, "Trends begin after the first month with residents.", false)
+      Cons(latest, _) ->
+        let a = label(a, x, y +. 83.0, 11.0, "Last 24 recorded months · Each bar is one month · Month " ++ int_to_string(S.get(latest, 7)), false)
+        let a = trend_rows(a, List.reverse(c.livability_history), latest, x, y +. 108.0, width, 0)
+        label(a, x, y +. 361.0, 10.0, "Safety reflects reported incidents and emergency responses over six months.", false)
+    end
+  end
+  fn safety_reset(mx : Float, my : Float, w : Float, h : Float) : Bool do
+    let x = menu_x(w) +. menu_width(w) -. 118.0
+    let y = menu_y(h) +. 53.0
+    mx >= x && mx < x +. 95.0 && my >= y && my < y +. 28.0
+  end
+  pfn medical_summary(calls : List(Ur.Sim.Incident), district : Int, admitted : Int, stable : Int, minutes : Int) : (Int, Int, Int) do
+    match calls do
+      Nil -> (admitted, stable, minutes)
+      Cons(call, rest) ->
+        match call.medical do
+          Some(t) ->
+            if S.valid(t.facility) && (district < 0 || S.crime_district(call.lot) == district) do
+              medical_summary(rest, district, admitted + 1, stable + (if t.outcome == 1 do 1 else 0 end), minutes + S.medical_minutes(call, t))
+            else medical_summary(rest, district, admitted, stable, minutes) end
+          None -> medical_summary(rest, district, admitted, stable, minutes)
+        end
+    end
+  end
+  pfn crime_samples(history : List(Ur.Sim.CrimeMonth), focus : Int, filter : Int) : List(NativeIntArr) do
+    match history do
+      Nil -> Nil
+      Cons(sample, rest) ->
+        let district = if S.valid(focus) do S.crime_district(focus) else -1 end
+        let report = S.incident_report(sample.calls, district, filter)
+        let row = NativeArray.set_int(NativeArray.make_int(4, 0), 0, report.incidents)
+        let row = if filter == 4 do
+          let (admitted, stable, minutes) = medical_summary(sample.calls, district, 0, 0, 0)
+          let row = NativeArray.set_int(row, 1, admitted)
+          let row = NativeArray.set_int(row, 2, if admitted == 0 do 0 else minutes / admitted end)
+          NativeArray.set_int(row, 3, stable)
+        else
+          let row = NativeArray.set_int(row, 1, report.responses)
+          let row = NativeArray.set_int(row, 2, if report.responses == 0 do 0 else report.minutes / report.responses end)
+          NativeArray.set_int(row, 3, if district < 0 do 0 else S.safety_score(history, focus) end)
+        end
+        Cons(row, crime_samples(rest, focus, filter))
+    end
+  end
+  pfn crime_peak(samples : List(NativeIntArr), metric : Int, peak : Int) : Int do
+    match samples do
+      Nil -> peak
+      Cons(sample, rest) ->
+        let n = S.get(sample, metric)
+        crime_peak(rest, metric, if n > peak do n else peak end)
+    end
+  end
+  pfn crime_bars(a : Strata.Ui.Ui, samples : List(NativeIntArr), metric : Int, x : Float, bottom : Float, step : Float, peak : Int) : Strata.Ui.Ui do
+    match samples do
+      Nil -> a
+      Cons(sample, rest) ->
+        let n = S.get(sample, metric)
+        let bar = 1.0 +. int_to_float(n) *. 36.0 /. int_to_float(peak)
+        let ink = if metric == 0 do (0.91, 0.57, 0.36, 1.0) else (0.38, 0.78, 0.72, 1.0) end
+        crime_bars(U.rect(a, 0, x, bottom -. bar, step *. 0.75, bar, ink), rest, metric, x +. step, bottom, step, peak)
+    end
+  end
+  pfn crime_rows(a : Strata.Ui.Ui, samples : List(NativeIntArr), latest : NativeIntArr, focused : Bool, medical : Bool, x : Float, y : Float, width : Float, metric : Int) : Strata.Ui.Ui do
+    if metric == (if focused || medical do 4 else 3 end) do a else
+      let name = match metric do
+        0 -> "Incidents"
+        1 -> if medical do "Admitted" else "Responses" end
+        2 -> if medical do "Time to treatment" else "Mean response" end
+        _ -> if medical do "Stabilized" else "Safety" end
+      end
+      let score = S.get(latest, metric)
+      let value = if metric == 2 && S.get(latest, 1) == 0 do "–"
+        else int_to_string(score) ++ (if metric == 2 do " min" else if metric == 3 && !medical do "/100" else "" end end) end
+      let a = label(a, x, y +. 12.0, 12.0, name, true)
+      let a = label(a, x +. width -. 72.0, y +. 12.0, 12.0, value, true)
+      let chart_width = width -. 246.0
+      let a = U.rect(a, 0, x +. 140.0, y, chart_width, 39.0, (0.05, 0.10, 0.13, 1.0))
+      let peak = if metric == 3 && !medical do 100 else if metric == 2 do (if medical do 120 else 45 end) else crime_peak(samples, 0, 1) end end
+      let a = crime_bars(a, samples, metric, x +. 140.0, y +. 39.0, chart_width /. 24.0, peak)
+      crime_rows(a, samples, latest, focused, medical, x, y +. 49.0, width, metric + 1)
+    end
+  end
+  pfn latest_case(calls : List(Ur.Sim.Incident), focus : Int, filter : Int, text : String) : String do
+    match calls do
+      Nil -> text
+      Cons(call, rest) ->
+        let text = if S.incident_matches(call.kind, filter) && (!S.valid(focus) || S.crime_district(call.lot) == S.crime_district(focus)) do
+          let place = S.incident_name(call.kind) ++ " at " ++ int_to_string(call.lot % S.width()) ++ " / " ++ int_to_string(call.lot / S.width())
+          match call.medical do
+            Some(t) ->
+              place ++ " · " ++ S.medical_outcome(t.outcome) ++ (if S.valid(t.facility) do
+                " · " ++ int_to_string(S.medical_minutes(call, t)) ++ " min to care (" ++ int_to_string(t.wait) ++ " waiting) · Site " ++ int_to_string(t.facility % S.width()) ++ "/" ++ int_to_string(t.facility / S.width())
+              else "" end)
+            None -> S.incident_name(call.kind) ++ " at " ++ int_to_string(call.lot % S.width()) ++ " / " ++ int_to_string(call.lot / S.width()) ++
+          (if call.response < 0 do " · No response" else " · Response in " ++ int_to_string(call.response) ++ " min" end) ++
+          (if call.kind == 3 do " · Spread to " ++ int_to_string(List.length(call.spread)) ++ " lots" else "" end)
+          end
+        else text end
+        latest_case(rest, focus, filter, text)
+    end
+  end
+  pfn safety_trends(a : Strata.Ui.Ui, c : Ur.Sim.City, focus : Int, layer : Int, x : Float, y : Float, width : Float) : Strata.Ui.Ui do
+    let filter = if layer == 20 || layer == 21 do layer - 17 else 0 end
+    let scope = if S.valid(focus) do
+      "Neighborhood " ++ int_to_string(focus % S.width() / 6 + 1) ++ " / " ++ int_to_string(focus / S.width() / 6 + 1)
+    else "Citywide" end
+    let a = label(a, x, y +. 55.0, 17.0, scope ++ (if filter == 3 do " · Fires" else if filter == 4 do " · Medical calls" else " safety" end end), true)
+    let a = finance_button(a, x +. width -. 136.0, y +. 53.0, 95.0, "Citywide", !S.valid(focus))
+    let a = label(a, x, y +. 85.0, 11.0, "Click a parcel to select its neighborhood · One bar per month", false)
+    match crime_samples(c.crime_history, focus, filter) do
+      Nil -> label(a, x, y +. 121.0, 12.0, "Incident records begin with the next simulated month.", false)
+      Cons(latest, rest) ->
+        let a = crime_rows(a, List.reverse(Cons(latest, rest)), latest, S.valid(focus), filter == 4, x, y +. 114.0, width, 0)
+        let text = match c.crime_history do
+          Cons(month, _) -> latest_case(month.calls, focus, filter, "No reported incidents")
+          Nil -> ""
+        end
+        let a = label(a, x, y +. 334.0, 12.0, "Latest month · " ++ text, true)
+        label(a, x, y +. 356.0, 10.0, "Choose the Fires or Medical calls map layer to filter this chart.", false)
+    end
+  end
+  pfn activity_rows(a : Strata.Ui.Ui, events : List(Ur.Activity.NeighborhoodEvent), x : Float, y : Float, width : Float) : Strata.Ui.Ui do
+    match events do
+      Nil -> a
+      Cons(event, rest) ->
+        let a = U.rect(a, 0, x, y, width -. 36.0, 33.0, (0.09, 0.17, 0.20, 1.0))
+        let a = label(a, x +. 8.0, y +. 8.0, 11.0, "M" ++ int_to_string(event.month), false)
+        let location = int_to_string(event.lot % S.width() / 6 + 1) ++ "/" ++ int_to_string(event.lot / S.width() / 6 + 1)
+        let a = label(a, x +. 53.0, y +. 8.0, 12.0, event.title, true)
+        let a = if width < 540.0 do a else label(a, x +. width -. 155.0, y +. 8.0, 11.0, if S.valid(event.lot) do "Neighborhood " ++ location else "Citywide" end, false) end
+        activity_rows(a, rest, x, y +. 38.0, width)
+    end
+  end
+  fn activity_at(mx : Float, my : Float, w : Float, h : Float, events : List(Ur.Activity.NeighborhoodEvent)) : Int do
+    let x = menu_x(w) +. 18.0
+    let local = my -. menu_y(h) -. 105.0
+    if mx < x || mx >= w -. x || local < 0.0 || float_to_int(local) % 38 >= 33 do -1 else
+      match List.drop(events, float_to_int(local /. 38.0)) do
+        Cons(event, _) -> event.lot
+        Nil -> -1
+      end
+    end
+  end
+  fn council_at(c : Ur.Sim.City, mx : Float, my : Float, w : Float, h : Float, tab : Int, visible : Bool) : Int do
+    let x = mx -. menu_x(w)
+    let y = my -. menu_y(h)
+    if !visible || tab != 8 do 0
+    else if y >= 155.0 && y < 183.0 do
+      let k = Ur.Council.kind(c)
+      let request = k == 1 || k == 5
+      if request && x >= 18.0 && x < 112.0 do 1
+      else if (request && x >= 120.0 && x < 214.0) || (k == 6 && x >= 18.0 && x < 112.0) do 2
+      else if k > 0 && S.valid(Ur.Council.target(c)) && x >= 245.0 && x < 426.0 do 3
+      else 0 end end end
+    else if Ur.Council.established(c) && y >= 227.0 && y < 255.0 do
+      if x >= 18.0 && x < 104.0 do 4
+      else if x >= 110.0 && x < 196.0 do 5 else 0 end end
+    else if Ur.Council.campaign(c) && y >= 310.0 && y < 338.0 do
+      if x >= 18.0 && x < 147.0 do 6
+      else if x >= 153.0 && x < 296.0 do 7
+      else if x >= 302.0 && x < 398.0 do 8 else 0 end end end
+    else 0 end end end end
+  end
+  pfn council_panel(a : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, x : Float, y : Float, selected : Int) : Strata.Ui.Ui do
+    let a = label(a, x, y +. 57.0, 17.0, "City council", true)
+    if !Ur.Council.established(c) do
+      label(a, x, y +. 89.0, 12.0, "The first wards are drawn once the city reaches 120 residents.", false)
+    else
+      let k = Ur.Council.kind(c)
+      let issue = Ur.Council.agenda_issue(c)
+      let title = if k == 0 && Ur.Council.verified_months(c) >= 2 do "Resolved · " ++ Ur.Council.issue_name(issue) else Ur.Council.agenda_title_for(c) end
+      let a = label(a, x, y +. 88.0, 13.0, title, true)
+      let a = if k > 0 do
+        let a = label(a, x, y +. 109.0, 11.0, Ur.Council.member(c, Ur.Council.sponsor(c)) ++ "   ·   Expires month " ++ int_to_string(Ur.Council.expires(c)), false)
+        let a = label(a, x, y +. 131.0, 11.0, Ur.Council.terms(c), false)
+        if k == 1 || k == 5 do
+          finance_button(finance_button(a, x, y +. 155.0, 94.0, "Grant", true), x +. 102.0, y +. 155.0, 94.0, "Decline", false)
+        else if k == 6 do finance_button(a, x, y +. 155.0, 94.0, "Decline", false)
+        else if issue == 0 && (k == 3 || k == 4) do
+          label(a, x, y +. 155.0, 11.0, "Local improvements: " ++ int_to_string(Ur.Council.progress(c)) ++ " / " ++ int_to_string(Ur.Council.improvement_required(c)), true)
+        else a end end end
+      else a end
+      let lot = Ur.Council.target(c)
+      let a = if k > 0 && S.valid(lot) do
+        finance_button(a, x +. 227.0, y +. 155.0, 181.0, if issue > 0 do "Show affected homes" else "Show target parcel" end, false)
+      else a end
+      let a = if k > 0 && issue > 0 do
+        let now = Ur.Council.observed(c)
+        let observed = if now > 100 do "sample changed" else int_to_string(now) ++ "% affected" end
+        let evidence = Ur.Council.issue_name(issue) ++ " · " ++ int_to_string(Ur.Council.baseline(c)) ++ "% at filing · " ++ observed
+        let a = label(a, x, y +. 185.0, 11.0, evidence, true)
+        let goal = "Target: " ++ int_to_string(Ur.Council.outcome_goal(c)) ++ "% or fewer for two months · " ++ int_to_string(Ur.Council.verified_months(c)) ++ "/2 verified"
+        label(a, x, y +. 201.0, 10.0, goal, false)
+      else a end
+      let ward = Ur.Council.focus(c, selected)
+      let campaign = Ur.Council.campaign(c)
+      let title = if campaign do "Campaign open · Vote in month " else "Next election · Month " end
+      let a = label(a, x +. 192.0, y +. 235.0, 12.0, title ++ int_to_string(Ur.Council.election_month(c)), true)
+      let a = finance_button(finance_button(a, x, y +. 227.0, 86.0, "Prev. ward", false), x +. 92.0, y +. 227.0, 86.0, "Next ward", false)
+      let a = label(a, x, y +. 261.0, 12.0, Ur.Council.member(c, ward), true)
+      let a = if campaign do
+        let a = label(a, x, y +. 283.0, 11.0, "Challenger: " ++ Ur.Council.challenger(c, ward), false)
+        let side = Ur.Council.endorsement(c, ward)
+        let a = finance_button(a, x, y +. 310.0, 129.0, "Endorse incumbent", side == 1)
+        let a = finance_button(a, x +. 135.0, y +. 310.0, 143.0, "Endorse challenger", side == 2)
+        finance_button(a, x +. 284.0, y +. 310.0, 96.0, "Stay neutral", side == 0)
+      else
+        let status = Ur.Council.result(c, ward)
+        let summary = if status == 1 do "Incumbent reelected" else if status == 2 do "Challenger won" else "This ward has yet to vote." end end
+        let summary = if Ur.Council.endorsed_loser(c, ward) do summary ++ " · Your endorsement lost" else summary end
+        label(a, x, y +. 283.0, 11.0, summary, false)
+      end
+      let report = Ur.Council.ward_report(c, st, ward)
+      let priority = Ur.Council.leading_issue(report)
+      let conditions = if report.homes == 0 do "No occupied homes in this ward."
+      else if priority == 0 do "No pressing issue across " ++ int_to_string(report.homes) ++ " occupied homes."
+      else Ur.Council.issue_name(priority) ++ " · " ++ int_to_string(Ur.Council.share(report, priority)) ++ "% of " ++ int_to_string(report.homes) ++ " occupied homes" end end
+      let a = label(a, x, y +. 347.0, 11.0, conditions, true)
+      let help = if campaign do "Endorsements can change until election day." else "Endorsements open four months before each election." end
+      label(a, x, y +. 367.0, 11.0, help, false)
+    end
+  end
+  fn demand_at(x : Float, y : Float) : Bool do x >= 123.0 && x < 220.0 && y >= 12.0 && y < 74.0 end
+  pfn demand_meter(a : Strata.Ui.Ui, y : Float, name : String, value : Int, color : (Float, Float, Float, Float)) : Strata.Ui.Ui do
+    let a = label(a, 125.0, y, 10.0, name, false)
+    let a = U.rect(a, 0, 174.0, y +. 4.0, 42.0, 6.0, (0.11, 0.18, 0.20, 1.0))
+    if value <= 0 do a else U.rect(a, 0, 174.0, y +. 4.0, int_to_float(value) *. 0.42, 6.0, color) end
+  end
+  pfn market_cell(a : Strata.Ui.Ui, sample : NativeIntArr, x : Float, y : Float, step : Float, income : Bool, q : Int, selected : Bool) : Strata.Ui.Ui do
+    if q == 5 do a else
+      let value = S.get(sample, q + (if income do 6 else 1 end))
+      let missing = if income do S.get(sample, 12) == 0 else value == 101 end
+      let share = int_to_float(S.clamp(value, 0, if income do 36 else 100 end)) /. (if income do 36.0 else 100.0 end)
+      let color = if missing do (0.11, 0.15, 0.17, 1.0)
+        else if income do (0.13 +. 0.57 *. share, 0.19 +. 0.32 *. share, 0.37 +. 0.29 *. share, 1.0)
+        else (0.12 +. 0.12 *. share, 0.20 +. 0.39 *. share, 0.24 +. 0.28 *. share, 1.0) end end
+      let a = U.rect(a, 0, x, y, step -. 2.0, 10.0, color)
+      let a = if selected && step >= 17.0 do label(a, x +. 2.0, y, 9.0, if missing do "–" else int_to_string(value) end, true) else a end
+      market_cell(a, sample, x, y +. 12.0, step, income, q + 1, selected)
+    end
+  end
+  pfn market_columns(a : Strata.Ui.Ui, samples : List(NativeIntArr), x : Float, y : Float, step : Float, income : Bool, index : Int, selected : Int) : Strata.Ui.Ui do
+    match samples do
+      Nil -> a
+      Cons(sample, rest) ->
+        let a = market_cell(a, sample, x, y, step, income, 0, index == selected)
+        let a = if index == selected do U.rect(a, 0, x, y +. 60.0, step -. 2.0, 2.0, (0.8, 0.92, 0.88, 1.0)) else a end
+        market_columns(a, rest, x +. step, y, step, income, index + 1, selected)
+    end
+  end
+  pfn market_rows(a : Strata.Ui.Ui, x : Float, y : Float, sample : NativeIntArr, income : Bool, q : Int) : Strata.Ui.Ui do
+    if q == 5 do a else
+      let value = S.get(sample, q + (if income do 6 else 1 end))
+      let missing = if income do S.get(sample, 12) == 0 else value == 101 end
+      let suffix = if missing do "–" else if income do "$" ++ int_to_string(value) else int_to_string(value) ++ "%" end end
+      let a = label(a, x, y, 10.0, "Q" ++ int_to_string(q + 1) ++ "   " ++ suffix, true)
+      market_rows(a, x, y +. 12.0, sample, income, q + 1)
+    end
+  end
+  pfn exposure(samples : List(NativeIntArr), active : Int, exits : Int) : (Int, Int) do
+    match samples do
+      Nil -> (active, exits)
+      Cons(sample, rest) -> exposure(rest, active + S.get(sample, 15), exits + S.get(sample, 16))
+    end
+  end
+  pfn rent_tier_row(a : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, x : Float, y : Float, width : Float, tier : Int) : Strata.Ui.Ui do
+    if tier == 5 do a else
+      let offered = S.get(st.rent_tiers, tier)
+      let occupancy = if offered == 0 do "–" else int_to_string(S.get(st.rent_tiers, tier + 5) * 100 / offered) ++ "%" end
+      let change = S.rent_adjustment(c, tier)
+      let amount = if change < 0 do "-$" ++ int_to_string(0 - change) else "+$" ++ int_to_string(change) end
+      let a = label(a, x, y, 10.0, S.rent_tier_name(tier), true)
+      let a = label(a, x, y +. 13.0, 10.0, occupancy ++ "  ·  " ++ amount, false)
+      rent_tier_row(a, c, st, x +. width, y, width, tier + 1)
+    end
+  end
+  pfn market_panel(a : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, x : Float, y : Float, width : Float, mx : Float, my : Float) : Strata.Ui.Ui do
+    let samples = if List.is_empty(c.market_history) do Cons(st.market, Nil) else List.reverse(c.market_history) end
+    let count = List.length(samples)
+    let left = x +. 65.0
+    let step = (width -. 103.0) /. int_to_float(count)
+    let chart_hover = mx >= left && mx < left +. step *. int_to_float(count) && my >= y +. 185.0 && my < y +. 341.0
+    let selected = if chart_hover do S.clamp(float_to_int((mx -. left) /. step), 0, count - 1) else count - 1 end
+    let sample = match List.drop(samples, selected) do
+      Cons(point, _) -> point
+      Nil -> st.market
+    end
+    let a = label(a, x, y +. 56.0, 18.0, "Regional market", true)
+    let a = label(a, x, y +. 80.0, 12.0, "Demand   Housing " ++ int_to_string(S.housing_demand(st)) ++ "   ·   Shops " ++ int_to_string(S.shop_demand(st)) ++ "   ·   Jobs " ++ int_to_string(S.jobs_demand(st)), true)
+    let a = label(a, x, y +. 99.0, 11.0, "Homes " ++ int_to_string(S.get(st.market, 12)) ++ "/" ++ int_to_string(S.get(st.market, 11)) ++ " occupied   ·   Shops " ++ int_to_string(S.get(st.market, 14)) ++ "/" ++ int_to_string(S.get(st.market, 13)) ++ " trading", false)
+    let month = if List.is_empty(c.market_history) do "Current snapshot" else "Month " ++ int_to_string(S.get(sample, 0)) end
+    let a = label(a, x, y +. 116.0, 11.0, "Base rent bands  ·  Occupancy and monthly rent adjustment", true)
+    let a = rent_tier_row(a, c, st, x, y +. 132.0, (width -. 34.0) /. 5.0, 0)
+    let a = label(a, x, y +. 166.0, 12.0, "Housing occupancy by asking-rent quintile", true)
+    let a = market_rows(a, x, y +. 185.0, sample, false, 0)
+    let a = market_columns(a, samples, left, y +. 185.0, step, false, 0, selected)
+    let a = label(a, x, y +. 254.0, 12.0, "Mean after-tax household income by income quintile", true)
+    let a = market_rows(a, x, y +. 273.0, sample, true, 0)
+    let a = market_columns(a, samples, left, y +. 273.0, step, true, 0, selected)
+    let a = label(a, x, y +. 343.0, 10.0, month ++ "   ·   Q1 is lowest, Q5 highest   ·   Hover a column to read its values", false)
+    let (active, exits) = exposure(List.take(c.market_history, 12), 0, 0)
+    let turnover = if active == 0 do "Business closures will appear after the first trading month."
+      else int_to_string(exits) ++ " business closures · Last " ++ int_to_string(S.clamp(count, 1, 12)) ++ " months · " ++ int_to_string(exits * 1000 / active / 10) ++ "." ++ int_to_string(exits * 1000 / active % 10) ++ "% per active business-month" end
+    label(a, x, y +. 359.0, 11.0, turnover, false)
+  end
+  pfn education_rows(a : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, x : Float, top : Float, width : Float, stage : Int) : Strata.Ui.Ui do
+    if stage == 4 do a else
+      let y = top +. 106.0 +. int_to_float(stage) *. 41.0
+      let a = label(a, x, y +. 3.0, 13.0, S.education_name(stage), true)
+      let count = int_to_string(S.enrolled(c, stage)) ++ " / " ++ int_to_string(S.get(st.school_seats, stage)) ++ " seats"
+      let a = label(a, x +. 112.0, y +. 4.0, 11.0, count, false)
+      let a = if stage < 2 do a else
+        let a = label(a, x +. width -. 208.0, y +. 4.0, 11.0, "$" ++ int_to_string(S.school_tuition(c, stage)) ++ " / month", true)
+        let a = finance_button(a, x +. width -. 114.0, y, 32.0, "-", true)
+        finance_button(a, x +. width -. 81.0, y, 32.0, "+", true)
+      end
+      education_rows(a, c, st, x, top, width, stage + 1)
+    end
+  end
+  pfn faculty_rows(a : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, x : Float, y : Float, rank : Int) : Strata.Ui.Ui do
+    if rank == 8 do a else
+      let row = S.specialization_name(rank) ++ "  ·  " ++ int_to_string(S.specialist_enrolled(c, rank)) ++ " enrolled  ·  " ++
+        int_to_string(S.specialist_graduates(c, rank)) ++ " grads  ·  " ++ int_to_string(S.get(st.skill_jobs, rank)) ++ " jobs"
+      let a = label(a, x, y +. int_to_float((rank - 4) % 2) *. 22.0, 11.0, row, false)
+      faculty_rows(a, c, st, if rank == 5 do x +. 285.0 else x end, y, rank + 1)
+    end
+  end
+  pfn education_panel(a : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, x : Float, y : Float, width : Float) : Strata.Ui.Ui do
+    let a = label(a, x, y +. 56.0, 18.0, "Education and skills", true)
+    let a = label(a, x, y +. 81.0, 11.0, "Elementary, then secondary, then work, trade school, or university", false)
+    let a = education_rows(a, c, st, x, y, width, 0)
+    let a = label(a, x, y +. 271.0, 12.0, "Workforce qualifications and jobs by requirement", true)
+    let a = label(a, x, y +. 292.0, 11.0,
+      "Secondary   " ++ int_to_string(S.graduates(c, 1)) ++ " graduates · " ++ int_to_string(S.get(st.skill_jobs, 1)) ++ " roles", false)
+    let a = label(a, x, y +. 311.0, 11.0,
+      "Trade   " ++ int_to_string(S.graduates(c, 2)) ++ " graduates · " ++ int_to_string(S.get(st.skill_jobs, 2)) ++ " roles", false)
+    let a = label(a, x, y +. 330.0, 11.0,
+      "University   " ++ int_to_string(S.graduates(c, 3)) ++ " graduates · " ++ int_to_string(S.get(st.skill_jobs, 3)) ++ " roles", false)
+    faculty_rows(a, c, st, x, y +. 351.0, 4)
+  end
+  pfn flow_total(history : List(NativeIntArr), column : Int, total : Int) : Int do
+    match history do
+      Nil -> total
+      Cons(sample, rest) -> flow_total(rest, column, total + S.get(sample, column))
+    end
+  end
+  pfn age_bars(a : Strata.Ui.Ui, census : NativeIntArr, x : Float, y : Float, width : Float, group : Int) : Strata.Ui.Ui do
+    if group == 5 do a else
+      let name = match group do
+        0 -> "0 to 5"
+        1 -> "6 to 17"
+        2 -> "18 to 39"
+        3 -> "40 to 64"
+        _ -> "65 and older"
+      end
+      let people = Ur.Demography.age(census, group)
+      let total = S.clamp(Ur.Demography.total(census), 1, 1000000)
+      let a = label(a, x, y, 12.0, name, true)
+      let a = U.rect(a, 0, x +. 96.0, y +. 4.0, width, 8.0, (0.10, 0.19, 0.23, 1.0))
+      let a = if people > 0 do U.rect(a, 0, x +. 96.0, y +. 4.0, width *. int_to_float(people) /. int_to_float(total), 8.0, (0.34, 0.72, 0.64, 1.0)) else a end
+      let a = label(a, x +. 108.0 +. width, y, 12.0, int_to_string(people), true)
+      age_bars(a, census, x, y +. 21.0, width, group + 1)
+    end
+  end
+  pfn population_panel(a : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, x : Float, y : Float, width : Float) : Strata.Ui.Ui do
+    let census = if Ur.Demography.initialized(c.census) do c.census else Ur.Demography.seed(st.people) end
+    let month = List.take(c.population_history, 1)
+    let year = List.take(c.population_history, 12)
+    let a = label(a, x, y +. 56.0, 18.0, "Regional population", true)
+    let a = label(a, x, y +. 81.0, 12.0, int_to_string(st.people) ++ " residents   ·   " ++ int_to_string(st.labor.workforce) ++ " in the workforce", true)
+    let a = age_bars(a, census, x, y +. 112.0, (width -. 174.0) *. 0.90, 0)
+    let a = label(a, x, y +. 224.0, 12.0, "Last month   " ++ int_to_string(flow_total(month, 1, 0)) ++ " born   ·   " ++ int_to_string(flow_total(month, 2, 0)) ++ " died   ·   " ++ int_to_string(flow_total(month, 3, 0)) ++ " arrived   ·   " ++ int_to_string(flow_total(month, 4, 0)) ++ " left", true)
+    let a = label(a, x, y +. 245.0, 11.0, "Last " ++ int_to_string(List.length(year)) ++ " recorded months   " ++ int_to_string(flow_total(year, 1, 0)) ++ " born   ·   " ++ int_to_string(flow_total(year, 2, 0)) ++ " died   ·   " ++ int_to_string(flow_total(year, 3, 0)) ++ " arrived   ·   " ++ int_to_string(flow_total(year, 4, 0)) ++ " left", false)
+    let a = label(a, x, y +. 273.0, 13.0, "Immigration policy", true)
+    let a = finance_button(a, x, y +. 292.0, 96.0, S.immigration_name(0), c.immigration == 0)
+    let a = finance_button(a, x +. 96.0, y +. 292.0, 96.0, S.immigration_name(1), c.immigration == 1)
+    let a = finance_button(a, x +. 192.0, y +. 292.0, 96.0, S.immigration_name(2), c.immigration == 2)
+    label(a, x, y +. 329.0, 11.0, "Newcomers need housing and access to jobs.", false)
+  end
+  fn diagnosis_row_at(mx : Float, my : Float, w : Float, h : Float) : Int do
+    let right = menu_x(w) +. menu_width(w) -. 17.0
+    let offset = my -. menu_y(h) -. 130.0
+    if mx < right -. 100.0 || mx >= right || offset < 0.0 || offset >= 216.0 ||
+      float_to_int(offset) % 72 >= 30 do -1 else float_to_int(offset /. 72.0) end
+  end
+  pfn diagnosis_row(a : Strata.Ui.Ui, x : Float, y : Float, width : Float, headline : String, detail : String, response : String, target : Int) : Strata.Ui.Ui do
+    let a = label(a, x, y, 14.0, headline, true)
+    let a = label(a, x, y +. 23.0, 11.0, detail, false)
+    let a = label(a, x, y +. 41.0, 11.0, response, false)
+    if S.valid(target) do finance_button(a, x +. width -. 135.0, y, 100.0, "Show on map", true) else a end
+  end
+  pfn diagnosis_panel(a : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, focus : Int, x : Float, y : Float, width : Float) : Strata.Ui.Ui do
+    let a = finance_button(a, x +. width -. 163.0, y +. 51.0, 128.0, "Activity feed", false)
+    let a = label(a, x, y +. 57.0, 17.0, "Neighborhood diagnosis", true)
+    if !S.valid(focus) do label(a, x, y +. 90.0, 12.0, "Click a parcel outside the panel to inspect its neighborhood.", false) else
+      let r = Ur.Diagnosis.report(c, st, focus)
+      let a = label(a, x, y +. 83.0, 11.0, "Centered on " ++ int_to_string(focus % S.width()) ++ ", " ++ int_to_string(focus / S.width()) ++ " · Two blocks in each direction", false)
+      let a = label(a, x, y +. 101.0, 11.0, int_to_string(r.homes) ++ " occupied homes · " ++ int_to_string(r.shops) ++ " shops · " ++ int_to_string(r.bars) ++ " bars · Peak stop footfall " ++ int_to_string(r.footfall), false)
+      let road = if !S.valid(r.road) do "No measured road demand nearby."
+        else S.road_name(S.get(c.roads, r.road)) ++ " · " ++ int_to_string(r.road_load) ++ " / " ++ int_to_string(S.road_capacity(c, r.road)) ++ " lane load" end
+      let advice = if r.pressure <= 100 do "Road demand is within the measured capacity."
+        else if r.stops > 0 do "Run transit more often to ease car demand. Service costs rise."
+        else "Try connecting this area to transit. Budget for stops and service." end end
+      let a = diagnosis_row(a, x, y +. 130.0, width, if r.pressure > 100 do "Traffic · Over capacity" else "Traffic" end, road, advice, r.road)
+      let noise = if r.late_homes > 0 do int_to_string(r.late_homes) ++ " occupied homes on or next to parcels with bars open until 2 am."
+        else "No occupied homes directly exposed to bars open until 2 am." end
+      let a = diagnosis_row(a, x, y +. 202.0, width, "Late-night noise", noise,
+        if r.late_homes > 0 do "Paint 10 pm quiet hours around the source. Bars lose late trading." else "Keep late venues away from nearby homes as the district grows." end, r.noise_source)
+      let waste = if r.overflow == 0 do "Stored waste is within local capacity."
+        else int_to_string(r.overflow) ++ " units overflowing · Worst parcel has " ++ int_to_string(r.worst_pile) end
+      let last = S.get(c.waste_last, r.waste_lot)
+      let booked = List.any(c.waste_runs, fn run -> run.pickup == r.waste_lot)
+      let waste = if r.overflow == 0 do waste
+        else if booked do waste ++ " · Pickup scheduled"
+        else if last > 0 do waste ++ " · Last pickup " ++ int_to_string(S.clamp(S.waste_date(c) - last, 0, 100000)) ++ "d ago"
+        else waste ++ " · No pickup recorded" end end end
+      let a = diagnosis_row(a, x, y +. 274.0, width, "Trash collection", waste,
+        if r.overflow > 0 do "Check collection access. Bigger bins use a curb parking space." else "Sidewalk cans add storage and preserve curb parking." end, r.waste_lot)
+      label(a, x, y +. 354.0, 11.0, "Click another parcel to move the report.", false)
+    end
+  end
+  pfn weather_rows(a : Strata.Ui.Ui, c : Ur.Sim.City, x : Float, y : Float, width : Float, today : Int, offset : Int, forecast : Bool) : Strata.Ui.Ui do
+    if offset > 7 do a else
+      let date = today + (if forecast do offset else 0 - offset end)
+      let top = y +. int_to_float(offset - 1) *. 30.0
+      let days = S.days_per_month()
+      let a = if date < 0 do a else
+        let month = date / days
+        let day = date % days
+        let date_label = "M" ++ int_to_string(month) ++ " · Day " ++ int_to_string(day + 1)
+        let reading = S.weather_name(S.weather_on(c, month, day)) ++ " · " ++ int_to_string(S.temperature_on(c, month, day)) ++ " °C"
+        let a = label(a, x, top, 11.0, date_label, false)
+        label(a, x +. width *. 0.38, top, 11.0, reading, true)
+      end
+      weather_rows(a, c, x, y, width, today, offset + 1, forecast)
+    end
+  end
+  pfn weather_panel(a : Strata.Ui.Ui, c : Ur.Sim.City, x : Float, y : Float, width : Float) : Strata.Ui.Ui do
+    let today = c.month * S.days_per_month() + c.calendar_day
+    let column = (width -. 36.0) *. 0.5
+    let other = x +. column +. 8.0
+    let a = label(a, x, y +. 57.0, 17.0, "Weather", true)
+    let a = label(a, x, y +. 85.0, 12.0, "Today · " ++ S.weather_name(S.current_weather(c)) ++
+      " · " ++ int_to_string(S.temperature(c)) ++ " °C · Soil moisture " ++ int_to_string(c.soil_moisture) ++ "%", false)
+    let wet = S.climate_rain(c)
+    let heat = S.climate_heat(c)
+    let wetness = if wet >= 4 do "Wetter" else if wet <= -4 do "Drier" else "Moderate rainfall" end end
+    let warmth = if heat >= 2 do "Warmer" else if heat <= -2 do "Cooler" else "Moderate temperatures" end end
+    let a = label(a, x, y +. 105.0, 10.0, "Climate · " ++ wetness ++ " · " ++ warmth, false)
+    let a = label(a, x, y +. 122.0, 14.0, "7-day forecast", true)
+    let a = label(a, other, y +. 122.0, 14.0, "Weather history", true)
+    let a = weather_rows(a, c, x, y +. 151.0, column, today, 1, true)
+    if today > 0 do weather_rows(a, c, other, y +. 151.0, column, today, 1, false)
+    else label(a, other, y +. 151.0, 11.0, "History begins tomorrow.", false) end
+  end
+  pfn sidebar(a : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, w : Float, h : Float, visible : Bool, tab : Int, view : FinanceView, crime_focus : Int, council_focus : Int, layer : Int, hover : Int, reason : String, mx : Float, my : Float, paused : Bool, activity : List(Ur.Activity.NeighborhoodEvent)) : Strata.Ui.Ui do
+    let x = menu_x(w)
+    let y = menu_y(h)
+    let width = menu_width(w)
+    let a = panel(a, w -. 136.0, 91.0, 118.0, 32.0)
+    let a = label(a, w -. 124.0, 99.0, 12.0, if visible do "Hide details  –" else "Show details  +" end, true)
+    if !visible do a else
+      let a = U.rect(a, 0, x +. 4.0, y +. 5.0, width, 392.0, (0.018, 0.035, 0.04, 0.57))
+      let a = tabs(panel(a, x, y, width, 392.0), x +. 8.0, y +. 8.0, tab_width(w), if tab == 12 do 7 else tab end, Ur.Council.kind(c) > 0 || (Ur.Council.established(c) && Ur.Council.campaign(c)), 0)
+      let inset = x +. 18.0
+      let top = y -. 130.0
+      match tab do
+        1 -> parcel(a, c, st, inset, top, hover, reason)
+        2 -> finance_button(services(a, st, inset, top, width), x +. width -. 145.0, y +. 51.0, 128.0, "Education and skills", true)
+        11 -> finance_button(population_panel(a, c, st, inset, y, width), x +. width -. 145.0, y +. 51.0, 128.0, "Back to overview", false)
+        10 -> finance_button(education_panel(a, c, st, inset, y, width), x +. width -. 145.0, y +. 51.0, 128.0, "Back to services", false)
+        3 ->
+          let a = label(a, inset, top +. 188.0, 17.0, "Regional policy", true)
+          if c.harbour < 0 do prose(a, inset, top +. 228.0, 13.0, "Establish a harbour to change regional policy.") else
+            let a = finance_button(a, x +. width -. 145.0, y +. 51.0, 128.0, "Immigration", true)
+            let a = policy_rows(a, c, x, top, 0)
+            let a = if w >= 620.0 do
+              let a = label(a, x +. 292.0, top +. 188.0, 14.0, "Citywide street policies", true)
+              let a = district_policy(a, c, x, top, 0)
+              label(a, x +. 292.0, top +. 292.0, 11.0, "Paint local overrides under Zoning.", false)
+            else a end
+            label(a, inset, top +. 401.0, 11.0, "Tariffs $" ++ int_to_string(st.budget.tariffs) ++ "   Tolls $" ++ int_to_string(st.budget.toll_income) ++ "   Trade $" ++ int_to_string(st.budget.trade_income), false)
+          end
+        9 -> market_panel(a, c, st, inset, y, width, mx, my)
+        8 -> council_panel(a, c, st, inset, y, council_focus)
+        13 -> weather_panel(a, c, inset, y, width)
+        12 -> diagnosis_panel(a, c, st, hover, inset, y, width)
+        7 ->
+          let a = finance_button(a, x +. width -. 145.0, y +. 51.0, 128.0, "Diagnose area", true)
+          let a = label(a, inset, y +. 57.0, 17.0, "Neighborhood activity", true)
+          let a = label(a, inset, y +. 82.0, 11.0, if List.is_empty(activity) do "Recent changes will appear as the city develops." else "Select an event to go to its street." end, false)
+          activity_rows(a, activity, inset, y +. 105.0, width)
+        4 -> finance(a, c, st.budget, inset, y, width, view)
+        5 -> livability_trends(a, c, inset, y, width)
+        6 -> safety_trends(a, c, crime_focus, layer, inset, y, width)
+        _ ->
+          let a = overview(a, c, st, inset, top, paused)
+          let a = finance_button(a, x +. width -. 279.0, y +. 51.0, 128.0, "Weather", false)
+          if c.harbour < 0 do a else finance_button(a, x +. width -. 145.0, y +. 51.0, 128.0, "Population", true) end
+      end
+    end
+  end
+  fn speed_at(x : Float, y : Float, w : Float) : Int do
+    let start = w -. 180.0
+    if y >= 37.0 && y < 65.0 && x >= start && x < start +. 160.0 do
+      float_to_int((x -. start) /. 40.0)
+    else -1 end
+  end
+  pfn speed_buttons(u : Strata.Ui.Ui, x : Float, active : Int, button : Int) : Strata.Ui.Ui do
+    if button > 3 do u else
+      let selected = active == button
+      let text = if button == 0 do "Pause" else int_to_string(button) ++ "x" end
+      let bg = if selected do (0.23, 0.41, 0.40, 1.0) else (0.08, 0.16, 0.19, 1.0) end
+      let a = U.rect(u, 0, x, 37.0, 38.0, 28.0, bg)
+      let a = label(a, x +. (if button == 0 do 4.0 else 12.0 end), 44.0, 11.0, text, selected)
+      speed_buttons(a, x +. 40.0, active, button + 1)
+    end
+  end
+  pfn rain_streaks(a : Strata.Ui.Ui, w : Float, h : Float, time : Float, intensity : Int, i : Int) : Strata.Ui.Ui do
+    if i >= 88 + (intensity - 2) * 60 do a else
+      let x0 = int_to_float(i * 293 % 997) *. w /. 997.0
+      let y0 = int_to_float(i * 157 % 991) *. h /. 991.0
+      let fall = y0 +. time *. (330.0 +. int_to_float(i % 5) *. 42.0)
+      let y = fall -. h *. Math.floor(fall /. h)
+      let length = int_to_float(8 + i % 10)
+      let a = U.rect(a, 0, x0, y, 1.0, length, (0.76, 0.86, 0.94, 0.21))
+      rain_streaks(a, w, h, time, intensity, i + 1)
+    end
+  end
+  pfn business_hours(c : Ur.Sim.City, lot : Int) : String do
+    if S.nightlife(c, lot) do
+      if S.quiet_at(c, lot) == 2 do "17:00–22:00" else "17:00–02:00" end
+    else if S.overnight_business(c, lot) do "24 hours"
+    else if S.retail(c, lot) == 1 do "07:00–21:00" else "11:00–23:00" end end end
+  end
+  pfn popup_frame(w : Float, h : Float, point : (Float, Float)) : (Float, Float, Float) do
+    let (px, py) = point
+    let width = if w < 350.0 do w -. 16.0 else 326.0 end
+    let x = if px +. width +. 20.0 <= w do px +. 10.0 else w -. width -. 8.0 end
+    let y = if py > h -. 303.0 do h -. 303.0 else py end
+    (if x < 8.0 do 8.0 else x end, if y < 125.0 do 125.0 else y end, width)
+  end
+  pfn popup_visible(w : Float, h : Float, point : (Float, Float)) : Bool do
+    let (x, y) = point
+    x >= 0.0 && x <= w +. 40.0 && y >= -40.0 && y <= h && w > 240.0 && h > 337.0
+  end
+  fn over_tile_popup(w : Float, h : Float, point : (Float, Float), mx : Float, my : Float) : Bool do
+    let (x, y, width) = popup_frame(w, h, point)
+    popup_visible(w, h, point) && mx >= x && mx < x +. width && my >= y && my < y +. 204.0
+  end
+  fn tile_popup_action(c : Ur.Sim.City, lot : Int, w : Float, h : Float, point : (Float, Float), mx : Float, my : Float) : Int do
+    if !S.valid(lot) || !over_tile_popup(w, h, point, mx, my) do 0 else
+      let (x, y, width) = popup_frame(w, h, point)
+      if mx >= x +. width -. 36.0 && mx < x +. width -. 8.0 && my >= y +. 6.0 && my < y +. 34.0 do 1
+      else if (S.freight_port(c, lot) || (Option.is_none(c.freight) && S.get(c.ferries, lot) > 0)) &&
+        mx >= x +. 12.0 && mx < x +. width -. 12.0 && my >= y +. 139.0 && my < y +. 195.0 do
+        if Option.is_none(c.freight) do 5 else 6 + (if mx < x +. width *. 0.5 do 0 else 1 end) +
+          (if my < y +. 167.0 do 0 else 2 end) end
+      else if S.can_pause_facility(c, lot) && mx >= x +. 12.0 && mx < x +. width -. 12.0 &&
+              my >= y +. 154.0 && my < y +. 190.0 do 2
+      else if S.get(c.stops, lot) == 2 && mx >= x +. 12.0 && mx < x +. width -. 12.0 &&
+              my >= y +. 154.0 && my < y +. 190.0 do
+        if mx < x +. width *. 0.55 do 3 else 4 end
+      else 0 end end end end
+    end
+  end
+  pfn nearby_drivers(c : Ur.Sim.City, lot : Int, people : List(Ur.Citizens.Citizen), count : Int) : Int do
+    match people do
+      Nil -> count
+      Cons(person, rest) ->
+        let here = match person.route do
+          Cons(a, Cons(b, _)) -> Ur.Citizens.driving(c, person, a, b) && lot == (if person.progress < 0.5 do a else b end)
+          _ -> false
+        end
+        nearby_drivers(c, lot, rest, count + (if here do 1 else 0 end))
+    end
+  end
+  pfn describe_resident(c : Ur.Sim.City, person : Ur.Citizens.Citizen) : String do
+    let role = if person.study >= 0 do S.education_name(person.study) ++ " student"
+      else if S.valid(person.work) do
+        let workplace = S.building_name(c, person.work)
+        if workplace == "" do "Employed" else "Works at " ++ workplace end
+      else "No assigned job" end end
+    "Resident #" ++ int_to_string(person.id) ++ " · " ++ role
+  end
+  pfn resident_rows(u : Strata.Ui.Ui, c : Ur.Sim.City, people : List(Ur.Citizens.Citizen), lot : Int, x : Float, y : Float, left : Int) : Strata.Ui.Ui do
+    if left == 0 do u else
+      match people do
+        Nil -> u
+        Cons(person, rest) ->
+          if person.home == lot do resident_rows(label(u, x, y, 11.0, describe_resident(c, person), false), c, rest, lot, x, y +. 17.0, left - 1)
+          else resident_rows(u, c, rest, lot, x, y, left) end
+      end
+    end
+  end
+  pfn depot_worker_name(id : Int) : String do
+    let given = match id % 6 do
+      0 -> "Mina"
+      1 -> "Noah"
+      2 -> "Imani"
+      3 -> "Ari"
+      4 -> "Leila"
+      _ -> "Sam"
+    end
+    let family = match id / 6 % 5 do
+      0 -> "Park"
+      1 -> "Rivera"
+      2 -> "Quinn"
+      3 -> "Tran"
+      _ -> "Shaw"
+    end
+    given ++ " " ++ family
+  end
+  pfn depot_employee_rows(u : Strata.Ui.Ui, people : List(Ur.Citizens.Citizen), lot : Int, x : Float, y : Float, remaining : Int) : Strata.Ui.Ui do
+    if remaining == 0 do u else
+      match people do
+        Nil -> u
+        Cons(person, rest) ->
+          if person.work == lot && person.study < 0 && person.work_position > 0 do
+            let role = if person.work_position == 1 do "Dispatcher" else "Driver" end
+            let row = depot_worker_name(person.id) ++ "  ·  " ++ role ++ "  ·  #" ++ int_to_string(person.id)
+            depot_employee_rows(label(u, x, y, 11.0, row, false), rest, lot, x, y +. 17.0, remaining - 1)
+          else depot_employee_rows(u, rest, lot, x, y, remaining) end
+      end
+    end
+  end
+  fn vehicle_popup_close(w : Float, h : Float, point : (Float, Float), mx : Float, my : Float) : Bool do
+    let (x, y, width) = popup_frame(w, h, point)
+    popup_visible(w, h, point) && mx >= x +. width -. 36.0 && mx < x +. width -. 8.0 && my >= y +. 6.0 && my < y +. 34.0
+  end
+  pfn route_dashes(u : Strata.Ui.Ui, view : Ur.Scene.Projection, ax : Float, ay : Float, bx : Float, end_y : Float, colour : (Float, Float, Float, Float), i : Int, count : Int) : Strata.Ui.Ui do
+    if i >= count do u else
+      let t = int_to_float(i) /. int_to_float(count)
+      let x = ax +. (bx -. ax) *. t
+      let y = ay +. (end_y -. ay) *. t
+      let u = if x >= 0.0 && x <= view.w && y >= 83.0 && y <= view.h -. 88.0 do
+        U.rect(u, 0, x -. 2.5, y -. 2.5, 5.0, 5.0, colour)
+      else u end
+      route_dashes(u, view, ax, ay, bx, end_y, colour, i + 1, count)
+    end
+  end
+  pfn trash_route(u : Strata.Ui.Ui, c : Ur.Sim.City, view : Ur.Scene.Projection, route : List(Int), run : Ur.Sim.WasteRun, leg : Int, returning : Bool) : Strata.Ui.Ui do
+    match route do
+      Cons(a, Cons(b, rest)) ->
+        let returning = returning || a == run.site
+        let direction = S.direction(a, b)
+        let offset_x = if direction == 2 do 5 else if direction == 3 do -5 else 0 end end
+        let offset_z = if direction == 1 do 5 else if direction == 0 do -5 else 0 end end
+        let (ax, ay) = Ur.Scene.world_point(view, int_to_float(a % S.width() * 32 + 16 + offset_x), int_to_float(S.get(c.heights, a) + 3), int_to_float(a / S.width() * 32 + 16 + offset_z))
+        let (bx, end_y) = Ur.Scene.world_point(view, int_to_float(b % S.width() * 32 + 16 + offset_x), int_to_float(S.get(c.heights, b) + 3), int_to_float(b / S.width() * 32 + 16 + offset_z))
+        let colour = if returning do (0.38, 0.69, 0.94, 0.9) else if leg < run.pickup_leg do (0.34, 0.86, 0.67, 0.92) else (1.0, 0.74, 0.25, 0.96) end end
+        let dots = S.clamp(float_to_int((Math.abs(bx -. ax) +. Math.abs(end_y -. ay)) /. 7.0), 2, 12)
+        trash_route(route_dashes(u, view, ax, ay, bx, end_y, colour, 0, dots), c, view, Cons(b, rest), run, leg + 1, returning)
+      _ -> u
+    end
+  end
+  fn truck_popup(u : Strata.Ui.Ui, c : Ur.Sim.City, view : Ur.Scene.Projection, truck : Ur.Scene.SanitationMoment, driver : Int, point : (Float, Float)) : Strata.Ui.Ui do
+    let u = trash_route(u, c, view, truck.run.route, truck.run, 0, false)
+    if !popup_visible(view.w, view.h, point) do u else
+      let (x, y, width) = popup_frame(view.w, view.h, point)
+      let u = panel(u, x, y, width, 204.0)
+      let close_x = x +. width -. 36.0
+      let u = U.rect(u, 0, close_x, y +. 6.0, 28.0, 28.0, (0.16, 0.28, 0.31, 1.0))
+      let u = label(u, close_x +. 9.0, y +. 11.0, 14.0, "X", true)
+      let x = x +. 12.0
+      let u = label(u, x, y +. 9.0, 15.0, "Trash truck", true)
+      let u = label(u, x, y +. 40.0, 12.0, "Driver · " ++ depot_worker_name(driver) ++ "  #" ++ int_to_string(driver), true)
+      let capacity = width -. 24.0
+      let u = label(u, x, y +. 65.0, 12.0, "Load · " ++ int_to_string(truck.load) ++ " / 48", false)
+      let u = U.rect(u, 0, x, y +. 87.0, capacity, 5.0, (0.18, 0.26, 0.28, 1.0))
+      let u = if truck.load > 0 do U.rect(u, 0, x, y +. 87.0, capacity *. int_to_float(truck.load) /. 48.0, 5.0, (0.34, 0.86, 0.67, 1.0)) else u end
+      let pickup = truck.run.pickup
+      let destination = if truck.stage < 2 do "Collection · " ++ int_to_string(pickup % S.width()) ++ ", " ++ int_to_string(pickup / S.width())
+        else if truck.stage < 4 do S.facility_name(truck.run.kind) else "Trash collection depot" end end
+      let status = match truck.stage do
+        0 -> "Heading to pickup"
+        1 -> "Collecting trash"
+        2 -> "Hauling to disposal"
+        3 -> "Unloading"
+        _ -> "Returning to depot"
+      end
+      let u = label(u, x, y +. 103.0, 12.0, status, true)
+      let u = label(u, x, y +. 124.0, 11.0, destination, false)
+      let u = label(u, x, y +. 151.0, 11.0, "Planned route", true)
+      label(u, x, y +. 173.0, 10.0, "Green pickup  ·  Amber disposal  ·  Blue return", false)
+    end
+  end
+  pfn zone_heading(c : Ur.Sim.City, lot : Int) : String do
+    match S.get(c.zones, lot) do
+      1 -> "Housing zone"
+      2 -> "Employment zone"
+      _ -> "Mixed-use zone"
+    end
+  end
+  pfn zone_reason(u : Strata.Ui.Ui, x : Float, y : Float, width : Float, reason : String) : Strata.Ui.Ui do
+    let u = label(u, x, y, 11.0, "Development status", false)
+    T.styled(u, 0, x, y +. 20.0, T.default_font(), 13.0, (0.93, 0.95, 0.90, 1.0),
+      T.with_wrap(T.style(), width -. 24.0), reason)
+  end
+  fn undeveloped_hover(u : Strata.Ui.Ui, c : Ur.Sim.City, lot : Int, point : (Float, Float), reason : String) : Strata.Ui.Ui do
     let w = U.width(u)
     let h = U.height(u)
-    let a = panel(u, 0.0, 0.0, w, 80.0)
+    if !S.undeveloped_zone(c, lot) || !popup_visible(w, h, point) do u else
+      let (x, y, width) = popup_frame(w, h, point)
+      let u = label(panel(u, x, y, width, 107.0), x +. 12.0, y +. 10.0, 15.0, zone_heading(c, lot), true)
+      zone_reason(u, x +. 12.0, y +. 36.0, width, reason)
+    end
+  end
+  pfn bus_popup(box : Strata.Ui.Ui, c : Ur.Sim.City, buses : Ur.Sim.BusNetwork, lot : Int, x : Float, y : Float, width : Float) : Strata.Ui.Ui do
+    let box = match S.bus_line_at(buses, lot) do
+      None -> label(box, x, y +. 55.0, 12.0, "Add a second connected stop to open service", true)
+      Some(line) ->
+        let box = label(box, x, y +. 55.0, 12.0, int_to_string(line.departures) ++ " departures per peak interval · "
+          ++ int_to_string(line.headway) ++ " min headway", true)
+        let box = label(box, x, y +. 76.0, 11.0, int_to_string(line.boarded) ++ " board · "
+          ++ int_to_string(line.demand - line.boarded) ++ " left waiting", false)
+        let box = label(box, x, y +. 96.0, 11.0, "Monthly fares $" ++ int_to_string(line.boarded * c.bus_fare)
+          ++ " · Service cost $" ++ int_to_string(S.bus_operating_cost(line)), false)
+        if line.departures < line.requested do label(box, x, y +. 117.0, 11.0, "More departures need depot capacity", true)
+        else box end
+    end
+    let left = width *. 0.55 -. 12.0
+    let right_x = x +. left +. 4.0
+    let box = label(box, x, y +. 136.0, 11.0, "Citywide fare $" ++ int_to_string(c.bus_fare), false)
+    let box = U.rect(box, 0, x, y +. 154.0, left, 36.0, (0.20, 0.39, 0.32, 1.0))
+    let box = U.rect(box, 0, right_x, y +. 154.0, width -. left -. 28.0, 36.0, (0.20, 0.31, 0.38, 1.0))
+    let box = label(box, x +. 10.0, y +. 164.0, 12.0, "Set " ++ int_to_string(S.frequency(c, lot) % 3 + 1) ++ " departures", true)
+    label(box, right_x +. 8.0, y +. 164.0, 12.0, "Set fare $" ++ int_to_string(S.next_bus_fare(c)), true)
+  end
+  pfn freight_button(box : Strata.Ui.Ui, x : Float, y : Float, width : Float, title : String) : Strata.Ui.Ui do
+    label(U.rect(box, 0, x, y, width, 22.0, (0.20, 0.33, 0.37, 1.0)), x +. 6.0, y +. 4.0, 10.0, title, true)
+  end
+  pfn freight_popup(box : Strata.Ui.Ui, c : Ur.Sim.City, x : Float, y : Float, width : Float) : Strata.Ui.Ui do
+    match c.freight do
+      None ->
+        let box = label(box, x, y +. 56.0, 12.0, "Connect an island producer and a mainland market.", true)
+        freight_button(box, x, y +. 153.0, width -. 24.0, "Open freight service")
+      Some(route) ->
+        let line = match route.voyage do
+          Some(ship) -> "Sailing " ++ int_to_string(ship.id) ++ " · " ++ int_to_string(ship.food.units) ++ " food / " ++
+            int_to_string(ship.fuel) ++ " fuel / " ++ int_to_string(ship.waste) ++ " waste"
+          None -> "Next booking day " ++ int_to_string(route.departure)
+        end
+        let state = if route.suspended do "Suspended" else if S.get(c.ferries, route.port) != route.island + 1 do "Link severed" else
+          match route.voyage do
+            Some(ship) -> if ship.left > 0 do int_to_string(ship.left) ++ " days to berth" else "At berth · unloading by road" end
+            None -> "Awaiting departure"
+          end end end
+        let box = label(box, x, y +. 52.0, 11.0, line, true)
+        let box = label(box, x, y +. 69.0, 10.0, state ++ " · Dock " ++ int_to_string(route.dock_food) ++ " food / " ++ int_to_string(route.dock_waste) ++ " waste", false)
+        let box = label(box, x, y +. 88.0, 10.0, "Market " ++ int_to_string(route.shop.units) ++ " in stock · $" ++
+          int_to_string(route.price) ++ " · " ++ int_to_string(Ur.FreightNetwork.cover(route)) ++ " days on hand", false)
+        let box = label(box, x, y +. 109.0, 10.0, "Sold " ++ int_to_string(route.sold) ++ "/" ++ int_to_string(route.demand) ++
+          " today · Plant fuel " ++ int_to_string(route.fuel), false)
+        let box = label(box, x, y +. 124.0, 10.0, "This month · Duties $" ++ int_to_string(route.duty) ++ " / public freight $" ++ int_to_string(route.expenses), false)
+        let half = (width -. 30.0) *. 0.5
+        let right = x +. half +. 6.0
+        let priority = match route.priority do
+          1 -> "Fuel"
+          2 -> "Waste"
+          _ -> "Food"
+        end
+        let box = freight_button(box, x, y +. 140.0, half, if route.suspended do "Resume sailings" else "Suspend sailings" end)
+        let box = freight_button(box, right, y +. 140.0, half, "Priority · " ++ priority)
+        let box = freight_button(box, x, y +. 169.0, half, if route.backup do "Disable backup imports" else "Enable backup imports" end)
+        freight_button(box, right, y +. 169.0, half, if route.reserve do "Extra storage available" else "Storage $180" end)
+    end
+  end
+  fn tile_popup(u : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, lot : Int, point : (Float, Float), hour : Int, people : List(Ur.Citizens.Citizen), reason : String) : Strata.Ui.Ui do
+    let w = U.width(u)
+    let h = U.height(u)
+    if !S.valid(lot) || !popup_visible(w, h, point) do u else
+      let (x, y, width) = popup_frame(w, h, point)
+      let box = panel(u, x, y, width, 204.0)
+      let close_x = x +. width -. 36.0
+      let box = U.rect(box, 0, close_x, y +. 6.0, 28.0, 28.0, (0.16, 0.28, 0.31, 1.0))
+      let box = label(box, close_x +. 9.0, y +. 11.0, 14.0, "X", true)
+      let x = x +. 12.0
+      let road = S.get(c.roads, lot)
+      let kind = S.get(c.plants, lot)
+      let name = if S.undeveloped_zone(c, lot) do zone_heading(c, lot) else if S.freight_port(c, lot) || S.get(c.ferries, lot) > 0 do "Freight dock" else if S.get(c.stops, lot) == 2 do "Bus stop" else if S.get(c.stops, lot) == 4 do "Subway station" else if road > 0 do S.road_name(road)
+        else if kind > 0 do S.facility_name(kind)
+        else if S.get(c.buildings, lot) > 0 do S.building_name(c, lot)
+        else if S.get(c.public_parking, lot) > 0 do S.parking_name(S.get(c.public_parking, lot))
+        else if S.get(c.heights, lot) == 0 do "Water" else "Parcel" end end end end end end end end end
+      let box = label(box, x, y +. 9.0, 15.0, name, true)
+      let heat = S.local_temperature(c, lot)
+      let temp = int_to_string(heat / 10) ++ "." ++ int_to_string(heat % 10) ++ " °C"
+      let box = label(box, x, y +. 32.0, 10.5, "Parcel " ++ int_to_string(lot % S.width()) ++ ", " ++ int_to_string(lot / S.width()) ++ " · " ++ temp, false)
+      if S.undeveloped_zone(c, lot) do zone_reason(box, x, y +. 57.0, width, reason)
+      else if S.freight_port(c, lot) || (S.get(c.ferries, lot) > 0 && Option.is_none(c.freight)) do freight_popup(box, c, x, y, width)
+      else if S.get(c.stops, lot) == 2 do bus_popup(box, c, st.buses, lot, x, y, width)
+      else if S.get(c.stops, lot) == 4 do
+        let water = S.get(c.subway_water, lot)
+        let status = if water > 0 do "Flooded · Line closed" else if S.get(st.running_transit, lot) > 0 do "Service running" else "No service" end end
+        let box = label(box, x, y +. 57.0, 12.0, status, true)
+        if water > 0 do
+          let box = label(box, x, y +. 82.0, 11.0, int_to_string(water) ++ " / 72 floodwater", false)
+          let box = label(box, x, y +. 104.0, 10.0, "Automatic pumps need 8 spare local power", false)
+          label(box, x, y +. 125.0, 10.0, "$2 per pumping day after severe rain", false)
+        else box end
+      else if kind == 8 do
+        let stock = S.get(c.rain_tanks, lot) * 100 / S.rain_tank_capacity()
+        let box = label(box, x, y +. 57.0, 12.0, "Tank " ++ int_to_string(stock) ++ "% full", true)
+        label(box, x, y +. 81.0, 10.0, "Rain refills the tank. Water use draws it down.", false)
+      else if S.can_pause_facility(c, lot) do
+        let paused = S.facility_paused(c, lot)
+        let (active, idle, stop, resume, detail) = match kind do
+          11 -> ("Discharge enabled", "Discharge disabled", "Disable discharge", "Enable discharge", "Sewage needs another outlet or treatment.")
+          35 -> ("Ocean dumping enabled", "Ocean dumping disabled", "Disable ocean dumping", "Enable ocean dumping", "Severe coastal pollution harms fishing.")
+          36 -> ("Incineration enabled", "Incineration paused", "Pause burning", "Resume burning", int_to_string(S.get(c.waste_stock, lot)) ++ " ash awaiting pickup")
+          _ -> ("Teaching enabled", "Teaching paused", "Pause teaching", "Resume teaching",
+            if paused do "Campus and qualifications are retained." else "24 postgraduate seats" end)
+        end
+        let box = label(box, x, y +. 57.0, 13.0, if paused do idle else active end, true)
+        let upkeep = S.parcel_facility_upkeep(c, lot)
+        let box = label(box, x, y +. 81.0, 11.0, "Facility upkeep $" ++ int_to_string(upkeep) ++ " / month", false)
+        let box = label(box, x, y +. 106.0, 10.0, detail, false)
+        let action = if paused do resume else stop end
+        let box = U.rect(box, 0, x, y +. 154.0, width -. 24.0, 36.0,
+          if paused do (0.20, 0.39, 0.32, 1.0) else (0.32, 0.26, 0.18, 1.0) end)
+        label(box, x +. 10.0, y +. 164.0, 12.0, action, true)
+      else if kind == 16 || kind == 17 || kind == 34 do
+        let summary = if kind == 16 do int_to_string(List.length(c.waste_runs)) ++ " trucks scheduled today"
+          else if kind == 17 do int_to_string(S.get(c.waste_sites, lot)) ++ " / " ++ int_to_string(S.landfill_capacity()) ++ " stored"
+          else int_to_string(S.get(c.waste_sites, lot)) ++ " / 96 awaiting shipment" end end
+        let box = label(box, x, y +. 57.0, 12.0, summary, true)
+        if kind == 16 do
+          let assigned = List.length(List.filter(people, fn person -> person.work == lot && person.study < 0 && person.work_position > 0))
+          let box = label(box, x, y +. 81.0, 11.0, int_to_string(assigned) ++ " / " ++ int_to_string(S.job_slots(c, lot)) ++ " employees shown", true)
+          depot_employee_rows(box, people, lot, x, y +. 104.0, 4)
+        else if kind == 34 do label(box, x, y +. 81.0, 11.0, "$3 per unit · Ships every 3 days", false) else box end end
+      else if road > 0 do
+        let load = S.road_load(st.traffic, lot)
+        let capacity = S.road_capacity(c, lot)
+        let traffic = if S.storm_road_closed(c, lot) do "Flooded · Closed to traffic" else if !S.motor_road(c, lot) do "Closed to motor traffic" else
+          (if load > capacity do "Congested" else if load * 2 > capacity do "Busy" else "Light" end end) ++
+            " · " ++ int_to_string(load) ++ " / " ++ int_to_string(capacity) ++ " lane load"
+        end end
+        let box = label(box, x, y +. 54.0, 12.0, traffic, true)
+        let box = label(box, x, y +. 77.0, 11.0, "Cars on this tile " ++ int_to_string(nearby_drivers(c, lot, people, 0)), false)
+        let box = label(box, x, y +. 98.0, 11.0, "Maintenance $" ++ int_to_string(S.road_upkeep(road) + S.flood_upkeep(c, lot)) ++ " / month", false)
+        let box = if S.get(c.storm_drains, lot) > 0 do label(box, x, y +. 119.0, 11.0, "Improved storm drainage", false)
+          else if S.get(c.tolls, lot) > 0 do label(box, x, y +. 119.0, 11.0, "$1 toll per entry", false) else box end end
+        let box = if S.get(c.car_free_days, lot) > 0 do label(box, x, y +. 140.0, 11.0, "Car-free " ++ S.street_schedule_name(S.get(c.car_free_days, lot)), false) else box end
+        let box = match S.get(st.junctions, lot) do
+          1 -> label(box, x, y +. 161.0, 11.0, "Intersection · All-way stop", false)
+          2 -> label(box, x, y +. 161.0, 11.0, "Intersection · Traffic lights", false)
+          _ -> box
+        end
+        match S.get(c.waste_bins, lot) do
+          1 -> label(box, x, y +. 181.0, 10.0, "Small trash cans", false)
+          2 -> label(box, x, y +. 181.0, 10.0, "Underground trash bin · 1 curb space used", false)
+          _ -> box
+        end
+      else
+        let homes = S.homes_at(c, lot)
+        let jobs = S.job_slots(c, lot)
+        let box = if homes > 0 do
+          let box = label(box, x, y +. 54.0, 12.0, "Housing · " ++ int_to_string(S.occupied_homes(c, lot)) ++ "/" ++ int_to_string(homes) ++ " occupied", true)
+          resident_rows(box, c, people, lot, x, y +. 75.0, 2)
+        else box end
+        let top = if homes > 0 do y +. 119.0 else y +. 54.0 end
+        let box = if jobs > 0 do label(box, x, top, 11.0, "Employees · " ++ int_to_string(S.get(st.staffed_jobs, lot)) ++ "/" ++ int_to_string(jobs) ++ " positions filled", true) else box end
+        let top = if jobs > 0 do top +. 20.0 else top end
+        let box = if S.public_trade(c, lot) do
+          label(box, x, top, 11.0, (if S.business_open(c, lot, hour) do "Open · " else "Closed · " end) ++ business_hours(c, lot), false)
+        else if S.business_closed(c, lot) do label(box, x, top, 11.0, "Vacant business premises", false) else box end end
+        let box = if S.get(c.public_parking, lot) > 0 do
+          let parking = S.get(c.public_parking, lot)
+          label(box, x, top +. 21.0, 11.0, S.parking_name(parking) ++ " · " ++ int_to_string(S.parking_spaces(parking)) ++ " spaces", false)
+        else box end
+        let stock = S.get(c.waste_stock, lot)
+        let last = S.get(c.waste_last, lot)
+        if stock > 0 || last > 0 do
+          let pickup = if last == 0 do "Pickup pending" else "Last pickup " ++ int_to_string(S.clamp(S.waste_date(c) - last, 0, 100000)) ++ "d ago" end
+          let state = if S.waste_overflow(c, lot) > 0 do " · Overflow" else "" end
+          label(box, x, y +. 181.0, 10.0, "Trash " ++ int_to_string(stock) ++ state ++ " · " ++ pickup, false)
+        else box end
+      end
+    end end end end end end end end
+  end
+  fn draw(c : Ur.Sim.City, st : Ur.Sim.Stats, chosen : Int, group : Int, page : Int, layer : Int, hover : Int, parcel_focus : Int, mx : Float, my : Float, reason : String, sidebar_visible : Bool, sidebar_tab : Int, finance_view : FinanceView, crime_focus : Int, council_focus : Int, paused : Bool, speed : Int, hour : Int, weather : Int, weather_time : Float, citizens : Ur.Citizens.CitizenCounts, preview : String, can_undo : Bool, activity : List(Ur.Activity.NeighborhoodEvent)) : Strata.Ui.Ui do
+    let u = Strata.Render.ui_begin(1.0)
+    let w = U.width(u)
+    let a = if weather >= 2 do rain_streaks(u, w, U.height(u), weather_time, weather, 0) else u end
+    let a = panel(a, 0.0, 0.0, w, 80.0)
     let a = label(a, 24.0, 13.0, 32.0, "UR", true)
     let a = label(a, 26.0, 52.0, 10.0, "THE ISLAND REGION", false)
+    let a = if c.harbour < 0 do a else
+      let a = demand_meter(a, 14.0, "Housing", S.housing_demand(st), (0.30, 0.69, 0.49, 1.0))
+      let a = demand_meter(a, 34.0, "Shops", S.shop_demand(st), (0.37, 0.67, 0.89, 1.0))
+      demand_meter(a, 54.0, "Jobs", S.jobs_demand(st), (0.86, 0.62, 0.32, 1.0))
+    end
     let a = label(a, 230.0, 17.0, 11.0, "RESIDENTS", false)
     let a = label(a, 230.0, 36.0, 24.0, int_to_string(st.people), true)
-    let a = label(a, 385.0, 17.0, 11.0, "JOBS", false)
-    let a = label(a, 385.0, 36.0, 24.0, int_to_string(st.work), true)
+    let a = label(a, 385.0, 17.0, 11.0, "JOBS FILLED", false)
+    let a = label(a, 385.0, 36.0, 21.0, int_to_string(st.labor.employed) ++ " / " ++ int_to_string(st.work), true)
+    let a = label(a, 385.0, 61.0, 10.0, int_to_string(st.labor.unemployed) ++ " seeking work", false)
     let a = label(a, 520.0, 17.0, 11.0, "TREASURY", false)
     let a = label(a, 520.0, 36.0, 24.0, "$" ++ int_to_string(c.cash), true)
-    let a = label(a, 735.0, 17.0, 11.0, "MONTHLY BALANCE", false)
-    let a = label(a, 735.0, 39.0, 18.0, (if c.income >= 0 do "+$" else "$" end) ++ int_to_string(c.income), true)
-    let a = label(a, w -. 180.0, 18.0, 12.0, "MONTH " ++ int_to_string(c.month), false)
-    let a = label(a, w -. 180.0, 40.0, 18.0, if paused do "PAUSED" else int_to_string(speed) ++ "x  RUNNING" end, true)
-    let a = tools(panel(a, 10.0, 108.0, 216.0, 344.0), 1, chosen)
-    let x = w -. 278.0
-    let a = panel(a, x, 108.0, 260.0, 450.0)
-    let a = label(a, x +. 18.0, 124.0, 11.0, "REGIONAL POLICY", false)
-    let a = label(a, x +. 18.0, 153.0, 18.0, "Tax rate   " ++ int_to_string(c.tax) ++ "%", true)
-    let a = label(a, x +. 18.0, 182.0, 12.0, "[ decrease    ] increase", false)
-    let a = label(a, x +. 18.0, 215.0, 18.0, "Energy price   $" ++ int_to_string(c.energy), true)
-    let a = label(a, x +. 18.0, 244.0, 12.0, "; decrease    ' increase", false)
-    let a = label(a, x +. 18.0, 278.0, 14.0, "Power  " ++ int_to_string(st.used) ++ " / " ++ int_to_string(st.power), true)
-    let a = U.rect(a, 0, x +. 18.0, 311.0, 224.0, 1.0, (0.23, 0.34, 0.35, 1.0))
-    let a = label(a, x +. 18.0, 330.0, 11.0, if S.valid(hover) do "PARCEL " ++ int_to_string(hover % S.width()) ++ " / " ++ int_to_string(hover / S.width()) else "DEVELOPMENT" end, false)
-    let style = T.with_wrap(T.style(), 220.0)
-    let a = T.styled(a, 0, x +. 18.0, 354.0, T.default_font(), 16.0, (0.94, 0.88, 0.68, 1.0), style, reason)
-    let detail = if S.valid(hover) do "Density " ++ int_to_string(S.get(c.density, hover)) ++ "   |   " ++ int_to_string(S.get(c.heights, hover) / 4) ++ " m elevation" else "Hover over a plot to see what it needs." end
-    let a = label(a, x +. 18.0, 438.0, 12.0, detail, false)
-    let a = T.styled(a, 0, x +. 18.0, 480.0, T.default_font(), 13.0, (0.70, 0.82, 0.76, 1.0), style, if st.people >= 500 && c.income > 0 do "Milestone reached: a thriving town. Keep expanding." else "First milestone: 500 residents and a positive monthly balance." end)
-    let a = panel(a, 0.0, h -. 76.0, w, 76.0)
-    let a = label(a, 24.0, h -. 64.0, 15.0, c.message, true)
-    let a = label(a, 24.0, h -. 35.0, 12.0, "Click / drag to build   |   1-7 tools   |   Arrows pan   |   - / = zoom   |   Space pause   |   Tab speed   |   Esc quit", false)
-    label(a, w -. 180.0, h -. 35.0, 11.0, "tick " ++ int_to_string(float_to_int(ms *. 1000.0)) ++ " us", false)
+    let a = label(a, 735.0, 17.0, 11.0, "PROJECTED / MONTH", false)
+    let forecast = S.balance(st.budget)
+    let a = label(a, 735.0, 36.0, 18.0, (if forecast >= 0 do "+$" else "-$" end) ++ int_to_string(int_abs(forecast)), true)
+    let a = label(a, 735.0, 59.0, 11.0, "Upkeep $" ++ int_to_string(st.budget.infrastructure) ++ "   Operations $" ++ int_to_string(st.budget.operations), false)
+    let a = if citizens.tracked == 0 || w < 1380.0 do a else
+      let a = label(a, 980.0, 18.0, 11.0, "CITIZEN TRIPS", false)
+      let a = label(a, 980.0, 36.0, 11.0, int_to_string(citizens.walking) ++ " walking   " ++ int_to_string(citizens.driving) ++ " driving   " ++ int_to_string(citizens.waiting) ++ " waiting   " ++ int_to_string(citizens.riding) ++ " riding", true)
+      label(a, 980.0, 57.0, 11.0, int_to_string(citizens.home) ++ " home   " ++ int_to_string(citizens.at_work) ++ " working   " ++ int_to_string(citizens.studying) ++ " studying   " ++ int_to_string(citizens.shopping) ++ " shopping   " ++ int_to_string(citizens.visiting_park) ++ " at parks", false)
+    end
+    let clock = (if hour < 10 do "0" else "" end) ++ int_to_string(hour) ++ ":00"
+    let date = "M" ++ int_to_string(c.month) ++ " · Day " ++ int_to_string(c.calendar_day + 1) ++ " · " ++ S.day_name(c.street_day)
+    let a = label(a, w -. 180.0, 18.0, 11.0, date ++ "  " ++ clock, true)
+    let a = speed_buttons(a, w -. 180.0, if paused do 0 else speed end, 0)
+    let a = if layer > 0 do label(a, 24.0, 94.0, 13.0, "Layer: " ++ Ur.Layers.name(layer), true) else a end
+    let a = if layer == 29 do
+      let a = label(panel(a, 18.0, 116.0, 468.0, 49.0), 24.0, 120.0, 11.0, Ur.Layers.legend(layer), true)
+      label(a, 24.0, 140.0, 12.0, S.wind_caption(c, hover), false)
+    else a end
+    let a = if layer == 33 do
+      let a = label(panel(a, 18.0, 116.0, 442.0, 44.0), 24.0, 119.0, 11.0, Ur.Layers.legend(layer), true)
+      let detail = if S.get(c.seawalls, hover) > 0 do "Seawall · $26/month"
+        else if S.get(c.heights, hover) > 0 do
+          let depth = S.floodplain_depth(c, hover) * 25
+          let text = if S.severe_rain(c) do "Floodwater now " else "Severe rain estimate " end
+          text ++ int_to_string(depth) ++ " cm" ++ (if S.get(c.storm_drains, hover) > 0 do " · Improved drainage" else "" end)
+        else "Point at land to inspect flood depth." end end
+      label(a, 24.0, 138.0, 11.0, detail, false)
+    else a end
+    let a = if (layer >= 23 && layer <= 28) || layer == 32 do
+      let a = label(panel(a, 18.0, 116.0, 420.0, 44.0), 24.0, 119.0, 11.0, Ur.Layers.legend(layer), true)
+      let detail = if layer == 32 && S.valid(hover) && S.get(c.heights, hover) > 0 do
+        let heat = S.local_temperature(c, hover)
+        int_to_string(heat / 10) ++ "." ++ int_to_string(heat % 10) ++ " °C here"
+      else if layer == 28 && S.valid(hover) && Ur.Council.ward_at(c, hover) >= 0 do Ur.Council.member(c, Ur.Council.ward_at(c, hover))
+      else if layer == 27 && S.schedule_eligible(c, hover) do
+        S.street_schedule_name(S.get(c.car_free_days, hover)) ++ (if S.car_free_now(c, hover) do " · Closed now" else " · Open now" end)
+      else if layer == 27 do "Point at a street to see its schedule." else "" end end end end
+      label(a, 24.0, 138.0, 11.0, detail, false)
+    else a end
+    let a = if S.valid(hover) && S.public_trade(c, hover) && !sidebar_visible do
+      let open = S.business_open(c, hover, hour)
+      let hours = business_hours(c, hover)
+      label(panel(a, 18.0, 170.0, 326.0, 30.0), 24.0, 176.0, 11.0,
+        S.building_name(c, hover) ++ (if open do " · Open · " else " · Closed · " end) ++ hours, open)
+    else a end
+    let a = if st.startup_step > 0 && !sidebar_visible do
+      starter_guide(a, st.startup_step, 18.0, 207.0, 402.0, paused)
+    else a end
+    let a = sidebar(a, c, st, w, U.height(u), sidebar_visible, sidebar_tab, finance_view, crime_focus, council_focus, layer, parcel_focus, reason, mx, my, paused, activity)
+    let a = panel(a, w -. 346.0, 91.0, 100.0, 32.0)
+    let a = label(a, w -. 333.0, 99.0, 12.0, "Game menu", true)
+    let a = panel(a, w -. 238.0, 91.0, 94.0, 32.0)
+    let a = label(a, w -. 225.0, 99.0, 12.0, "Undo  [Z]", can_undo)
+    let a = label(panel(a, w -. 192.0, 130.0, 174.0, 45.0), w -. 180.0, 135.0, 11.0, S.weather_name(weather) ++ " · " ++ int_to_string(S.temperature(c)) ++ " °C", true)
+    let a = label(a, w -. 180.0, 154.0, 10.0, "Soil moisture " ++ int_to_string(c.soil_moisture) ++ "%   ·   Forecast >", false)
+    let caption = if Ur.Layers.is_utility(layer) && S.valid(hover) do Ur.Layers.utility_caption(st, layer, hover) else "" end
+    let a = if caption != "" do label(panel(a, 18.0, 116.0, 425.0, 37.0), 26.0, 128.0, 12.0, caption, true) else a end
+    Ur.Toolbar.draw(a, if preview == "" do c else { c with message: preview } end, chosen, group, page, layer, mx, my)
   end
 end

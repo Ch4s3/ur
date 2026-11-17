@@ -2,9 +2,1073 @@ mod UrTest do
   needs IO.Console
   needs IO.Clock
   needs IO.Process
+  needs IO.FileRead
+  needs IO.FileWrite
   alias Ur.Sim as S
-  fn main(_cap : Cap(IO.Console)) : Unit do
+  pfn bus_depot_clearance() : Unit do
     let c = S.new()
+    let depot = S.index(8, 18)
+    let height = 12
+    let c = { c with plants: NativeArray.set_int(c.plants, depot, 23),
+      heights: NativeArray.set_int(c.heights, depot, height),
+      roads: NativeArray.make_int(S.count(), 0), transit: NativeArray.make_int(S.count(), 0) }
+    List.each([3, 0, 1, 2], fn side ->
+      let road = S.neighbour(depot, side)
+      let path = S.neighbour(depot, if side == 0 do 1 else 0 end)
+      let layout = { c with roads: NativeArray.set_int(c.roads, road, 1),
+        heights: NativeArray.set_int(c.heights, road, height + 3),
+        transit: NativeArray.set_int(c.transit, path, 1) }
+      -- The turning bus and its lights must fit under the canopy on every frontage.
+      let swept = Ur.Architecture.orient([Ur.Architecture.piece(9, height + 2, 18, 14, 8, 14, 0)], side)
+      let parts = Ur.Landscape.structures(layout, depot, 0)
+      let clear = List.all(swept, fn bay ->
+        List.all(parts, fn p ->
+          p.x + p.w <= bay.x || bay.x + bay.w <= p.x ||
+          p.y + p.h <= bay.y || bay.y + bay.h <= p.y ||
+          p.z + p.d <= bay.z || bay.z + bay.d <= p.z))
+      Test.assert_true(clear, "bus depot has clear space for its bus on frontage " ++ int_to_string(side)))
+  end
+
+  pfn wind_checks(c : Ur.Sim.City) : Unit do
+    let offshore = S.index(9, 25)
+    let land = S.index(8, 18)
+    Test.assert_true(S.get((S.act(c, offshore, 86)).plants, offshore) == 0, "offshore wind requires a trade school")
+    let trained = { c with plants: NativeArray.set_int(c.plants, S.index(13, 19), 27) }
+    Test.assert_true(S.get((S.act(trained, land, 86)).plants, land) == 0, "offshore wind cannot be built on land")
+    let built = S.act(trained, offshore, 86)
+    Test.assert_eq_int(S.get(built.plants, offshore), 33, "offshore turbine can be placed in open water")
+    Test.assert_eq_int((S.generation(built, S.access(built))).wind, 0, "offshore generation requires a grid connection")
+    let cabled = S.act(S.act(S.act(S.act(built, S.index(9, 22), 26), S.index(9, 23), 26), S.index(9, 24), 26), offshore, 26)
+    Test.assert_true((S.generation(cabled, S.access(cabled))).wind > 100, "subsea cable delivers offshore generation")
+    let future = { c with calendar_day: 10 }
+    Test.assert_true((S.wind_at(c, offshore)).speed > (S.wind_at(c, land)).speed &&
+      int_abs((S.wind_at(future, offshore)).speed - (S.wind_at(c, offshore)).speed) <
+      int_abs((S.wind_at(future, land)).speed - (S.wind_at(c, land)).speed), "offshore wind is stronger and steadier")
+    let turbine = S.act(c, land, 20)
+    let neighbor = S.index(9, 18)
+    Test.assert_true(S.wind_noise(turbine, neighbor) > S.wind_noise(turbine, S.index(7, 18)) &&
+      S.environment_score(turbine, neighbor) < S.environment_score(c, neighbor), "turbines reduce nearby livability and are louder downwind")
+    let road = S.index(9, 18)
+    let idle = NativeArray.make_int(S.count() * 4, 0)
+    let gas = S.drift_pollution(c, idle)
+    Test.assert_true(S.get(gas.air_pollution, S.index(9, 21)) > S.get(gas.air_pollution, S.index(7, 21)), "gas emissions accumulate downwind")
+    let busy = S.drift_pollution(c, NativeArray.set_int(idle, road * 4, 95))
+    Test.assert_true(S.get(busy.air_pollution, S.index(10, 18)) > S.get(gas.air_pollution, S.index(10, 18)) &&
+      S.environment_score(busy, S.index(10, 18)) < S.environment_score(gas, S.index(10, 18)), "traffic emissions carry downwind and reduce livability")
+  end
+  pfn has_delivery(c : Ur.Sim.City, trips : List(Ur.Food.Trip), producer : Int, retail : Int) : Bool do
+    match trips do
+      Nil -> false
+      Cons(trip, rest) ->
+        let (_, destination) = Ur.Food.leg(trip.stops, trip.legs - 1)
+        (trip.mode == 6 && S.get(c.plants, trip.source) == producer && S.retail(c, destination) == retail) ||
+          has_delivery(c, rest, producer, retail)
+    end
+  end
+  pfn unique_parking(people : List(Ur.Citizens.Citizen)) : Bool do
+    match people do
+      Nil -> true
+      Cons(person, rest) ->
+        let unique = match Ur.Citizens.parking_at(person.parking) do
+          None -> true
+          Some(bay) -> !List.any(rest, fn other ->
+            match Ur.Citizens.parking_at(other.parking) do
+              None -> false
+              Some(peer) ->
+                if bay.kind > 0 && peer.kind > 0 do bay.lot == peer.lot
+                else bay.kind == 0 && peer.kind == 0 && bay.road == peer.road && bay.edge == peer.edge && bay.bay == peer.bay end
+            end)
+        end
+        unique && unique_parking(rest)
+    end
+  end
+  pfn parking_steps(c : Ur.Sim.City, people : List(Ur.Citizens.Citizen), left : Int) : List(Ur.Citizens.Citizen) do
+    if left == 0 do people else
+      parking_steps(c, Ur.Citizens.step_with(c, NativeArray.make_int(S.count(), 0), people, S.day_seconds() *. 0.625, 0.2), left - 1)
+    end
+  end
+  pfn parking_checks(c : Ur.Sim.City) : Unit do
+    let people = Ur.Citizens.refresh(c, Nil)
+    Test.assert_true(unique_parking(people), "parked cars have distinct bays")
+    match people do
+      Cons(sample, _) ->
+        let home = S.index(10, 16)
+        let work = S.index(8, 20)
+        let c = { c with storefronts: NativeArray.set_int(c.storefronts, work, 1) }
+        let first = S.index(9, 16)
+        let remote = S.index(9, 18)
+        let route = [home, first, S.index(9, 17), remote, S.index(9, 19), S.index(9, 20), work]
+        let close = { lot: home, road: first, kind: 0, bay: 0, edge: 0, steps: 0, site: home }
+        let distant = { close with road: remote, steps: 2 }
+        let person = { sample with home: home, work: work, work_route: route, study: -1, qualification: 0,
+          location: home, target: home, shop: -1, park: -1, wait: 0.0, parking: Ur.Citizens.parking_code(close) }
+        let shopper = { person with work: -1, shop: work, shop_route: route, parking: 0 }
+        let after_shopping = parking_steps(c, [shopper], 150)
+        Test.assert_true((Ur.Citizens.tally(c, after_shopping)).shopping == 1, "a citizen without a car completes a trip to an open shop")
+        let driving = parking_steps(c, [person], 1)
+        let walking = parking_steps(c, [{ person with parking: Ur.Citizens.parking_code(distant) }], 1)
+        Test.assert_true(List.any(driving, fn p -> p.car_phase == 1), "a driver starts by walking to their own car")
+        Test.assert_true(List.any(walking, fn p -> !p.by_car && !List.is_empty(p.route)), "a farther walk to the car changes the commute mode")
+        let entrance = { close with lot: work, site: work, road: S.index(9, 20), edge: 0 }
+        let overflow = { entrance with road: S.index(9, 19) }
+        let parked = { person with id: person.id + 1, wait: 200.0, parking: Ur.Citizens.parking_code(entrance) }
+        let full = [person, parked, { parked with id: person.id + 2, parking: Ur.Citizens.parking_code({ entrance with bay: 1 }) },
+          { parked with id: person.id + 3, parking: Ur.Citizens.parking_code(overflow) }, { parked with id: person.id + 4, parking: Ur.Citizens.parking_code({ overflow with bay: 1 }) }]
+        let no_space = parking_steps(c, full, 1)
+        Test.assert_false(List.any(no_space, fn p -> p.id == person.id && p.by_car), "full nearby parking prevents the drive")
+        match driving do
+          Cons(departed, _) ->
+            let lane = List.drop(route, 1)
+            let merging = { departed with progress: 0.49 }
+            let move = fn people -> Ur.Citizens.step_with(c, NativeArray.make_int(S.count(), 0), people, S.day_seconds() *. 0.625, 2.0)
+            let merged = move([merging])
+            Test.assert_true(List.any(merged, fn p -> p.car_phase == 2 && p.progress > 0.4), "a car enters traffic at the physical curb merge point")
+            let blocker = { departed with id: person.id + 1, car_phase: 2, route: lane, progress: 0.48 }
+            let blocked = move([merging, blocker])
+            Test.assert_true(List.any(blocked, fn p -> p.id == person.id && p.car_phase == 1), "a parking departure waits for a real gap in traffic")
+            let follower = { departed with car_phase: 2, route: lane, progress: 0.12 }
+            let leader = { follower with id: follower.id + 1, progress: 0.31 }
+            let vehicles = parking_steps(c, [follower, leader], 1)
+            Test.assert_true(List.any(vehicles, fn p -> p.id == person.id && p.queued), "a car queues behind a car already in its lane")
+            let junction = S.index(9, 17)
+            let side = S.index(10, 17)
+            let traffic = NativeArray.make_int(S.count() * 4, 0)
+            let running = NativeArray.make_int(S.count(), 0)
+            let local = { c with roads: NativeArray.set_int(c.roads, side, 1),
+              heights: NativeArray.set_int(c.heights, side, S.get(c.heights, junction)),
+              buildings: running }
+            Test.assert_eq_int(S.junction_control(local, traffic, junction), 1, "a quiet local T junction gets stop signs")
+            let busy = NativeArray.set_int(traffic, junction * 4, 12)
+            Test.assert_eq_int(S.junction_control(local, busy, junction), 2, "heavy traffic warrants a signal")
+            let intersection = { local with roads: NativeArray.set_int(local.roads, side, 2) }
+            Test.assert_eq_int(S.junction_control(intersection, traffic, junction), 2, "an avenue junction gets signals")
+            Test.assert_eq_int(S.junction_control(local, traffic, side), 0, "a dead end needs no control")
+            let signs = NativeArray.set_int(running, junction, 1)
+            let signal = NativeArray.set_int(running, junction, 2)
+            let phase_zero = int_to_float((16 - (junction % 3) * 2) % 16) /. 2.0
+            let stopped = Ur.Citizens.step_with_bus(local, running, None, [{ leader with progress: 0.4 }], 0.0, 2.0, signs, phase_zero)
+            Test.assert_true(List.any(stopped, fn p -> p.route == lane && p.progress == S.stop_line()), "a car must stop at the stop sign")
+            let held = Ur.Citizens.step_with_bus(local, running, None, stopped, 0.0, 0.5, signs, phase_zero)
+            let released = Ur.Citizens.step_with_bus(local, running, None, held, 0.0, 2.0, signs, phase_zero)
+            Test.assert_true(List.any(released, fn p -> p.previous == first), "the stop sign lets the car proceed after waiting")
+            let step = fn (people, time) -> Ur.Citizens.step_with_bus(intersection, running, None, people, 0.0, 2.0, signal, time)
+            let light = step([{ follower with progress: 0.11 }, { leader with progress: 0.40 }], phase_zero)
+            Test.assert_true(List.any(light, fn p -> p.id == follower.id && p.route == lane && p.progress <= 0.20),
+              "a long frame cannot send the follower through a queued car")
+            Test.assert_true(List.any(light, fn p -> p.id == leader.id && p.route == lane && p.progress == S.stop_line()),
+              "the lead car stops before the red intersection")
+            let green = step(light, phase_zero +. 4.0)
+            Test.assert_true(List.any(green, fn p -> p.id == leader.id && p.previous == first),
+              "the queued lead car moves through when the light changes")
+            let walker = { person with id: 1, route: List.drop(lane, 1), previous: first, progress: 0.24, location: -1 }
+            let wait = Ur.Citizens.step_with_bus(intersection, running, None, [walker], 0.0, 0.1, signal, phase_zero)
+            Test.assert_true(List.any(wait, fn p -> p.progress == 0.24), "a pedestrian waits while the road being crossed has green")
+            let cross = Ur.Citizens.step_with_bus(intersection, running, None, [walker], 0.0, 0.1, signal, phase_zero +. 4.0)
+            Test.assert_true(List.any(cross, fn p -> p.progress > 0.24), "a pedestrian starts across on red")
+          Nil -> Test.assert_true(false, "two cars need a valid driving route")
+        end
+        let visitors = parking_steps(c, driving, 150)
+        let at_work = List.filter(visitors, fn p -> p.id == person.id && p.location == work)
+        match at_work do
+          Cons(guest, _) ->
+            match Ur.Citizens.parking_at(guest.parking) do
+              Some(bay) -> Test.assert_eq_int(bay.lot, work, "the same citizen parks the car at work")
+              None -> Test.assert_true(false, "the car should be parked at work")
+            end
+          Nil -> Test.assert_true(false, "the driver should reach work")
+        end
+      Nil -> Test.assert_true(false, "parking fixture needs a populated city")
+    end
+  end
+  pfn parking_construction(c : Ur.Sim.City) : Unit do
+    let c = { c with buildings: NativeArray.set_int(c.buildings, S.index(10, 16), 2) }
+    let lot = S.index(8, 17)
+    let occupied = S.index(10, 21)
+    let surface = Ur.Build.preview(c, 87, lot, lot)
+    Test.assert_true(surface.valid && surface.changed && surface.cost == 260, "surface parking has a buildable preview")
+    let tower = S.act(c, lot, 88)
+    Test.assert_eq_int(S.get(tower.public_parking, lot), 2, "build an above-ground parking garage")
+    let garage = Ur.Build.preview(c, 89, occupied, occupied)
+    Test.assert_true(garage.valid && garage.changed && garage.cost > S.cost(c, occupied, 88), "build the most expensive garage under an occupied parcel")
+    Test.assert_eq_int(S.get(garage.city.buildings, occupied), S.get(c.buildings, occupied), "underground construction preserves the building above")
+    let cleared = Ur.Build.preview(garage.city, 90, occupied, occupied)
+    Test.assert_true(cleared.valid && cleared.changed && S.get(cleared.city.public_parking, occupied) == 0, "remove underground parking through the build tool")
+    Test.assert_true(S.environment_score(surface.city, lot) < S.environment_score(tower, lot), "surface lots have the larger livability penalty")
+    Test.assert_true((S.stats(surface.city)).budget.parking_income > 0, "passing traffic pays to park")
+    let city = S.tick(garage.city)
+    let game = { city: city, cx: 90.0, cz: 150.0, zoom: 60.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(game)) do
+      Ok(saved) -> Test.assert_eq_int(S.get(saved.city.public_parking, occupied), 3, "underground parking survives saving and loading")
+      Err(error) -> Test.assert_true(false, error)
+    end
+  end
+  pfn observe_citizens(c : Ur.Sim.City, citizens : List(Ur.Citizens.Citizen), tick : Int, saw_queue : Bool, saw_shop : Bool, saw_walk : Bool) : (Bool, Bool, Bool) do
+    if tick >= 360 do (saw_queue, saw_shop, saw_walk) else
+      let city_time = int_to_float(tick) *. 0.2 *. S.day_seconds() /. 24.0
+      let next = Ur.Citizens.step(c, citizens, city_time, 0.2)
+      let counts = Ur.Citizens.tally(c, next)
+      observe_citizens(c, next, tick + 1, saw_queue || counts.queued > 0, saw_shop || counts.shopping > 0, saw_walk || counts.walking > 0)
+    end
+  end
+  pfn observe_transit(c : Ur.Sim.City, running : NativeIntArr, citizens : List(Ur.Citizens.Citizen), tick : Int, waiting : Bool, riding : Bool, alighted : Bool) : Bool do
+    if tick >= 165 do false else
+      let next = Ur.Citizens.step_with(c, running, citizens, int_to_float(tick) *. 0.2, 0.2)
+      let counts = Ur.Citizens.tally(c, next)
+      let waiting = waiting || counts.waiting > 0
+      let riding = riding || (waiting && counts.riding > 0)
+      let alighted = alighted || (riding && counts.walking > 0)
+      if alighted && counts.at_work > 0 do true
+      else observe_transit(c, running, next, tick + 1, waiting, riding, alighted) end
+    end
+  end
+  pfn observe_park(c : Ur.Sim.City, people : List(Ur.Citizens.Citizen), frames : Int, saw_path : Bool) : Bool do
+    if frames == 0 do false else
+      match people do
+        Nil -> false
+        Cons(person, _) ->
+          let saw_path = match person.route do
+            Cons(a, Cons(b, _)) -> saw_path || (person.park_trip && S.get(c.parks, a) > 0 && S.get(c.parks, b) > 0 && !person.by_car)
+            _ -> saw_path
+          end
+          if saw_path && person.location == person.park && person.park >= 0 do true else
+            observe_park(c, Ur.Citizens.step_with(c, NativeArray.make_int(2640, 0), people, 0.9, 1.0), frames - 1, saw_path)
+          end
+      end
+    end
+  end
+  pfn park_visitor(people : List(Ur.Citizens.Citizen)) : List(Ur.Citizens.Citizen) do
+    match people do
+      Nil -> Nil
+      Cons(person, rest) ->
+        if person.park >= 0 do Cons({ person with activity: 0, shop: -1, shop_route: Nil, work: -1, work_route: Nil, wait: 0.0 }, Nil) else park_visitor(rest) end
+    end
+  end
+  pfn education_blocks(c : Ur.Sim.City, x : Int) : Ur.Sim.City do
+    if x > 24 do c else
+      let road = S.index(x, 21)
+      let homes = S.index(x, 22)
+      education_blocks({ c with roads: NativeArray.set_int(c.roads, road, 1),
+        buildings: NativeArray.set_int(c.buildings, homes, 3), zones: NativeArray.set_int(c.zones, homes, 1) }, x + 1)
+    end
+  end
+  pfn observe_campus(c : Ur.Sim.City, people : List(Ur.Citizens.Citizen), tick : Int, studied : Bool, crossed : Bool) : Bool do
+    if studied && crossed do true else if tick == 700 do false else
+      let crossed = crossed || List.any(people, fn p -> match p.route do
+        Cons(a, Cons(b, _)) -> p.study == 3 && S.campus_quad(c, a) && S.campus_quad(c, b) && !p.by_car
+        _ -> false
+      end)
+      let studied = studied || (Ur.Citizens.tally(c, people)).studying > 0
+      let time = 0.50 +. int_to_float(tick) *. 0.02
+      let day = float_to_int(time /. S.day_seconds())
+      let next = Ur.Citizens.step_with({ c with calendar_day: day, street_day: day % 7 }, NativeArray.make_int(S.count(), 0), people, time, 0.02)
+      observe_campus(c, next, tick + 1, studied, crossed)
+    end end
+  end
+  pfn faculty_checks(game : Ur.Save.Game) : Unit do
+    let blank = NativeArray.make_int(S.count(), 0)
+    let fresh = S.new()
+    let city = education_blocks({ fresh with cash: 30000, heights: NativeArray.make_int(S.count(), 8), plants: blank,
+      buildings: blank, roads: blank, zones: blank, education: NativeArray.set_int(S.new_education(), 13, 2) }, 9)
+    let root = S.index(15, 20)
+    let faculty = S.index(18, 20)
+    let university = S.act(city, root, 81)
+    Test.assert_eq_int(S.program_at(university, root), 3, "a university anchors the commuter fixture")
+    let nuclear_lot = S.index(12, 20)
+    let hospital_lot = S.index(13, 20)
+    let clinic_lot = S.index(14, 20)
+    let recycler_lot = S.index(11, 20)
+    Test.assert_false((Ur.Build.preview(university, 22, nuclear_lot, nuclear_lot)).valid, "a university alone cannot unlock nuclear power")
+    let sciences = S.act(university, faculty, 83)
+    Test.assert_true((Ur.Build.preview(sciences, 22, nuclear_lot, nuclear_lot)).valid, "building a science faculty unlocks nuclear power")
+    Test.assert_false((Ur.Build.preview(S.act(sciences, faculty, 7), 22, nuclear_lot, nuclear_lot)).valid, "removing the science faculty locks new nuclear builds")
+    let clinic_only = S.act(city, clinic_lot, 45)
+    Test.assert_false((Ur.Build.preview(clinic_only, 62, hospital_lot, hospital_lot)).valid, "a clinic alone cannot unlock hospitals")
+    Test.assert_false((Ur.Build.preview(university, 62, hospital_lot, hospital_lot)).valid, "a university alone cannot unlock hospitals")
+    let clinic = S.act(university, clinic_lot, 45)
+    Test.assert_true((Ur.Build.preview(clinic, 62, hospital_lot, hospital_lot)).valid, "a clinic and a university unlock hospitals")
+    Test.assert_false((Ur.Build.preview(university, 16, recycler_lot, recycler_lot)).valid, "recycling requires trade education specifically")
+    let trade = S.act(university, S.index(20, 20), 80)
+    Test.assert_true((Ur.Build.preview(trade, 16, recycler_lot, recycler_lot)).valid, "a trade school unlocks water recycling")
+    Test.assert_false((Ur.Build.preview(university, 78, clinic_lot, clinic_lot)).valid, "an empty lot cannot receive a fire station upgrade")
+    let plan = Ur.Build.preview(university, 82, faculty, faculty)
+    Test.assert_true(plan.valid && plan.cost == 1900, "a connected mid-game university can add medicine")
+    Test.assert_eq_int(S.campus_root(plan.city, faculty), root, "the faculty belongs to the university")
+    Test.assert_eq_int(S.program_at(plan.city, faculty), 4, "the new building teaches medicine")
+    Test.assert_eq_int(S.program_at(S.act(plan.city, faculty, 7), root), 3, "a faculty can be removed by itself")
+    Test.assert_eq_int(S.get((S.act(plan.city, root, 7)).plants, faculty), 0, "removing the university clears its faculty")
+    let data = NativeArray.set_int(NativeArray.set_int(plan.city.education, 180, 16), 7, 16)
+    let city = { plan.city with education: data, month: 0 }
+    let stats = S.stats(city)
+    let admitted = S.advance_education(city, stats.routes, stats.labor, stats.people)
+    Test.assert_eq_int(S.specialist_enrolled(admitted, 4), 8, "some graduates enter the postgraduate cohort")
+    Test.assert_eq_int(S.specialist_graduates(admitted, 4), 0, "medicine takes a year to finish")
+    let paused = S.toggle_facility({ admitted with month: 12 }, faculty)
+    Test.assert_eq_int(S.active_program_at(paused, faculty), -1, "a paused faculty stops teaching while the campus remains built")
+    Test.assert_true(S.parcel_facility_upkeep(paused, faculty) < S.parcel_facility_upkeep(admitted, faculty), "pausing a faculty cuts upkeep")
+    let deferred = S.advance_education(paused, stats.routes, stats.labor, stats.people)
+    Test.assert_eq_int(S.specialist_enrolled(deferred, 4), 8, "pausing retains enrolled students")
+    Test.assert_eq_int(S.specialist_graduates(deferred, 4), 0, "a paused cohort cannot graduate")
+    let resumed = S.advance_education(S.toggle_facility({ deferred with month: 13 }, faculty), stats.routes, stats.labor, stats.people)
+    Test.assert_eq_int(S.specialist_graduates(resumed, 4), 8, "resuming restores the deferred graduation")
+    match Ur.Save.decode(Ur.Save.encode({ game with city: paused })) do
+      Ok(loaded) -> Test.assert_true(S.facility_paused(loaded.city, faculty), "paused operations survive reloading")
+      Err(error) -> Test.assert_true(false, error)
+    end
+    let finished = S.advance_education({ admitted with month: 12 }, stats.routes, stats.labor, stats.people)
+    Test.assert_eq_int(S.specialist_graduates(finished, 4), 8, "the cohort completes its qualification after twelve months")
+    let office = S.index(14, 20)
+    -- Isolate the credential rule from the full campus fixture's congested approach.
+    let homes = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(blank, S.index(13, 22), 3), S.index(14, 22), 3), S.index(15, 22), 3)
+    let vacancy = { finished with zones: NativeArray.set_int(finished.zones, office, 2),
+      buildings: NativeArray.set_int(homes, office, 1), business_sector: NativeArray.set_int(finished.business_sector, office, 4) }
+    let people = S.population(vacancy)
+    Test.assert_eq_int(S.get(S.workplace_hiring(vacancy, stats.routes, people), office), 8, "reachable medical posts are limited by credentialed workers")
+    Test.assert_eq_int(S.get(S.workplace_hiring({ vacancy with specializations: S.new_specializations() }, stats.routes, people), office), 0, "general university graduates cannot fill medical posts")
+    match Ur.Save.decode(Ur.Save.encode({ game with city: vacancy })) do
+      Ok(loaded) -> Test.assert_eq_int(S.specialist_graduates(loaded.city, 4), 8, "postgraduate credentials persist")
+      Err(error) -> Test.assert_true(false, error)
+    end
+    let students = Ur.Citizens.refresh({ university with education: NativeArray.set_int(university.education, 7, 120) }, Nil)
+    let students = List.filter(students, fn person -> person.study == 3)
+    Test.assert_true(!List.is_empty(students), "enrolled university students have a route from home")
+    Test.assert_true(observe_campus(university, students, 0, false, false), "students walk to class and through connected university quads")
+  end
+  pfn building_connection_checks() : Unit do
+    let start = S.new()
+    let c = { start with heights: NativeArray.make_int(S.count(), 8) }
+    let street = S.index(12, 20)
+    let lot = S.index(12, 19)
+    let detached = S.act(c, street, 1)
+    let rejected = Ur.Build.preview(detached, 44, lot, lot)
+    Test.assert_true(!rejected.valid && rejected.city.cash == detached.cash, "a school beside an isolated street cannot be placed")
+    let zoned = S.act(detached, lot, 2)
+    Test.assert_eq_int(S.get(zoned.zones, lot), 1, "zoning can be drawn before a road is connected")
+    let site = { zoned with construction: NativeArray.set_int(zoned.construction, lot, 1) }
+    let paused = S.tick(site)
+    Test.assert_eq_int(S.get(paused.construction, lot), 1, "construction pauses while the site is disconnected")
+    let connected = S.act(S.act(S.act(site, S.index(10, 19), 1), S.index(11, 19), 1), S.index(11, 20), 1)
+    let school = Ur.Build.preview(connected, 44, S.index(12, 21), S.index(12, 21))
+    Test.assert_true(school.valid && school.changed, "a school on a connected branch can be placed")
+    let resumed = S.tick(connected)
+    Test.assert_eq_int(S.get(resumed.buildings, lot), 1, "construction resumes after reconnecting the street")
+  end
+  pfn off_road_utilities() : Unit do
+    let start = S.new()
+    let solar_lot = S.index(8, 17)
+    let well_lot = S.index(8, 18)
+    let roads = NativeArray.set_int(NativeArray.set_int(start.roads, S.index(9, 17), 0), S.index(9, 18), 0)
+    let c = { start with roads: roads }
+    let solar = Ur.Build.preview(c, 21, solar_lot, solar_lot)
+    let well = Ur.Build.preview(solar.city, 9, well_lot, well_lot)
+    Test.assert_true(solar.valid && solar.changed && well.valid && well.changed, "solar arrays and wells can be placed without street frontage")
+    let active = S.stats(well.city)
+    Test.assert_true(active.generation.solar > 0 && active.services.wells == 384, "off-road sites supply the connected grid and pipes")
+    let cut = S.act(S.act(well.city, start.harbour, 27), start.harbour, 19)
+    let inactive = S.stats(cut)
+    Test.assert_true(inactive.generation.solar == 0 && inactive.services.wells == 0, "off-road utilities still need their network connections")
+  end
+  pfn starter_guide_checks() : Unit do
+    let dock = S.index(20, 36)
+    let street = S.index(20, 35)
+    let shore = S.index(21, 36)
+    let heights = NativeArray.set_int(NativeArray.set_int(NativeArray.make_int(S.count(), 8), S.index(20, 37), 0), S.index(21, 37), 0)
+    let unclaimed = S.unclaimed()
+    let island = { unclaimed with heights: heights }
+    Test.assert_eq_int((S.stats(island)).startup_step, 1, "new game starts by asking the player to land")
+    let landed = S.land(island, dock)
+    Test.assert_eq_int((S.stats(landed)).startup_step, 2, "the harbour opens the road step")
+    let road = S.act(landed, street, 1)
+    Test.assert_eq_int((S.stats(road)).startup_step, 3, "the road opens the power step")
+    let powered = S.act(road, S.index(19, 36), 21)
+    Test.assert_eq_int((S.stats(powered)).startup_step, 4, "connected solar opens the water step")
+    let rain = S.act(powered, S.index(20, 34), 14)
+    Test.assert_eq_int((S.stats(rain)).startup_step, 4, "a disconnected collector does not advance the guide")
+    let piped = S.act(rain, street, 18)
+    Test.assert_eq_int((S.stats(piped)).startup_step, 5, "connected rain collection opens the sewage step")
+    let sewer = S.act(piped, shore, 17)
+    Test.assert_eq_int((S.stats(sewer)).startup_step, 6, "a connected outfall opens the zoning step")
+    let zones = S.act(S.act(sewer, S.index(19, 35), 2), S.index(21, 35), 3)
+    Test.assert_eq_int((S.stats(zones)).startup_step, 6, "the zoning step waits for utility connections")
+    let ready = S.act(zones, street, 26)
+    Test.assert_eq_int((S.stats(ready)).startup_step, 7, "serviced housing and jobs open the move-in step")
+  end
+  pfn island_differences(a : Ur.Sim.City, b : Ur.Sim.City, i : Int, relief : Int, shore : Int) : (Int, Int) do
+    if i == S.count() do (relief, shore) else
+      let height_a = S.get(a.heights, i)
+      let height_b = S.get(b.heights, i)
+      island_differences(a, b, i + 1, relief + (if height_a != height_b do 1 else 0 end),
+        shore + (if (height_a == 0) != (height_b == 0) do 1 else 0 end))
+    end
+  end
+  pfn seeded_island_checks(game : Ur.Save.Game) : Unit do
+    let first = S.unclaimed_seeded(42)
+    let (same, _) = island_differences(first, S.unclaimed_seeded(42), 0, 0, 0)
+    let dry = S.unclaimed_seeded(307)
+    let (relief, shore) = island_differences(first, dry, 0, 0, 0)
+    Test.assert_eq_int(same, 0, "a world seed reproduces the same terrain")
+    let repeated = S.unclaimed_seeded(42)
+    Test.assert_true(first.climate_seed == repeated.climate_seed && first.climate_seed != dry.climate_seed,
+      "the island seed determines the climate seed")
+    Test.assert_eq_int(S.weather_on(first, 6, 18), S.weather_on(repeated, 6, 18), "the same seed reproduces the forecast")
+    Test.assert_true(S.climate_rain(first) != S.climate_rain(dry) || S.climate_heat(first) != S.climate_heat(dry),
+      "different island seeds can favor different climates")
+    Test.assert_true(shore > 0 && relief > shore, "seeds vary shorelines and elevation")
+    let foothill = S.index(15, 18)
+    let next_foothill = S.index(16, 18)
+    Test.assert_true(S.get(first.heights, foothill) == 0 || S.get(first.heights, next_foothill) == 0, "a river seed cuts an inland channel below the mountain")
+    Test.assert_true(S.get(dry.heights, foothill) > 0 && S.get(dry.heights, next_foothill) > 0, "river-free seeds keep the foothill dry")
+    Test.assert_true(S.freshwater(first, S.index(23, 24)) && S.geothermal(first, S.index(40, 13)), "the main aquifer and volcanic slopes are preserved")
+    Test.assert_eq_int(S.food_island(first, S.index(46, 32)), 1, "the fertile island retains its role")
+    Test.assert_eq_int(S.food_island(first, S.index(55, 23)), 2, "the fishing shoals retain their role")
+    match Ur.Save.decode(Ur.Save.encode({ game with city: first })) do
+      Ok(loaded) ->
+        let (changed, _) = island_differences(first, loaded.city, 0, 0, 0)
+        Test.assert_eq_int(changed, 0, "save and load preserve the generated terrain")
+        Test.assert_eq_int(loaded.city.climate_seed, first.climate_seed, "save and load preserve the seeded climate")
+        Test.assert_eq_int(S.temperature_on(loaded.city, 6, 18), S.temperature_on(first, 6, 18),
+          "loading preserves the seeded forecast")
+
+      Err(error) -> Test.assert_true(false, error)
+    end
+  end
+  pfn sanitation_checks(game : Ur.Save.Game) : Unit do
+    let c = S.new()
+    let depot = S.index(8, 18)
+    let landfill = S.index(8, 17)
+    let road = S.index(9, 20)
+    let home = S.index(10, 20)
+    let c = S.act(S.act(c, depot, 24), landfill, 25)
+    let crew = List.filter(Ur.Citizens.refresh(c, Nil), fn person -> person.work == depot && person.study < 0)
+    Test.assert_eq_int(S.job_slots(c, depot), 4, "the depot offers four municipal jobs")
+    Test.assert_true(List.length(crew) > 0 && List.all(crew, fn person -> person.work_position > 0 && !List.is_empty(person.work_route)),
+      "specific residents have positions and routes to the depot")
+    let sidewalk = Ur.Build.sidewalk_preview(c, road, 0, 91)
+    let tree = Ur.Build.sidewalk_preview(sidewalk.city, road, 1, 56)
+    Test.assert_true(sidewalk.valid && tree.valid && S.sidewalk_item(tree.city, road, 0) == 6 &&
+      S.sidewalk_item(tree.city, road, 1) == 1 && S.waste_bin_edge(tree.city, road) < 0,
+      "individual cans and trees can share a street without occupying parking")
+    let removed = Ur.Build.sidewalk_preview(tree.city, road, 0, 61)
+    Test.assert_true(removed.changed && S.sidewalk_item(removed.city, road, 0) == 0 &&
+      S.sidewalk_item(removed.city, road, 1) == 1, "removal affects only the selected sidewalk position")
+    let small = Ur.Build.preview(c, 91, road, road)
+    let large = Ur.Build.preview(c, 92, road, road)
+    Test.assert_true(small.valid && small.cost == 20 && large.valid && large.cost == 110, "both curb bin sizes can be built through the normal tool")
+    Test.assert_true(S.waste_bin_edge(small.city, road) < 0 && S.waste_bin_edge(large.city, road) >= 0, "only the underground bin takes a parking bay")
+    let c = { large.city with trash: 30, waste_stock: NativeArray.set_int(large.city.waste_stock, home, 30) }
+    let small_stock = { small.city with waste_stock: c.waste_stock }
+    Test.assert_true(S.waste_overflow(c, home) < S.waste_overflow(small_stock, home), "the larger bin contains a larger backlog")
+    let dispatched = S.advance_day(c)
+    Test.assert_true(List.any(dispatched.waste_runs, fn run -> run.depot == depot && run.pickup == home && run.site == landfill), "a depot schedules a real pickup and landfill trip")
+    let onsite = List.map(crew, fn person -> { person with location: depot, activity: 1, route: Nil })
+    let moment = Ur.Scene.sanitation_moment(dispatched, S.day_seconds() *. 10.0 /. 24.0 +. 0.001)
+    let unstaffed = Ur.Scene.sanitation_shift(dispatched, 0.0, Ur.Scene.empty_sanitation(), moment, crew)
+    Test.assert_eq_int(unstaffed.driver, -1, "a truck waits for an assigned driver to reach the depot")
+    let shift = Ur.Scene.sanitation_shift(dispatched, 0.0, Ur.Scene.empty_sanitation(), moment, onsite)
+    Test.assert_true(List.any(onsite, fn worker -> worker.id == shift.driver && worker.work_position >= 2),
+      "an on-site driver, rather than the dispatcher, takes the run")
+    let aboard = Ur.Citizens.sanitation_crew(onsite, -1, shift.driver)
+    Test.assert_true(List.any(aboard, fn worker -> worker.id == shift.driver && worker.activity == 6),
+      "the selected worker drives instead of starting another trip")
+    Test.assert_eq_int(S.get(dispatched.waste_sites, landfill), 0, "dispatch does not move trash in advance")
+    match Ur.Save.decode(Ur.Save.encode({ game with city: dispatched })) do
+      Ok(loaded) -> Test.assert_true(List.any(loaded.city.waste_runs, fn run -> run.depot == depot && run.pickup == home && run.site == landfill) && S.get(loaded.city.waste_stock, home) >= 30, "scheduled routes and backlog survive reloading")
+      Err(error) -> Test.assert_true(false, error)
+    end
+    let delivered = S.advance_day(dispatched)
+    Test.assert_true(S.get(delivered.waste_sites, landfill) >= 30 && S.get(delivered.waste_last, home) > 0, "the completed route transfers waste into finite landfill storage")
+    let cut = { dispatched with roads: NativeArray.set_int(dispatched.roads, road, 0) }
+    Test.assert_eq_int(S.get((S.advance_day(cut)).waste_last, home), 0, "severing the road cancels the scheduled pickup")
+    let coast = S.index(9, 23)
+    let c = S.act(S.act(S.act(c, landfill, 7), S.index(9, 22), 7), S.index(9, 22), 1)
+    let exported = S.act(c, coast, 93)
+    Test.assert_eq_int(S.get(exported.plants, coast), 34, "the waste export dock can be built at a connected shoreline: " ++ exported.message)
+    let staged = S.advance_day(S.advance_day(exported))
+    Test.assert_true(S.get(staged.waste_sites, coast) > 0, "cargo waits at the export dock until its sailing")
+    let shipped = S.advance_day(staged)
+    Test.assert_true((S.stats(shipped)).waste.exported > 0, "trucks can unload for export")
+    let ocean = S.act(c, coast, 94)
+    Test.assert_true(S.get(ocean.plants, coast) == 35 && S.facility_paused(ocean, coast), "ocean dumping requires explicit activation")
+    let forbidden = S.advance_day(S.advance_day(ocean))
+    Test.assert_eq_int((S.stats(forbidden)).waste.dumped, 0, "the disabled coastal dump handles no trash")
+    let dumped = S.advance_day(S.advance_day(S.toggle_facility(ocean, coast)))
+    Test.assert_true((S.stats(dumped)).waste.dumped > 0 && S.pollution_at(dumped, coast) > 0, "dumped truckloads pollute the coast")
+    Test.assert_false((Ur.Build.preview(c, 95, landfill, landfill)).valid, "incineration is a later unlock")
+    let ready = { c with plants: NativeArray.set_int(c.plants, landfill, 36) }
+    let burned = S.advance_day(S.advance_day(ready))
+    Test.assert_true((S.stats(burned)).waste.burned > 0 && S.get(burned.waste_stock, landfill) > 0 &&
+      S.get(burned.air_pollution, landfill) > 0, "a connected incinerator produces ash and air pollution")
+  end
+  pfn diagnosis_checks() : Unit do
+    let c = Ur.Scenario.diagnosis_district()
+    let focus = S.index(10, 17)
+    let st = S.stats(c)
+    let road = S.index(9, 17)
+    let st = { st with traffic: NativeArray.set_int(st.traffic, road * 4, 99) }
+    let before = Ur.Diagnosis.report(c, st, focus)
+    Test.assert_true(before.road == road && before.pressure > 100, "diagnosis identifies a nearby overloaded road")
+    Test.assert_true(before.late_homes > 0 && S.valid(before.noise_source), "diagnosis identifies homes exposed to late bars")
+    Test.assert_true(before.overflow > 0 && before.waste_lot == S.index(11, 17), "diagnosis locates the worst overflow")
+    let quieter = S.act(c, before.noise_source, 69)
+    let after = Ur.Diagnosis.report(quieter, st, focus)
+    Test.assert_true(after.late_homes < before.late_homes && after.bars == before.bars, "earlier closing cuts late exposure while retaining bars")
+  end
+  pfn zoning_status_checks() : Unit do
+    let base = S.new()
+    let lot = S.index(13, 16)
+    let c = { base with zones: NativeArray.set_int(base.zones, lot, 1) }
+    Test.assert_true(S.undeveloped_zone(c, lot), "an empty zoned parcel is eligible for the development panel")
+    Test.assert_eq_str(S.reason(c, lot), "No road connection to the harbour", "an isolated zone explains its blocking connection")
+    let building = { c with construction: NativeArray.set_int(c.construction, lot, 1) }
+    Test.assert_false(S.undeveloped_zone(building, lot), "a started building leaves the undeveloped panel")
+  end
+  pfn employment_corridor_checks() : Unit do
+    let baseline = Ur.Scenario.employment_corridor()
+    let upgraded = Ur.Scenario.upgrade_corridor(baseline)
+    let before = S.stats(baseline)
+    let after = S.stats(upgraded)
+    let home = Ur.Scenario.corridor_home()
+    let workplace = Ur.Scenario.corridor_workplace()
+    let project = Ur.Scenario.corridor_project()
+    Test.assert_true(S.commute(after.commutes, home) < S.commute(before.commutes, home), "extra bus service shortens the commute")
+    Test.assert_true(S.get(after.staffed_jobs, workplace) > S.get(before.staffed_jobs, workplace), "extra bus service fills positions at the east workplace")
+    Test.assert_true(List.any(after.job_matches, fn hire -> hire.home == home && hire.workplace == workplace), "west residents take specific east jobs")
+    Test.assert_true(after.budget.bus_operations > before.budget.bus_operations, "extra departures raise operating costs")
+    Test.assert_true(List.any(before.buses.lines, fn line -> line.demand > line.boarded), "one departure leaves riders waiting")
+    Test.assert_true(List.all(after.buses.lines, fn line -> line.boarded <= line.departures * S.bus_seats()), "paid boardings respect scheduled seats")
+    let payments = List.fold_left(List.range(0, S.count()), 0, fn (total, lot) -> total + S.get(after.buses.fares, lot))
+    Test.assert_eq_int(payments, after.budget.bus_fares, "households pay exactly the fares the city receives")
+    let no_depot = S.act(upgraded, S.index(8, 18), 7)
+    Test.assert_true(List.all((S.stats(no_depot)).buses.lines, fn line -> line.departures == 1),
+      "requesting more departures needs a connected depot")
+    let costly = S.stats({ upgraded with bus_fare: 6 })
+    Test.assert_eq_int(S.get(costly.staffed_jobs, workplace), 0, "an unaffordable fare keeps jobs out of reach")
+    Test.assert_eq_int(costly.budget.bus_fares, 0, "would-be riders do not pay")
+    let interrupted = S.act(upgraded, S.index(17, 14), 38)
+    Test.assert_eq_int(S.get((S.stats(interrupted)).staffed_jobs, workplace), 0, "a broken route no longer connects workers")
+    let roster = Ur.Citizens.refresh_with(upgraded, Nil, after.routes, after.people, after.job_matches)
+    Test.assert_true(List.any(roster, fn person -> person.home == home && person.work == workplace && S.valid(person.work_board)),
+      "visible workers keep their real bus-dependent workplace assignments")
+    Test.assert_eq_int(S.get((S.advance(baseline, 4)).buildings, project), 0, "the underserved parcel stays empty")
+    let developed = S.advance(upgraded, 4)
+    Test.assert_true(S.get(developed.buildings, project) > 0, "better service unlocks private construction")
+    Test.assert_true(S.get((S.stats(developed)).staffed_jobs, workplace) > 0, "the corridor still supports jobs after the new housing opens")
+    let game = { city: { developed with bus_fare: 2 }, cx: 135.0, cz: 148.0, zoom: 110.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(game)) do
+      Ok(loaded) ->
+        Test.assert_eq_int(loaded.city.bus_fare, 2, "the citywide bus fare survives a save")
+        match loaded.city.finance_history do
+          Cons(month, _) -> Test.assert_eq_int(month.budget.bus_operations, after.budget.bus_operations, "settled operating costs survive a save")
+          Nil -> Test.assert_true(false, "the transit ledger was saved")
+        end
+      Err(message) -> Test.assert_true(false, message)
+    end
+    let trip = Ur.Scenario.corridor_trip(upgraded, after)
+    Test.assert_true(trip.waited, "a west resident walks to a stop and joins the queue")
+    Test.assert_true(trip.boarded, "a west resident boards the dispatched bus")
+    Test.assert_true(trip.arrived, "a west resident alights and reaches the east workplace")
+    Test.assert_true(trip.fullest_bus <= S.bus_seats(), "visible queues respect bus capacity")
+  end
+  pfn utility_flow_checks() : Unit do
+    let capacity = NativeArray.set_int(NativeArray.make_int(15, 100), 6, 40)
+    let block = NativeArray.set_int(capacity, 1, 0)
+    let block = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(block, 10, 0), 11, 0), 12, 0)
+    let block = NativeArray.set_int(block, 3, 0)
+    let n = Ur.UtilitiesNetwork.add_source(Ur.UtilitiesNetwork.new(5, 15, block), 7, 100)
+    let (n, west) = Ur.UtilitiesNetwork.draw(n, 5, 70)
+    let (n, east) = Ur.UtilitiesNetwork.draw(n, 8, 20)
+    Test.assert_eq_int(west, 40, "a small feeder limits delivery to the western branch")
+    Test.assert_eq_int(east, 20, "a small feeder does not starve the other branch")
+    Test.assert_eq_int(Ur.UtilitiesNetwork.remaining(n, 7), 40, "unused generation stays at its source")
+    let upper = NativeArray.set_int(NativeArray.set_int(block, 1, 30), 2, 30)
+    let parallel = Ur.UtilitiesNetwork.add_source(Ur.UtilitiesNetwork.new(5, 15, upper), 7, 100)
+    let (_, west) = Ur.UtilitiesNetwork.draw(parallel, 5, 70)
+    Test.assert_eq_int(west, 70, "a parallel pipe or cable carries the other thirty units")
+
+    let city = Ur.Scenario.feeder_demo()
+    let lot = Ur.Scenario.feeder_demo_site()
+    let feeder = Ur.Scenario.feeder_demo_link()
+    let base = S.stats(city)
+    let upgrade = Ur.Build.preview(city, 97, feeder, feeder)
+    Test.assert_true(upgrade.valid && upgrade.changed && upgrade.cost == 120, "the ordinary construction tool upgrades a feeder in place")
+    let improved = S.stats(upgrade.city)
+    Test.assert_eq_int(base.power, improved.power, "upgrading a feeder adds no generation")
+    Test.assert_eq_int(improved.budget.infrastructure - base.budget.infrastructure, 4, "an upgraded feeder costs more to maintain")
+    Test.assert_eq_str(S.reason_with(city, lot, base), "Power bottleneck · Upgrade or bypass the feeder", "the inspector identifies the local constraint")
+    Test.assert_eq_str(S.reason_with(upgrade.city, lot, improved), "Eligible for development. Waiting for private investment.", "upgrading removes the growth blocker")
+    Test.assert_eq_int(S.get((S.advance(city, 4)).buildings, lot), 0, "the full feeder leaves the site empty")
+    let grown = S.advance(upgrade.city, 4)
+    Test.assert_true(S.get(grown.buildings, lot) > 0, "the site builds once it can reserve power")
+    let finished = S.stats(grown)
+    Test.assert_eq_int(finished.budget.energy_income, finished.utilities.electric.total * grown.energy / 4, "bills use delivered electricity")
+    let pipe = Ur.Build.preview(upgrade.city, 98, feeder, feeder)
+    Test.assert_true(pipe.valid && pipe.changed && pipe.cost == 160, "a main upgrade uses the ordinary pipe tool workflow")
+    let game = { city: pipe.city, cx: 100.0, cz: 140.0, zoom: 72.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(game)) do
+      Ok(loaded) ->
+        Test.assert_eq_int(S.get(loaded.city.grid, feeder), 2, "feeder capacity survives reloading")
+        Test.assert_eq_int(S.get(loaded.city.pipes, feeder), 2, "sewer and water capacity survive reloading")
+      Err(message) -> Test.assert_true(false, message)
+    end
+  end
+  pfn freight_checks() : Unit do
+    let cargo = { food: 60, fuel: 40, waste: 20 }
+    let food_first = Ur.FreightNetwork.booking(cargo, 100, 0)
+    let waste_first = Ur.FreightNetwork.booking(cargo, 100, 2)
+    Test.assert_true(food_first.food == 60 && food_first.fuel == 40 && food_first.waste == 0,
+      "one deck limit applies to all cargo")
+    Test.assert_true(waste_first.waste == 20 && waste_first.food + waste_first.fuel == 80,
+      "changing priorities displaces cargo within the same capacity")
+    let landed = Ur.FreightNetwork.landed_cost(10, 4, 10, 5)
+    let (remaining, sold) = Ur.FreightNetwork.take(landed, 6)
+    Test.assert_true(remaining.units == 4 && remaining.value == 22 && sold.value == 33 && 6 * 7 - sold.value == 9,
+      "landed costs reconcile after a partial sale")
+    let base = Ur.Scenario.freight_demo()
+    let port = Ur.Scenario.freight_demo_port()
+    Test.assert_true(Option.is_some(base.freight), "the ordinary dock action opens a freight service")
+    let warm = Ur.Scenario.advance_freight_days(base, 7)
+    let stopped = S.freight_action(warm, port, 1)
+    let delayed = Ur.Scenario.advance_freight_days(stopped, 8)
+    let supplied = Ur.Scenario.advance_freight_days(S.freight_action(stopped, port, 3), 8)
+    let game = { city: stopped, cx: 151.0, cz: 139.0, zoom: 125.0, yaw: 0.55, paused: true, speed: 1 }
+    match (warm.freight, delayed.freight, supplied.freight) do
+      (Some(initial), Some(late), Some(alternate)) ->
+        Test.assert_true(Option.is_some(initial.voyage) && initial.shop.units > 0, "the stop happens with cargo afloat and food on shelves")
+        Test.assert_true(late.shop.units < initial.shop.units && late.price > initial.price && late.coverage < 50,
+          "delayed cargo stays off the shelves and raises prices as the buffer runs down")
+        Test.assert_true(alternate.coverage > late.coverage && alternate.price < late.price && alternate.duty > late.duty,
+          "funded backup imports ease scarcity and pay duty")
+        Test.assert_eq_int(late.fuel, 0, "the island plant runs down its separate fuel stock")
+        let lot = Ur.Scenario.feeder_demo_site()
+        let shortage = S.stats(delayed)
+        let stocked = S.stats(supplied)
+        let reason = S.reason_with(delayed, lot, shortage)
+        Test.assert_eq_str(reason, "Local food shortage · Restore sailings or fund backup imports",
+          "local scarcity blocks the same housing parcel that the feeder upgrade opened")
+        Test.assert_true(S.reason_with(supplied, lot, stocked) != reason,
+          "backup imports restore the parcel's food access")
+        let cut = S.act(warm, port, 38)
+        let month_end = S.tick(supplied)
+        match (Ur.Scenario.advance_freight_days(cut, 4)).freight do
+          Some(disconnected) -> Test.assert_eq_int(disconnected.next_id, initial.next_id, "a cut ferry cannot dispatch")
+          None -> Test.assert_true(false, "the port cut preserves manifested freight")
+        end
+        match (month_end.freight, month_end.finance_history) do
+          (Some(closed), Cons(ledger, _)) ->
+            Test.assert_true(closed.duty == 0 && closed.expenses == 0 && ledger.budget.freight_operations >= alternate.expenses,
+              "monthly settlement books public freight commitments once")
+          _ -> Test.assert_true(false, "month end saves the freight accounts")
+        end
+        Test.assert_true(initial.expenses > 0 && late.next_id == initial.next_id && late.duty == 0,
+          "the hold creates neither extra bookings nor internal import duty")
+        match Ur.Save.decode(Ur.Save.encode(game)) do
+          Ok(loaded) ->
+            match (Ur.Scenario.advance_freight_days(loaded.city, 8)).freight do
+              Some(replayed) -> Test.assert_true(replayed.next_id == late.next_id && replayed.coverage == late.coverage && replayed.expenses == late.expenses,
+                "save and reload conserve bookings and expenses")
+              None -> Test.assert_true(false, "the voyage survives reloading")
+            end
+          Err(message) -> Test.assert_true(false, message)
+        end
+      _ -> Test.assert_true(false, "the demo retains its freight service")
+    end
+  end
+  pfn council_outcome_checks() : Unit do
+    let base = Ur.Scenario.council_outcome_baseline()
+    let hold = Ur.Scenario.council_outcome_demo()
+    let exposed = S.index(10, 16)
+    let other = S.index(10, 21)
+    let north = Ur.Council.ward_at(hold, exposed)
+    let south = Ur.Council.ward_at(hold, other)
+    let st = S.stats(hold)
+    let north_report = Ur.Council.ward_report(hold, st, north)
+    let south_report = Ur.Council.ward_report(hold, st, south)
+    Test.assert_eq_int(Ur.Council.leading_issue(north_report), 7, "the affected ward puts pollution first")
+    Test.assert_eq_int(Ur.Council.share(south_report, 7), 0, "the neighboring ward does not inherit the pollution complaint")
+    Test.assert_eq_int(Ur.Council.kind(hold), 7, "heavy neighborhood pollution prompts a hold on new high-nuisance facilities")
+    Test.assert_eq_int(Ur.Council.sponsor(hold), north, "the affected councillor sponsors the hold")
+    Test.assert_true(Ur.Council.building_block(hold, 4, Cons(exposed, Nil)), "the sponsoring ward can block a gas plant")
+    Test.assert_false(Ur.Council.building_block(hold, 4, Cons(other, Nil)), "the hold does not extend into the neighboring ward")
+    Test.assert_false(Ur.Council.building_block(hold, 26, Cons(exposed, Nil)), "the hold allows work on the power grid")
+    let repair = { hold with month: hold.month + 1, air_pollution: base.air_pollution }
+    let checked = Ur.Council.advance(repair, S.population(repair))
+    Test.assert_eq_int(Ur.Council.verified_months(checked), 1, "one month of cleaner air earns one review")
+    let repeated = Ur.Council.advance(checked, S.population(checked))
+    Test.assert_eq_int(Ur.Council.kind(repeated), 7, "reviewing the same month twice cannot lift the hold")
+    let relapse = { checked with month: checked.month + 1, air_pollution: hold.air_pollution }
+    let lapsed = Ur.Council.advance(relapse, S.population(relapse))
+    Test.assert_eq_int(Ur.Council.verified_months(lapsed), 0, "a relapse resets the consecutive review count")
+    let game = { city: checked, cx: 78.0, cz: 151.0, zoom: 52.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(game)) do
+      Ok(saved) ->
+        Test.assert_eq_int(Ur.Council.baseline(saved.city), Ur.Council.baseline(hold), "the agenda baseline survives reloading")
+        let next = { saved.city with month: saved.city.month + 1 }
+        let resolved = Ur.Council.advance(next, S.population(next))
+        Test.assert_eq_int(Ur.Council.kind(resolved), 0, "two consecutive verified months lift the hold across a reload")
+        Test.assert_false(Ur.Council.building_block(resolved, 4, Cons(exposed, Nil)), "the ward's restriction is lifted")
+      Err(error) -> Test.assert_true(false, error)
+    end
+  end
+  pfn hot_weather(c : Ur.Sim.City, day : Int) : Ur.Sim.City do
+    let next = { c with calendar_day: day % 30, month: 6 + day / 30 }
+    if day >= 59 || S.temperature(next) == 34 do next else hot_weather(next, day + 1) end
+  end
+  pfn floodplain_checks() : Unit do
+    let storm = Ur.Scenario.storm_site()
+    let coast = Ur.Scenario.storm_station()
+    let shore = Ur.Scenario.storm_shore()
+    let sea = S.index(7, 16)
+    let inland = S.index(10, 16)
+    let bowl = S.index(20, 20)
+    let heights = NativeArray.make_int(2640, 24)
+    let heights = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(heights, coast, 8), inland, 8), sea, 0)
+    let heights = NativeArray.set_int(NativeArray.set_int(heights, bowl, 16), shore, 0)
+    let c = { storm with heights: heights, soil_moisture: 100 }
+    Test.assert_true(S.surface_flood(c, coast) > S.surface_flood(c, inland) && S.surface_flood(c, inland) > 0,
+      "coastal flooding weakens over land as distance from the water grows")
+    let dry = { c with calendar_day: 0 }
+    Test.assert_true(S.surface_flood(dry, coast) == 0 && S.floodplain_depth(dry, coast) > 0,
+      "the dry-day overlay retains potential storm exposure")
+    let drain = Ur.Build.preview(c, 99, -1, coast)
+    Test.assert_true(drain.valid && drain.cost == 180 && !S.storm_road_closed(drain.city, coast),
+      "a drainage upgrade keeps the exposed street open")
+    let wall = Ur.Build.preview(drain.city, 100, -1, sea)
+    Test.assert_true(wall.valid && wall.cost == 4200 && S.surface_flood(wall.city, inland) == 0,
+      "an offshore seawall stops the connected coastal approach without drainage on the inland tile")
+    Test.assert_false((Ur.Build.preview(c, 100, -1, inland)).valid, "seawalls cannot be built on land")
+    Test.assert_true(S.surface_flood(S.act(wall.city, sea, 7), inland) > 0, "removing the barrier restores exposure")
+    let pavement = { c with roads: NativeArray.set_int(c.roads, bowl, 1) }
+    let park = { c with parks: NativeArray.set_int(c.parks, bowl, 1) }
+    Test.assert_true(S.surface_flood(pavement, bowl) > S.surface_flood(c, bowl) &&
+      S.surface_flood(c, bowl) > S.surface_flood(park, bowl), "open land and parks absorb more inland runoff than pavement")
+    Test.assert_true(S.floodplain_depth({ c with soil_moisture: 10 }, bowl) < S.floodplain_depth(c, bowl),
+      "saturated soil absorbs less stormwater")
+    let game = { city: wall.city, cx: 78.0, cz: 151.0, zoom: 52.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(game)) do
+      Ok(saved) ->
+        Test.assert_eq_int(S.get(saved.city.storm_drains, coast), 1, "drainage upgrades survive loading")
+        Test.assert_eq_int(S.get(saved.city.seawalls, sea), 1, "seawalls survive loading")
+      Err(error) -> Test.assert_true(false, error)
+    end
+  end
+  pfn weather_checks() : Unit do
+    let storm = Ur.Scenario.storm_site()
+    let station = Ur.Scenario.storm_station()
+    let shore = Ur.Scenario.storm_shore()
+    let tank = Ur.Scenario.storm_collector()
+    Test.assert_eq_int(S.weather(storm.month, storm.calendar_day), 4, "a severe rain spell occurs on the calendar")
+    Test.assert_true(S.storm_road_closed(storm, station), "severe rain stops traffic on the low coastal road")
+    let x = 9 * 32 + 16
+    let seam = 19 * 32
+    let approach = Ur.Landscape.height(storm, x, 17 * 32 + 16)
+    let top = Ur.Landscape.height(storm, x, seam + 16)
+    let edge = Ur.Landscape.height(storm, x, seam) - Ur.Landscape.height(storm, x, seam - 1)
+    Test.assert_true(top > approach && int_abs(edge) <= 1, "the road climbs without a cliff at the inland station")
+    let wet = S.advance_day(storm)
+    Test.assert_true(S.get(wet.rain_tanks, tank) > 0, "rain fills a collector tank")
+    Test.assert_true(S.get(wet.subway_water, station) > 0, "water enters the low station")
+    Test.assert_eq_int(S.get(wet.subway_water, S.index(9, 19)), 0, "the uphill station stays above floodwater")
+    Test.assert_eq_int(S.get(S.transit_service(wet, 100), S.index(9, 19)), 0, "a flooded station closes the connected line")
+    Test.assert_true(S.get(wet.land_pollution, station) < 90 && S.get(wet.pollution, shore) > 0, "runoff transfers pollution from land to sea")
+    let date = Ur.Scenario.first_weather(storm.month * 30, 0, 30)
+    let dry = { wet with month: date / 30, calendar_day: date % 30 }
+    let vented = S.advance_day(dry)
+    Test.assert_true(S.get(vented.rain_tanks, tank) < S.get(dry.rain_tanks, tank), "dry weather uses water stored in the collector")
+    Test.assert_true(S.get(vented.subway_water, station) < S.get(dry.subway_water, station) && vented.pumping_cost > 0,
+      "powered pumps drain the station and accrue a charge")
+    let outage = { dry with grid: NativeArray.make_int(2640, 0) }
+    let disconnected = S.advance_day(outage)
+    Test.assert_eq_int(S.get(disconnected.subway_water, station), S.get(outage.subway_water, station), "pumps cannot work without a grid connection")
+    Test.assert_eq_int(disconnected.pumping_cost, outage.pumping_cost, "unpowered pumps incur no charge")
+    let sunny = S.generation(dry, S.access(dry))
+    let rainy = S.generation(storm, S.access(storm))
+    Test.assert_true(sunny.solar > rainy.solar, "solar supplies less power in severe rain")
+    let bare = hot_weather(dry, 0)
+    let home = S.index(10, 20)
+    let trees = NativeArray.set_int(NativeArray.set_int(bare.streetscape, S.index(9, 20), 3), S.index(9, 19), 3)
+    let shady = { bare with streetscape: trees, parks: NativeArray.set_int(bare.parks, S.index(10, 19), 1) }
+    Test.assert_true(S.local_temperature(shady, home) < S.local_temperature(bare, home), "nearby canopy and parks cool a hot parcel")
+    Test.assert_true(S.walk_pace(shady, home) > S.walk_pace(bare, home), "shade makes a hot walk faster")
+    Test.assert_true(Ur.Layers.heat_color(S.local_temperature(shady, home)) != Ur.Layers.heat_color(S.local_temperature(bare, home)),
+      "shade moves the parcel out of the hottest overlay band")
+    let bare_stats = S.stats(bare)
+    let shady_stats = S.stats(shady)
+    Test.assert_true(S.get(shady_stats.utilities.electric.demand, home) < S.get(bare_stats.utilities.electric.demand, home), "shade reduces cooling power at the nearby home")
+    let planted = S.act(S.new(), S.index(8, 18), 11)
+    let watered = S.services(planted, S.access(planted), S.population(planted))
+    let drought = { planted with soil_moisture: 0 }
+    let parched = S.services(drought, S.access(drought), S.population(drought))
+    Test.assert_true(watered.farms > parched.farms && parched.farms == 0, "drought stops crops even when irrigation has a connection")
+
+    let game = { city: vented, cx: 78.0, cz: 151.0, zoom: 52.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(game)) do
+      Ok(saved) ->
+        Test.assert_eq_int(S.get(saved.city.rain_tanks, tank), S.get(vented.rain_tanks, tank), "water stored in the tank survives reloading")
+        Test.assert_eq_int(S.get(saved.city.subway_water, station), S.get(vented.subway_water, station), "subway flooding survives reloading")
+        Test.assert_eq_int(saved.city.pumping_cost, vented.pumping_cost, "pumping charges survive reloading")
+      Err(error) -> Test.assert_true(false, error)
+    end
+  end
+  fn main(_cap : Cap(IO)) : Unit do
+    bus_depot_clearance()
+    floodplain_checks()
+    weather_checks()
+    council_outcome_checks()
+    freight_checks()
+    utility_flow_checks()
+    employment_corridor_checks()
+    zoning_status_checks()
+    diagnosis_checks()
+    wind_checks(S.new())
+    Test.assert_eq_int(Ur.Toolbar.group_at(1320.0, 830.0, 1440.0, 900.0), 0, "space beside the toolbar stays available to the world")
+    Test.assert_eq_int(Ur.Toolbar.group_at(720.0, 830.0, 1440.0, 900.0), 4, "Utilities opens from the centre button")
+    Test.assert_eq_int(Ur.Toolbar.page_at(295.0, 657.0, 1440.0, 900.0, 4, 0), 1, "Water has its own submenu")
+    Test.assert_eq_int(Ur.Toolbar.option_at(215.0, 690.0, 1440.0, 900.0, 4, 1), 18, "the first Water card lays pipes")
+    Test.assert_eq_int(Ur.Toolbar.option_at(75.0, 448.0, 600.0, 750.0, 4, 1), 18, "the first Water card stays accessible when the tray wraps")
+    Test.assert_eq_int(Ur.Toolbar.option_at(75.0, 554.0, 600.0, 750.0, 4, 1), 14, "the second row exposes additional tools")
+    Test.assert_true(Ur.Toolbar.over(75.0, 448.0, 600.0, 750.0, 4, 1), "the toolbar intercepts placement clicks")
+    Test.assert_false(Ur.Toolbar.over(100.0, 250.0, 1440.0, 900.0, 4, 1), "the old sidebar area is available for building")
+    Test.assert_true(Ur.Hud.toggle_at(1340.0, 104.0, 1440.0), "the details toggle stays accessible")
+    Test.assert_true(Ur.Hud.over_panel(810.0, 300.0, 1440.0, 900.0, true), "open details consume map clicks")
+    Test.assert_false(Ur.Hud.over_panel(810.0, 300.0, 1440.0, 900.0, false), "hiding details restores map clicks")
+    Test.assert_eq_int(Ur.Hud.panel_tab_at(560.0, 275.0, 1440.0, 900.0, true), 2, "Services has its own tab")
+    let (_, policy_delta) = Ur.Hud.policy_at(590.0, 350.0, 1440.0, 900.0, true, 3)
+    let (_, parcel_delta) = Ur.Hud.policy_at(590.0, 350.0, 1440.0, 900.0, true, 1)
+    let (_, hidden_delta) = Ur.Hud.policy_at(590.0, 350.0, 1440.0, 900.0, false, 3)
+    Test.assert_eq_int(policy_delta, 1, "the visible Policy tab accepts adjustments")
+    Test.assert_eq_int(parcel_delta + hidden_delta, 0, "inactive policy buttons cannot change taxes")
+    Test.assert_true(Ur.Menu.at(720.0, 380.0, 1440.0, 900.0, true, false) == :new_city, "New game is available at boot")
+    Test.assert_true(Ur.Menu.at(720.0, 421.0, 1440.0, 900.0, true, false) == :nothing, "Load is disabled before saving")
+    Test.assert_true(Ur.Menu.at(720.0, 421.0, 1440.0, 900.0, true, true) == :load_city, "Load is available when a save exists")
+    let c = S.new()
+    parking_checks(c)
+    parking_construction(c)
+    let from = S.index(10, 20)
+    let target = S.index(13, 20)
+    let path = Ur.Build.footprint(1, from, target)
+    Test.assert_eq_int(List.length(path), 4, "road drags preview every intermediate parcel")
+    let region = S.land(S.unclaimed(), S.index(20, 36))
+    let inland = S.index(20, 35)
+    let sea = S.index(20, 37)
+    let road = Ur.Build.preview(region, 1, inland, inland)
+    Test.assert_true(road.valid && road.changed && road.cost == 60, "a build preview quotes its full cost")
+    Test.assert_eq_int(S.get(region.roads, inland), 0, "preview leaves the current city untouched")
+    let blocked = Ur.Build.preview(region, 1, inland, sea)
+    Test.assert_false(blocked.valid, "a road crossing water rejects the gesture")
+    Test.assert_eq_int(blocked.city.cash, region.cash, "a rejected build does not charge for earlier parcels")
+    Test.assert_eq_int(S.get(blocked.city.roads, inland), 0, "a rejected drag does not leave partial roads")
+    let pa = S.index(12, 20)
+    let seam = S.index(13, 20)
+    let pb = S.index(14, 20)
+    let heights = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(c.heights, pa, 12), seam, 12), pb, 12)
+    let roads = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(c.roads, pa, 1), seam, 1), pb, 1)
+    let fixture = { c with heights: heights, roads: roads }
+    let upper = Ur.Build.preview(fixture, 50, pa, pb)
+    Test.assert_true(upper.valid && upper.cost == 480, "overpass quotes the portals and elevated span")
+    Test.assert_eq_int(S.grade_peer(upper.city, pa), pb, "overpass links the two portals")
+    Test.assert_eq_int(S.grade_peer(upper.city, seam), -1, "crossing a surface street does not create an intersection")
+    Test.assert_eq_int(S.get(upper.city.roads, seam), 1, "surface street is preserved below the crossing")
+    let lower = Ur.Build.preview(fixture, 51, pa, pb)
+    Test.assert_true(lower.valid && S.grade_kind(lower.city, pa) == 2, "underpass is a separate road class")
+    let channel = { fixture with heights: NativeArray.set_int(heights, seam, 0) }
+    let submerged_cut = Ur.Build.preview(channel, 51, pa, pb)
+    Test.assert_false(submerged_cut.valid, "an open cut cannot cross the ocean")
+    let tunnel = Ur.Build.preview(channel, 52, pa, pb)
+    Test.assert_true(tunnel.valid && tunnel.cost == 930, "a sealed tunnel can cross a submerged parcel")
+    let removed = S.act(tunnel.city, seam, 54)
+    Test.assert_eq_int(S.grade_peer(removed, pa), -1, "removing the crossing disconnects both portals")
+    let first = S.index(19, 34)
+    let middle = S.index(20, 34)
+    let last = S.index(20, 33)
+    let h = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(road.city.heights, first, 12), middle, 12), last, 12)
+    let lot = { road.city with heights: h }
+    let stroke = Ur.Build.park_stroke(Nil, -1, first)
+    let stroke = Ur.Build.park_stroke(Ur.Build.park_stroke(stroke, first, middle), middle, last)
+    let park = Ur.Build.park_preview(lot, Ur.Build.park_stroke(stroke, last, middle))
+    Test.assert_true(park.valid && park.cost == 135, "an L-shaped park charges for three unique parcels")
+    Test.assert_eq_int(S.get(park.city.parks, last), 3, "park tiles share the connected area")
+    let pocket_park = Ur.Build.park_preview(lot, Cons(middle, Nil))
+    Test.assert_true(S.walkable_park_score(park.city, S.park_walk(park.city), inland) > S.walkable_park_score(pocket_park.city, S.park_walk(pocket_park.city), inland), "a larger park creates a stronger neighborhood benefit")
+    let cut_park = { park.city with roads: NativeArray.make_int(2640, 0) }
+    Test.assert_eq_int(S.walkable_park_score(cut_park, S.park_walk(cut_park), inland), 0, "parks do not give walkability across disconnected land")
+    let divided = S.act(park.city, middle, 7)
+    Test.assert_eq_int(S.get(divided.parks, first), 1, "demolition splits a park into smaller components")
+    let bad_park = Ur.Build.park_preview(lot, Cons(first, Cons(sea, Nil)))
+    Test.assert_true(!bad_park.valid && bad_park.city.cash == lot.cash, "invalid park strokes roll back the entire preview")
+    let showcase = Ur.Scenario.parks_and_crossings()
+    let visitor = park_visitor(Ur.Citizens.refresh(showcase, Nil))
+    Test.assert_true(observe_park(showcase, visitor, 145, false), "a citizen walks to the park, takes an interior path and arrives")
+    let bridge_start = S.index(22, 25)
+    let bridge_end = S.index(30, 25)
+    let street_height = S.grade_surface(showcase, bridge_start, bridge_end, 0.0)
+    let first_edge = S.grade_surface(showcase, bridge_start, bridge_end, 0.0625)
+    let second_edge = S.grade_surface(showcase, bridge_start, bridge_end, 0.1875)
+    let start_slope = (first_edge -. street_height) /. 16.0
+    let middle_slope = (second_edge -. first_edge) /. 32.0
+    Test.assert_true(start_slope < 0.25 && start_slope < middle_slope, "the overpass eases into its main incline")
+    let halfway_to_edge = S.grade_surface(showcase, bridge_start, bridge_end, 0.03125)
+    Test.assert_true(halfway_to_edge > (street_height +. first_edge) *. 0.5 -. 0.001 && halfway_to_edge < (street_height +. first_edge) *. 0.5 +. 0.001, "vehicles follow the deck between parcel boundaries")
+    Test.assert_eq_int(S.grade_kind(showcase, S.index(22, 25)), 1, "showcase contains an overpass")
+    Test.assert_eq_int(S.grade_kind(showcase, S.index(31, 26)), 2, "showcase contains an underpass")
+    Test.assert_eq_int(S.grade_kind(showcase, S.index(23, 23)), 3, "showcase contains a road tunnel")
+    Test.assert_eq_int(S.get(showcase.parks, S.index(27, 27)), 10, "showcase has a connected irregular park")
+    let garden = Ur.Build.preview(park.city, 55, first, first)
+    Test.assert_true(garden.valid && garden.cost == 195, "upgrading a park quotes the full connected footprint")
+    Test.assert_eq_int(S.get(garden.city.park_tiers, last), 1, "a garden upgrade reaches the far end of the park")
+    let landmark = S.act(garden.city, middle, 55)
+    Test.assert_eq_int(S.get(landmark.park_tiers, first), 2, "the second upgrade creates a landmark")
+    Test.assert_true(S.walkable_park_score(landmark, S.park_walk(landmark), inland) > S.walkable_park_score(park.city, S.park_walk(park.city), inland), "upgrading a park raises nearby livability")
+    let planted = Ur.Build.preview(landmark, 57, inland, inland)
+    Test.assert_true(planted.valid && planted.cost == 30, "a blossom tree has a construction price")
+    Test.assert_true(S.environment_score(planted.city, inland) > S.environment_score(landmark, inland), "street plants improve livability")
+    let stripped = Ur.Build.preview(planted.city, 61, inland, inland)
+    Test.assert_true(stripped.valid && stripped.changed && stripped.cost == 0, "remove just the planting")
+    Test.assert_eq_int(S.get(stripped.city.roads, inland), 1, "removing planting leaves the street")
+    let city = S.tick({ planted.city with grades: upper.city.grades, grade_cover: upper.city.grade_cover })
+    let game = { city: city, cx: 120.0, cz: 180.0, zoom: 60.0, yaw: 0.75, paused: true, speed: 2 }
+    sanitation_checks(game)
+    let encoded = Ur.Save.encode(game)
+    match Ur.Save.decode(encoded) do
+      Ok(loaded) ->
+        Test.assert_eq_str(Ur.Save.encode(loaded), encoded, "save round trip preserves all recorded city and camera fields")
+        Test.assert_eq_int((S.tick(loaded.city)).cash, (S.tick(city)).cash, "loaded city continues its economy")
+      Err(error) -> Test.assert_true(false, "save round trip failed: " ++ error)
+    end
+    match Ur.Save.decode("{\"version\":999}") do
+      Err(_) -> ()
+      Ok(_) -> Test.assert_true(false, "unknown save versions must be rejected")
+    end
+    let save_path = Authority.must(Env.get("UR_TEST_SAVE", ""))
+    if save_path != "" do
+      match Ur.Save.save(save_path, game) do
+        Ok(_) -> match Ur.Save.load(save_path) do
+          Ok(loaded) -> Test.assert_eq_str(Ur.Save.encode(loaded), encoded, "disk save and load preserve the city")
+          Err(error) -> Test.assert_true(false, error)
+        end
+        Err(error) -> Test.assert_true(false, error)
+      end
+    else () end
+
+    Test.assert_eq_int(Ur.Hud.panel_tab_at(685.0, 275.0, 1440.0, 900.0, true), 4, "Finance opens from its own tab")
+    let victim = S.index(22, 21)
+    let station = S.index(20, 21)
+    let barrier = S.index(21, 22)
+    let patrol_road = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(region.roads, S.index(20, 22), 1), barrier, 1), S.index(22, 22), 1)
+    let patrol_city = { region with month: 25, roads: patrol_road, buildings: NativeArray.set_int(region.buildings, victim, 3),
+      zones: NativeArray.set_int(region.zones, victim, 1), plants: NativeArray.set_int(region.plants, station, 21) }
+    let empty_traffic = NativeArray.make_int(10560, 0)
+    let patrol_labor = { workforce: 1, employed: 1, unemployed: 0, vacancies: 0, wages: 0, local_income: None, fares: None }
+    let answered = S.simulate_crime(patrol_city, empty_traffic, patrol_labor)
+    let blocked_patrol = S.simulate_crime({ patrol_city with roads: NativeArray.set_int(patrol_road, barrier, 0) }, empty_traffic, patrol_labor)
+    let district = S.crime_district(victim)
+    let report = S.crime_report(answered.calls, district)
+    let missed = S.crime_report(blocked_patrol.calls, district)
+    Test.assert_true(report.incidents == 1 && report.responses == 1 && report.minutes > 0, "a recorded incident dispatches a connected patrol")
+    Test.assert_true(missed.incidents == 1 && missed.responses == 0, "a cut road records the incident but blocks the patrol")
+    Test.assert_true(S.safety_score(Cons(answered, Nil), victim) > S.safety_score(Cons(blocked_patrol, Nil), victim), "unanswered calls have a greater effect on neighborhood safety")
+    let adjacent = S.index(23, 21)
+    let fire_city = { patrol_city with
+      buildings: NativeArray.set_int(patrol_city.buildings, adjacent, 2),
+      plants: NativeArray.set_int(patrol_city.plants, station, 20) }
+    let stations = Cons(station, Nil)
+    let idle = NativeArray.make_int(2640, 0)
+    let fire = { lot: victim, kind: 3, reported: 0, station: -1, response: -1, travel: 0, road: Nil, spread: Nil, medical: None }
+    let (quick, _) = S.run_emergency(fire_city, empty_traffic, stations, idle, fire)
+    let (late, _) = S.run_emergency(fire_city, NativeArray.make_int(10560, 100), stations, idle, fire)
+    Test.assert_true(quick.response >= 0 && late.response > quick.response, "traffic delays a fire crew on the same route")
+    Test.assert_true(List.is_empty(quick.spread) && List.any(late.spread, fn lot -> lot == adjacent), "a late fire response allows the flames to reach adjoining buildings")
+    let promenade = { fire_city with roads: NativeArray.set_int(patrol_road, barrier, 3) }
+    let (fire_truck, _) = S.run_emergency(promenade, empty_traffic, stations, idle, fire)
+    let clinic = { promenade with plants: NativeArray.set_int(promenade.plants, station, 19) }
+    let medical = { fire with kind: 4 }
+    let (ambulance, _) = S.run_emergency(clinic, empty_traffic, stations, idle, medical)
+    Test.assert_true(List.any(fire_truck.road, fn i -> i == barrier) && List.any(ambulance.road, fn i -> i == barrier), "wide pedestrian streets carry both types of emergency vehicles")
+    let beds = NativeArray.make_int(10560, 0)
+    let (admitted, _, occupied_beds) = S.transfer_patient(clinic, empty_traffic, stations, idle, beds, ambulance)
+    match admitted.medical do
+      Some(t) ->
+        Test.assert_true(t.facility == station && t.outcome == 1 && t.wait == 0, "ambulance delivers the patient to an available clinic")
+        Test.assert_eq_int(List.length(t.route), 3, "transport follows the road back across the promenade")
+      None -> Test.assert_true(false, "a transported patient gets a treatment record")
+    end
+    let (in_traffic, _, _) = S.transfer_patient(clinic, NativeArray.make_int(10560, 100), stations, idle, beds, ambulance)
+    match (admitted.medical, in_traffic.medical) do
+      (Some(clear), Some(slow)) -> Test.assert_true(S.medical_minutes(in_traffic, slow) > S.medical_minutes(admitted, clear), "congestion on the transport leg increases time to treatment")
+      _ -> Test.assert_true(false, "both routes reach the clinic")
+    end
+    let full_beds = NativeArray.set_int(occupied_beds, station * 4, 100)
+    let (delayed, _, _) = S.transfer_patient(clinic, empty_traffic, stations, idle, full_beds, ambulance)
+    match delayed.medical do
+      Some(t) -> Test.assert_true(t.facility == station && t.wait > 0 && t.outcome == 2, "bed delays cause complications")
+      None -> Test.assert_true(false, "a waiting patient gets an outcome")
+    end
+    let hospital = S.index(22, 23)
+    let expanded_care = { clinic with plants: NativeArray.set_int(clinic.plants, hospital, 22) }
+    let (diverted, _, _) = S.transfer_patient(expanded_care, empty_traffic, Cons(hospital, stations), idle, full_beds, ambulance)
+    match diverted.medical do
+      Some(t) -> Test.assert_true(t.facility == hospital && t.outcome == 1, "a free hospital bed avoids the clinic queue")
+      None -> Test.assert_true(false, "diversion gets a treatment record")
+    end
+    let path = { clinic with roads: NativeArray.set_int(patrol_road, barrier, 0), transit: NativeArray.set_int(clinic.transit, barrier, 1) }
+    let (unreachable, _) = S.run_emergency(path, empty_traffic, stations, idle, medical)
+    Test.assert_eq_int(unreachable.response, -1, "a footpath cannot carry an ambulance")
+    let burned = S.apply_building_fires(fire_city, Cons({ fire with response: 34, spread: Cons(adjacent, Nil) }, Nil))
+    Test.assert_true(S.fire_rebuilding(burned, victim) && S.get(burned.buildings, victim) == 0, "a long fire leaves a ruin with no building")
+    Test.assert_true(S.fire_offline(burned, adjacent) && !S.fire_rebuilding(burned, adjacent), "spread can damage a neighbor without destroying it")
+    let supply = NativeArray.make_int(2640, 0)
+    let blocked_rebuild = S.advance_fire_recovery(burned, NativeArray.make_int(2640, -1), 0)
+    Test.assert_eq_int(S.fire_months_left(blocked_rebuild, victim), 4, "recovery waits for road access")
+    let month_one = S.advance_fire_recovery(burned, supply, 0)
+    Test.assert_true(S.fire_offline(month_one, adjacent) && S.residential_floors(month_one, victim) == 0, "fire closures last while work is underway")
+    let month_two = S.advance_fire_recovery(month_one, supply, 0)
+    Test.assert_false(S.fire_offline(month_two, adjacent), "repair reopens a damaged building")
+    let rebuilt = S.advance_fire_recovery(S.advance_fire_recovery(month_two, supply, 0), supply, 0)
+    Test.assert_eq_int(S.residential_floors(rebuilt, victim), 3, "reconstruction restores homes only when finished")
+    let shops = { fire_city with zones: NativeArray.set_int(fire_city.zones, victim, 3) }
+    let shut = S.apply_building_fires(shops, Cons({ fire with response: 20 }, Nil))
+    Test.assert_true(S.retail(shops, victim) > 0 && S.retail(shut, victim) == 0 && S.job_slots(shut, victim) == 0 && S.residential_floors(shut, victim) == 0, "fire shuts a mixed-use shop and its homes")
+    let incident_save = { game with city: { burned with crime_history: Cons({ answered with calls: Cons(admitted, Cons(late, answered.calls)) }, Cons(blocked_patrol, Nil)) } }
+    let incident_json = Ur.Save.encode(incident_save)
+    match Ur.Save.decode(incident_json) do
+      Ok(loaded) -> Test.assert_eq_str(Ur.Save.encode(loaded), incident_json, "incident routes and response data survive save and load")
+      Err(error) -> Test.assert_true(false, "incident save round trip failed: " ++ error)
+    end
+    let purchase = S.act(c, S.index(8, 18), 11)
+    let settled = S.tick(purchase)
+    Test.assert_eq_int(List.length(settled.livability_history), 1, "a month with residents records livability metrics")
+    match settled.finance_history do
+      Nil -> Test.assert_true(false, "a completed month must appear in finance history")
+      Cons(entry, _) ->
+        Test.assert_eq_int(entry.revenue - entry.expenditures, settled.cash - c.cash, "finance history reconciles with the treasury including purchases")
+        let b = entry.budget
+        Test.assert_eq_int(b.property_tax + b.income_tax + b.business_tax + b.energy_income + b.trade_income + b.tariffs + b.toll_income,
+          entry.revenue, "income sources reconcile with the chart")
+        Test.assert_eq_int(b.infrastructure + b.power_cost + b.food_cost + b.water_cost + b.sanitation_cost + entry.construction,
+          entry.expenditures, "spending categories reconcile with the chart")
+    end
+    Test.assert_eq_int(settled.construction_spend, 0, "construction purchases are settled once per month")
+    let two_months = S.tick(settled)
+    let selected = Ur.Hud.finance_click(two_months, 445.0, 410.0, 1440.0, 900.0, { month: 0, lines: false })
+    Test.assert_eq_int(selected.month, settled.month, "clicking the first chart column selects the older month")
+    let switched = Ur.Hud.finance_click(two_months, 1020.0, 321.0, 1440.0, 900.0, selected)
+    Test.assert_true(switched.lines && switched.month == selected.month, "changing chart style keeps the selected month")
+    let budget = (S.stats(settled)).budget
+    let deficit_budget = { budget with revenue: 90, infrastructure: 100, operations: 0 }
+    let projected = Ur.Hud.forecast(settled, deficit_budget)
+    Test.assert_eq_int(List.length(projected), 12, "finance projects twelve months")
+    Test.assert_eq_int(Ur.Hud.first_deficit(projected), settled.month + 1, "the first projected deficit gets the marker")
+    Test.assert_eq_int(Ur.Hud.first_deficit(Ur.Hud.forecast(c, deficit_budget)), c.month + 1,
+      "the current budget projects a deficit before the first completed month")
+    let rising = { two_months with finance_history: Cons(
+      { month: 2, revenue: 100, expenditures: 280, budget: { budget with infrastructure: 80, operations: 0 }, construction: 200, property_receipts: 0 },
+      Cons({ month: 1, revenue: 100, expenditures: 60, budget: { budget with infrastructure: 60, operations: 0 }, construction: 0, property_receipts: 0 }, Nil)) }
+    let rising_forecast = Ur.Hud.forecast(rising, { budget with revenue: 100, infrastructure: 80, operations: 0 })
+    Test.assert_eq_int(Ur.Hud.first_deficit(rising_forecast), 5, "rising recurring costs cross income after breakeven, excluding one-off construction")
+    let projected_click = Ur.Hud.finance_click(two_months, 550.0, 410.0, 1440.0, 900.0, selected)
+    Test.assert_eq_int(projected_click.month, selected.month, "projected months do not replace the historical breakdown")
+
+
+
+
     Test.assert_true((S.act(c, -1, 1)).cash == c.cash, "negative parcel is rejected")
     Test.assert_true((S.act(c, 0, 2)).cash == c.cash, "housing cannot be zoned on water")
     let poor = { c with cash: 0 }
@@ -15,15 +1079,224 @@ mod UrTest do
     let graded = S.act(c, S.index(10, 9), 6)
     Test.assert_eq_int(S.get(graded.heights, S.index(10, 9)), S.get(c.heights, S.index(10, 9)) - 8, "grading lowers land two metres")
     Test.assert_eq_int(graded.cash, c.cash - 180, "grading costs money")
-    let dense = S.act(S.act(S.act(c, S.index(10, 20), 5), S.index(10, 20), 5), S.index(10, 20), 5)
-    Test.assert_eq_int(S.get(dense.density, S.index(10, 20)), 3, "density is capped")
-    Test.assert_eq_int(dense.cash, c.cash - 80, "capped density does not charge")
+    let limited = S.act(c, S.index(10, 20), 5)
+    Test.assert_eq_int(S.get(limited.density, S.index(10, 20)), 1, "height limit cycles from three to one")
+    let quiet = S.act(c, S.index(8, 17), 29)
+    Test.assert_eq_int((S.act(quiet, S.index(8, 17), 25)).cash, quiet.cash, "quiet policy rejects landfill without charging")
+    let neighbourhood = S.act(c, S.index(11, 20), 30)
+    Test.assert_eq_int(S.get((S.act(neighbourhood, S.index(11, 20), 28)).zones, S.index(11, 20)), 3, "neighbourhood policy permits mixed use")
+    Test.assert_eq_int(S.get((S.act(neighbourhood, S.index(11, 20), 3)).zones, S.index(11, 20)), 0, "neighbourhood policy excludes commercial zoning")
+    let traffic_home = S.index(10, 19)
+    let traffic_city = { c with buildings: NativeArray.set_int(NativeArray.make_int(2640, 0), traffic_home, 3),
+      plants: NativeArray.make_int(2640, 0) }
+    let lanes = S.road_traffic(traffic_city, S.access(traffic_city))
+    Test.assert_eq_int(S.lane_demand(lanes, S.index(9, 19), 3), 6, "homes load the lane toward the harbour")
+    Test.assert_eq_int(S.lane_demand(lanes, S.index(9, 20), 2), 3, "the opposite lane carries return trips")
+    let street = S.index(9, 19)
+    let avenue = S.act(traffic_city, street, 48)
+    Test.assert_eq_int(S.get(avenue.roads, street), 2, "the avenue replaces the existing local street")
+    Test.assert_eq_int(traffic_city.cash - avenue.cash, 65, "an upgrade charges the retrofit price")
+    Test.assert_eq_int(S.get(avenue.pipes, street), S.get(traffic_city.pipes, street), "upgrading preserves water pipes")
+    Test.assert_eq_int(S.get(avenue.grid, street), S.get(traffic_city.grid, street), "upgrading preserves power lines")
+    Test.assert_true(S.delay_for(avenue, street, 28) < S.delay_for(traffic_city, street, 28), "avenues handle a higher lane load")
+    let upgraded_traffic = S.road_traffic(avenue, S.access(avenue))
+    Test.assert_true(S.lane_demand(upgraded_traffic, street, 3) > S.lane_demand(lanes, street, 3), "faster roads induce extra trips without changing zoning")
+    let priced_avenue = S.act(avenue, street, 40)
+    let priced_lanes = S.road_traffic(priced_avenue, S.access(priced_avenue))
+    Test.assert_eq_int(S.lane_demand(priced_lanes, street, 3), S.lane_demand(lanes, street, 3), "a toll can offset the travel-time benefit that induces trips")
+    let promenade = S.act(avenue, street, 49)
+    Test.assert_eq_int(S.get(promenade.roads, street), 3, "convert an avenue to a pedestrian street in place")
+    Test.assert_true(Ur.Food.walkable(promenade, street), "pedestrian streets preserve walking access")
+    Test.assert_false(Ur.Citizens.connected(promenade, street, S.index(9, 20)), "pedestrian streets block cars")
+    Test.assert_eq_int(S.road_load(S.road_traffic(promenade, S.access(promenade)), street), 0, "pedestrian streets carry no car traffic")
+    Test.assert_eq_int(S.get((S.act(promenade, street, 34)).transit, street), 0, "a bus route cannot cross a pedestrian street")
+    let empty_streets = S.land(S.unclaimed(), S.index(20, 36))
+    let corner = S.index(20, 34)
+    let corner_city = S.act(S.act(S.act(empty_streets, S.index(20, 35), 1), corner, 1), S.index(21, 34), 1)
+    let (horizontal, vertical) = S.road_turn(corner_city, corner)
+    Test.assert_true(horizontal == 1 && vertical == 3, "a clean two-way bend uses a rounded corner")
+    let (x, z, _, _) = Ur.Scene.street_pose(corner_city, corner, S.index(21, 34), 0.0, 0.0)
+    Test.assert_true(x > 656.0 && z > 1104.0, "vehicles follow the rounded centre line inside the corner")
+
     let a = S.access(c)
     Test.assert_true(NativeArray.get_int(a, S.index(9, 20)) >= 0, "starter road reaches harbour")
     let remote = S.act(c, S.index(27, 14), 1)
     Test.assert_true(NativeArray.get_int(S.access(remote), S.index(27, 14)) == -1, "isolated roads do not grant market access")
+    let census = Ur.Demography.seed(240)
+    let restricted = Ur.Demography.advance(census, 100, 120, 0, 0)
+    let balanced = Ur.Demography.advance(census, 100, 120, 0, 1)
+    let encouraged = Ur.Demography.advance(census, 100, 120, 0, 2)
+    Test.assert_true(restricted.arrived < balanced.arrived && balanced.arrived < encouraged.arrived, "immigration policy changes actual arrivals")
+    let pressure = Ur.Demography.advance(census, 30, 0, 12, 2)
+    Test.assert_true(pressure.left > 0 && pressure.arrived == 0, "housing loss displaces residents and incentives cannot fill unavailable homes")
+    let aging = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(census, 6, 71), 10, 299), 15, 179)
+    let change = Ur.Demography.advance(aging, 100, 120, 0, 1)
+    Test.assert_true(change.births > 0 && change.deaths > 0 && change.pupils > 0, "the census records births, deaths and children reaching school age")
+    Test.assert_eq_int(Ur.Demography.total(change.census), Ur.Demography.total(census) + change.births - change.deaths + change.arrived - change.left, "monthly demographic flows balance")
+    let migration_city = S.tick(S.adjust_policy(c, 9, 1))
+    match Ur.Save.decode(Ur.Save.encode({ game with city: migration_city })) do
+      Ok(loaded) ->
+        Test.assert_eq_int(loaded.city.immigration, 2, "immigration policy survives a save")
+        Test.assert_eq_int(Ur.Demography.total(loaded.city.census), Ur.Demography.total(migration_city.census), "the census survives a save")
+      Err(error) -> Test.assert_true(false, error)
+    end
+    let first_months = S.tick(c)
+    Test.assert_eq_int(S.population(first_months), S.population(c), "new homes do not open as soon as construction starts")
+    Test.assert_eq_int(S.jobs(first_months), S.jobs(c), "new workplaces do not open as soon as construction starts")
+    let home_site = S.index(10, 19)
+    let tower_site = S.index(8, 20)
+    let projects = NativeArray.set_int(NativeArray.set_int(c.construction, home_site, 1), tower_site, 1)
+    let building = { c with construction: projects, tax: 25 }
+    let day_three = S.advance_day({ building with calendar_day: 2 })
+    Test.assert_eq_int(S.get(day_three.buildings, home_site), 1, "a first storey opens during the month")
+    Test.assert_eq_int(S.get(day_three.construction, tower_site), 2, "tower framing advances on the day schedule")
+    Test.assert_eq_int(day_three.month, building.month, "construction can progress without settling the monthly economy")
+    let month_one = S.tick(building)
+    Test.assert_eq_int(S.get(month_one.buildings, home_site), 1, "a first storey opens after one month")
+    Test.assert_eq_int(S.get(month_one.buildings, tower_site), 2, "both existing floors stay open during the upgrade")
+    Test.assert_eq_int(S.get(month_one.construction, tower_site), 2, "tower framing advances during construction")
+    Test.assert_eq_int(S.get((S.advance(month_one, 2)).buildings, tower_site), 3, "third storey opens after three months")
+    let cleared_site = S.act(building, home_site, 7)
+    Test.assert_eq_int(S.get((S.tick(cleared_site)).buildings, home_site), 0, "cleared project cannot finish")
     let grown = S.advance(c, 80)
     Test.assert_true(S.population(grown) > S.population(c), "serviced zones develop privately")
+    let staffed = S.stats(c)
+    Test.assert_true(staffed.labor.employed > 0 && staffed.labor.vacancies > 0, "households fill only the jobs the workforce can staff")
+    let business_policy = S.stats(S.adjust_policy(c, 1, 5))
+    Test.assert_eq_int(business_policy.budget.income_tax, staffed.budget.income_tax, "business rate leaves the income tax unchanged")
+    Test.assert_true(business_policy.budget.business_tax > staffed.budget.business_tax, "raising business tax increases receipts on filled jobs")
+    let tolled = S.act(c, S.index(9, 20), 40)
+    Test.assert_true((S.stats(tolled)).budget.toll_income > 0, "a used toll road generates receipts")
+    Test.assert_eq_int((S.stats(S.act(tolled, S.index(9, 20), 40))).budget.toll_income, 0, "removing a toll stops receipts")
+    let cut_off = { c with roads: NativeArray.set_int(c.roads, c.harbour, 0) }
+    let isolated_economy = S.stats(cut_off)
+    Test.assert_eq_int(isolated_economy.work, staffed.work, "isolated businesses retain job openings")
+    Test.assert_eq_int(isolated_economy.budget.income_tax + isolated_economy.budget.business_tax, 0, "isolated vacancies generate no wages or business tax")
+    let home_plot = S.index(10, 20)
+    let home_account = S.household_accounts(c, staffed.routes, staffed.commutes, staffed.labor, home_plot)
+    let expensive_power = S.household_accounts({ c with energy: 12 }, staffed.routes, staffed.commutes, staffed.labor, home_plot)
+    Test.assert_true(S.margin(expensive_power) < S.margin(home_account), "energy prices reduce household disposable income")
+    let business_plot = S.index(8, 20)
+    let struggling = S.advance(cut_off, 3)
+    Test.assert_false(S.business_closed(struggling, business_plot), "temporary losses do not immediately close businesses")
+    let closed_business = S.tick(struggling)
+    Test.assert_true(S.business_closed(closed_business, business_plot), "four loss months close the business")
+    let reopened = S.tick({ closed_business with roads: c.roads })
+    Test.assert_false(S.business_closed(reopened, business_plot), "an existing storefront can reopen after access returns")
+    Test.assert_eq_int(S.occupied_homes(closed_business, home_plot), 0, "disconnected households vacate the building")
+    Test.assert_true(S.occupied_homes(S.tick(reopened), home_plot) > 0, "reachable jobs bring households back to vacant homes")
+    Test.assert_true((S.household_accounts({ c with tax: 25 }, staffed.routes, staffed.commutes, staffed.labor, home_plot)).tax > home_account.tax, "income tax lowers take-home pay")
+    let neutral = S.neutral_rent_pressure()
+    let supply = NativeArray.set_int(NativeArray.make_int(10, 0), 2, 24)
+    let full = NativeArray.set_int(supply, 7, 24)
+    let rising = S.update_rent_pressure(neutral, full)
+    Test.assert_true(S.get(rising, 2) > S.get(rising, 1) && S.get(rising, 1) > S.get(rising, 0) && S.get(rising, 0) > 300, "rent pressure spills into nearby bands and falls off with distance")
+    let falling = S.update_rent_pressure(neutral, supply)
+    Test.assert_true(S.get(falling, 2) < S.get(falling, 1) && S.get(falling, 1) < 300, "vacancy reduces rents in its band and neighboring bands")
+    let base_tier = S.home_rent_tier(c, staffed.routes, home_plot)
+    let with_pressure = { c with rent_pressure: NativeArray.set_int(neutral, base_tier, 500) }
+    let priced = S.household_accounts(with_pressure, staffed.routes, staffed.commutes, staffed.labor, home_plot)
+    Test.assert_eq_int(priced.rent, home_account.rent + 2, "tier pressure is charged in the household budget")
+    match Ur.Save.decode(Ur.Save.encode({ game with city: with_pressure })) do
+      Ok(loaded) -> Test.assert_eq_int(S.rent_adjustment(loaded.city, base_tier), 2, "rent pressure survives a save")
+      Err(error) -> Test.assert_true(false, error)
+    end
+    let origin = 100
+    let farther = 720
+    let nearer = 730
+    let blank = NativeArray.make_int(S.count(), 0)
+    let homes = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(blank, origin, 1), farther, 1), nearer, 2)
+    let housing_zones = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(blank, origin, 1), farther, 1), nearer, 1)
+    let losses = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(blank, origin, 3), farther, 4), nearer, 4)
+    let access = NativeArray.make_int(S.count(), 0)
+    let journey = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(NativeArray.make_int(S.count(), 999), origin, 80), farther, 63), nearer, 8)
+    let wages = { workforce: 10, employed: 10, unemployed: 0, vacancies: 0, wages: 210, local_income: None, fares: None }
+    let rental_city = { c with zones: housing_zones, buildings: homes, housing_losses: losses,
+      footfall: NativeArray.set_int(blank, origin, 48), tax: 25, energy: 8 }
+    let moved = S.relocate_households(rental_city, access, journey, wages)
+    Test.assert_eq_int(S.get(moved.home_arrivals, nearer), 4, "priced-out households choose the cheaper total commute and rent cost")
+    Test.assert_eq_int(S.get(moved.home_arrivals, farther), 0, "a lower asking rent can lose to a much shorter commute")
+    Test.assert_eq_int(S.occupied_homes(moved, nearer), 4, "moving households fill exactly the homes they occupy")
+    Test.assert_eq_int(S.population(moved), S.population(rental_city), "local relocation conserves the matched households")
+    Test.assert_true(S.neighborhood_rent(moved, nearer) > S.neighborhood_rent(moved, origin), "relocation raises rent in the receiving neighborhood")
+    match Ur.Save.decode(Ur.Save.encode({ game with city: moved })) do
+      Ok(loaded) ->
+        Test.assert_eq_int(S.occupied_homes(loaded.city, nearer), 4, "partial occupancy survives a save")
+        Test.assert_eq_int(S.neighborhood_rent(loaded.city, nearer), S.neighborhood_rent(moved, nearer), "local rent pressure survives a save")
+      Err(error) -> Test.assert_true(false, error)
+    end
+    let primary_site = S.index(10, 18)
+    let secondary_site = S.index(10, 19)
+    let locked = S.act(c, secondary_site, 79)
+    Test.assert_eq_int(locked.cash, c.cash, "secondary school is locked before an elementary school is built")
+    let elementary = S.act(c, primary_site, 44)
+    Test.assert_eq_int(S.get(elementary.plants, primary_site), 18, "elementary school can always be built")
+    Test.assert_eq_str(S.school_requirement(elementary, 79), "", "elementary school unlocks secondary")
+    Test.assert_true(S.school_requirement(elementary, 81) != "", "elementary school does not unlock university")
+    let high_school = S.act(elementary, secondary_site, 79)
+    Test.assert_eq_int(S.get(high_school.plants, secondary_site), 26, "secondary school is buildable after elementary")
+    Test.assert_eq_str(S.school_requirement(high_school, 80) ++ S.school_requirement(high_school, 81), "", "secondary school unlocks both branches")
+    let site = S.campus_footprint(elementary, 79, secondary_site)
+    Test.assert_eq_int(List.length(site), 3, "a secondary school reserves three blocks")
+    let wing = match List.drop(site, 1) do
+      Cons(i, _) -> i
+      Nil -> -1
+    end
+    Test.assert_eq_int(S.campus_root(high_school, wing), secondary_site, "the annex points to its owning school")
+    Test.assert_eq_int((S.act(high_school, wing, 1)).cash, high_school.cash, "a road cannot overwrite the annex")
+    let cleared_school = S.act(high_school, wing, 7)
+    Test.assert_eq_str(S.school_requirement(cleared_school, 81), "", "already earned education unlocks persist")
+    let campuses = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(c.plants, S.index(9, 18), 26), S.index(9, 19), 27), S.index(9, 20), 28)
+    let school_city = { c with plants: campuses, month: 0 }
+    let primary = { school_city with education: NativeArray.set_int(NativeArray.set_int(S.new_education(), 24, 12), 4, 12) }
+    let secondary = S.advance_education(primary, staffed.routes, staffed.labor, 32)
+    Test.assert_eq_int(S.enrolled(secondary, 1), 12, "elementary completions feed secondary school")
+    Test.assert_eq_int(S.enrolled(secondary, 2) + S.enrolled(secondary, 3), 0, "students must finish secondary before either branch")
+    let graduates = { secondary with month: 72 }
+    let affordable = S.change_tuition(S.change_tuition(graduates, 2, -30), 3, -30)
+    let branches = S.advance_education(affordable, staffed.routes, staffed.labor, 32)
+    Test.assert_true(S.enrolled(branches, 2) > 0 && S.enrolled(branches, 3) > 0 && S.graduates(branches, 1) > 0, "secondary graduates split across both schools and direct employment")
+    let costly_school = S.change_tuition(S.change_tuition(graduates, 2, 30), 3, 30)
+    let no_study = S.advance_education(costly_school, staffed.routes, staffed.labor, 32)
+    Test.assert_eq_int(S.enrolled(no_study, 2) + S.enrolled(no_study, 3), 0, "unaffordable tuition blocks post-secondary enrolment")
+    let skilled_site = S.index(8, 20)
+    let specialist = { c with business_sector: NativeArray.set_int(c.business_sector, skilled_site, 2) }
+    Test.assert_true((S.stats(specialist)).labor.employed < staffed.labor.employed, "trade jobs cannot be filled by workers without a trade qualification")
+    let open_workshop = { specialist with education: NativeArray.set_int(specialist.education, 2, 10) }
+    let workshop = S.stats(open_workshop)
+    Test.assert_eq_int(S.get(workshop.staffed_jobs, skilled_site), 10, "available trade graduates fill individual workshop positions")
+    let workers = Ur.Citizens.refresh(open_workshop, Nil)
+    Test.assert_true(List.any(workers, fn p -> p.work == skilled_site && p.qualification == 2 && p.work_position > 0 && !List.is_empty(p.work_route)), "a trade graduate has a reserved position and a route to the workshop")
+    seeded_island_checks(game)
+    faculty_checks(game)
+    building_connection_checks()
+    off_road_utilities()
+    starter_guide_checks()
+    let snapshot = (S.stats(c)).market
+    Test.assert_eq_int(S.get(snapshot, 12) * 4, S.population(c), "occupied households match population")
+    Test.assert_eq_int(S.get(snapshot, 1) + S.get(snapshot, 5), 200, "equally priced occupied homes span all price quintiles")
+    Test.assert_true(S.get(snapshot, 6) <= S.get(snapshot, 10), "income quintiles are ordered from lowest to highest")
+    Test.assert_eq_int(Ur.Hud.panel_tab_at(1035.0, 275.0, 1440.0, 900.0, true), 9, "Market has its own tab")
+    match Ur.Save.decode(Ur.Save.encode({ game with city: closed_business })) do
+      Ok(loaded) ->
+        Test.assert_eq_int(List.length(loaded.city.market_history), 4, "market history survives a save")
+        Test.assert_true(S.business_closed(loaded.city, business_plot), "business vacancy survives a save")
+      Err(error) -> Test.assert_true(false, "market save failed: " ++ error)
+    end
+    Test.assert_eq_int(S.property_action(c, business_plot), 0, "occupied businesses cannot be condemned")
+    let delinquent = S.advance(closed_business, 3)
+    Test.assert_eq_int(S.property_action(delinquent, business_plot), 1, "vacant property can be condemned after three bills")
+    let condemned = S.transact_property(delinquent, business_plot)
+    Test.assert_eq_int(S.property_action(condemned, business_plot), 2, "condemnation allows possession")
+    let owned = S.transact_property(condemned, business_plot)
+    Test.assert_eq_int(S.property_action(owned, business_plot), 3, "city ownership allows a redevelopment sale")
+    Test.assert_eq_int((S.transact_property(owned, business_plot)).cash, owned.cash, "disconnected city property stays unsold")
+    let owned = { owned with roads: c.roads }
+    let sold = S.transact_property(owned, business_plot)
+    Test.assert_true(sold.cash > owned.cash && S.get(sold.buildings, business_plot) == 0, "sale credits the treasury and clears the old building")
+    Test.assert_eq_int(S.get(sold.zones, business_plot), S.get(owned.zones, business_plot), "sale preserves zoning")
+    Test.assert_eq_int(S.get(sold.property_arrears, business_plot), 0, "sale clears the old tax claim")
+    Test.assert_eq_int((S.transact_property(sold, business_plot)).cash, sold.cash, "a sale cannot be repeated")
     let taxed = S.advance({ c with tax: 25 }, 80)
     Test.assert_true(S.population(taxed) < S.population(grown), "high taxes deter investment")
     let powerless = { c with plants: NativeArray.make_int(S.count(), 0) }
@@ -31,21 +1304,435 @@ mod UrTest do
     Test.assert_true((S.policy(c, 100, -100)).tax == 25, "tax policy is bounded")
     Test.assert_true((S.policy(c, 100, -100)).energy == 1, "energy policy is bounded")
     let costly = S.advance({ c with energy: 12 }, 80)
-    Test.assert_eq_int(S.population(costly), S.population(c), "high energy price blocks new investment")
+    Test.assert_true(List.all(List.range(0, S.count()), fn lot ->
+      S.get(costly.buildings, lot) <= S.get(c.buildings, lot) && S.get(costly.construction, lot) == 0),
+      "high energy price blocks new investment")
     Test.assert_true(S.population(S.advance(c, 80)) == S.population(grown), "growth is deterministic")
     Test.assert_false(Ur.Input.world_drag(false, false, true, true), "UI press does not own world drag")
     Test.assert_false(Ur.Input.world_drag(false, true, true, false), "dragging out of UI cannot build")
     Test.assert_true(Ur.Input.world_drag(false, false, true, false), "world press starts painting")
     let tall = { c with buildings: NativeArray.set_int(c.buildings, S.index(10, 20), 3) }
     Test.assert_eq_int(Ur.Scene.pick_at(tall, 84.0, 154.5), S.index(10, 20), "roof selects its building, not the next parcel")
-    let bridge = S.act(c, 0, 1)
+    let rejected = S.act(c, 0, 1)
+    Test.assert_eq_int(S.get(rejected.roads, 0), 0, "roads cannot be placed on water")
+    Test.assert_eq_int(rejected.cash, c.cash, "rejected water road is free")
+    let road_plot = S.index(11, 20)
+    let road = S.act(c, road_plot, 1)
+    Test.assert_eq_int(road.cash, c.cash - 60, "new roads charge for each parcel")
+    let bridge = { c with roads: NativeArray.set_int(c.roads, 0, 1) }
     let cleared = S.act(bridge, 0, 7)
     Test.assert_true(S.get(cleared.roads, 0) == 0, "bridges can be demolished")
+    let civic_home = S.index(10, 20)
+    let school = S.index(10, 16)
+    let clinic = S.index(10, 17)
+    let fire = S.index(10, 18)
+    let police = S.index(10, 19)
+    let c_school = S.act(c, school, 44)
+    let civic_city = S.act(S.act(S.act(c_school, clinic, 45), fire, 46), police, 47)
+    let road_access = S.access(civic_city)
+    let coverage = S.civic_access(civic_city)
+    Test.assert_eq_int(S.get(coverage, civic_home), 15, "four civic services cover a home via its street")
+    Test.assert_eq_int(S.get(S.civic_access(S.act(civic_city, S.index(9, 19), 7)), civic_home), 0, "coverage follows road connections")
+    Test.assert_eq_int(S.civic_density(c, S.civic_access(c), civic_home, 3), 1, "starter housing can grow without civic services")
+    Test.assert_eq_int(S.civic_density(c_school, S.civic_access(c_school), civic_home, 3), 2, "a school unlocks a second floor")
+    Test.assert_eq_int(S.civic_density(civic_city, coverage, civic_home, 3), 3, "full civic coverage permits three floors")
+    Test.assert_eq_int(S.civic_density(civic_city, coverage, civic_home, 1), 1, "civic access cannot override market limits")
+    Test.assert_true(S.distance(road_access, civic_home) >= 0, "the civic test home has harbour access")
+    Test.assert_true((S.stats(civic_city)).budget.infrastructure > (S.stats(c)).budget.infrastructure, "civic services have recurring upkeep")
     let region = Ur.Scenario.connected_region()
     Test.assert_true(S.get(S.access(region), S.index(28, 16)) >= 0, "bridge connects the second island")
-    let town = S.advance(region, 1200)
-    Test.assert_true(S.population(town) >= 500, "the first milestone is achievable through normal construction")
+    let roads = S.access(region)
+    Test.assert_eq_int(S.market_density(region, roads, S.index(10, 17), 250, 200), 3, "strong demand supports three storeys near the gateway")
+    Test.assert_eq_int(S.market_density(region, roads, S.index(28, 17), 250, 200), 2, "more remote plots grow less densely")
+    Test.assert_eq_int(S.market_density(c, S.access(c), S.index(10, 20), 32, 24), 1, "low demand supports one storey")
+    let town = S.advance(Ur.Scenario.civic_region(region), 1080)
+    let st = S.stats(town)
+    Test.assert_eq_int(st.services.geothermal, 180, "the eastern field supplies clean power")
+    Test.assert_true(st.services.wells >= st.people, "connected western wells supply the expanded network")
+    let trade_demand = S.clamp(st.people, 0, 500)
+    let trade_service = S.services(town, st.routes, trade_demand)
+    Test.assert_eq_int(trade_service.imports, trade_demand, "trade feeds the town without local production within import capacity")
+    let tariff_city = S.adjust_policy(c, 2, 10)
+    let import_policy = S.stats(tariff_city)
+    let tariff_routes = S.access(c)
+    let full_demand = (S.services(c, tariff_routes, 160)).imports
+    let tariff_demand = (S.services(tariff_city, tariff_routes, 160)).imports
+    Test.assert_true(tariff_demand < full_demand && import_policy.budget.tariffs > 0, "import tariffs collect revenue and reduce import capacity at full demand")
+    let farm = S.act(c, S.index(8, 18), 11)
+    Test.assert_eq_int((S.stats(farm)).services.farms, 96, "connected irrigated farm supplies food")
+    let farm_economy = S.stats(farm)
+    Test.assert_eq_int(farm_economy.services.farm_exports, farm_economy.services.farms - farm_economy.people, "local food needs take priority over farm exports")
+    Test.assert_true(farm_economy.budget.trade_income > 0, "surplus farm production earns public trade income")
+    let export_policy = S.stats(S.adjust_policy(farm, 3, 5))
+    Test.assert_true(export_policy.budget.tariffs > 0, "an export tariff collects revenue from farm shipments")
+    let no_aquifer = S.act(c, S.index(27, 14), 9)
+    Test.assert_eq_int(no_aquifer.cash, c.cash, "a well cannot be built on the dry island")
+    let coast = S.index(9, 23)
+    let linked = S.act(S.act(S.act(c, S.index(9, 22), 7), S.index(9, 22), 1), coast, 12)
+    Test.assert_eq_int((S.stats(linked)).services.fish, 128, "working fishery feeds the connected town")
+    let desal = S.act(S.act(S.act(linked, S.index(9, 22), 18), coast, 7), coast, 10)
+    Test.assert_eq_int((S.stats(desal)).services.desal, 0, "spare generation cannot reach a desalination plant without a local feeder")
+    let desal = S.act(desal, S.index(9, 22), 26)
+    Test.assert_eq_int((S.stats(desal)).services.desal, 192, "powered coastal desalination supplies water")
+    let no_power = { desal with plants: NativeArray.set_int(desal.plants, S.index(8, 21), 0) }
+    Test.assert_eq_int((S.stats(no_power)).services.desal, 0, "desalination requires available power")
+    Test.assert_true(S.population(town) >= 500, "the first milestone is achievable through normal construction, population " ++ int_to_string(S.population(town)))
     Test.assert_true(town.income > 0, "expanded region sustains a positive budget")
+    let severed = S.act(desal, S.index(9, 22), 19)
+    Test.assert_eq_int((S.stats(severed)).services.desal, 0, "cutting the pipe stops water delivery")
+    let rain = S.act(c, S.index(8, 18), 14)
+    Test.assert_eq_int((S.stats(rain)).services.rain, 0, "a new collector cannot supply water before the first rain")
+    let wet_day = Ur.Scenario.first_weather(0, 2, 30)
+    let filled = S.advance_day({ rain with month: wet_day / 30, calendar_day: wet_day % 30 })
+    Test.assert_true((S.stats(filled)).services.rain > 0, "the collector supplies water after rainfall")
+    let outfall = S.act(S.act(desal, coast, 7), coast, 17)
+    let fish_plot = S.index(8, 23)
+    let mixed = S.act(S.act(outfall, S.index(8, 22), 1), fish_plot, 12)
+    let clean = S.stats(mixed)
+    let polluted = S.advance(mixed, 4)
+    let dirty = S.stats(polluted)
+    Test.assert_true(S.pollution_at(polluted, fish_plot) > 0, "outfall pollutes nearby fishing waters")
+    Test.assert_true(dirty.services.fish < clean.services.fish && dirty.services.fish_revenue < clean.services.fish_revenue, "pollution reduces catch and revenue")
+    let trained = { mixed with plants: NativeArray.set_int(mixed.plants, S.index(13, 19), 27) }
+    let recycler = S.act(trained, S.index(8, 18), 16)
+    Test.assert_true((S.stats(recycler)).services.recycled > 0 && (S.stats(recycler)).services.discharged == 0, "recycling recovers water and displaces discharge")
+    let disabled = S.toggle_facility(polluted, coast)
+    Test.assert_eq_int((S.stats(disabled)).services.discharged, 0, "shutting an outfall stops discharge")
+    Test.assert_eq_int(S.get(disabled.plants, coast), 11, "the outfall is still on site")
+    Test.assert_true((S.stats(S.toggle_facility(disabled, coast))).services.discharged > 0, "the outfall can reopen")
+    Test.assert_eq_int(Ur.Hud.tile_popup_action(disabled, coast, 1440.0, 900.0, (100.0, 150.0), 410.0, 167.0), 1, "clicking the top-right X closes the popover")
+    Test.assert_eq_int(Ur.Hud.tile_popup_action(disabled, coast, 1440.0, 900.0, (100.0, 150.0), 150.0, 320.0), 2, "the outfall button dispatches its contextual action")
+    let stopped = S.act(polluted, coast, 7)
+    Test.assert_true(S.pollution_at(S.advance(stopped, 10), fish_plot) < S.pollution_at(polluted, fish_plot), "coast recovers after discharge stops")
+    let importer = S.act(S.act(desal, coast, 7), coast, 15)
+    let dry = { importer with plants: NativeArray.set_int(importer.plants, S.index(9, 22), 0) }
+    Test.assert_eq_int((S.stats(dry)).services.imported_water, S.population(dry), "water imports cover unmet demand")
+    Test.assert_eq_int((S.stats({ dry with cash: 0 })).services.imported_water, 0, "water imports require cash")
+    let cut_grid = S.act(c, S.index(9, 21), 27)
+    Test.assert_eq_int((S.stats(cut_grid)).power, 0, "disconnecting the grid stops power")
+    let wind = S.act(c, S.index(8, 18), 20)
+    let solar = S.act(wind, S.index(8, 17), 21)
+    let university = S.index(13, 19)
+    let science = S.index(13, 18)
+    let campus = NativeArray.set_int(solar.campus, science, university + 1)
+    let plants = NativeArray.set_int(NativeArray.set_int(solar.plants, university, 28), science, 30)
+    let atomic = S.act({ solar with campus: campus, plants: plants }, S.index(8, 19), 22)
+    let gen = (S.stats(atomic)).generation
+    Test.assert_true(gen.wind > 0 && gen.solar > 0 && gen.nuclear == 360, "new generators feed the wired grid")
+    Test.assert_eq_int((S.stats({ atomic with cash: 0 })).generation.nuclear, 0, "nuclear fuel requires cash")
+    let bio = S.act(c, S.index(8, 18), 23)
+    let digest = S.stats(bio)
+    Test.assert_true(digest.generation.biogas > 0 && digest.waste.digested == digest.generation.biogas, "collected trash fuels biogas")
+    let pile = { c with trash: 200 }
+    let serviced = S.act(S.act(pile, S.index(8, 18), 24), S.index(8, 17), 25)
+    Test.assert_true((S.stats(serviced)).waste.pending < (S.stats(pile)).waste.pending, "pickup and disposal capacity clear the backlog")
+    Test.assert_true(S.land_pollution_at(S.advance(serviced, 4), S.index(8, 17)) > 0, "landfill creates local pollution")
+    let west = S.index(21, 14)
+    let east = S.index(23, 14)
+    let port = S.act(S.act(c, west, 37), east, 37)
+    Test.assert_eq_int(S.get(port.ferries, west), east + 1, "ferry links opposite shores")
+    Test.assert_eq_int(S.get(port.ferries, east), west + 1, "ferry trips work both ways")
+    let closed = S.act(port, west, 38)
+    Test.assert_eq_int(S.get(closed.ferries, east), 0, "removing a ferry clears both endpoints")
+    let high_frequency = S.act(S.act(port, west, 39), west, 39)
+    Test.assert_true(S.service_delay(high_frequency, west, 5) < S.service_delay(port, west, 5), "more ferry departures reduce waiting")
+    Test.assert_eq_int(S.frequency(high_frequency, east), 3, "ferry frequency applies at both terminals")
+    let road_jobs = S.job_access(c)
+    let bus = S.act(S.act(c, S.index(9, 19), 34), S.index(9, 18), 34)
+    Test.assert_eq_int(S.get(S.transit_service(bus, 100), S.index(9, 18)), 0, "route segments require stops before running")
+    let bus = S.act(S.act(bus, S.index(9, 19), 41), S.index(9, 18), 41)
+    Test.assert_eq_int(S.get(S.transit_service(bus, 0), S.index(9, 18)), 2, "bus route runs without grid power")
+    let bus = S.act(S.act(S.act(S.act(bus, S.index(9, 19), 39), S.index(9, 19), 39), S.index(9, 18), 39), S.index(9, 18), 39)
+    Test.assert_true(S.commute(S.job_access(bus), S.index(10, 18)) < S.commute(road_jobs, S.index(10, 18)), "bus improves access to existing jobs")
+    let commuter = S.index(10, 18)
+    let commuter_bus = { bus with buildings: NativeArray.set_int(bus.buildings, commuter, 1) }
+    let commuter_stats = S.stats(commuter_bus)
+    let baseline = S.road_traffic(commuter_bus, commuter_stats.routes)
+    Test.assert_true(S.get(commuter_stats.riders, commuter) > 0, "a competitive bus attracts real road demand")
+    Test.assert_true(S.lane_demand(commuter_stats.traffic, S.index(9, 18), 3) < S.lane_demand(baseline, S.index(9, 18), 3), "mode shift reduces traffic on the lane")
+    let bar = S.index(8, 19)
+    let shop = S.index(10, 19)
+    let stop = S.index(9, 19)
+    let buildings = NativeArray.set_int(NativeArray.set_int(bus.buildings, bar, 1), shop, 2)
+    let market = { bus with buildings: buildings }
+    let flow = NativeArray.set_int(NativeArray.make_int(2640, 0), shop, 8)
+    let active_stops = S.transit_service(market, 0)
+    let busy_market = S.grow_storefronts(market, active_stops, flow)
+    Test.assert_true(S.nightlife(busy_market, bar) && S.storefront(busy_market, shop) == 1, "busy service attracts both bars and retail")
+    let idle_market = S.grow_storefronts(market, active_stops, NativeArray.make_int(2640, 0))
+    Test.assert_eq_int(S.storefront(idle_market, bar), 0, "a stop without riders does not attract nightlife")
+    let early = S.act(busy_market, bar, 69)
+    Test.assert_true(S.bar_open(busy_market, bar, 23) && !S.bar_open(early, bar, 23), "early quiet hours close bars at night")
+    Test.assert_true(S.street_noise(early, stop) < S.street_noise(busy_market, stop), "quiet hours reduce noise on neighboring parcels")
+    let quiet = S.act(busy_market, bar, 70)
+    Test.assert_true(!S.nightlife(quiet, bar) && S.storefront(quiet, shop) == 1, "a painted quiet area leaves the next parcel's storefront alone")
+    let zoned = S.adjust_policy(busy_market, 5, -1)
+    let override = Ur.Build.preview(zoned, 65, bar, shop)
+    Test.assert_true(override.valid && override.changed && S.ground_at(override.city, bar) == 2 && S.ground_at(zoned, bar) == 1, "painted ground-floor rules override the city default")
+    let weekend = Ur.Build.preview(busy_market, 71, stop, stop)
+    let saturday = { weekend.city with street_day: 5 }
+    Test.assert_true(weekend.valid && weekend.changed && S.motor_road(weekend.city, stop) && !S.motor_road(saturday, stop), "the same street opens on weekdays and closes on weekends")
+    Test.assert_true(S.get(S.transit_service(saturday, 0), stop) == 2 && S.responder_road(saturday, 3, stop), "buses and emergency vehicles retain access")
+    let cut_bus = S.act(commuter_bus, S.index(9, 19), 38)
+    Test.assert_eq_int(S.get((S.stats(cut_bus)).riders, commuter), 0, "a route without two stops attracts no riders")
+    let transit_home = S.index(10, 18)
+    let transit_work = S.index(8, 20)
+    let route_end = S.index(9, 20)
+    let line = S.act(S.act(commuter_bus, route_end, 34), route_end, 41)
+    let buildings = NativeArray.set_int(NativeArray.set_int(NativeArray.make_int(2640, 0), transit_home, 1), transit_work, 1)
+    let line = { line with buildings: buildings }
+    let running = S.transit_service(line, 100)
+    Test.assert_true(observe_transit(line, running, Ur.Citizens.refresh(line, Nil), 0, false, false, false), "citizens wait, ride, alight and reach work")
+    let rail_a = S.index(9, 19)
+    let rail_b = S.index(9, 18)
+    let tram = S.act(S.act(S.act(S.act(c, rail_a, 35), rail_b, 35), rail_a, 42), rail_b, 42)
+    Test.assert_true(tram.cash < c.cash, "tram tracks and stops cost money")
+    Test.assert_eq_int(S.get(S.transit_service(tram, 100), rail_a), 2, "connected and powered tram stops open service")
+    Test.assert_eq_int(S.get(S.transit_service(tram, 0), rail_a), 0, "tram stops running when generation is lost")
+    let subway = S.act(S.act(S.act(S.act(c, rail_a, 36), rail_b, 36), rail_a, 43), rail_b, 43)
+    Test.assert_eq_int(S.get(S.transit_service(subway, 100), rail_b), 2, "powered stations connected by tunnels open service")
+    let disconnected = S.act(subway, c.harbour, 27)
+    Test.assert_eq_int(S.get(S.transit_service(disconnected, 100), rail_a), 0, "a disconnected station cannot use regional electricity")
+    let network = Ur.Scenario.transit_region()
+    Test.assert_eq_int(S.get(network.ferries, west), east + 1, "transport demo ferry: " ++ network.message)
+    let empty = S.unclaimed()
+    let shore = S.index(20, 36)
+    Test.assert_eq_int(S.population(empty), 0, "founding map is empty")
+    Test.assert_eq_int((S.land(empty, 0)).harbour, -1, "cannot land on open water")
+    Test.assert_eq_int((S.land(empty, S.index(20, 22))).harbour, -1, "cannot land inland")
+    let colony = S.land(empty, shore)
+    Test.assert_eq_int(colony.harbour, shore, "chosen shore is the network root")
+    Test.assert_eq_int((S.land(colony, S.index(20, 8))).harbour, shore, "landing is permanent")
+    Test.assert_true((S.stats(colony)).power > 0, "landing provides bootstrap power")
+    Test.assert_true(S.freshwater(empty, S.index(46, 32)), "farming island has water")
+    Test.assert_false(S.freshwater(empty, S.index(45, 13)), "volcanic island is dry")
+    let expansion = S.index(20, 35)
+    let serviced_lot = S.act(S.act(S.act(colony, expansion, 1), expansion, 18), expansion, 26)
+    let opening_budget = (S.stats(colony)).budget
+    let expansion_budget = (S.stats(serviced_lot)).budget
+    Test.assert_true(expansion_budget.infrastructure > opening_budget.infrastructure, "empty serviced streets add recurring upkeep")
+    Test.assert_eq_int(expansion_budget.revenue, opening_budget.revenue, "empty serviced streets earn no new revenue")
+    Test.assert_eq_int((S.tick(serviced_lot)).income, S.balance(expansion_budget), "forecast matches the first bill on vacant land")
+    let starter_road = S.index(20, 35)
+    let homes = S.index(19, 35)
+    let jobs = S.index(21, 35)
+    let colony = S.act(S.act(S.act(colony, starter_road, 1), starter_road, 18), starter_road, 26)
+    let colony = S.act(S.act(colony, homes, 2), jobs, 3)
+    Test.assert_true(S.population(S.advance(colony, 20)) > 0, "land, wire and zone brings the first residents")
+    let western_port = S.index(37, 22)
+    let shoal_port = S.index(51, 22)
+    let coastal_start = S.land(empty, western_port)
+    let ferry = S.act(S.act(coastal_start, western_port, 37), shoal_port, 37)
+    Test.assert_true(S.get(S.access(ferry), shoal_port) >= 0, "founding ferry connects the remote port to road services")
+    Test.assert_eq_int(S.get(S.grid_access(ferry), shoal_port), -1, "ferry does not transmit power")
+    let island_fishery = S.index(51, 23)
+    let mainland_shop = S.index(36, 22)
+    let freight_city = { ferry with cash: 0,
+      plants: NativeArray.set_int(ferry.plants, island_fishery, 6),
+      zones: NativeArray.set_int(ferry.zones, mainland_shop, 2),
+      buildings: NativeArray.set_int(ferry.buildings, mainland_shop, 1) }
+    let stocked = S.tick(freight_city)
+    Test.assert_eq_int(S.get(stocked.shop_delivered, mainland_shop), 16, "ferry freight fills the shop and its buffer")
+    Test.assert_eq_int(S.get(stocked.shop_stock, mainland_shop), 8, "shop retains one month of stock after sales")
+    let stopped_freight = S.act(stocked, western_port, 38)
+    let buffer = S.tick({ stopped_freight with cash: 0 })
+    Test.assert_eq_int(S.get(buffer.shop_delivered, mainland_shop), 0, "closing the ferry stops the shipment")
+    Test.assert_eq_int(S.get(buffer.shop_sales, mainland_shop), 8, "shop sells from its buffer after a missed shipment")
+    let empty_shop = S.tick({ buffer with cash: 0 })
+    Test.assert_eq_int(S.get(empty_shop.shop_sales, mainland_shop), 0, "sales stop when buffer runs out")
+    let fishery = S.act(ferry, island_fishery, 12)
+    let empty_route = S.tick(ferry)
+    Test.assert_eq_int(empty_route.expansion.exports, 0, "an empty ferry earns no export revenue")
+    Test.assert_true(empty_route.expansion.net < 0, "an empty ferry still costs money")
+    let exporting = S.tick(fishery)
+    Test.assert_eq_int(exporting.expansion.invested, coastal_start.cash - fishery.cash, "ledger includes terminal and fishery construction")
+    Test.assert_eq_int(exporting.expansion.exports, 32, "export cargo uses the ferry's monthly capacity")
+    Test.assert_true(exporting.expansion.net > 0, "a working food route earns money after upkeep")
+    Test.assert_eq_int(exporting.income - empty_route.income, 88, "the treasury receives 32 export payments minus fishery upkeep")
+    Test.assert_eq_int((S.stats(fishery)).budget.trade_income, 96, "a working route immediately updates projected trade")
+    let polluted = { fishery with pollution: NativeArray.set_int(fishery.pollution, island_fishery, 100) }
+    Test.assert_eq_int((S.tick(polluted)).expansion.exports, 0, "pollution reduces export cargo along with the catch")
+    Test.assert_eq_int((S.tick(freight_city)).expansion.exports, 16, "local shops take capacity before exports")
+    let upgraded = S.act(S.act(fishery, shoal_port, 39), shoal_port, 39)
+    let repaid = S.advance(upgraded, 12)
+    Test.assert_true(repaid.expansion.recovered >= repaid.expansion.invested, "productive shoals repay the expansion")
+    let disconnected = S.act(repaid, shoal_port, 38)
+    Test.assert_eq_int((S.stats(disconnected)).budget.trade_income, 0, "disconnecting removes projected export receipts immediately")
+    let cut_route = S.tick(disconnected)
+    Test.assert_eq_int(cut_route.expansion.exports, 0, "closing the ferry stops export receipts")
+    Test.assert_eq_int(cut_route.expansion.invested, repaid.expansion.invested, "closing a ferry preserves the investment ledger")
+    let farm_harbour = S.index(32, 32)
+    let farm_port = S.index(38, 32)
+    let farm_start = S.land(empty, farm_harbour)
+    let farm_link = S.act(S.act(farm_start, farm_harbour, 37), farm_port, 37)
+    let farm_link = S.act(S.act(S.act(farm_link, S.index(39, 32), 1), S.index(40, 32), 1), S.index(41, 32), 1)
+    let farm_lot = S.index(41, 33)
+    let well_lot = S.index(42, 32)
+    let dry_farm = S.act(S.act(farm_link, farm_lot, 11), well_lot, 9)
+    Test.assert_eq_int((S.tick(dry_farm)).expansion.exports, 0, "a farm without irrigation earns no export money")
+    let irrigated = S.act(S.act(dry_farm, S.index(41, 32), 18), well_lot, 18)
+    let farm_export = S.tick(irrigated)
+    Test.assert_eq_int(farm_export.expansion.exports, 32, "a local well and pipes bring crops to the harbour")
+    Test.assert_eq_int(farm_export.expansion.invested, farm_start.cash - irrigated.cash, "farm roads, pipes and well count toward payback")
+    Test.assert_eq_int((S.stats(irrigated)).services.wells, 0, "an isolated farm well cannot supply mainland taps")
+    let export_demo = Ur.Scenario.first_expansion()
+    Test.assert_true(S.population(export_demo) > 0, "the expansion demo starts with a working town")
+    Test.assert_true(export_demo.expansion.exports > 0 && export_demo.expansion.net > 0, "the expansion demo ships profitable cargo")
+    Test.assert_eq_int((S.stats(export_demo)).services.imports, 0, "ferry cargo meets town demand before exporting")
+    let civic_demo = Ur.Scenario.civic_town()
+    Test.assert_eq_int(S.get(S.civic_access(civic_demo), S.index(32, 21)), 15, "the civic demo connects the neighbourhood to all four services")
+    Test.assert_true(S.population(civic_demo) > S.population(export_demo), "the demo town grows beyond the starter district")
+    let matured = S.advance(export_demo, 24)
+    Test.assert_true(matured.expansion.recovered >= matured.expansion.invested, "the populated demo town repays its expansion")
+    let food_town = Ur.Scenario.food_town()
+    let citizens = Ur.Citizens.refresh(food_town, Nil)
+    let (_, _, saw_walk) = observe_citizens(food_town, citizens, 0, false, false, false)
+    Test.assert_true(saw_walk, "citizens are visible while walking between buildings and roads")
+    let food_stats = S.stats(food_town)
+    Test.assert_true(food_stats.services.farms > 0 && food_stats.services.fish > 0, "food town supplies crops and fish")
+    let trips = Ur.Food.traffic(food_town, food_stats)
+    Test.assert_true(has_delivery(food_town, trips, 5, 1), "farm trucks reach a grocery store")
+    Test.assert_true(has_delivery(food_town, trips, 6, 2), "fishery trucks reach a restaurant")
+    let fleet_demo = Ur.Scenario.neighborhood_district()
+    let depot = S.index(8, 18)
+    let warehouse = S.index(10, 20)
+    Test.assert_eq_int(S.get(fleet_demo.plants, depot), 23, "bus depot is built through the construction tool")
+    Test.assert_eq_int(S.get(fleet_demo.plants, warehouse), 24, "warehouse is built through the construction tool")
+    let fleet_demo = S.tick(fleet_demo)
+    let fleet_stats = S.stats(fleet_demo)
+    let routes = Ur.Fleet.routes(fleet_demo, fleet_stats.running_transit)
+    Test.assert_true(List.any(routes, fn route -> route.mode == 2 && route.source == depot), "bus pulls out from the depot")
+    Test.assert_true(List.any(routes, fn route -> route.mode == 6 && route.source == warehouse), "food trucks pull out from the warehouse")
+    let active = Ur.Fleet.step(fleet_demo, fleet_stats.traffic, Nil, routes, 0.0, true)
+    let moving = Ur.Fleet.step(fleet_demo, fleet_stats.traffic, active, Nil, 1.0, true)
+    Test.assert_eq_int(List.length(moving), List.length(active), "dispatch refresh preserves runs already under way")
+    Test.assert_true(List.any(moving, fn run -> run.trip.mode == 2 && run.progress > 0.0), "the bus advances after a dispatch refresh")
+    let weekend = { fleet_demo with street_day: 5 }
+    let events = Ur.Activity.record(fleet_demo, weekend, Nil)
+    Test.assert_true(List.any(events, fn event -> event.lot == S.index(9, 19) && event.title == "Street closed to cars"), "weekend closure appears in the activity feed")
+    let mix = S.index(10, 19)
+    let one_floor = { food_town with buildings: NativeArray.set_int(food_town.buildings, mix, 1) }
+    let two_floors = { one_floor with buildings: NativeArray.set_int(one_floor.buildings, mix, 2) }
+    Test.assert_eq_int(S.homes_at(two_floors, mix) - S.homes_at(one_floor, mix), 3, "mixed use adds three homes above the shop")
+    Test.assert_eq_int(S.population(two_floors), S.population(one_floor), "new home capacity does not immediately create residents")
+    Test.assert_eq_int(S.jobs(two_floors), S.jobs(one_floor), "apartments do not duplicate shop jobs")
+    let council_demo = Ur.Scenario.council_district()
+    Test.assert_true(Ur.Council.established(council_demo), "growth establishes represented wards")
+    Test.assert_eq_int(Ur.Council.kind(council_demo), 3, "the month 24 agenda asks for a park before rezoning")
+    let ward = Ur.Council.sponsor(council_demo)
+    let lot = if ward == S.crime_district(S.index(10, 16)) do S.index(10, 16) else S.index(10, 21) end
+    let blocked = Ur.Build.preview(council_demo, 28, -1, lot)
+    Test.assert_false(blocked.valid, "the council hold blocks a zoning change before it is applied")
+    let park = S.index(ward % 10 * 6 + 4, ward / 10 * 6 + 1)
+    let partial = { council_demo with parks: NativeArray.set_int(council_demo.parks, park, 1) }
+    Test.assert_eq_int(Ur.Council.kind(Ur.Council.settle(partial)), 3, "one park parcel is insufficient")
+    let improved = { partial with parks: NativeArray.set_int(partial.parks, park + 1, 1) }
+    let resolved = Ur.Council.settle(improved)
+    Test.assert_eq_int(Ur.Council.kind(resolved), 0, "new park space in the sponsoring ward releases the hold")
+    Test.assert_true((Ur.Build.preview(resolved, 28, -1, lot)).valid, "the same rezoning works after the agreement")
+    let fire_site = S.index(8, 18)
+    let with_station = S.act(S.new(), fire_site, 46)
+    Test.assert_eq_int(S.get(with_station.plants, fire_site), 20, "a basic station can be built for an upgrade")
+    let fire_demand = NativeArray.set_int(NativeArray.set_int(council_demo.council, 4, 3), 5, fire_site + 1)
+    let upgrade_city = { with_station with council: fire_demand }
+    let upgrade = Ur.Build.preview(upgrade_city, 78, -1, fire_site)
+    Test.assert_true(upgrade.valid, "the civic upgrade tool accepts a basic station")
+    Test.assert_eq_int(S.get(upgrade.city.plants, fire_site), 25, "upgrading changes the existing station in place")
+    Test.assert_eq_int(Ur.Council.kind(Ur.Council.settle(upgrade.city)), 0, "the named fire station upgrade clears the hold")
+    let scheduled = S.index(9, 19)
+    let schedule_demand = NativeArray.set_int(NativeArray.set_int(council_demo.council, 4, 7), 5, scheduled + 1)
+    let schedule_city = { council_demo with council: schedule_demand }
+    Test.assert_eq_int(Ur.Council.progress(schedule_city), 0, "an open weekday does not count as removing a car-free schedule")
+    let unscheduled = S.act(schedule_city, scheduled, 75)
+    Test.assert_eq_int(Ur.Council.kind(Ur.Council.settle(unscheduled)), 0, "clearing a named street schedule settles the hold")
+    let tax_request = Ur.Council.file_agenda({ resolved with month: 41 }, ward, 1, 6)
+    let tax_granted = Ur.Council.respond(tax_request, true)
+    Test.assert_eq_int(tax_granted.tax, tax_request.tax - 1, "granting the tax request applies it")
+    let tax_hold = Ur.Council.file_agenda({ tax_granted with month: 44 }, ward, 2, 7)
+    Test.assert_true(Ur.Council.policy_block(S.policy(tax_hold, 1, 0), tax_hold), "the council can reject a tax increase")
+    let new_block = S.index(12, 16)
+    let expanding = { resolved with month: 25, zones: NativeArray.set_int(resolved.zones, new_block, 1),
+      buildings: NativeArray.set_int(resolved.buildings, new_block, 1) }
+    let expanded = Ur.Council.advance(expanding, 140)
+    Test.assert_eq_int(Ur.Council.ward_at(expanded, new_block), ward, "new housing extends its adjacent ward")
+    let dense = { expanded with month: 26, buildings: NativeArray.set_int(expanded.buildings, new_block, 4) }
+    let divided = Ur.Council.advance(dense, 170)
+    Test.assert_eq_int(Ur.Council.ward_at(divided, new_block), S.crime_district(new_block), "a dense growing area can elect its own representative")
+    Test.assert_true(Ur.Council.vote_support(75, 0) > Ur.Council.vote_support(35, 0), "happier residents favor reelection")
+    Test.assert_true(Ur.Council.vote_support(50, 1) > Ur.Council.vote_support(50, 2), "endorsements sway the supported side")
+    let campaign = Ur.Scenario.election_district()
+    Test.assert_false(Ur.Council.campaign({ campaign with month: 43 }), "campaigns stay closed five months before the vote")
+    Test.assert_true(Ur.Council.campaign(campaign) && Ur.Council.campaign({ campaign with month: 47 }), "the four months before the vote are campaign season")
+    Test.assert_false(Ur.Council.campaign({ campaign with month: 48 }), "campaigns end on election month")
+    let election = Ur.Council.advance({ campaign with month: 48 }, S.population(campaign))
+    Test.assert_eq_int(Ur.Council.last_election(election), 48, "elections take place every 48 months")
+    let other_side = if Ur.Council.result(election, ward) == 1 do 2 else 1 end
+    let endorsed = Ur.Council.endorse(campaign, ward, other_side)
+    Test.assert_eq_int(Ur.Council.endorsement(endorsed, ward), other_side, "endorsement is recorded during the campaign")
+    let after_vote = Ur.Council.advance({ endorsed with month: 48 }, S.population(endorsed))
+    Test.assert_eq_int(Ur.Council.endorsement(after_vote, ward), 0, "elections clear the endorsements for the next term")
+    Test.assert_true(Ur.Council.result(after_vote, ward) > 0, "the ward has an election result")
+    let safe_ward = S.crime_district(S.index(10, 21))
+    let backed_challenger = Ur.Council.endorse(campaign, safe_ward, 2)
+    let losing_vote = Ur.Council.advance({ backed_challenger with month: 48 }, S.population(backed_challenger))
+    Test.assert_true(Ur.Council.endorsed_loser(losing_vote, safe_ward), "the fixture records an endorsement of a losing challenger")
+    Test.assert_true(Ur.Council.challenge_chance(losing_vote, safe_ward) > Ur.Council.challenge_chance(election, safe_ward), "the winner is more likely to challenge the mayor after a losing endorsement")
+    let funded = Ur.Council.invest(campaign, { campaign with cash: campaign.cash - 500 }, 44, Cons(lot, Nil))
+    Test.assert_true(Ur.Council.challenge_chance(funded, ward) < Ur.Council.challenge_chance(campaign, ward), "investment buys goodwill in the receiving ward")
+    Test.assert_eq_int(Ur.Council.challenge_chance(funded, safe_ward), Ur.Council.challenge_chance(campaign, safe_ward), "investment does not improve relations with a different ward")
+
+    let council_save = { game with city: endorsed }
+    match Ur.Save.decode(Ur.Save.encode(council_save)) do
+      Ok(saved) ->
+        Test.assert_eq_int(Ur.Council.kind(saved.city), 3, "council agenda survives saving and loading")
+        Test.assert_eq_int(Ur.Council.endorsement(saved.city, ward), other_side, "campaign endorsements survive saving and loading")
+      Err(error) -> Test.assert_true(false, error)
+    end
+    let friday = { council_demo with calendar_day: 28, street_day: 4, clock_ms: 900 }
+    let saturday = S.advance_day(friday)
+    Test.assert_eq_int(saturday.calendar_day, 29, "midnight advances one calendar day")
+    Test.assert_eq_int(saturday.month, friday.month, "ordinary days do not run monthly accounting")
+    Test.assert_eq_int(saturday.cash, friday.cash, "ordinary days do not charge monthly costs")
+    Test.assert_true(S.car_free_now(saturday, scheduled), "the same calendar turns on weekend street restrictions")
+    let sunday = S.advance_day(saturday)
+    Test.assert_eq_int(sunday.calendar_day, 0, "a thirty-day month rolls back to day one")
+    Test.assert_eq_int(sunday.month, friday.month + 1, "the month rolls over once at midnight")
+    Test.assert_eq_int(sunday.street_day, 6, "weekdays continue uninterrupted through the month boundary")
+    Test.assert_eq_int(S.street_hour(1.76), 23, "the clock displays the last hour of the day")
+    Test.assert_eq_int(S.street_hour(S.day_seconds()), 0, "the clock resets to midnight")
+    match Ur.Save.decode(Ur.Save.encode({ game with city: friday })) do
+      Ok(restored) ->
+        Test.assert_eq_int(restored.city.calendar_day, 28, "save preserves the calendar day")
+        Test.assert_eq_int(restored.city.clock_ms, 900, "save preserves the time of day")
+      Err(error) -> Test.assert_true(false, error)
+    end
+    let traffic_demo = Ur.Scenario.traffic_district()
+    let traffic_stats = S.stats(traffic_demo)
+    let buses = Ur.Fleet.routes(traffic_demo, traffic_stats.running_transit)
+    Test.assert_true(List.any(buses, fn route -> route.mode == 2 && route.legs >= 12), "the expanded grid supports a long depot bus run")
+    Test.assert_true(S.get(traffic_stats.routes, S.index(17, 18)) >= 0, "the far intersection connects to the harbour")
+    Test.assert_true(S.traffic_pace(1, 8) < S.traffic_pace(1, 2), "weekday commuters have slower roads than overnight traffic")
+    let grocery_demo = Ur.Scenario.food_town()
+    let grocery = S.index(10, 19)
+    Test.assert_true(S.business_open(grocery_demo, grocery, 12), "the grocery admits daytime customers")
+    Test.assert_false(S.business_open(grocery_demo, grocery, 2), "the grocery closes overnight")
+    let night_shop = S.index(10, 20)
+    let lighting_home = S.index(10, 21)
+    let base = S.new()
+    let lighting_city = { base with zones: NativeArray.set_int(base.zones, night_shop, 3),
+      buildings: NativeArray.set_int(base.buildings, night_shop, 2) }
+    Test.assert_true(S.business_open(lighting_city, night_shop, 3), "an overnight grocery stays open at 3 am")
+    Test.assert_true(Ur.Landscape.lights(lighting_city, night_shop, 3) / 2 % 2 == 1, "the overnight storefront stays lit")
+    Test.assert_eq_int(Ur.Landscape.lights(lighting_city, lighting_home, 23), 0, "low-density houses go dark before midnight")
+    let taller = { lighting_city with buildings: NativeArray.set_int(lighting_city.buildings, lighting_home, 3) }
+    Test.assert_eq_int(Ur.Landscape.lights(taller, lighting_home, 23), 1, "tall housing still has lit windows")
+    let lamp_road = S.index(10, 16)
+    let lit_street = S.act(taller, lamp_road, 1)
+    Test.assert_eq_int(Ur.Landscape.lights(lit_street, lamp_road, 12), 0, "streetlights switch off in daylight")
+    Test.assert_eq_int(Ur.Landscape.lights(lit_street, lamp_road, 3), 4, "streetlights stay on until morning")
+    let outage = S.act(lit_street, lit_street.harbour, 27)
+    Test.assert_eq_int(Ur.Landscape.lights(outage, lamp_road, 3), 0, "streetlights go dark when the grid is cut")
+    Test.assert_eq_int(Ur.Landscape.lights(outage, night_shop, 3), 0, "shop lights go dark when the grid is cut")
     Authority.must(println("Ur simulation: all assertions passed"))
   end
 end

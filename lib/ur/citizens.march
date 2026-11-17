@@ -1,0 +1,967 @@
+mod Ur.Citizens do
+  alias Ur.Sim as S
+  type BusService = { routes : List(Ur.Food.Trip), active : List(Ur.Fleet.Run) }
+  type Parking = { lot : Int, road : Int, kind : Int, bay : Int, edge : Int, steps : Int, site : Int }
+  type Citizen = { id : Int, home : Int, work : Int, work_position : Int, work_board : Int, study : Int, qualification : Int, shop : Int, location : Int,
+    park : Int, park_trip : Bool, campus_day : Int, park_route : List(Int), work_route : List(Int), shop_route : List(Int), route : List(Int),
+    target : Int, previous : Int, board : Int, alight : Int, bus_slot : Int, transit_phase : Int, by_car : Bool, car_phase : Int, parking : Int, arrival : Int, activity : Int, wait : Float, progress : Float, queued : Bool }
+  type Occupied = { lanes : NativeIntArr, parking_keys : List(Int), junctions : NativeIntArr, crossings : NativeIntArr, signal_tick : Int }
+  type CitizenCounts = { tracked : Int, walking : Int, waiting : Int, riding : Int, driving : Int, queued : Int, at_work : Int, studying : Int, shopping : Int, visiting_park : Int, home : Int }
+
+  pfn job(c : Ur.Sim.City, i : Int) : Bool do
+    S.job_slots(c, i) > 0
+  end
+  fn connected(c : Ur.Sim.City, a : Int, b : Int) : Bool do
+    S.valid(a) && S.valid(b) && S.motor_road(c, a) && S.motor_road(c, b) &&
+      (S.grade_link(c, a, b) || (S.span_distance(a, b) == 1 && int_abs(S.get(c.heights, a) - S.get(c.heights, b)) <= 12))
+  end
+  pfn follow(c : Ur.Sim.City, links : NativeIntArr, i : Int, rest : List(Int), left : Int) : (Int, List(Int)) do
+    if !S.valid(i) || left == 0 do (-1, Nil)
+    else if S.get(links, i) == i do (i, List.reverse(Cons(i, rest)))
+    else follow(c, links, S.get(links, i), Cons(i, rest), left - 1) end end
+  end
+  pfn destination(c : Ur.Sim.City, links : NativeIntArr, home : Int) : (Int, List(Int)) do
+    if S.get(links, home) == home do (home, Nil)
+    else if Ur.Food.walkable(c, home) && S.get(links, home) >= 0 do follow(c, links, home, Nil, S.count())
+    else follow(c, links, Ur.Food.entrance(c, links, home, 0), Cons(home, Nil), S.count()) end end
+  end
+  pfn valid_route(c : Ur.Sim.City, route : List(Int), first : Bool) : Bool do
+    match route do
+      Cons(a, Cons(b, rest)) ->
+        if (S.grade_link(c, a, b) || (S.span_distance(a, b) == 1 && int_abs(S.get(c.heights, a) - S.get(c.heights, b)) <= 12)) &&
+          (first || Ur.Food.walkable(c, a) || S.valid(S.campus_root(c, a)) || S.get(c.parks, a) > 0) do valid_route(c, Cons(b, rest), false) else false end
+      Cons(_, Nil) -> true
+      Nil -> true
+    end
+  end
+  fn home_parking(c : Ur.Sim.City, lot : Int) : Int do
+    if S.get(c.zones, lot) == 1 && S.get(c.buildings, lot) == 1 && S.get(c.construction, lot) == 0 &&
+      !S.fire_offline(c, lot) && S.valid(S.fleet_frontage(c, lot, 0)) do
+      if Strata.Seed.mix(lot, 41) % 3 == 0 do 2 else 1 end
+    else 0 end
+  end
+  -- Vehicle assignments cross frame boundaries as scalar values.
+  -- Mixed radix: kind, bay, curb edge, access steps, then the three parcels.
+  fn parking_code(p : Parking) : Int do
+    let parcels = p.lot + S.count() * (p.road + S.count() * p.site)
+    1 + p.kind + 6 * p.bay + 240 * p.edge + 960 * p.steps + 2880 * parcels
+  end
+  fn parking_at(code : Int) : Option(Parking) do
+    if code == 0 do None else
+      let n = code - 1
+      let parcels = n / 2880
+      Some({ kind: n % 6, bay: n / 6 % 40, edge: n / 240 % 4, steps: n / 960 % 3,
+        lot: parcels % S.count(), road: parcels / S.count() % S.count(), site: parcels / S.count() / S.count() })
+    end
+  end
+  pfn parking_value(parking : Option(Parking)) : Int do
+    match parking do
+      Some(p) -> parking_code(p)
+      None -> 0
+    end
+  end
+  pfn parking_key(p : Parking) : Int do
+    if p.kind >= 3 do S.count() * 9 + p.site * 40 + p.bay
+    else if p.kind > 0 do p.lot * 9 + 8
+    else p.road * 9 + p.edge * 2 + p.bay end end
+  end
+  pfn hold(keys : List(Int), parking : Option(Parking)) : List(Int) do
+    match parking do
+      Some(p) -> Cons(parking_key(p), keys)
+      None -> keys
+    end
+  end
+  pfn holds_key(keys : List(Int), key : Int) : Bool do
+    match keys do
+      Nil -> false
+      Cons(i, rest) -> i == key || holds_key(rest, key)
+    end
+  end
+  pfn parkings(people : List(Citizen), ignore : Int, keys : List(Int)) : List(Int) do
+    match people do
+      Nil -> keys
+      Cons(person, rest) ->
+        let keys = if person.id == ignore do keys else
+          hold(if person.car_phase < 2 do hold(keys, parking_at(person.parking)) else keys end, parking_at(person.arrival))
+        end
+        parkings(rest, ignore, keys)
+    end
+  end
+  pfn lane_get(occupied : Occupied, index : Int) : Int do NativeArray.get_int(occupied.lanes, index) end
+  pfn lane_set(occupied : Occupied, index : Int, value : Int) : Occupied do
+    { occupied with lanes: NativeArray.set_int(occupied.lanes, index, value) }
+  end
+  pfn garage_bay(base : Parking, bay : Int, capacity : Int, keys : List(Int)) : Option(Parking) do
+    if bay == capacity do None else
+      let next = { base with bay: bay }
+      if holds_key(keys, parking_key(next)) do garage_bay(base, bay + 1, capacity, keys) else Some(next) end
+    end
+  end
+  pfn parking_facility(c : Ur.Sim.City, lot : Int, road : Int, steps : Int, d : Int, keys : List(Int)) : Option(Parking) do
+    if d == 4 do None else
+      let site = S.neighbour(road, d)
+      let kind = S.get(c.public_parking, site)
+      if kind == 0 || S.fleet_frontage(c, site, 0) != road do
+        parking_facility(c, lot, road, steps, d + 1, keys)
+      else
+        let base = { lot: lot, road: road, kind: kind + 2, bay: 0, edge: d, steps: steps, site: site }
+        match garage_bay(base, 0, S.parking_spaces(kind), keys) do
+          Some(p) -> Some(p)
+          None -> parking_facility(c, lot, road, steps, d + 1, keys)
+        end
+      end
+    end
+  end
+  pfn curb_for_direction(from : Int, to : Int) : Int do
+    match S.direction(from, to) do
+      0 -> 2
+      1 -> 3
+      2 -> 1
+      _ -> 0
+    end
+  end
+  pfn free_parking(c : Ur.Sim.City, lot : Int, road : Int, previous : Int, steps : Int, keys : List(Int), curb_side : Int) : Option(Parking) do
+    if !S.valid(lot) || !S.motor_street(c, road) || S.span_distance(previous, road) != 1 do None else
+      let kind = if steps == 0 && road == S.fleet_frontage(c, lot, 0) do home_parking(c, lot) else 0 end
+      let private_bay = { lot: lot, road: road, kind: kind, bay: 0, edge: S.direction(road, previous), steps: steps, site: lot }
+      let side = if steps == 0 do private_bay.edge else if private_bay.edge < 2 do 3 else 1 end end
+      let edge = if curb_side >= 0 do curb_side else
+        if S.motor_street(c, S.neighbour(road, side)) do S.opposite(side) else side end
+      end
+      let (corner, _) = S.road_turn(c, road)
+      let curb_allowed = corner < 0 && !S.motor_street(c, S.neighbour(road, edge))
+      let curb = { private_bay with kind: 0, edge: edge }
+      let second = { curb with bay: 1 }
+      if kind > 0 && !holds_key(keys, parking_key(private_bay)) do Some(private_bay)
+      else if curb_allowed && S.waste_bin_edge(c, road) != edge && !holds_key(keys, parking_key(curb)) do Some(curb)
+      else if curb_allowed && !holds_key(keys, parking_key(second)) do Some(second)
+      else parking_facility(c, lot, road, steps, 0, keys) end end end
+    end
+  end
+  pfn along_parking(c : Ur.Sim.City, lot : Int, path : List(Int), steps : Int, keys : List(Int), arriving : Bool) : Option(Parking) do
+    match path do
+      Cons(previous, Cons(road, rest)) ->
+        let curb_side = match rest do
+          Cons(peer, _) -> if arriving do curb_for_direction(peer, road) else curb_for_direction(road, peer) end
+          Nil -> -1
+        end
+        match free_parking(c, lot, road, previous, steps, keys, curb_side) do
+          Some(p) -> Some(p)
+          None -> if steps >= 2 do None else along_parking(c, lot, Cons(road, rest), steps + 1, keys, arriving) end
+        end
+      _ -> None
+    end
+  end
+  pfn valid_parking(c : Ur.Sim.City, p : Parking) : Bool do
+    S.motor_street(c, p.road) && (if p.kind >= 3 do
+      S.get(c.public_parking, p.site) == p.kind - 2 && p.road == S.fleet_frontage(c, p.site, 0)
+    else (p.kind == 0 && (p.bay != 0 || S.waste_bin_edge(c, p.road) != p.edge)) || (p.kind > 0 && p.kind == home_parking(c, p.lot) && p.road == S.fleet_frontage(c, p.lot, 0)) end)
+  end
+  pfn owned_parking(c : Ur.Sim.City, old : List(Citizen), id : Int) : Option(Parking) do
+    match old do
+      Nil -> None
+      Cons(person, rest) ->
+        if person.id != id do owned_parking(c, rest, id)
+        else
+          -- An interrupted trip keeps its reserved bay, preferring the destination
+          -- once the car has reached it.
+          let parking = if person.car_phase >= 2 do person.arrival else person.parking end
+          match parking_at(parking) do
+            Some(p) -> if valid_parking(c, p) do Some(p) else None end
+            None -> None
+          end
+        end
+    end
+  end
+  pfn acquire_parking(c : Ur.Sim.City, lot : Int, route : List(Int), keys : List(Int), wants_car : Bool) : Option(Parking) do
+    if !wants_car do None else
+      match along_parking(c, lot, route, 0, keys, false) do
+        Some(p) -> Some(p)
+        None -> free_parking(c, lot, S.fleet_frontage(c, lot, 0), lot, 0, keys, -1)
+      end
+    end
+  end
+  pfn existing(c : Ur.Sim.City, old : List(Citizen), id : Int, study : Int, qualification : Int) : Option(Citizen) do
+    match old do
+      Nil -> None
+      Cons(person, rest) ->
+        if person.id != id do existing(c, rest, id, study, qualification)
+        else if person.study == study && person.qualification == qualification &&
+          (if study >= 0 do S.active_program_at(c, person.work) == study else job(c, person.work) && qualified(c, person.work, qualification) end) && (person.shop < 0 || S.public_trade(c, person.shop)) &&
+          (match parking_at(person.parking) do
+            Some(p) -> valid_parking(c, p)
+            None -> true
+          end) &&
+          (match parking_at(person.arrival) do
+            Some(p) -> valid_parking(c, p)
+            None -> true
+          end) &&
+          valid_route(c, person.work_route, true) && valid_route(c, person.shop_route, true) do Some(person)
+        else None end end
+    end
+  end
+  pfn park_stroll(c : Ur.Sim.City, i : Int, previous : Int, d : Int, seed : Int, remaining : Int) : List(Int) do
+    if d == 4 || remaining == 0 do Nil else
+      let j = S.neighbour(i, (seed + d) % 4)
+      if j != previous && S.get(c.parks, j) > 0 && S.pedestrian_edge(c, i, j) do
+        Cons(j, park_stroll(c, j, i, 0, seed + 1, remaining - 1))
+      else park_stroll(c, i, previous, d + 1, seed, remaining) end
+    end
+  end
+  pfn park_path(c : Ur.Sim.City, field : Ur.Sim.ParkWalk, i : Int, seed : Int) : List(Int) do
+    if !S.valid(i) do Nil else
+      let j = S.get(field.next, i)
+      if i == j do Cons(i, park_stroll(c, i, -1, 0, seed, 1 + seed % 2))
+      else Cons(i, park_path(c, field, j, seed)) end
+    end
+  end
+  pfn last_stop(route : List(Int), last : Int) : Int do
+    match route do
+      Cons(i, rest) -> last_stop(rest, i)
+      Nil -> last
+    end
+  end
+  pfn plan_park(c : Ur.Sim.City, field : Ur.Sim.ParkWalk, person : Citizen) : Citizen do
+    let entry = S.park_entry(c, field, person.home)
+    let route = if S.valid(entry) && S.walkable_park_score(c, field, person.home) > 0 do park_path(c, field, entry, person.id) else Nil end
+    let park = last_stop(route, -1)
+    let route = if S.valid(park) && entry != person.home do Cons(person.home, route) else route end
+    -- Finish an active visit on the same path, or reset it if editing broke that path.
+    if person.park_trip && (person.location < 0 || person.activity == 5) do
+      if S.get(c.parks, person.park) > 0 && valid_route(c, person.park_route, true) do person
+      else { person with park: park, park_route: route, park_trip: false, activity: 0, location: person.home, target: person.home, route: Nil, wait: 1.0 } end
+    else { person with park: park, park_route: route } end
+  end
+  pfn qualified(c : Ur.Sim.City, lot : Int, skill : Int) : Bool do
+    let needed = S.job_requirement(c, lot)
+    S.qualified_for(skill, needed)
+  end
+  type EducationRoutes = { schools : List(NativeIntArr), population : Int, hires : List(Ur.Sim.JobMatch) }
+  pfn student_stage(c : Ur.Sim.City, stage : Int, draw : Int) : Int do
+    if stage == 8 do -1 else
+      let group = S.program_enrolled(c, stage)
+      if draw < group do stage else student_stage(c, stage + 1, draw - group) end
+    end
+  end
+  pfn route_at(c : Ur.Sim.City, fields : List(NativeIntArr), level : Int, lot : Int) : (Int, List(Int)) do
+    match List.drop(fields, level) do
+      Nil -> (-1, Nil)
+      Cons(field, _) -> destination(c, field, lot)
+    end
+  end
+  pfn education_routes(c : Ur.Sim.City, roads : NativeIntArr, stage : Int) : List(NativeIntArr) do
+    if stage == 8 do Nil else
+      let field = if S.program_enrolled(c, stage) > 0 do
+        Ur.Food.campus_destinations(c, fn i -> S.active_program_at(c, i) == stage && S.building_access(c, roads, i) >= 0)
+      else NativeArray.make_int(2640, -1) end
+      Cons(field, education_routes(c, roads, stage + 1))
+    end
+  end
+  pfn programs_changed(c : Ur.Sim.City, before : Ur.Sim.City, stage : Int) : Bool do
+    if stage == 8 do false else
+      S.program_enrolled(c, stage) != S.program_enrolled(before, stage) ||
+        (if stage >= 4 do S.specialist_graduates(c, stage) != S.specialist_graduates(before, stage)
+        else stage > 0 && S.graduates(c, stage) != S.graduates(before, stage) end) ||
+        programs_changed(c, before, stage + 1)
+    end
+  end
+  fn education_changed(c : Ur.Sim.City, before : Ur.Sim.City) : Bool do programs_changed(c, before, 0) end
+  pfn home_job(c : Ur.Sim.City, hires : List(Ur.Sim.JobMatch), home : Int, shown : List(Citizen)) : (Int, List(Int), Int, Int) do
+    match hires do
+      Nil -> (-1, Nil, 0, -1)
+      Cons(hire, rest) ->
+        if hire.home != home do home_job(c, rest, home, shown) else
+          let occupied = List.length(List.filter(shown, fn person -> person.work == hire.workplace &&
+            person.home == home && person.study < 0 && person.qualification == hire.rank && person.work_board == hire.board))
+          if occupied >= hire.workers do home_job(c, rest, home, shown) else
+            let (work, route) = destination(c, Ur.Food.destinations(c, fn lot -> lot == hire.workplace), home)
+            if S.valid(work) do (work, route, hire.rank, hire.board) else home_job(c, rest, home, shown) end
+          end
+        end
+    end
+  end
+  pfn roster(c : Ur.Sim.City, old : List(Citizen), stores : NativeIntArr, bars : NativeIntArr, walk : Ur.Sim.ParkWalk, education : EducationRoutes, used : NativeIntArr, lot : Int, floor : Int, left : Int, out : List(Citizen)) : List(Citizen) do
+    if lot >= S.count() || left == 0 do List.reverse(out)
+    else if floor >= (if S.get(c.zones, lot) == 3 do S.occupied_homes(c, lot) else (S.occupied_homes(c, lot) * 3 + 3) / 4 end) do roster(c, old, stores, bars, walk, education, used, lot + 1, 0, left, out)
+    else
+      let id = if floor < 9 do lot * 9 + floor else S.count() * 9 + lot * 64 + floor end
+      let roll = Strata.Seed.cell(227, 1, id, 0, 0)
+      let planned_study = student_stage(c, 0, roll % education.population)
+      let (school, school_route) = if planned_study < 0 do (-1, Nil) else route_at(c, education.schools, planned_study, lot) end
+      let study = if S.valid(school) do planned_study else -1 end
+      let (work, work_route, qualification, work_board) = if study >= 0 do (school, school_route, 0, -1)
+        else home_job(c, education.hires, lot, out) end
+      let position = if study < 0 && S.valid(work) do S.get(used, work) + 1 else 0 end
+      let used = if position > 0 do NativeArray.set_int(used, work, position) else used end
+      let prior = match existing(c, old, id, study, qualification) do
+        Some(person) -> if person.work == work && person.work_route == work_route do Some({ person with work_position: position, work_board: work_board }) else None end
+        None -> None
+      end
+      let wants_car = roll / 19 % 100 < (if S.get(c.buildings, lot) >= 3 do 32 else if S.get(c.buildings, lot) == 2 do 62 else 92 end end)
+      let person = match prior do
+        Some(person) ->
+          let person = if person.car_phase != 0 do person else
+            let parking = match owned_parking(c, old, id) do
+              Some(p) -> Some(p)
+              None -> if person.location == person.home do acquire_parking(c, lot, work_route, parkings(out, -1, parkings(old, id, Nil)), wants_car) else None end
+            end
+            { person with parking: parking_value(parking) }
+          end
+          let (bar, bar_route) = if floor % 3 == 0 && person.location == person.home do destination(c, bars, lot) else (-1, Nil) end
+          if S.valid(bar) do Some({ person with shop: bar, shop_route: bar_route })
+          else if person.shop >= 0 do Some(person) else
+            let (shop, shop_route) = destination(c, stores, lot)
+            Some({ person with shop: shop, shop_route: shop_route })
+          end end
+        None ->
+          let (bar, bar_route) = if floor % 3 == 0 do destination(c, bars, lot) else (-1, Nil) end
+          let (shop, shop_route) = if S.valid(bar) do (bar, bar_route) else destination(c, stores, lot) end
+          let parking = match owned_parking(c, old, id) do
+            Some(p) -> Some(p)
+            None -> acquire_parking(c, lot, work_route, parkings(out, -1, parkings(old, id, Nil)), wants_car)
+          end
+          Some({ id: id, park: -1, park_trip: false, campus_day: -1, park_route: Nil, home: lot, work: work, work_position: position, work_board: work_board, study: study, qualification: qualification, shop: shop, location: lot, work_route: work_route, shop_route: shop_route,
+              route: Nil, target: lot, previous: -1, board: -1, alight: -1, bus_slot: -1, transit_phase: 0, by_car: false, car_phase: 0, parking: parking_value(parking), arrival: 0, activity: 0, wait: if study >= 0 do int_to_float(id % 13) *. 0.02 else 0.2 +. int_to_float(id % 17) *. 0.24 end, progress: 0.0, queued: false })
+      end
+      match person do
+        Some(person) -> roster(c, old, stores, bars, walk, education, used, lot, floor + 1, left - 1, Cons(plan_park(c, walk, person), out))
+        None -> roster(c, old, stores, bars, walk, education, used, lot + 1, 0, left, out)
+      end
+    end end
+  end
+  fn changed(c : Ur.Sim.City, old : Ur.Sim.City, i : Int) : Bool do
+    if i >= S.count() do false
+    else if S.storefront(c, i) != S.storefront(old, i) || S.ground_at(c, i) != S.ground_at(old, i) || S.fire_offline(c, i) != S.fire_offline(old, i) || S.get(c.parks, i) != S.get(old.parks, i) || S.get(c.roads, i) != S.get(old.roads, i) || S.get(c.grades, i) != S.get(old.grades, i) || (S.get(c.transit, i) == 1) != (S.get(old.transit, i) == 1) || S.get(c.heights, i) != S.get(old.heights, i) ||
+      S.get(c.buildings, i) != S.get(old.buildings, i) || S.job_requirement(c, i) != S.job_requirement(old, i) || S.get(c.plants, i) != S.get(old.plants, i) || S.get(c.waste_bins, i) != S.get(old.waste_bins, i) || S.get(c.public_parking, i) != S.get(old.public_parking, i) || S.occupied_homes(c, i) != S.occupied_homes(old, i) || S.business_closed(c, i) != S.business_closed(old, i) || S.get(c.zones, i) != S.get(old.zones, i) do true
+    else changed(c, old, i + 1) end end
+  end
+  fn refresh_with(c : Ur.Sim.City, old : List(Citizen), roads : NativeIntArr, people : Int, hires : List(Ur.Sim.JobMatch)) : List(Citizen) do
+    let stores = Ur.Food.destinations(c, fn i -> S.public_trade(c, i))
+    let bars = Ur.Food.destinations(c, fn i -> S.nightlife(c, i))
+    let education = { schools: education_routes(c, roads, 0), population: S.clamp(people, 1, 1000000), hires: hires }
+    roster(c, old, stores, bars, S.park_walk(c), education, NativeArray.make_int(2640, 0), 0, 0, S.clamp(people, 0, 96), Nil)
+  end
+  fn refresh(c : Ur.Sim.City, old : List(Citizen)) : List(Citizen) do
+    let roads = S.access(c)
+    let people = S.population(c)
+    refresh_with(c, old, roads, people, (S.employment(c, roads, people)).matches)
+  end
+
+  pfn cell(a : Int, b : Int, progress : Float) : Int do
+    (a * 4 + S.direction(a, b)) * 4 + S.clamp(float_to_int(progress *. 4.0), 0, 3)
+  end
+  fn parking_entry(p : Parking) : Float do
+    if p.kind == 0 do 0.66 else 0.42 end
+  end
+  fn parking_exit(p : Parking) : Float do
+    if p.kind == 0 do 0.46 else 0.38 end
+  end
+  pfn position(progress : Float) : Int do 1 + float_to_int(progress *. 1000.0) end
+  fn driving(c : Ur.Sim.City, person : Citizen, a : Int, b : Int) : Bool do
+    let storm_segment = S.motor_street(c, a) && S.motor_street(c, b) &&
+      (S.storm_road_closed(c, a) || S.storm_road_closed(c, b))
+    person.car_phase == 2 && (connected(c, a, b) || storm_segment) &&
+      (match parking_at(person.arrival) do
+          Some(p) -> p.road != a
+          None -> false
+        end)
+  end
+  -- Lane cells hold physical positions, including a reserved curb merge.
+  pfn lane_room(occupied : Occupied, first : Int, at : Int, slot : Int) : Bool do
+    if slot >= 4 do true else
+      let value = lane_get(occupied, first + slot)
+      (value == 0 || value + 260 <= at || value >= at + 260) &&
+        lane_room(occupied, first, at, slot + 1)
+    end
+  end
+  pfn departure_merge(c : Ur.Sim.City, person : Citizen, b : Int, next : Int) : Float do
+    match parking_at(person.parking) do
+      Some(p) -> if person.car_phase == 1 && b == p.road && connected(c, b, next) do parking_exit(p) else 0.0 end
+      None -> 0.0
+    end
+  end
+  fn walk_corners(c : Ur.Sim.City, person : Citizen, a : Int, b : Int) : Option((Int, Int, Int, Int)) do
+    let from = person.previous
+    if person.transit_phase == 3 || person.car_phase == 2 || !S.valid(from) || !S.surface_junction(c, a) ||
+       S.span_distance(from, a) != 1 || S.span_distance(a, b) != 1 ||
+       !S.junction_arm(c, a, S.direction(a, from)) || !S.junction_arm(c, a, S.direction(a, b)) do None
+    else
+      let sign = if person.id % 2 == 0 do 1 else -1 end
+      let approach = S.direction(a, from)
+      let departure = S.direction(a, b)
+      let (sx, sz) = corner_for(approach, -sign)
+      let (ex, ez) = corner_for(departure, sign)
+      Some((sx, sz, ex, ez))
+    end
+  end
+  fn corner_for(arm : Int, side : Int) : (Int, Int) do
+    match arm do
+      0 -> (3, 16 - 13 * side)
+      1 -> (29, 16 + 13 * side)
+      2 -> (16 + 13 * side, 3)
+      _ -> (16 - 13 * side, 29)
+    end
+  end
+  fn crossing_arm(sx : Int, sz : Int, ex : Int, ez : Int, leg : Int) : Int do
+    if leg == 0 do
+      if sx == ex do -1 else if sz < 16 do 2 else 3 end end
+    else
+      if sz == ez do -1 else if ex < 16 do 0 else 1 end end
+    end
+  end
+  fn crossing_step() : Float do 0.24 end
+  pfn active_crossing(c : Ur.Sim.City, person : Citizen, a : Int, b : Int) : Int do
+    let step = crossing_step()
+    let t = person.progress
+    if t <= 0.0 || t >= step *. 2.0 || t == step do -1 else
+      match walk_corners(c, person, a, b) do
+        Some((sx, sz, ex, ez)) ->
+          let arm = crossing_arm(sx, sz, ex, ez, if t < step do 0 else 1 end)
+          if arm >= 0 && S.junction_arm(c, a, arm) do arm else -1 end
+        None -> -1
+      end
+    end
+  end
+  pfn mark_crossing(c : Ur.Sim.City, occupied : Occupied, person : Citizen, a : Int, b : Int) : Occupied do
+    if S.get(occupied.junctions, a) == 0 do occupied else
+      let arm = active_crossing(c, person, a, b)
+      if arm < 0 do occupied else
+        let mask = int_or(S.get(occupied.crossings, a), int_shl(1, arm))
+        { occupied with crossings: NativeArray.set_int(occupied.crossings, a, mask) }
+      end
+    end
+  end
+  pfn reserve(c : Ur.Sim.City, cars : List(Citizen), occupied : Occupied) : Occupied do
+    match cars do
+      Nil -> occupied
+      Cons(person, rest) ->
+        match person.route do
+        Cons(a, Cons(b, tail)) ->
+          let occupied = if driving(c, person, a, b) do
+            lane_set(occupied, cell(a, b, person.progress), position(person.progress))
+          else if person.car_phase == 1 && person.progress > 0.5 do
+            match tail do
+              Cons(next, _) ->
+                let merge = departure_merge(c, person, b, next)
+                if merge > 0.0 do lane_set(occupied, cell(b, next, merge), position(merge)) else occupied end
+              Nil -> occupied
+            end
+          else occupied end end
+          reserve(c, rest, mark_crossing(c, occupied, person, a, b))
+        _ -> reserve(c, rest, occupied)
+      end
+    end
+  end
+  pfn arrive(person : Citizen) : Citizen do
+    let parking = if person.by_car do person.arrival else person.parking end
+    { person with location: person.target, transit_phase: 0, route: Nil, progress: 0.0, queued: false,
+      by_car: false, car_phase: 0, parking: parking, arrival: 0, wait: 0.16 }
+  end
+  fn transit_stop(c : Ur.Sim.City, running : NativeIntArr, lot : Int, d : Int) : Int do
+    if d >= 4 do -1 else
+      let stop = S.neighbour(lot, d)
+      let mode = S.get(c.transit, stop)
+      if (mode == 2 || mode == 3) && S.get(running, stop) == 2 &&
+        int_abs(S.get(c.heights, lot) - S.get(c.heights, stop)) <= 12 do stop
+      else transit_stop(c, running, lot, d + 1) end
+    end
+  end
+  type TransitSearch = { parents : NativeIntArr, queue : NativeIntArr, tail : Int }
+  pfn add_transit(c : Ur.Sim.City, search : TransitSearch, i : Int, mode : Int, d : Int) : TransitSearch do
+    if d >= 4 do search else
+      let j = S.neighbour(i, d)
+      let search = if S.transit_link(c, i, j, mode) && S.get(search.parents, j) < 0 do
+        { parents: NativeArray.set_int(search.parents, j, i),
+          queue: NativeArray.set_int(search.queue, search.tail, j), tail: search.tail + 1 }
+      else search end
+      add_transit(c, search, i, mode, d + 1)
+    end
+  end
+  pfn find_transit(c : Ur.Sim.City, search : TransitSearch, start : Int, mode : Int, head : Int) : NativeIntArr do
+    if head >= search.tail || S.get(search.parents, start) >= 0 do search.parents else
+      find_transit(c, add_transit(c, search, S.get(search.queue, head), mode, 0), start, mode, head + 1)
+    end
+  end
+  pfn trace_transit(parents : NativeIntArr, i : Int, end_stop : Int, target : Int) : List(Int) do
+    if i == end_stop do Cons(i, Cons(target, Nil))
+    else Cons(i, trace_transit(parents, S.get(parents, i), end_stop, target)) end
+  end
+  pfn transit_trip_from(c : Ur.Sim.City, running : NativeIntArr, origin : Int, target : Int, ground_legs : Int, required : Int) : List(Int) do
+    let board = if S.valid(required) do required else transit_stop(c, running, origin, 0) end
+    let alight = transit_stop(c, running, target, 0)
+    let mode = S.get(c.transit, board)
+    if !S.valid(board) || !S.valid(alight) || board == alight || mode != S.get(c.transit, alight) do Nil else
+      let search = { parents: NativeArray.set_int(NativeArray.make_int(2640, -1), alight, alight),
+        queue: NativeArray.set_int(NativeArray.make_int(2640, 0), 0, alight), tail: 1 }
+      let links = find_transit(c, search, board, mode, 0)
+      if S.get(links, board) < 0 do Nil else
+        let path = trace_transit(links, board, alight, target)
+        let ride_legs = List.length(path) - 2
+        let transit_cost = 5 + (4 - S.frequency(c, board)) + ride_legs * (if mode == 2 do 2 else 1 end)
+        let ground_cost = if ground_legs <= 3 do ground_legs * 3 else ground_legs * 3 + 4 end
+        if S.valid(required) || transit_cost <= ground_cost do Cons(origin, path) else Nil end
+      end
+    end
+  end
+  fn transit_trip(c : Ur.Sim.City, running : NativeIntArr, origin : Int, target : Int, ground_legs : Int) : List(Int) do
+    transit_trip_from(c, running, origin, target, ground_legs, -1)
+  end
+  pfn car_corridor(c : Ur.Sim.City, route : List(Int)) : Bool do
+    match route do
+      Cons(i, Cons(j, rest)) -> S.motor_road(c, i) && car_corridor(c, Cons(j, rest))
+      _ -> true
+    end
+  end
+  pfn uses_grade(c : Ur.Sim.City, route : List(Int)) : Bool do
+    match route do
+      Cons(a, Cons(b, rest)) -> S.grade_link(c, a, b) || uses_grade(c, Cons(b, rest))
+      _ -> false
+    end
+  end
+  pfn timed_closure(c : Ur.Sim.City, route : List(Int)) : Bool do
+    match route do
+      Nil -> false
+      Cons(i, rest) -> S.car_free_now(c, i) || timed_closure(c, rest)
+    end
+  end
+  pfn scheduled_activity(c : Ur.Sim.City, person : Citizen, hour : Int) : (Int, Int) do
+    let start = if person.study >= 0 do 6 + person.id % 3 else 7 + person.id % 3 end
+    let end_hour = if person.study >= 0 && person.study < 2 do 15 + person.id % 2 else 16 + person.id % 3 end
+    let school = person.study >= 0 && S.active_program_at(c, person.work) == person.study
+    let work = S.valid(person.work) && (school || (S.job_slots(c, person.work) > 0 && qualified(c, person.work, person.qualification)))
+    let working = work && (if S.public_trade(c, person.work) do S.business_open(c, person.work, hour)
+      else if S.get(c.plants, person.work) == 16 do hour >= 4 && hour < 20
+      else c.street_day < 5 && hour >= start && hour < end_hour end end)
+    let shopping = S.business_open(c, person.shop, hour) && (if S.nightlife(c, person.shop) do hour >= 18 || hour < 2
+      else hour >= 11 + person.id % 4 && hour < 21 end)
+    if working do (1, person.work)
+    else if shopping do (3, person.shop)
+    else if S.valid(person.park) && hour >= 10 && hour < 19 do (5, person.park)
+    else (0, person.home) end end end
+  end
+  pfn route_for(c : Ur.Sim.City, person : Citizen, target : Int) : List(Int) do
+    if person.location == person.home do
+      if target == person.work do person.work_route else if target == person.shop do person.shop_route else person.park_route end end
+    else if target == person.home do
+      List.reverse(if person.location == person.work do person.work_route else if person.location == person.shop do person.shop_route else person.park_route end end)
+    else
+      if person.study >= 0 && target == person.work do
+        let (_, route) = destination(c, Ur.Food.campus_destinations(c, fn lot -> lot == target), person.location)
+        route
+      else if person.study >= 0 && person.location == person.work do
+        let (_, from_home) = destination(c, Ur.Food.campus_destinations(c, fn lot -> lot == person.work), target)
+        List.reverse(from_home)
+      else
+        let (_, route) = destination(c, Ur.Food.destinations(c, fn lot -> lot == target), person.location)
+        route
+      end end
+    end end
+  end
+  pfn parking_walk(route : List(Int), road : Int, steps : Int) : Int do
+    match route do
+      Nil -> 999
+      Cons(lot, rest) -> if lot == road do steps else parking_walk(rest, road, steps + 1) end
+    end
+  end
+  pfn parking_departure(c : Ur.Sim.City, code : Int, target : Int, route : List(Int)) : List(Int) do
+    match parking_at(code) do
+      Some(start) ->
+        let approach = parking_walk(route, start.road, 0)
+        if start.kind != 0 || approach > 3 do route else
+          match List.drop(route, approach) do
+            Cons(road, Cons(peer, _)) ->
+              if start.edge == curb_for_direction(road, peer) do route else
+                let heading = match start.edge do
+                  0 -> 3
+                  1 -> 2
+                  2 -> 0
+                  _ -> 1
+                end
+                let next = S.neighbour(road, heading)
+                if !connected(c, road, next) do route else
+                  let links = Ur.Food.driving_destinations_avoiding(c, target, road)
+                  if S.get(links, next) < 0 do route else
+                    let tail = List.reverse(Ur.Food.path_to(links, next, Nil))
+                    if List.length(tail) > List.length(route) + 6 do route
+                    else List.append(List.take(route, approach + 1), tail) end
+                  end
+                end
+              end
+            _ -> route
+          end
+        end
+      None -> route
+    end
+  end
+  pfn trip_parking(c : Ur.Sim.City, person : Citizen, target : Int, route : List(Int), occupied : Occupied, drive_after : Int) : Option(Parking) do
+    match parking_at(person.parking) do
+      Some(start) ->
+        let approach = parking_walk(route, start.road, 0)
+        let can_pull_out = if start.kind != 0 do true else
+          match List.drop(route, approach) do
+            Cons(road, Cons(peer, _)) ->
+              let (corner, _) = S.road_turn(c, road)
+              corner < 0 && start.edge == curb_for_direction(road, peer)
+            _ -> false
+          end
+        end
+        if start.lot != person.location || approach > 3 || !S.motor_road(c, start.road) || !can_pull_out do None else
+          let reversed = List.reverse(route)
+          match along_parking(c, target, reversed, 0, occupied.parking_keys, true) do
+            Some(finish) ->
+              let access = approach - 1 + finish.steps
+              let fee = S.parking_fee(finish.kind - 2) / 2
+              let legs = List.length(route) - 1
+              if S.motor_road(c, finish.road) && legs > drive_after + access * 2 + fee && legs > approach + finish.steps + 1 do Some(finish) else None end
+            None -> None
+          end
+        end
+      None -> None
+    end
+  end
+  pfn trip(c : Ur.Sim.City, running : NativeIntArr, bus : Option(BusService), person : Citizen, occupied : Occupied, activity : Int, target : Int, route : List(Int), park_trip : Bool) : (Citizen, Occupied) do
+    let route = if !park_trip && List.length(route) > 4 && timed_closure(c, route) && S.valid(person.location) && S.valid(target) do
+      let (_, detour) = destination(c, Ur.Food.driving_destinations(c, target), person.location)
+      if List.is_empty(detour) do route else detour end
+    else route end
+    let ground_legs = List.length(route) - 1
+    let required = if person.location == person.home && target == person.work do person.work_board else -1 end
+    let transit = if park_trip || person.location == target || person.study >= 4 do Nil
+      else transit_trip_from(c, running, person.location, target, ground_legs, required) end
+    let board = match transit do
+      Cons(_, Cons(stop, _)) -> stop
+      _ -> -1
+    end
+    let alight = if List.is_empty(transit) do -1 else transit_stop(c, running, target, 0) end
+    let uses_transit = !List.is_empty(transit) && (match bus do
+      Some(service) -> S.get(c.transit, board) != 2 || Ur.Fleet.serves(service.routes, board, alight)
+      None -> true
+    end)
+    let route = if uses_transit do transit else route end
+    let drive_after = if person.study >= 0 do 10 else 3 end
+    let (arrival, route) = if person.location != target && !park_trip && !uses_transit &&
+      (ground_legs > drive_after || uses_grade(c, route)) && car_corridor(c, List.drop(route, 1)) do
+      let driving_route = parking_departure(c, person.parking, target, route)
+      match trip_parking(c, person, target, driving_route, occupied, if uses_grade(c, driving_route) do 1 else drive_after end) do
+        Some(spot) -> (Some(spot), driving_route)
+        None -> (None, route)
+      end
+    else (None, route) end
+    let by_car = match arrival do
+      Some(_) -> true
+      None -> false
+    end
+    let occupied = { occupied with parking_keys: hold(occupied.parking_keys, arrival) }
+    let next = { person with activity: activity, park_trip: park_trip, target: target, route: route, progress: 0.0, queued: false, by_car: by_car, car_phase: if by_car do 1 else 0 end, arrival: parking_value(arrival), previous: -1, board: board, alight: alight, bus_slot: -1, transit_phase: if uses_transit do 1 else 0 end }
+    match route do
+      Cons(_, Cons(_, _)) -> ({ next with location: -1 }, occupied)
+      _ -> (arrive(next), occupied)
+    end
+  end
+  pfn next_quad(c : Ur.Sim.City, lot : Int, root : Int, skip : Int, d : Int) : Int do
+    if d == 4 do -1 else
+      let peer = S.neighbour(lot, d)
+      if peer != skip && S.campus_root(c, peer) == root && S.campus_quad(c, peer) do peer
+      else next_quad(c, lot, root, skip, d + 1) end
+    end
+  end
+  pfn quad_lap(c : Ur.Sim.City, school : Int) : List(Int) do
+    let root = S.campus_root(c, school)
+    let quad = next_quad(c, school, root, -1, 0)
+    if !S.valid(quad) do Nil else
+      let next = next_quad(c, quad, root, school, 0)
+      let back = Cons(quad, Cons(school, Nil))
+      if S.valid(next) do Cons(school, Cons(quad, Cons(next, back)))
+      else Cons(school, back) end
+    end
+  end
+  pfn depart(c : Ur.Sim.City, running : NativeIntArr, bus : Option(BusService), person : Citizen, occupied : Occupied, time : Float) : (Citizen, Occupied) do
+    let hour = S.street_hour(time)
+    let (activity, target) = scheduled_activity(c, person, hour)
+    let between_classes = person.study >= 3 && target == person.work && person.location == target &&
+      person.campus_day != c.calendar_day && hour >= 10 + person.id % 3 && hour < 16
+    let lap = if between_classes do quad_lap(c, target) else Nil end
+    if !List.is_empty(lap) do
+      trip(c, running, bus, { person with campus_day: c.calendar_day }, occupied, 1, target, lap, false)
+    else if target == person.location do ({ person with wait: 0.04, activity: activity }, occupied) else
+      let route = route_for(c, person, target)
+      if List.is_empty(route) do ({ person with wait: 0.10 }, occupied) else
+        trip(c, running, bus, person, occupied, activity, target, route, target == person.park || person.location == person.park)
+      end
+    end end
+  end
+  pfn current_plot(route : List(Int)) : Int do
+    match route do
+      Cons(i, _) -> i
+      Nil -> -1
+    end
+  end
+  pfn next_leg(c : Ur.Sim.City, person : Citizen, occupied : Occupied, b : Int, tail : List(Int)) : (Citizen, Occupied) do
+    match tail do
+      Nil -> (arrive({ person with previous: current_plot(person.route) }), occupied)
+      Cons(next, _) ->
+        let car_phase = match (person.car_phase, parking_at(person.parking), parking_at(person.arrival)) do
+          (1, Some(p), _) -> if b == p.road do 2 else 1 end
+          (2, _, Some(p)) -> if current_plot(person.route) == p.road do 3 else 2 end
+          _ -> person.car_phase
+        end
+        let entry = departure_merge(c, person, b, next)
+        let person = { person with car_phase: car_phase }
+        let progress = if driving(c, person, b, next) do entry else 0.0 end
+        let occupied = if driving(c, person, b, next) do lane_set(occupied, cell(b, next, progress), position(progress)) else occupied end
+        let phase = if person.transit_phase == 1 && b == person.board do 2
+          else if person.transit_phase == 3 && b == person.alight do 4 else person.transit_phase end end
+        let wait = if phase == 2 do 3.0 /. int_to_float(S.frequency(c, b)) else 0.0 end
+        ({ person with route: Cons(b, tail), previous: current_plot(person.route), progress: progress, queued: false, transit_phase: phase, wait: wait }, occupied)
+    end
+  end
+  pfn next_clear(c : Ur.Sim.City, person : Citizen, occupied : Occupied, b : Int, tail : List(Int)) : Bool do
+    match tail do
+      Nil -> true
+      Cons(next, _) ->
+        let leaving = person.car_phase == 2 && (match parking_at(person.arrival) do
+          Some(p) -> p.road == current_plot(person.route)
+          None -> false
+        end)
+        leaving || !driving(c, person, b, next) ||
+          lane_room(occupied, cell(b, next, 0.0), position(0.0), 0)
+    end
+  end
+  pfn walk_through_junction(c : Ur.Sim.City, person : Citizen, occupied : Occupied, a : Int, b : Int, proposed : Float) : Float do
+    if S.get(occupied.junctions, a) != 2 do proposed else
+      match walk_corners(c, person, a, b) do
+        Some((sx, sz, ex, ez)) ->
+          let first = crossing_arm(sx, sz, ex, ez, 0)
+          let second = crossing_arm(sx, sz, ex, ez, 1)
+          let step = crossing_step()
+          if person.progress == 0.0 && first >= 0 && S.junction_arm(c, a, first) &&
+             !S.crosswalk_open(a, first, occupied.signal_tick) do 0.0
+          else if person.progress <= step && proposed > step && second >= 0 && S.junction_arm(c, a, second) &&
+             !S.crosswalk_open(a, second, occupied.signal_tick) do step
+          else proposed end end
+        None -> proposed
+      end
+    end
+  end
+  pfn walk(c : Ur.Sim.City, person : Citizen, occupied : Occupied, dt : Float, b : Int, tail : List(Int)) : (Citizen, Occupied) do
+    let speed = if person.study >= 0 && !person.park_trip do 3.6 else 0.32 end
+    let a = current_plot(person.route)
+    let pace = if S.surface_flood(c, b) >= 2 do 0.0 else S.walk_pace(c, a) end
+    let proposed = walk_through_junction(c, person, occupied, a, b, person.progress +. dt *. speed *. pace)
+    let occupied = mark_crossing(c, occupied, { person with progress: proposed }, a, b)
+    let (progress, occupied) = match tail do
+      Cons(next, _) ->
+        let merge = departure_merge(c, person, b, next)
+        if merge > 0.0 && person.progress <= 0.5 && proposed > 0.5 do
+          if lane_room(occupied, cell(b, next, 0.0), position(merge), 0) do
+            (proposed, lane_set(occupied, cell(b, next, merge), position(merge)))
+          else (0.5, occupied) end
+        else (proposed, occupied) end
+      Nil -> (proposed, occupied)
+    end
+    if progress < 1.0 do ({ person with progress: progress }, occupied)
+    else next_leg(c, person, occupied, b, tail) end
+  end
+  pfn junction_clear(c : Ur.Sim.City, occupied : Occupied, i : Int, approach : Int, d : Int) : Bool do
+    if d >= 4 do true else
+      let peer = S.neighbour(i, d)
+      let exiting = connected(c, i, peer) && (lane_get(occupied, cell(i, peer, 0.0)) > 0 ||
+        (lane_get(occupied, cell(i, peer, 0.25)) > 0 && lane_get(occupied, cell(i, peer, 0.25)) < position(0.44)))
+      let entering = peer != approach && connected(c, peer, i) &&
+        (lane_get(occupied, cell(peer, i, S.stop_line())) > position(S.stop_line()) ||
+         lane_get(occupied, cell(peer, i, 0.5)) > 0 || lane_get(occupied, cell(peer, i, 0.99)) > 0)
+      if exiting || entering do false else junction_clear(c, occupied, i, approach, d + 1) end
+    end
+  end
+  pfn gap_limit(occupied : Occupied, slot : Int, last : Int, proposed : Float) : Float do
+    if slot > last do proposed else
+      let leader = lane_get(occupied, slot)
+      if leader > 0 do
+        let limit = int_to_float(leader - 1) /. 1000.0 -. 0.26
+        if limit < proposed do limit else proposed end
+      else gap_limit(occupied, slot + 1, last, proposed) end
+    end
+  end
+  pfn drive(c : Ur.Sim.City, person : Citizen, occupied : Occupied, time : Float, dt : Float, a : Int, b : Int, tail : List(Int)) : (Citizen, Occupied) do
+    let direction = S.direction(a, b)
+    let old = cell(a, b, person.progress)
+    let speed = if S.get(c.roads, a) == 2 && S.get(c.roads, b) == 2 do 0.78 else 0.62 end
+    let length = if S.grade_link(c, a, b) do int_to_float(S.span_distance(a, b)) else 1.0 end
+    let pace = if S.storm_road_closed(c, b) do 0.0 else S.rain_road_pace(c) end
+    let proposed = person.progress +. dt *. speed *. pace *. S.traffic_pace(c.street_day, S.street_hour(time)) /. length
+    let end_at = match parking_at(person.arrival) do
+      Some(p) -> if b == p.road do parking_entry(p) else 1.0 end
+      None -> 1.0
+    end
+    let limit = gap_limit(occupied, old + 1, cell(a, b, 1.0), proposed)
+    let junction = if end_at > S.stop_line() && !S.grade_link(c, a, b) do S.get(occupied.junctions, b) else 0 end
+    let clear = next_clear(c, person, occupied, b, tail)
+    let stop = if junction > 0 do S.stop_line() else 0.72 end
+    let stopped = if junction == 1 && person.progress == stop do person.wait +. dt else person.wait end
+    let permission = if junction == 1 do person.wait >= 0.45
+      else if junction == 2 do S.signal_green(b, direction, occupied.signal_tick) else true end end
+    let exit_mask = match tail do
+      Cons(next, _) -> int_shl(1, S.direction(b, next))
+      Nil -> 0
+    end
+    let crossed_arms = int_or(int_shl(1, S.opposite(direction)), exit_mask)
+    let blocked = junction > 0 && person.progress <= stop &&
+      (!permission || int_and(crossed_arms, S.get(occupied.crossings, b)) > 0 || !junction_clear(c, occupied, b, a, 0))
+    let limit = if limit > stop && (blocked || (end_at == 1.0 && !clear)) do stop else limit end
+    let progress = if limit < person.progress do person.progress else limit end
+    if progress >= end_at && clear do
+      next_leg(c, person, lane_set(occupied, old, 0), b, tail)
+    else
+      let next = cell(a, b, progress)
+      if next != old && lane_get(occupied, next) > 0 do ({ person with queued: true }, occupied)
+      else ({ person with progress: progress, wait: stopped, queued: progress < proposed }, lane_set(lane_set(occupied, old, 0), next, position(progress))) end
+    end
+  end
+  pfn alight_route(route : List(Int), lot : Int) : List(Int) do
+    match route do
+      Nil -> Nil
+      Cons(i, rest) -> if i == lot do route else alight_route(rest, lot) end
+    end
+  end
+  pfn bus_passenger(c : Ur.Sim.City, person : Citizen, active : List(Ur.Fleet.Run), seats : NativeIntArr, dt : Float) : Citizen do
+    if person.transit_phase == 2 do
+      let (slot, arrival) = Ur.Fleet.boarding(active, person.board, person.alight, seats)
+      if slot >= 0 do { person with bus_slot: slot, transit_phase: 3, wait: arrival, progress: Ur.Fleet.progress(active, slot) }
+      else if person.wait > -75.0 do { person with wait: person.wait -. dt }
+      else
+        let links = Ur.Food.destinations(c, fn lot -> lot == person.target)
+        let path = Ur.Food.path_to(links, person.board, Nil)
+        let route = if S.get(links, person.board) >= 0 do List.reverse(path) else Nil end
+        { person with route: route, location: person.board, transit_phase: 0, wait: 0.0 }
+      end end
+    else
+      let progress = Ur.Fleet.progress(active, person.bus_slot)
+      if progress >= person.wait || progress < person.progress do
+        { person with route: alight_route(person.route, person.alight), previous: -1, bus_slot: -1, transit_phase: 4, progress: 0.0, wait: 0.0 }
+      else { person with progress: progress } end
+    end
+  end
+  pfn advance_trip(c : Ur.Sim.City, running : NativeIntArr, bus : Option(BusService), person : Citizen, occupied : Occupied, time : Float, dt : Float) : (Citizen, Occupied) do
+    match person.route do
+      Cons(a, Cons(b, tail)) ->
+        if (person.transit_phase == 2 || person.transit_phase == 3) && S.get(c.transit, person.board) == 4 && S.get(running, person.board) == 0 do
+          if person.transit_phase == 2 do
+            ({ person with route: Nil, location: person.board, transit_phase: 0, progress: 0.0, wait: 0.0 }, occupied)
+          else (person, occupied) end
+        else if person.transit_phase == 2 do
+          if person.wait > 0.0 do ({ person with wait: person.wait -. dt }, occupied)
+          else ({ person with transit_phase: 3 }, occupied) end
+        else if person.transit_phase == 3 do
+          let speed = if S.get(c.transit, person.board) == 3 do 0.85 else 0.65 end
+          let progress = person.progress +. dt *. speed
+          if progress >= 1.0 do next_leg(c, person, occupied, b, tail)
+          else ({ person with progress: progress }, occupied) end
+        else if driving(c, person, a, b) do drive(c, person, occupied, time, dt, a, b, tail)
+        else walk(c, person, occupied, dt, b, tail) end end end end
+      _ ->
+        if person.wait > 0.0 do ({ person with wait: person.wait -. dt }, occupied)
+        else depart(c, running, bus, person, occupied, time) end
+    end
+  end
+  fn sanitation_driver(people : List(Citizen), depot : Int, pickup : Int) : Int do
+    let ready = List.filter(people, fn person -> person.work == depot && person.work_position >= 2 &&
+      person.location == depot && person.activity == 1 && List.is_empty(person.route))
+    match List.drop(ready, pickup % S.clamp(List.length(ready), 1, 3)) do
+      Cons(person, _) -> person.id
+      Nil -> -1
+    end
+  end
+  fn sanitation_crew(people : List(Citizen), previous : Int, driver : Int) : List(Citizen) do
+    if previous == driver && driver < 0 do people else
+      List.map(people, fn person ->
+        if person.id == driver do { person with activity: 6 }
+        else if person.activity == 6 do { person with activity: 1 } else person end end)
+    end
+  end
+  pfn bus_waiter(c : Ur.Sim.City, person : Citizen) : Bool do
+    person.transit_phase == 2 && S.get(c.transit, person.board) == 2
+  end
+  pfn queue_boarding(c : Ur.Sim.City, active : List(Ur.Fleet.Run), queue : List(Citizen), seats : NativeIntArr, dt : Float, out : List(Citizen)) : List(Citizen) do
+    match queue do
+      Nil -> out
+      Cons(person, rest) ->
+        let next = bus_passenger(c, person, active, seats, dt)
+        let seats = if next.bus_slot >= 0 do
+          NativeArray.set_int(seats, next.bus_slot, NativeArray.get_int(seats, next.bus_slot) + 1)
+        else seats end
+        queue_boarding(c, active, rest, seats, dt, Cons(next, out))
+    end
+  end
+  pfn bus_boarding(c : Ur.Sim.City, active : List(Ur.Fleet.Run), cars : List(Citizen), dt : Float) : List(Citizen) do
+    let riders = List.map(List.filter(cars, fn person -> person.bus_slot >= 0),
+      fn person -> bus_passenger(c, person, active, NativeArray.make_int(0, 0), dt))
+    let seats = List.fold_left(riders, NativeArray.make_int(180, 0), fn (seats, rider) ->
+      if rider.bus_slot >= 0 do NativeArray.set_int(seats, rider.bus_slot, NativeArray.get_int(seats, rider.bus_slot) + 1) else seats end)
+    let waiters = List.sort_by(List.filter(cars, fn person -> bus_waiter(c, person)), fn (a, b) -> a.wait <= b.wait)
+    queue_boarding(c, active, waiters, seats, dt, riders)
+  end
+  pfn advance(c : Ur.Sim.City, running : NativeIntArr, bus : Option(BusService), cars : List(Citizen), occupied : Occupied, time : Float, dt : Float, bus_updates : List(Citizen), out : List(Citizen)) : List(Citizen) do
+    match cars do
+      Nil -> List.reverse(out)
+      Cons(person, rest) ->
+        let (next, occupied) = if person.activity == 6 do (person, occupied) else
+          let bus_update = if person.bus_slot >= 0 || bus_waiter(c, person) do List.find(bus_updates, fn rider -> rider.id == person.id) else None end
+          match bus_update do
+            Some(next) -> (next, occupied)
+            None -> advance_trip(c, running, bus, person, occupied, time, dt)
+          end
+        end
+        let at_business = S.valid(next.location) && S.public_trade(c, next.location)
+        let next = if at_business && !S.business_open(c, next.location, S.street_hour(time)) do
+          { next with activity: 0, wait: 0.0 }
+        else next end
+        advance(c, running, bus, rest, occupied, time, dt, bus_updates, Cons(next, out))
+    end
+  end
+  fn step_with_bus(c : Ur.Sim.City, running : NativeIntArr, bus : Option(BusService), cars : List(Citizen), time : Float, dt : Float, junctions : NativeIntArr, traffic_time : Float) : List(Citizen) do
+    match cars do
+      Nil -> Nil
+      _ ->
+        let occupancy = { lanes: NativeArray.make_int(S.count() * 16, 0), parking_keys: parkings(cars, -1, Nil),
+          junctions: junctions, crossings: NativeArray.make_int(S.count(), 0), signal_tick: S.signal_tick(traffic_time) }
+        let updates = match bus do
+          Some(service) -> bus_boarding(c, service.active, cars, dt)
+          None -> Nil
+        end
+        advance(c, running, bus, cars, reserve(c, cars, occupancy), time, dt, updates, Nil)
+    end
+  end
+  fn step_with(c : Ur.Sim.City, running : NativeIntArr, cars : List(Citizen), time : Float, dt : Float) : List(Citizen) do
+    let junctions = S.junction_controls(c, NativeArray.make_int(S.count() * 4, 0), 0, NativeArray.make_int(S.count(), 0))
+    step_with_bus(c, running, None, cars, time, dt, junctions, time)
+  end
+  fn step(c : Ur.Sim.City, cars : List(Citizen), time : Float, dt : Float) : List(Citizen) do
+    step_with(c, S.transit_service(c, S.supply(c, S.access(c))), cars, time, dt)
+  end
+  pfn count_go(c : Ur.Sim.City, cars : List(Citizen), n : CitizenCounts) : CitizenCounts do
+    match cars do
+      Nil -> n
+      Cons(person, rest) ->
+        let n = { n with tracked: n.tracked + 1 }
+        let n = if person.activity == 6 do { n with driving: n.driving + 1 }
+        else if person.transit_phase == 2 do { n with waiting: n.waiting + 1 }
+        else if person.transit_phase == 3 do { n with riding: n.riding + 1 }
+        else if person.location < 0 do
+          match person.route do
+            Cons(a, Cons(b, _)) -> if driving(c, person, a, b) do { n with driving: n.driving + 1, queued: n.queued + (if person.queued do 1 else 0 end) }
+              else { n with walking: n.walking + 1 } end
+            _ -> n
+          end
+          else if person.location == person.home do { n with home: n.home + 1 }
+          else if person.activity == 5 && S.get(c.parks, person.location) > 0 do { n with visiting_park: n.visiting_park + 1 }
+          else if person.activity == 3 && person.location == person.shop do { n with shopping: n.shopping + 1 }
+          else if person.activity == 1 && person.location == person.work do
+            if person.study >= 0 do { n with studying: n.studying + 1 } else { n with at_work: n.at_work + 1 } end
+          else n end end end end end end end end
+        count_go(c, rest, n)
+    end
+  end
+  fn tally(c : Ur.Sim.City, cars : List(Citizen)) : CitizenCounts do
+    count_go(c, cars, { tracked: 0, walking: 0, waiting: 0, riding: 0, driving: 0, queued: 0, at_work: 0, studying: 0, shopping: 0, visiting_park: 0, home: 0 })
+  end
+end

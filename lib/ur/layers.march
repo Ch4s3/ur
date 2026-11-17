@@ -1,0 +1,194 @@
+mod Ur.Layers do
+  alias Ur.Sim as S
+  alias Ur.UtilitiesNetwork as N
+  fn name(layer : Int) : String do
+    match layer do
+      1 -> "Water supply"
+      31 -> "Sewage collection"
+      2 -> "Electricity"
+      3 -> "Transit & jobs"
+      4 -> "Air, land & ocean pollution"
+      5 -> "Groundwater"
+      6 -> "Geothermal"
+      7 -> "Oil potential"
+      8 -> "Landing survey"
+      9 -> "Road traffic"
+      10 -> "Civic services"
+      11 -> "Road crossings"
+      19 -> "Reported incidents"
+      20 -> "Fires"
+      21 -> "Medical calls"
+      22 -> "Fire recovery"
+      23 -> "Ground-floor areas"
+      24 -> "Quiet-hour areas"
+      25 -> "Transit foot traffic"
+      26 -> "Neighborhood noise"
+      27 -> "Car-free schedule"
+      28 -> "Council wards"
+      29 -> "Wind"
+      30 -> "Trash collection"
+      32 -> "Heat"
+      33 -> "Floodplain"
+      12 | 13 | 14 | 15 | 16 | 17 | 18 -> S.metric_name(layer - 12)
+      _ -> "Off"
+    end
+  end
+  fn legend(layer : Int) : String do
+    match layer do
+      1 | 2 | 31 -> "Cyan: spare capacity · Amber: busy · Red: full · Gray: no supply or outlet"
+      3 -> "Cyan running / amber unfinished / green near jobs"
+      4 -> "Faint amber: low pollution. Orange to red: higher concentrations."
+      5 -> "Blue marks groundwater. Fainter color follows the aquifer edge."
+      6 -> "Orange volcanic field"
+      7 -> "Violet marks prospective oil deposits."
+      10 -> "Green: all four. Cyan: school or clinic. Amber: fire or police only. Red: uncovered housing."
+      12 | 13 | 14 | 15 | 16 | 17 | 18 -> "Red below 35 / amber 35–49 / green 50–69 / cyan 70+."
+      20 -> "Latest month · Orange ignition / yellow spread."
+      23 -> "Painted overrides · Green housing or offices / cyan allowed / amber required."
+      24 -> "Painted overrides · Amber until 2 am / cyan until 10 pm / green no nightlife."
+      25 -> "Transit foot traffic · Green low / amber medium / cyan high."
+      30 -> "Green: contained / amber: piling up / red: overflowing / blue: disposal facility."
+      33 -> "Amber: storm risk · Blue: flooded now · Green: protection"
+      32 -> "Blue <25 °C · Green 25–27.9 · Amber 28–32.9 · Red 33+ °C"
+      29 -> "Arrows point downwind. Gray: light / blue: moderate / amber: strong."
+      28 -> "Amber: sponsor ward   Red: target parcel   Cyan/green: represented"
+      27 -> "Cyan: closed to cars   Amber: scheduled   Gray: eligible street"
+      26 -> "Noise from bars and turbines · Amber audible / red loud."
+      22 -> "Orange: closed for repairs. Red: rebuilding after a fire."
+      21 -> "Latest month · Cyan stabilized / amber complications / red no admission."
+      19 -> "Latest month · Red unanswered / amber response / orange fire."
+      11 -> "Cyan overpass / amber underpass / blue tunnel."
+      9 -> "Green free flow / amber busy / red congested"
+      8 -> "Cyan: low shoreline suitable for landing"
+      _ -> "Choose a layer to inspect the map."
+    end
+  end
+  -- Static prospecting layer for the starter map.
+  fn oil(i : Int) : Bool do
+    let x = i % S.width() - 30
+    let z = i / S.width() - 18
+    S.valid(i) && 2 * x * x + z * z <= 13
+  end
+  fn oil_at(c : Ur.Sim.City, i : Int) : Bool do
+    if c.founding_map do S.valid(i) && i % S.width() >= 52 && i / S.width() >= 25 && i / S.width() <= 29
+    else oil(i) end
+  end
+  pfn incident_material(calls : List(Ur.Sim.Incident), i : Int, filter : Int) : Int do
+    match calls do
+      Nil -> -1
+      Cons(call, rest) ->
+        if !S.incident_matches(call.kind, filter) do incident_material(rest, i, filter)
+        else if call.lot == i do
+          match call.medical do
+            Some(t) -> if t.outcome == 1 do 20 else if t.outcome == 2 do 10 else 6 end end
+            None -> if call.kind == 3 do 15 else if call.response < 0 do 6 else 10 end end
+          end
+        else if List.any(call.spread, fn lot -> lot == i) do 10
+        else incident_material(rest, i, filter) end end end
+    end
+  end
+  fn utility_layer(st : Ur.Sim.Stats, layer : Int) : Ur.Sim.UtilityDelivery do
+    if layer == 2 do st.utilities.electric else if layer == 31 do st.utilities.sewer else st.utilities.water end end
+  end
+  fn is_utility(layer : Int) : Bool do layer == 1 || layer == 2 || layer == 31 end
+  fn utility_caption(st : Ur.Sim.Stats, layer : Int, lot : Int) : String do
+    let report = utility_layer(st, layer)
+    let capacity = N.capacity(report.flow, lot)
+    let demand = S.get(report.demand, lot)
+    if capacity > 0 do
+      name(layer) ++ " · " ++ int_to_string(N.used(report.flow, lot)) ++ " / " ++ int_to_string(capacity) ++ " on segment"
+    else if demand > 0 do
+      name(layer) ++ " · " ++ int_to_string(S.get(report.delivered, lot)) ++ " / " ++ int_to_string(demand) ++ " served here"
+    else "" end end
+  end
+  fn heat_color(temperature : Int) : Int do
+    if temperature < 250 do 12 else if temperature < 280 do 11 else if temperature < 330 do 10 else 6 end end end
+  end
+  fn material(c : Ur.Sim.City, st : Ur.Sim.Stats, layer : Int, i : Int) : Int do
+    let land = S.get(c.heights, i) > 0
+    match layer do
+      33 ->
+        let risk = S.floodplain_depth(c, i)
+        if risk > 0 do
+          if S.severe_rain(c) do (if risk >= 6 do 31 else 12 end) else (if risk >= 6 do 15 else 18 end) end
+        else if S.get(c.storm_drains, i) > 0 || S.get(c.seawalls, i) > 0 do 11 else -1 end end
+      32 -> if S.get(c.heights, i) == 0 do -1 else heat_color(S.local_temperature(c, i)) end
+      1 | 2 | 31 ->
+        let report = utility_layer(st, layer)
+        let capacity = N.capacity(report.flow, i)
+        let demand = S.get(report.demand, i)
+        if capacity == 0 do
+          if demand > S.get(report.delivered, i) do 6 else -1 end
+        else if S.get(report.connections, i) < 0 do 17
+        else
+          let used = N.used(report.flow, i)
+          if used >= capacity do 6 else if used * 5 >= capacity * 4 do 10 else 20 end end
+        end end
+      3 ->
+        let trip = S.commute(st.commutes, i)
+        if S.get(c.ferries, i) > 0 || S.get(c.transit, i) == 1 || S.get(st.running_transit, i) > 0 do 20
+        else if S.get(c.transit, i) >= 2 do 10
+        else if land && S.get(c.zones, i) > 0 && trip < 999 do (if trip <= 14 do 11 else 10 end)
+        else -1 end end end
+      6 -> if land && S.geothermal(c, i) do 18 else -1 end
+      9 -> if S.motor_road(c, i) do 0 else -1 end
+      10 ->
+        let mask = S.get(st.civic, i)
+        let zone = S.get(c.zones, i)
+        if mask == 15 do 11
+        else if mask % 4 > 0 do 20
+        else if mask > 0 do 10
+        else if zone == 1 || zone == 3 do 6 else -1 end end end end
+      30 ->
+        let stock = S.get(c.waste_stock, i)
+        let kind = S.get(c.plants, i)
+        let overflow = S.waste_overflow(c, i)
+        if kind == 16 || kind == 17 || (kind >= 34 && kind <= 36) do 12
+        else if stock == 0 do -1 else if overflow >= 10 do 6 else if overflow > 0 do 10 else 11 end end end end
+      29 ->
+        if i % S.width() % 4 != 2 || i / S.width() % 4 != 2 do -1 else
+          let speed = (S.wind_at(c, i)).speed
+          if speed >= 36 do 10 else if speed >= 23 do 12 else 17 end end
+        end
+      28 -> Ur.Council.terrain_color(c, i)
+      27 -> if !S.schedule_eligible(c, i) do -1 else if S.car_free_now(c, i) do 20 else if S.get(c.car_free_days, i) > 0 do 10 else 17 end end end
+      23 ->
+        match S.get(c.ground_areas, i) do
+          1 -> 11
+          2 -> 20
+          3 -> 10
+          _ -> -1
+        end
+      24 ->
+        match S.get(c.quiet_areas, i) do
+          1 -> 10
+          2 -> 20
+          3 -> 11
+          _ -> -1
+        end
+      25 ->
+        let flow = S.get(c.footfall, i)
+        if flow == 0 do -1 else if flow >= 20 do 20 else if flow >= 12 do 10 else 11 end end end
+      26 ->
+        let noise = S.street_noise(c, i)
+        if noise == 0 do -1 else if noise >= 12 do 6 else 10 end end
+      22 -> if S.fire_rebuilding(c, i) do 6 else if S.fire_offline(c, i) do 15 else -1 end end
+      19 | 20 | 21 -> match c.crime_history do
+        Nil -> -1
+        Cons(month, _) -> incident_material(month.calls, i, if layer == 19 do 0 else layer - 17 end)
+      end
+      12 | 13 | 14 | 15 | 16 | 17 | 18 ->
+        let score = S.measure(c, st, i, layer - 12)
+        if !land do -1 else if score < 35 do 6 else if score < 50 do 10 else if score < 70 do 11 else 20 end end end end
+      11 ->
+        match S.grade_kind(c, S.grade_source(c, i)) do
+          1 -> 20
+          2 -> 10
+          3 -> 12
+          _ -> -1
+        end
+      8 -> if S.can_land(c, i) do 20 else -1 end
+      _ -> -1
+    end
+  end
+end

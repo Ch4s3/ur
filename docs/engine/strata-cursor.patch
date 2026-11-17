@@ -1,17 +1,18 @@
 diff --git a/lib/strata/ffi/vk.march b/lib/strata/ffi/vk.march
-index e012de4..13945fc 100644
+index e012de4..e089744 100644
 --- a/lib/strata/ffi/vk.march
 +++ b/lib/strata/ffi/vk.march
-@@ -20,6 +20,8 @@ mod Strata.Ffi.Vk do
+@@ -20,6 +20,9 @@ mod Strata.Ffi.Vk do
      fn x_poll(): Unit = "sv_poll"
      fn x_key(k: Int): Int = "sv_key"
      fn x_mouse_button(b: Int): Int = "sv_mouse_button"
 +    fn x_mouse_x(): Float = "sv_mouse_x"
 +    fn x_mouse_y(): Float = "sv_mouse_y"
++    fn x_scroll_y(): Float = "sv_scroll_y"
      fn x_mouse_dx(): Float = "sv_mouse_dx"
      fn x_mouse_dy(): Float = "sv_mouse_dy"
      fn x_time(): Float = "sv_time"
-@@ -85,6 +87,10 @@ mod Strata.Ffi.Vk do
+@@ -85,6 +88,12 @@ mod Strata.Ffi.Vk do
    fn key(k : Int) : Bool do x_key(k) == 1 end
    doc "Is mouse button [b] held? 0 left, 1 right, 2 middle."
    fn mouse_button(b : Int) : Bool do x_mouse_button(b) == 1 end
@@ -19,19 +20,82 @@ index e012de4..13945fc 100644
 +  fn mouse_x() : Float do x_mouse_x() end
 +  doc "Cursor y in window points, from the top edge; 0 without a window."
 +  fn mouse_y() : Float do x_mouse_y() end
++  doc "Vertical scroll delta accumulated during the latest poll."
++  fn scroll_y() : Float do x_scroll_y() end
    fn mouse_dx() : Float do x_mouse_dx() end
    fn mouse_dy() : Float do x_mouse_dy() end
    doc "Seconds since the window system started."
 diff --git a/native/strata_vk.c b/native/strata_vk.c
-index 4cd25b7..177670f 100644
+index 4cd25b7..cc8dc4d 100644
 --- a/native/strata_vk.c
 +++ b/native/strata_vk.c
-@@ -2349,6 +2349,8 @@ void sv_poll(void) { g.mdx = 0; g.mdy = 0; if (g.win) glfwPollEvents(); }
+@@ -90,6 +90,7 @@ typedef struct {
+ } ChunkEntry;
+ #define SV_IN_USE 256
+ #define SV_BODY   512          /* a part of a body: drawn at its pose, never in the light volume */
++#define SV_HAS_LIGHT 2048      /* slot owns a cell in the voxel light volume */
+ #define SV_HIDDEN 1024         /* held but not drawn (Strata.Slots' which-chunk-draws rule); kept across uploads, cleared by a free */
+ 
+ /* An image a pass renders to and a later pass samples. */
+@@ -256,7 +257,7 @@ static struct {
+     int64_t drawn_chunks, drawn_quads;
+     /* input */
+     unsigned char keys[SV_MAX_KEYS];
+-    double mx, my, mdx, mdy; int have_mouse;
++    double mx, my, mdx, mdy, scroll_y; int have_mouse;
+     int shot_pending; char shot_path[1024];
+ } g;
+ 
+@@ -1225,6 +1226,7 @@ static void on_cursor(GLFWwindow *w, double x, double y) {
+     if (g.have_mouse) { g.mdx += x - g.mx; g.mdy += y - g.my; }
+     g.mx = x; g.my = y; g.have_mouse = 1;
+ }
++static void on_scroll(GLFWwindow *w, double x, double y) { (void)w; (void)x; g.scroll_y += y; }
+ static void on_resize(GLFWwindow *w, int width, int height) { (void)w; (void)width; (void)height; g.resized = 1; }
+ 
+ /* ── Open / close ─────────────────────────────────────────────────────────── */
+@@ -1935,6 +1937,7 @@ int64_t sv_open(int64_t w, int64_t h, int64_t capture_mouse, int64_t quad_capaci
+     if (!g.win) { die("glfwCreateWindow", 0); return 0; }
+     glfwSetKeyCallback(g.win, on_key);
+     glfwSetCursorPosCallback(g.win, on_cursor);
++    glfwSetScrollCallback(g.win, on_scroll);
+     glfwSetFramebufferSizeCallback(g.win, on_resize);
+     if (capture_mouse) glfwSetInputMode(g.win, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+ 
+@@ -2345,10 +2348,13 @@ void sv_close(void) {
+ 
+ /* ── Window and input queries ─────────────────────────────────────────────── */
+ int64_t sv_should_close(void) { return (!g.win || glfwWindowShouldClose(g.win)) ? 1 : 0; }
+-void sv_poll(void) { g.mdx = 0; g.mdy = 0; if (g.win) glfwPollEvents(); }
++void sv_poll(void) { g.mdx = 0; g.mdy = 0; g.scroll_y = 0; if (g.win) glfwPollEvents(); }
  int64_t sv_key(int64_t k) { return (k >= 0 && k < SV_MAX_KEYS) ? g.keys[k] : 0; }
  /* Is mouse button b (0 left, 1 right, 2 middle) held? */
  int64_t sv_mouse_button(int64_t b) { return (g.win && b >= 0 && b <= 7 && glfwGetMouseButton(g.win, (int)b) == GLFW_PRESS) ? 1 : 0; }
 +double sv_mouse_x(void) { if (g.win && g.have_mouse) return g.mx; double x = 0, y = 0; if (g.win) glfwGetCursorPos(g.win, &x, &y); return x; }
 +double sv_mouse_y(void) { if (g.win && g.have_mouse) return g.my; double x = 0, y = 0; if (g.win) glfwGetCursorPos(g.win, &x, &y); return y; }
++double sv_scroll_y(void) { return g.scroll_y; }
  double sv_mouse_dx(void) { return g.mdx; }
  double sv_mouse_dy(void) { return g.mdy; }
  double sv_time(void) { return glfwGetTime(); }
+@@ -2809,7 +2815,8 @@ int64_t sv_chunk_commit(void) {
+     if ((uint32_t)slot + 1 > g.hi_slot) g.hi_slot = (uint32_t)slot + 1;
+     trans_track((uint32_t)slot, counts[2] > 0);
+     touch((uint32_t)slot);
+-    if (g.stage.body || g.stage.level > 0) return 1;   /* neither a body nor a coarse chunk is in the light volume */
++    if (g.stage.body || g.stage.level > 0 || g.stage_light_n == 0) return 1;   /* neither a body nor a coarse chunk is in the light volume */
++    e->level_flags |= SV_HAS_LIGHT;
+     /* its voxels go into the light volume at the start of the next frame */
+     int32_t chunk[3] = { e->origin[0] >> 5, e->origin[1] >> 5, e->origin[2] >> 5 };
+     if (g.stage_light_n == 32768) {
+@@ -2823,9 +2830,9 @@ void sv_chunk_free(int64_t slot) {
+     if (!g.ok || slot < 0 || slot >= SV_MAX_SLOTS) return;
+     ChunkEntry *e = &g.entries[slot];
+     if (!(e->level_flags & SV_IN_USE)) { e->level_flags = 0; return; }   /* a slot hidden before its first upload landed */
+-    int body = (e->level_flags & SV_BODY) != 0, coarse = (e->level_flags & 255) > 0;
++    int has_light = (e->level_flags & SV_HAS_LIGHT) != 0;
+     e->level_flags = 0;                      /* the cull pass skips it once the frames have their copy */
+-    if (!body && !coarse) {   /* and its cell of the light volume empties, if it is still this chunk's */
++    if (has_light) {   /* and its cell of the light volume empties, if it is still this chunk's */
+         int32_t chunk[3] = { e->origin[0] >> 5, e->origin[1] >> 5, e->origin[2] >> 5 };
+         int cell[3];
+         struct LightCell *c = cell_of(chunk, cell);

@@ -1,0 +1,121 @@
+-- One scheduled freight service connects the regional harbour to an island.
+-- Quantities are cargo units and prices are whole dollars.
+mod Ur.FreightNetwork do
+  type Inventory = { units : Int, value : Int }
+  type Cargo = { food : Int, fuel : Int, waste : Int }
+  type Voyage = { id : Int, left : Int, age : Int, food : Inventory, fuel : Int, waste : Int }
+  type Route = { port : Int, island : Int, producer : Int, market : Int, plant : Int, waste_site : Int,
+    priority : Int, backup : Bool, reserve : Bool, suspended : Bool,
+    producer_stock : Int, dock_food : Int, dock_waste : Int, shop : Inventory, fuel : Int, landed_fuel : Int,
+    voyage : Option(Voyage), next_id : Int, departure : Int, price : Int, demand : Int, sold : Int,
+    sales : Int, cost_sold : Int, spoiled : Int, wallet : Int, duty : Int, expenses : Int, delivered : Int, exported : Int, month_waste : Int, month_sales : Int, month_cost : Int, month_days : Int, coverage : Int }
+  type Conditions = { day : Int, open : Bool, mainland : Bool, production : Int, plant : Bool, waste : Int,
+    demand : Int, spending : Int, capacity : Int, handling : Int, cash : Int, tariff : Int }
+
+  fn empty() : Inventory do { units: 0, value: 0 } end
+  fn start(port : Int, island : Int, producer : Int, market : Int, plant : Int, waste_site : Int, day : Int) : Route do
+    { port: port, island: island, producer: producer, market: market, plant: plant, waste_site: waste_site, priority: 0,
+      backup: false, reserve: false, suspended: false, producer_stock: 0, dock_food: 0, dock_waste: 0,
+      shop: empty(), fuel: 0, landed_fuel: 0, voyage: None, next_id: 1, departure: day,
+      price: 7, demand: 0, sold: 0, sales: 0, cost_sold: 0, spoiled: 0, wallet: 380, duty: 0, expenses: 0, delivered: 0, exported: 0, month_waste: 0, month_sales: 0, month_cost: 0, month_days: 0, coverage: 100 }
+  end
+  pfn min(a : Int, b : Int) : Int do if a < b do a else b end end
+  pfn max(a : Int, b : Int) : Int do if a > b do a else b end end
+  fn storage(r : Route) : Int do if r.reserve do 64 else 32 end end
+  fn cover(r : Route) : Int do if r.demand == 0 do 0 else r.shop.units / r.demand end end
+  fn landed_cost(units : Int, supplier : Int, transport : Int, duty : Int) : Inventory do
+    { units: units, value: units * supplier + transport + duty }
+  end
+  fn deposit(a : Inventory, b : Inventory) : Inventory do
+    { units: a.units + b.units, value: a.value + b.value }
+  end
+  fn take(a : Inventory, request : Int) : (Inventory, Inventory) do
+    let units = min(a.units, max(0, request))
+    let value = if a.units > 0 do a.value * units / a.units else 0 end
+    ({ units: a.units - units, value: a.value - value }, { units: units, value: value })
+  end
+  fn booking(available : Cargo, capacity : Int, priority : Int) : Cargo do
+    let first = if priority == 1 do available.fuel else if priority == 2 do available.waste else available.food end end
+    let booked = min(first, capacity)
+    let remaining = capacity - booked
+    let food = if priority == 0 do booked else min(available.food, remaining) end
+    let remaining = if priority == 0 do remaining else remaining - food end
+    let fuel = if priority == 1 do booked else min(available.fuel, remaining) end
+    let remaining = if priority == 1 do remaining else remaining - fuel end
+    let waste = if priority == 2 do booked else min(available.waste, remaining) end
+    { food: food, fuel: fuel, waste: waste }
+  end
+  pfn receive(r : Route, d : Conditions) : Route do
+    match r.voyage do
+      None -> r
+      Some(old) ->
+        let age = old.age + 1
+        let spoil = if age > 6 do (old.food.units + 2) / 3 else 0 end
+        let (food, loss) = take(old.food, spoil)
+        let left = if d.open && !r.suspended do max(0, old.left - 1) else old.left end
+        let sailing = { old with age: age, left: left, food: food }
+        let r = { r with spoiled: r.spoiled + loss.units, cost_sold: r.cost_sold + loss.value }
+        if left > 0 || !d.open || r.suspended do { r with voyage: Some(sailing) } else
+          let room = min(d.handling, max(0, storage(r) - r.shop.units))
+          let (food, landed) = take(food, if d.mainland do room else 0 end)
+          let handling = d.handling - landed.units
+          let fuel = if d.plant do min(sailing.fuel, min(handling, 32 - r.landed_fuel - r.fuel)) else 0 end
+          let waste = min(sailing.waste, min(handling - fuel, max(0, d.cash - r.expenses) / 3))
+          let pending = { sailing with food: food, fuel: sailing.fuel - fuel, waste: sailing.waste - waste }
+          { r with shop: deposit(r.shop, landed), landed_fuel: r.landed_fuel + fuel,
+            delivered: r.delivered + landed.units, exported: r.exported + waste, month_waste: r.month_waste + waste, expenses: r.expenses + waste * 3,
+            voyage: if food.units + pending.fuel + pending.waste > 0 do Some(pending) else None end }
+        end
+    end
+  end
+  pfn sell(r : Route, d : Conditions) : Route do
+    let demand = d.demand
+    let available = if d.mainland do r.shop.units else 0 end
+    let pressure = if available >= demand * 2 do 0 else if available >= demand do 1 else if available > 0 do 3 else 5 end end end
+    let base = if r.shop.units > 0 do max(7, (r.shop.value + r.shop.units - 1) / r.shop.units + 2) else 7 end
+    let import_duty = (6 * d.tariff + 99) / 100
+    let ceiling = 9 + import_duty
+    let backup = if r.backup && d.mainland do min(8, min(r.wallet / (7 + import_duty), max(0, min(storage(r), demand * 2) - r.shop.units))) else 0 end
+    let price = if backup > 0 do min(ceiling, base + pressure) else base + pressure end
+    let shop = deposit(r.shop, landed_cost(backup, 6, backup, backup * import_duty))
+    let (shop, sold) = take(shop, if d.mainland do min(demand, d.spending / price) else 0 end)
+    let spoil = if d.day % 7 == 0 do shop.units / 4 else 0 end
+    let (shop, lost) = take(shop, spoil)
+    let revenue = sold.units * price
+    let coverage = if demand > 0 do (r.coverage * 3 + sold.units * 100 / demand) / 4 else r.coverage end
+    { r with shop: shop, price: price, demand: demand, sold: sold.units, sales: revenue, coverage: coverage,
+      delivered: r.delivered + backup, spoiled: r.spoiled + lost.units, cost_sold: r.cost_sold + sold.value + lost.value,
+      wallet: r.wallet + revenue - backup * (7 + import_duty), duty: r.duty + backup * import_duty }
+  end
+  pfn dispatch(r : Route, d : Conditions) : Route do
+    match r.voyage do
+      Some(_) -> r
+      None ->
+        if !d.open || r.suspended || d.day < r.departure do r else
+          let available = { food: min(r.dock_food, if d.mainland do min(r.wallet / 5, max(0, storage(r) - r.shop.units)) else 0 end),
+            fuel: if d.plant do min(24 - min(24, r.fuel + r.landed_fuel), max(0, d.cash - r.expenses) / 2) else 0 end,
+            waste: r.dock_waste }
+          let booked = booking(available, min(d.capacity, d.handling * 3), r.priority)
+          if booked.food + booked.fuel + booked.waste == 0 do r else
+            let sailing = { id: r.next_id, left: 2, age: 0, food: landed_cost(booked.food, 4, booked.food, 0), fuel: booked.fuel, waste: booked.waste }
+            { r with voyage: Some(sailing), next_id: r.next_id + 1, departure: d.day + 3,
+              wallet: r.wallet - sailing.food.value, expenses: r.expenses + booked.fuel * 2,
+              dock_food: r.dock_food - booked.food, dock_waste: r.dock_waste - booked.waste }
+          end
+        end
+    end
+  end
+  fn step(r : Route, d : Conditions) : Route do
+    let baked = min(72, r.producer_stock + d.production)
+    let carted = if d.production > 0 do min(baked, min(d.handling, 64 - r.dock_food)) else 0 end
+    let producer_loss = if d.day % 7 == 0 do (baked - carted) / 4 else 0 end
+    let dock_loss = if d.day % 7 == 0 do r.dock_food / 4 else 0 end
+    let transfer = if d.plant do min(r.landed_fuel, d.handling) else 0 end
+    let fuel = r.fuel + transfer
+    let r = { r with producer_stock: baked - carted - producer_loss, dock_food: r.dock_food + carted - dock_loss, dock_waste: r.dock_waste + d.waste,
+      fuel: if d.plant do max(0, fuel - 4) else fuel end, landed_fuel: r.landed_fuel - transfer,
+      spoiled: producer_loss + dock_loss, cost_sold: 0, delivered: 0, exported: 0 }
+    let market = sell(receive(r, d), d)
+    dispatch({ market with month_sales: r.month_sales + market.sales, month_cost: r.month_cost + market.cost_sold, month_days: r.month_days + 1 }, d)
+  end
+end

@@ -1,0 +1,60 @@
+mod Ur.OverlayField do
+  alias Ur.Sim as S
+
+  -- One shared sample per eight voxels, including the far map edges.
+  pfn width() : Int do S.width() * 4 + 1 end
+  pfn depth() : Int do S.depth() * 4 + 1 end
+
+  type Deposit = { x : Int, z : Int, air : Float, surface : Float, dx : Float, dz : Float, stretch : Float }
+  pfn spread(d : Deposit, n : Int, samples : NativeF32Arr) : NativeF32Arr do
+    if n == 441 do samples else
+      let ox = n % 21 - 10
+      let oz = n / 21 - 10
+      let x = d.x + ox
+      let z = d.z + oz
+      let samples = if x < 0 || x >= width() || z < 0 || z >= depth() do samples else
+        let px = int_to_float(ox) *. 0.25
+        let pz = int_to_float(oz) *. 0.25
+        let along = px *. d.dx +. pz *. d.dz
+        let across = pz *. d.dx -. px *. d.dz
+        let tail = if along > 0.0 do along else 0.0 end
+        let reach = if along > 0.0 do d.stretch else 0.72 end
+        let axis = (along -. 0.14) /. reach
+        let edge = across /. (0.68 +. tail *. 0.22)
+        let air = 1.0 -. axis *. axis -. edge *. edge
+        let surface = 1.0 -. (px *. px +. pz *. pz) /. 1.44
+        let strength = (if air > 0.0 do d.air *. air *. air else 0.0 end) +.
+          (if surface > 0.0 do d.surface *. surface *. surface else 0.0 end)
+        let i = z * width() + x
+        if strength > 0.0 do NativeArray.set_f32(samples, i, NativeArray.get_f32(samples, i) +. strength) else samples end
+      end
+      spread(d, n + 1, samples)
+    end
+  end
+
+  pfn deposits(c : Ur.Sim.City, dx : Float, dz : Float, stretch : Float, layer : Int, i : Int, samples : NativeF32Arr) : NativeF32Arr do
+    if i == S.count() do samples else
+      let air = if layer == 4 do S.get(c.air_pollution, i) else 0 end
+      let surface = match layer do
+        5 -> if S.get(c.heights, i) > 0 && S.freshwater(c, i) do 36 else 0 end
+        7 -> if Ur.Layers.oil_at(c, i) do 36 else 0 end
+        _ -> S.get(c.land_pollution, i) + S.get(c.pollution, i)
+      end
+      let samples = if air == 0 && surface == 0 do samples else
+        spread({ x: (i % S.width()) * 4 + 2, z: (i / S.width()) * 4 + 2,
+          air: int_to_float(air), surface: int_to_float(surface), dx: dx, dz: dz, stretch: stretch }, 0, samples)
+      end
+      deposits(c, dx, dz, stretch, layer, i + 1, samples)
+    end
+  end
+
+  fn field(c : Ur.Sim.City, layer : Int) : NativeF32Arr do
+    let wind = S.regional_wind(c)
+    deposits(c, Math.cos(wind.heading), Math.sin(wind.heading), 1.1 +. int_to_float(wind.speed) *. 0.028,
+      layer, 0, NativeArray.make_f32(width() * depth(), 0.0))
+  end
+
+  fn sample(samples : NativeF32Arr, x : Int, z : Int) : Int do
+    S.clamp(float_to_int(NativeArray.get_f32(samples, z * width() + x)), 0, 63)
+  end
+end

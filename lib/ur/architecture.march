@@ -1,0 +1,251 @@
+-- Solid quarter-metre primitives, composed into buildings before chunk clipping.
+mod Ur.Architecture do
+  type Piece = { x : Int, y : Int, z : Int, w : Int, h : Int, d : Int, material : Int }
+  fn piece(x : Int, y : Int, z : Int, w : Int, h : Int, d : Int, material : Int) : Piece do
+    { x: x, y: y, z: z, w: w, h: h, d: d, material: material }
+  end
+  pfn roof(i : Int, y : Int, material : Int, out : List(Piece)) : List(Piece) do
+    if i >= 9 do out else
+      roof(i + 1, y, material, Cons(piece(4, y + i, 5 + i, 24, 1, 22 - 2 * i, material), out))
+    end
+  end
+  type Facade = { wall : Int, trim : Int, glass : Int, form : Int }
+  pfn windows(n : Int, y : Int, x : Int, front : Int, span : Int, skin : Facade, lit : Bool, out : List(Piece)) : List(Piece) do
+    if n >= 3 do out else
+      let bay = span / 3
+      let glaze = if skin.form == 1 do bay - 1 else bay - 3 end
+      let start = x + n * bay + (bay - glaze) / 2
+      let a = Cons(piece(start - 1, y, front, glaze + 2, 6, 1, skin.trim), out)
+      let panes = if lit && (n + x + y) % 3 != 0 do 26 else skin.glass end
+      let a = Cons(piece(start, y + 1, front + 1, glaze, 4, 1, panes), a)
+      let a = Cons(piece(start, y + 1, 5, glaze, 4, 1, panes), a)
+      windows(n + 1, y, x, front, span, skin, lit, a)
+    end
+  end
+  pfn side_windows(n : Int, y : Int, x : Int, span : Int, glass : Int, out : List(Piece)) : List(Piece) do
+    if n >= 3 do out else
+      let z = 8 + n * 5
+      let a = Cons(piece(x - 1, y, z, 1, 4, 3, glass), Cons(piece(x + span, y, z, 1, 4, 3, glass), out))
+      side_windows(n + 1, y, x, span, glass, a)
+    end
+  end
+  pfn floors(n : Int, level : Int, skin : Facade, lit : Bool, shop : Bool, out : List(Piece)) : List(Piece) do
+    if level >= n do out else
+      let y = 2 + 11 * level
+      let inset = if skin.form == 2 do level * 2 else if skin.form == 3 do 2 else 0 end end
+      let x = 5 + inset
+      let span = 22 - inset * 2
+      let front = if skin.form == 2 do 25 - level else 25 end
+      let a = Cons(piece(x, y, 6, span, 11, front - 5, skin.wall), out)
+      let a = Cons(piece(x - 1, y + 10, 5, span + 2, 1, front - 3, skin.trim), a)
+      let floor_lit = lit && (!shop || level > 0) && (n == 1 || (level + skin.form) % 4 != 3)
+      let a = windows(0, y + 3, x, front + 1, span, skin, floor_lit, a)
+      let a = side_windows(0, y + 4, x, span, if floor_lit do 26 else skin.glass end, a)
+      let a = if level == 0 || skin.form == 1 do a else
+        let bx = if skin.form == 3 do 15 else if skin.form == 2 do 9 else 11 end end
+        let a = Cons(piece(bx, y + 1, front, 10, 1, 30 - front, 17), a)
+        let a = Cons(piece(bx, y + 4, 29, 10, 1, 1, skin.trim), a)
+        let a = Cons(piece(bx, y + 2, 29, 1, 2, 1, skin.trim), Cons(piece(bx + 9, y + 2, 29, 1, 2, 1, skin.trim), a))
+        Cons(piece(bx + 1, y + 2, 27, 3, 2, 2, 14), a)
+      end
+      floors(n, level + 1, skin, lit, shop, a)
+    end
+  end
+  pfn stepped_office(y : Int, out : List(Piece)) : List(Piece) do
+    let a = Cons(piece(4, y, 4, 24, 2, 23, 17), out)
+    let a = Cons(piece(7, y + 2, 7, 17, 5, 15, 7), a)
+    let a = Cons(piece(9, y + 7, 8, 13, 5, 12, 9), a)
+    let a = Cons(piece(11, y + 12, 10, 9, 3, 8, 19), a)
+    Cons(piece(14, y + 15, 13, 2, 1, 2, 20), a)
+  end
+  pfn garden_office(y : Int, out : List(Piece)) : List(Piece) do
+    let a = Cons(piece(4, y, 4, 24, 2, 23, 17), out)
+    let a = Cons(piece(6, y + 2, 6, 11, 7, 14, 9), a)
+    let a = Cons(piece(5, y + 9, 5, 13, 1, 16, 8), a)
+    let a = Cons(piece(6, y + 10, 6, 11, 1, 14, 19), a)
+    let a = Cons(piece(19, y + 2, 6, 7, 1, 18, 22), a)
+    let a = Cons(piece(20, y + 3, 9, 4, 3, 4, 14), a)
+    let a = Cons(piece(20, y + 3, 17, 4, 4, 4, 21), a)
+    Cons(piece(19, y + 4, 24, 7, 1, 1, 13), a)
+  end
+  pfn planter(x : Int, z : Int, out : List(Piece)) : List(Piece) do
+    Cons(piece(x, 1, z, 4, 2, 2, 23), Cons(piece(x + 1, 3, z, 2, 2, 2, 14), out))
+  end
+  pfn entry(home : Bool, shade : Int, out : List(Piece)) : List(Piece) do
+    let a = Cons(piece(11, 0, 28, 10, 1, 4, 16), Cons(piece(12, 1, 27, 8, 1, 3, 17), out))
+    let a = Cons(piece(10, 10, 25, 12, 1, 5, if home do 6 else 20 end), a)
+    let a = Cons(piece(11, 7, 28, 1, 2, 1, 20), Cons(piece(20, 7, 28, 1, 2, 1, 20), a))
+    if home do planter(if shade % 2 == 0 do 7 else 21 end, 29, a)
+    else Cons(piece(5, 1, 29, 3, 4, 2, 19), Cons(piece(5, 4, 28, 3, 1, 3, 20), a)) end
+  end
+  pfn canopy(bay : Int, tint : Int, out : List(Piece)) : List(Piece) do
+    if bay >= 7 do out else
+      let x = 5 + bay * 3
+      let colour = if bay % 2 == 0 do tint else 8 end
+      let a = Cons(piece(x, 9, 27, 3, 1, 4, colour), Cons(piece(x, 8, 30, 3, 1, 1, colour), out))
+      canopy(bay + 1, tint, a)
+    end
+  end
+  pfn produce_stand(x : Int, food : Int, out : List(Piece)) : List(Piece) do
+    let a = Cons(piece(x, 1, 29, 4, 2, 2, 13), out)
+    Cons(piece(x, 3, 29, 4, 1, 2, food), a)
+  end
+  pfn cafe_table(x : Int, out : List(Piece)) : List(Piece) do
+    let a = Cons(piece(x + 1, 1, 29, 1, 2, 1, 13), Cons(piece(x, 3, 28, 3, 1, 3, 16), out))
+    Cons(piece(x - 2, 1, 29, 1, 2, 2, 6), Cons(piece(x + 4, 1, 29, 1, 2, 2, 6), a))
+  end
+  fn storefront(grocery : Bool, closed : Bool, lit : Bool, out : List(Piece)) : List(Piece) do
+    let tint = if grocery do 21 else 6 end
+    let a = Cons(piece(4, 0, 27, 24, 1, 5, 16), out)
+    let glass = if lit do 27 else 9 end
+    let a = Cons(piece(5, 3, 27, 7, 5, 1, glass), Cons(piece(20, 3, 27, 7, 5, 1, glass), a))
+    let a = Cons(piece(7, 4, 28, 1, 3, 1, 8), Cons(piece(24, 4, 28, 1, 3, 1, 8), a))
+    let a = Cons(piece(11, 10, 27, 10, 2, 1, tint), Cons(piece(13, 10, 28, 6, 1, 1, 8), a))
+    let a = canopy(0, tint, a)
+    if closed do
+      let a = Cons(piece(5, 3, 28, 7, 5, 1, 19), Cons(piece(20, 3, 28, 7, 5, 1, 19), a))
+      Cons(piece(12, 2, 29, 8, 6, 1, 17), Cons(piece(12, 5, 30, 8, 1, 1, 23), a))
+    else if grocery do produce_stand(6, 21, produce_stand(22, 10, a))
+    else cafe_table(6, cafe_table(23, a)) end end
+  end
+  fn building(levels : Int, home : Bool, seed : Int, roofed : Bool, shop : Bool, lit : Bool) : List(Piece) do
+    let y = 2 + levels * 11
+    let form = seed % 4
+    let shade = (seed / 4) % 4
+    let wall = if home do (if shade == 0 do 18 else if shade == 1 do 5 else if shade == 2 do 8 else 7 end end end)
+      else if shade == 0 do 23 else if shade == 1 do 8 else if shade == 2 do 7 else 19 end end end end
+    let trim = if shade == 3 do 8 else if form == 1 do 19 else 17 end end
+    let glass = if home && form != 1 do 15 else 9 end
+    let a = Cons(piece(3, 0, 3, 26, 2, 27, 17), Nil)
+    let a = floors(levels, 0, { wall: wall, trim: trim, glass: glass, form: form }, lit, shop, a)
+    let a = Cons(piece(13, 2, 26, 6, 8, 2, 13), Cons(piece(14, 3, 28, 4, 6, 1, 7), a))
+    let a = if shop do a else entry(home, shade, a) end
+    if !roofed do a
+    else if home && (form == 0 || form == 3) do
+      let a = roof(0, y, if shade % 2 == 0 do 19 else 6 end, a)
+      Cons(piece(20, y + 3, 12, 3, 10, 3, 17), Cons(piece(19, y + 13, 11, 5, 1, 5, 13), a))
+    else if form == 2 do garden_office(y, a)
+    else if !home && form == 0 do stepped_office(y, a)
+    else
+      let a = Cons(piece(4, y, 4, 24, 2, 23, 17), a)
+      let a = Cons(piece(7, y + 2, 8, 18, 5, 13, if home do wall else 7 end), a)
+      let a = Cons(piece(8, y + 7, 9, 16, 1, 11, 8), a)
+      let a = Cons(piece(9, y + 8, 10, 6, 1, 9, 19), Cons(piece(17, y + 8, 10, 6, 1, 9, 19), a))
+      Cons(piece(22, y + 8, 19, 1, 6, 1, 13), Cons(piece(21, y + 14, 18, 3, 2, 3, 20), a))
+    end end end end
+  end
+  fn parking_pad(kind : Int, out : List(Piece)) : List(Piece) do
+    let out = Cons(piece(25, 0, 24, 7, 1, 8, 17), out)
+    if kind == 2 do
+      Cons(piece(25, 5, 24, 7, 1, 8, 19), Cons(piece(25, 1, 24, 1, 4, 8, 23),
+        Cons(piece(31, 1, 24, 1, 4, 8, 23), out)))
+    else out end
+  end
+  pfn stall_lines(col : Int, z : Int, y : Int, out : List(Piece)) : List(Piece) do
+    if col == 5 do out else stall_lines(col + 1, z, y, Cons(piece(2 + col * 7, y, z, 1, 1, 8, 8), out)) end
+  end
+  pfn deck(y : Int, out : List(Piece)) : List(Piece) do
+    let floor = Cons(piece(2, y, 2, 28, 1, 28, 17), out)
+    let stripes = stall_lines(0, 3, y + 1, stall_lines(0, 19, y + 1, floor))
+    Cons(piece(2, y + 1, 2, 1, 2, 28, 23), Cons(piece(29, y + 1, 2, 1, 2, 28, 23),
+      Cons(piece(2, y + 1, 2, 28, 2, 1, 23), stripes)))
+  end
+  fn public_parking(kind : Int) : List(Piece) do
+    if kind == 3 do
+      -- A street-facing entrance fits at the edge of the parcel above the garage.
+      [piece(2, 0, 25, 6, 1, 7, 4), piece(2, 1, 25, 1, 4, 7, 17),
+       piece(7, 1, 25, 1, 4, 7, 17), piece(2, 5, 25, 6, 1, 5, 17),
+       piece(3, 6, 29, 4, 2, 1, 12), piece(3, 1, 25, 4, 3, 1, 4)]
+    else
+      let entry = [piece(11, 0, 29, 10, 1, 3, 4), piece(22, 1, 28, 1, 5, 1, 17),
+        piece(21, 6, 28, 3, 2, 1, 12)]
+      if kind == 1 do
+        let tarmac = Cons(piece(1, 0, 1, 30, 1, 28, 4), entry)
+        stall_lines(0, 3, 1, stall_lines(0, 19, 1, tarmac))
+      else
+        let decks = deck(0, deck(7, deck(14, entry)))
+        let posts = [piece(2, 1, 3, 2, 14, 2, 23), piece(27, 1, 3, 2, 14, 2, 23),
+          piece(2, 1, 14, 2, 14, 2, 23), piece(27, 1, 14, 2, 14, 2, 23),
+          piece(2, 1, 26, 2, 14, 2, 23), piece(27, 1, 26, 2, 14, 2, 23),
+          piece(4, 7, 28, 24, 1, 2, 7), piece(4, 14, 28, 24, 1, 2, 7)]
+        let trim = [piece(4, 9, 29, 7, 1, 1, 19), piece(21, 9, 29, 7, 1, 1, 19),
+          piece(4, 16, 29, 24, 1, 1, 19), piece(12, 13, 29, 8, 1, 1, 8),
+          piece(10, 1, 29, 1, 2, 1, 10), piece(21, 1, 29, 1, 2, 1, 10)]
+        List.append(trim, List.append(posts, decks))
+      end
+    end
+  end
+  fn orient(parts : List(Piece), side : Int) : List(Piece) do
+    match parts do
+      Nil -> Nil
+      Cons(p, rest) ->
+        let turned = match side do
+          0 -> { p with x: 32 - p.z - p.d, z: p.x, w: p.d, d: p.w }
+          1 -> { p with x: p.z, z: 32 - p.x - p.w, w: p.d, d: p.w }
+          2 -> { p with x: 32 - p.x - p.w, z: 32 - p.z - p.d }
+          _ -> p
+        end
+        Cons(turned, orient(rest, side))
+    end
+  end
+  fn worksite_rise(stage : Int) : Int do
+    if stage == 1 do 3 else if stage == 2 do 7 else 10 end end
+  end
+  fn worksite(level : Int, stage : Int, base : List(Piece)) : List(Piece) do
+    let y = 2 + level * 11
+    let rise = worksite_rise(stage)
+    let a = Cons(piece(3, y - 2, 3, 26, 2, 27, 17), base)
+    let a = Cons(piece(6, y, 6, 2, rise, 2, 13), Cons(piece(24, y, 6, 2, rise, 2, 13), a))
+    let a = Cons(piece(6, y, 23, 2, rise, 2, 13), Cons(piece(24, y, 23, 2, rise, 2, 13), a))
+    let a = Cons(piece(6, y + rise - 1, 6, 20, 1, 2, 20), Cons(piece(6, y + rise - 1, 23, 20, 1, 2, 20), a))
+    let a = Cons(piece(6, y + rise - 1, 8, 2, 1, 15, 20), Cons(piece(24, y + rise - 1, 8, 2, 1, 15, 20), a))
+    Cons(piece(12, y, 10, 8, rise - 1, 9, 17), a)
+  end
+  pfn plant_fins(i : Int, out : List(Piece)) : List(Piece) do
+    if i >= 5 do out else plant_fins(i + 1, Cons(piece(7 + 4 * i, 5, 24, 2, 10, 2, 17), out)) end
+  end
+  fn station() : List(Piece) do
+    let a = Cons(piece(2, 0, 2, 28, 2, 28, 17), Cons(piece(5, 2, 5, 22, 14, 19, 8),
+      Cons(piece(4, 16, 4, 24, 2, 21, 7), Cons(piece(9, 18, 9, 14, 4, 12, 19),
+      Cons(piece(13, 22, 12, 6, 14, 6, 17), Cons(piece(12, 34, 11, 8, 4, 8, 20), Nil))))))
+    plant_fins(0, Cons(piece(10, 3, 25, 12, 6, 2, 9), a))
+  end
+  pfn leaf_tier(x : Int, y : Int, z : Int, rx : Int, rz : Int, h : Int, leaf : Int, out : List(Piece)) : List(Piece) do
+    Cons(piece(x - rx, y, z - rz + 1, 2 * rx + 1, h, 2 * rz - 1, leaf),
+      Cons(piece(x - rx + 1, y, z - rz, 2 * rx - 1, h, 2 * rz + 1, leaf), out))
+  end
+  fn tree(x : Int, z : Int, base : Int, seed : Int, form : Int) : List(Piece) do
+    let pale = if seed / 23 % 5 < 2 do 22 else 21 end
+    let deep = if seed / 13 % 3 == 0 do 25 else 14 end
+    let dx = seed / 7 % 3 - 1
+    let dz = seed / 17 % 3 - 1
+    if form == 1 do
+      let trunk = 15 + seed % 8
+      let width = 3 + seed / 5 % 2
+      let shaft = Cons(piece(x - 1, base, z - 1, 2, trunk + 3, 2, 13), Nil)
+      let lower = leaf_tier(x, base + trunk - 8, z, width + 1, width + 1, 3, deep, shaft)
+      let middle = leaf_tier(x + dx, base + trunk - 5, z, width, width, 3, deep, lower)
+      let upper = leaf_tier(x, base + trunk - 2, z + dz, width - 1, width - 1, 3, 21, middle)
+      Cons(piece(x - 1, base + trunk + 1, z - 1, 3, 4, 3, pale), upper)
+    else if form == 2 do
+      let trunk = 7 + seed % 7
+      let lean = if seed / 5 % 2 == 0 do -1 else 1 end
+      let shaft = Cons(piece(x - 1, base, z, 2, trunk, 2, 13),
+        Cons(piece(x + lean - 1, base + trunk - 3, z, 2, 4, 2, 13), Nil))
+      let low = leaf_tier(x + 2 * lean, base + trunk - 1, z + dz, 4, 3, 3, deep, shaft)
+      let upper = leaf_tier(x + 3 * lean, base + trunk + 2, z, 3, 2, 2, pale, low)
+      leaf_tier(x - lean, base + trunk + 1, z - 2, 2, 2, 3, deep, upper)
+    else
+      let trunk = 8 + seed % 8
+      let rx = 4 + seed / 19 % 2
+      let rz = 3 + seed / 29 % 3
+      let leaf = if seed / 31 % 12 == 0 do 18 else deep end
+      let tip = if leaf == 18 do 15 else pale end
+      let shaft = Cons(piece(x - 1, base, z - 1, 3, trunk, 3, 13),
+        Cons(piece(x - 2, base + trunk - 4, z, 5, 2, 2, 13), Nil))
+      let low = leaf_tier(x, base + trunk - 3, z, rx - 1, rz - 1, 3, leaf, shaft)
+      let middle = leaf_tier(x + dx, base + trunk, z + dz, rx, rz, 4, leaf, low)
+      leaf_tier(x + 2 * dx, base + trunk + 4, z + dz, rx - 2, rz - 1, 3, tip, middle)
+    end end
+  end
+end

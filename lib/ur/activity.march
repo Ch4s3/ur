@@ -1,0 +1,61 @@
+mod Ur.Activity do
+  alias Ur.Sim as S
+  type NeighborhoodEvent = { month : Int, lot : Int, title : String }
+
+  pfn storefront_name(kind : Int) : String do
+    if kind == 2 do "Bar" else "Shop" end
+  end
+
+  pfn change(before : Ur.Sim.City, after : Ur.Sim.City, i : Int) : String do
+    let schedule = S.get(after.car_free_days, i)
+    let old_shop = S.storefront(before, i)
+    let new_shop = S.storefront(after, i)
+    let old_floors = S.get(before.buildings, i)
+    let new_floors = S.get(after.buildings, i)
+    if S.get(before.car_free_days, i) != schedule do
+      if schedule == 0 do "Car-free schedule removed" else "Car-free " ++ S.street_schedule_name(schedule) ++ " scheduled" end
+    else if S.car_free_now(before, i) != S.car_free_now(after, i) do
+      if S.car_free_now(after, i) do "Street closed to cars" else "Street reopened to cars" end
+    else if S.get(before.ground_areas, i) != S.get(after.ground_areas, i) do "Ground floor: " ++ S.ground_name(S.ground_at(after, i))
+    else if S.get(before.quiet_areas, i) != S.get(after.quiet_areas, i) do "Quiet hours: " ++ S.quiet_name(S.quiet_at(after, i))
+    else if S.fire_offline(after, i) && !S.fire_offline(before, i) do "Building closed after a fire"
+    else if S.fire_offline(before, i) && !S.fire_offline(after, i) && new_floors > 0 do "Building reopened after repairs"
+    else if after.month > before.month && S.get(after.home_arrivals, i) > 0 do "Priced-out households moved here"
+    else if S.housing_vacant(after, i) && !S.housing_vacant(before, i) do "Households left after running a deficit"
+    else if S.housing_vacant(before, i) && S.residential_floors(after, i) > 0 do "Households moved into vacant homes"
+    else if S.business_closed(after, i) && !S.business_closed(before, i) do "Business closed after months of losses"
+    else if old_shop != new_shop && (new_shop == 1 || new_shop == 2) do storefront_name(new_shop) ++ " opened"
+    else if (old_shop == 1 || old_shop == 2) && old_shop != new_shop do storefront_name(old_shop) ++ " closed"
+    else if S.get(after.construction, i) > 0 && S.get(before.construction, i) == 0 do "Private construction started"
+    else if new_floors > old_floors do (if old_floors == 0 do "New building completed" else "Building gained a floor" end)
+    else "" end end end end end end end end end end end end end end
+  end
+
+  pfn collect(before : Ur.Sim.City, after : Ur.Sim.City, i : Int, out : List(NeighborhoodEvent), remaining : Int) : List(NeighborhoodEvent) do
+    if i >= S.count() || remaining == 0 do out else
+      let title = change(before, after, i)
+      if title == "" do collect(before, after, i + 1, out, remaining)
+      else if List.any(out, fn event -> event.title == title && S.crime_district(event.lot) == S.crime_district(i)) do
+        collect(before, after, i + 1, out, remaining)
+      else collect(before, after, i + 1, Cons({ month: after.month, lot: i, title: title }, out), remaining - 1) end end
+    end
+  end
+
+  fn record(before : Ur.Sim.City, after : Ur.Sim.City, history : List(NeighborhoodEvent)) : List(NeighborhoodEvent) do
+    let events = collect(before, after, 0, Nil, 7)
+    let events = if before.ground_rule == after.ground_rule do events else
+      Cons({ month: after.month, lot: -1, title: "Citywide ground floors: " ++ S.ground_name(after.ground_rule) }, events) end
+    let events = if before.quiet_rule == after.quiet_rule do events else
+      Cons({ month: after.month, lot: -1, title: "Citywide quiet hours: " ++ S.quiet_name(after.quiet_rule) }, events) end
+    let agenda = Ur.Council.kind(after)
+    let events = if agenda > 0 && (agenda != Ur.Council.kind(before) || Ur.Council.expires(after) != Ur.Council.expires(before)) do
+      Cons({ month: after.month, lot: -1, title: "New council item · " ++ Ur.Council.ward_name(Ur.Council.sponsor(after)) }, events)
+    else events end
+    let events = if Ur.Council.last_election(after) > Ur.Council.last_election(before) do
+      Cons({ month: after.month, lot: -1, title: "Council election results are in" }, events)
+    else if !Ur.Council.campaign(before) && Ur.Council.campaign(after) && Ur.Council.established(after) do
+      Cons({ month: after.month, lot: -1, title: "Council campaigns opened" }, events)
+    else events end end
+    List.take(List.append(events, history), 7)
+  end
+end

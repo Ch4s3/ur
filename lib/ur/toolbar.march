@@ -1,0 +1,342 @@
+mod Ur.Toolbar do
+  needs IO.Foreign
+  needs Window
+  alias Strata.Ui as U
+  alias Strata.Text as T
+  alias Ur.Sim as S
+
+  type Layout = { x : Float, y : Float, width : Float, columns : Int, cell : Float, cards_y : Float }
+  type Menu = { span : Int, pages : List(String), items : List(Int) }
+  pfn menu(group : Int, page : Int) : Menu do
+    match group do
+      1 ->
+        let items = if page == 3 do [99, 100] else if page == 2 do Cons(71, Cons(72, Cons(73, Cons(74, Cons(75, Nil)))))
+          else if page == 1 do Cons(50, Cons(51, Cons(52, Cons(54, Nil))))
+          else Cons(1, Cons(48, Cons(49, Cons(33, Cons(40, Nil))))) end end end
+        { span: 5, pages: ["Streets", "Crossings", "Car-free days", "Flood protection"], items: items }
+      2 ->
+        let items = match page do
+          2 -> Cons(64, Cons(65, Cons(66, Cons(63, Nil))))
+          3 -> Cons(68, Cons(69, Cons(70, Cons(67, Nil))))
+          1 -> Cons(29, Cons(30, Cons(31, Cons(32, Nil))))
+          _ -> Cons(2, Cons(3, Cons(28, Cons(5, Nil))))
+        end
+        { span: 4, pages: Cons("Land use", Cons("Nuisance", Cons("Ground floors", Cons("Quiet hours", Nil)))), items: items }
+      3 ->
+        let items = match page do
+          1 -> Cons(35, Cons(42, Nil))
+          2 -> Cons(36, Cons(43, Nil))
+          3 -> Cons(37, Nil)
+          4 -> Cons(39, Cons(38, Nil))
+          5 -> [87, 88, 89, 90]
+          _ -> Cons(34, Cons(41, Cons(76, Nil)))
+        end
+        { span: 4, pages: ["Bus", "Tram", "Subway", "Ferry", "Manage", "Parking"], items: items }
+      4 ->
+        let items = match page do
+          1 -> [18, 19, 9, 10, 14, 15, 16, 17]
+          2 -> Cons(11, Cons(12, Cons(13, Cons(77, Nil))))
+          3 -> [91, 92, 24, 25, 93, 94, 95, 96, 61]
+          4 -> [86, 26, 27]
+          5 -> [97, 98]
+          _ -> [26, 27, 4, 8, 20, 21, 22, 23]
+        end
+        { span: 8, pages: ["Power", "Water", "Food", "Waste", "Offshore", "Upgrades"], items: items }
+      5 ->
+        let items = match page do
+          1 -> Cons(53, Cons(55, Nil))
+          2 -> Cons(56, Cons(57, Cons(58, Cons(59, Cons(60, Cons(61, Nil))))))
+          3 -> Cons(44, Cons(79, Cons(80, Cons(81, Nil))))
+          4 -> Cons(82, Cons(83, Cons(84, Cons(85, Nil))))
+          _ -> Cons(44, Cons(45, Cons(62, Cons(46, Cons(47, Cons(78, Nil))))))
+        end
+        { span: 6, pages: Cons("Services", Cons("Parks", Cons("Street planting", Cons("Education", Cons("Faculties", Nil))))), items: items }
+      6 -> { span: 2, pages: Nil, items: Cons(6, Cons(7, Nil)) }
+      7 ->
+        let items = match page do
+          1 -> Cons(5, Cons(6, Cons(7, Cons(8, Nil))))
+          2 -> [4, 29, 30, 32, 33]
+          5 -> Cons(25, Cons(26, Nil))
+          6 -> Cons(27, Cons(23, Cons(24, Cons(28, Nil))))
+          4 -> Cons(19, Cons(20, Cons(21, Cons(22, Nil))))
+          3 -> Cons(12, Cons(13, Cons(14, Cons(15, Cons(16, Cons(17, Cons(18, Cons(19, Nil))))))))
+          _ -> [0, 1, 2, 3, 9, 10, 11, 31]
+        end
+        { span: 8, pages: Cons("Networks", Cons("Resources", Cons("Environment", Cons("Livability", Cons("Emergencies", Cons("Neighborhoods", Cons("Street policies", Nil))))))), items: items }
+      _ -> { span: 1, pages: Nil, items: Nil }
+    end
+  end
+  fn shortcut_group(tool : Int) : Int do
+    match tool do
+      1 -> 1
+      2 | 3 | 5 -> 2
+      4 -> 4
+      6 | 7 -> 6
+      _ -> 0
+    end
+  end
+  pfn icon(tool : Int) : String do
+    match tool do
+      1 -> "road"
+      48 -> "avenue"
+      49 -> "promenade"
+      50 -> "overpass"
+      51 -> "underpass"
+      52 -> "road_tunnel"
+      53 -> "park"
+      54 -> "clear"
+      55 -> "park"
+      56 -> "shade_tree"
+      57 -> "blossom_tree"
+      58 -> "columnar_tree"
+      59 -> "flower_planter"
+      60 -> "hedge_planter"
+      61 -> "clear"
+      33 -> "path"
+      40 -> "toll"
+      2 | 29 -> "homes"
+      3 | 31 -> "jobs"
+      28 | 30 -> "mixed"
+      5 -> "height"
+      34 -> "bus"
+      35 -> "tram"
+      36 | 43 -> "metro"
+      37 -> "ferry"
+      41 | 42 -> "stop"
+      39 -> "manage"
+      26 | 97 -> "power"
+      4 | 32 -> "plant"
+      8 -> "geothermal"
+      22 -> "nuclear"
+      23 -> "biogas"
+      21 -> "solar"
+      20 | 86 -> "wind"
+      87 -> "road"
+      88 | 89 -> "avenue"
+      90 -> "clear"
+      18 | 98 | 99 -> "pipe"
+      100 -> "grade"
+      9 -> "well"
+      10 -> "desal"
+      14 -> "rain"
+      15 -> "depot"
+      16 -> "recycle"
+      17 -> "outfall"
+      11 -> "farm"
+      12 -> "fish"
+      13 | 24 -> "depot"
+      25 | 91 | 92 | 95 -> "waste"
+      93 | 94 -> "outfall"
+      96 -> "clear"
+      44 | 79 | 80 | 81 | 82 | 83 | 84 | 85 -> "school"
+      75 | 63 | 67 -> "clear"
+      64 | 70 -> "housing"
+      71 | 72 | 73 | 74 -> "promenade"
+      76 | 77 -> "road"
+      65 | 66 | 68 | 69 -> "jobs"
+      45 | 62 -> "clinic"
+      46 | 78 -> "fire"
+      47 -> "police"
+      6 -> "grade"
+      7 | 19 | 27 | 38 -> "clear"
+      _ -> "layers"
+    end
+  end
+  pfn layer_icon(layer : Int) : String do
+    match layer do
+      23 | 26 -> "jobs"
+      24 -> "housing"
+      25 | 27 -> "road"
+      28 -> "school"
+      29 -> "wind"
+      32 -> "park"
+      33 -> "outfall"
+      30 -> "waste"
+      31 -> "outfall"
+      12 | 13 -> "park"
+      14 -> "road"
+      15 -> "school"
+      16 | 19 -> "police"
+      20 | 22 -> "fire"
+      21 -> "clinic"
+      17 -> "jobs"
+      18 -> "survey"
+      0 -> "clear"
+      1 -> "pipe"
+      2 | 6 -> "power"
+      3 -> "tram"
+      4 -> "pollution"
+      5 -> "water"
+      7 | 8 -> "survey"
+      9 -> "road"
+      _ -> "clinic"
+    end
+  end
+  pfn category(group : Int) : (String, String) do
+    match group do
+      1 -> ("Roads", "road")
+      2 -> ("Zoning", "zone")
+      3 -> ("Transit", "tram")
+      4 -> ("Utilities", "power")
+      5 -> ("Civic", "clinic")
+      6 -> ("Terrain", "grade")
+      _ -> ("Layers", "layers")
+    end
+  end
+
+  pfn minimum(a : Float, b : Float) : Float do if a < b do a else b end end
+  pfn bar_cell(w : Float) : Float do minimum(110.0, (w -. 24.0) /. 7.0) end
+  pfn bar_x(w : Float) : Float do (w -. 7.0 *. bar_cell(w)) *. 0.5 end
+  pfn bar_y(h : Float) : Float do h -. 92.0 end
+  pfn layout(w : Float, h : Float, m : Menu) : Layout do
+    let count = List.length(m.items)
+    let room = w -. 36.0
+    let columns = S.clamp(float_to_int(room /. 116.0), 1, m.span)
+    let cell = minimum(132.0, room /. int_to_float(columns))
+    let rows = (count + columns - 1) / columns
+    let grid = cell *. int_to_float(columns)
+    let tabs = int_to_float(List.length(m.pages)) *. 78.0
+    let width = (if tabs > grid do minimum(tabs, room) else grid end) +. 16.0
+    let page_height = if List.length(m.pages) > 0 do 34.0 else 0.0 end
+    let y = bar_y(h) -. 21.0 -. page_height -. int_to_float(rows) *. 106.0
+    { x: (w -. width) *. 0.5, y: y, width: width, columns: columns, cell: cell, cards_y: y +. 8.0 +. page_height }
+  end
+  fn group_at(x : Float, y : Float, w : Float, h : Float) : Int do
+    let left = bar_x(w)
+    if y < bar_y(h) || y >= bar_y(h) +. 56.0 || x < left || x >= w -. left do 0
+    else 1 + float_to_int((x -. left) /. bar_cell(w)) end
+  end
+  pfn page_cell(l : Layout, count : Int) : Float do minimum(92.0, (l.width -. 16.0) /. int_to_float(count)) end
+  fn page_at(x : Float, y : Float, w : Float, h : Float, group : Int, page : Int) : Int do
+    let m = menu(group, page)
+    let l = layout(w, h, m)
+    let count = List.length(m.pages)
+    if count == 0 || y < l.y +. 7.0 || y >= l.y +. 34.0 || x < l.x +. 8.0 do -1 else
+      let i = float_to_int((x -. l.x -. 8.0) /. page_cell(l, count))
+      if i >= count do -1 else i end
+    end
+  end
+  pfn item(items : List(Int), i : Int) : Int do
+    match items do
+      Nil -> -1
+      Cons(tool, rest) -> if i == 0 do tool else item(rest, i - 1) end
+    end
+  end
+  fn option_at(x : Float, y : Float, w : Float, h : Float, group : Int, page : Int) : Int do
+    let m = menu(group, page)
+    let l = layout(w, h, m)
+    if y < l.cards_y || y >= bar_y(h) -. 13.0 || x < l.x +. 8.0 || x >= l.x +. 8.0 +. l.cell *. int_to_float(l.columns) do -1 else
+      let dx = x -. l.x -. 8.0
+      let dy = y -. l.cards_y
+      let col = float_to_int(dx /. l.cell)
+      let row = float_to_int(dy /. 106.0)
+      if dx -. int_to_float(col) *. l.cell >= l.cell -. 5.0 || dy -. int_to_float(row) *. 106.0 >= 102.0 do -1
+      else item(m.items, row * l.columns + col) end
+    end
+  end
+  fn over(x : Float, y : Float, w : Float, h : Float, group : Int, page : Int) : Bool do
+    let over_bar = x >= bar_x(w) -. 6.0 && x < w -. bar_x(w) +. 6.0 && y >= bar_y(h) -. 4.0 && y < h -. 30.0
+    if y >= h -. 30.0 || over_bar do true
+    else if group == 0 do false else
+      let l = layout(w, h, menu(group, page))
+      x >= l.x && x < l.x +. l.width && y >= l.y && y < bar_y(h) -. 5.0
+    end end
+  end
+
+  pfn background() : (Float, Float, Float, Float) do (0.048, 0.089, 0.112, 0.98) end
+  pfn face(active : Bool, hover : Bool) : (Float, Float, Float, Float) do
+    if active do (0.16, 0.32, 0.35, 1.0)
+    else if hover do (0.12, 0.23, 0.28, 1.0)
+    else (0.078, 0.15, 0.19, 1.0) end end
+  end
+  pfn text(u : Strata.Ui.Ui, x : Float, y : Float, size : Float, name : String, bright : Bool) : Strata.Ui.Ui do
+    T.text(u, 0, x, y, T.default_font(), size,
+      if bright do (0.93, 0.95, 0.92, 1.0) else (0.68, 0.79, 0.80, 1.0) end, name)
+  end
+  pfn centred(u : Strata.Ui.Ui, centre : Float, y : Float, size : Float, name : String) : Strata.Ui.Ui do
+    let (width, _, _) = T.measure(T.default_font(), size, name, 0.0)
+    text(u, centre -. width *. 0.5, y, size, name, true)
+  end
+  pfn groups(u : Strata.Ui.Ui, group : Int, hot : Int, i : Int) : Strata.Ui.Ui do
+    if i > 7 do u else
+      let w = bar_cell(U.width(u))
+      let x = bar_x(U.width(u)) +. int_to_float(i - 1) *. w
+      let y = bar_y(U.height(u))
+      let centre = x +. w *. 0.5
+      let active = i == group
+      let (name, art) = category(i)
+      let a = U.rect(u, 0, x +. 2.0, y, w -. 4.0, 56.0, face(active, i == hot))
+      let a = if active do U.rect(a, 0, x +. 2.0, y, w -. 4.0, 2.0, (0.40, 0.82, 0.77, 1.0)) else a end
+      let a = Ur.ToolArt.draw(a, art, centre, y +. 7.0, if w < 61.0 do 2.4 else 3.2 end)
+      groups(centred(a, centre, y +. 36.0, if w < 61.0 do 10.0 else 12.0 end, name), group, hot, i + 1)
+    end
+  end
+  pfn pages(u : Strata.Ui.Ui, labels : List(String), l : Layout, step : Float, page : Int, hot : Int, i : Int) : Strata.Ui.Ui do
+    match labels do
+      Nil -> u
+      Cons(name, rest) ->
+        let x = l.x +. 8.0 +. int_to_float(i) *. step
+        let y = l.y +. 7.0
+        let a = U.rect(u, 0, x, y, step -. 3.0, 27.0, face(i == page, i == hot))
+        pages(centred(a, x +. step *. 0.5, y +. 6.0, 11.0, name), rest, l, step, page, hot, i + 1)
+    end
+  end
+  pfn cards(u : Strata.Ui.Ui, c : Ur.Sim.City, items : List(Int), l : Layout, map : Bool, selected : Int, hot : Int, i : Int) : Strata.Ui.Ui do
+    match items do
+      Nil -> u
+      Cons(tool, rest) ->
+        let x = l.x +. 8.0 +. int_to_float(i % l.columns) *. l.cell
+        let y = l.cards_y +. int_to_float(i / l.columns) *. 106.0
+        let prerequisite = if map do "" else S.construction_requirement(c, tool) end
+        let active = tool == selected && prerequisite == ""
+        let width = l.cell -. 5.0
+        let a = U.rect(u, 0, x, y, width, 102.0, face(active, tool == hot))
+        let a = U.rect(a, 0, x +. 5.0, y +. 5.0, width -. 10.0, 45.0, (0.049, 0.105, 0.133, 1.0))
+        let a = if active do U.rect(a, 0, x, y +. 100.0, width, 2.0, (0.40, 0.82, 0.77, 1.0)) else a end
+        let art = if map do layer_icon(tool) else icon(tool) end
+        let a = Ur.ToolArt.draw(a, art, x +. width *. 0.5, y +. 9.0, 4.5)
+        let name = if map do Ur.Layers.name(tool) else S.tool_name(tool) end
+        let a = T.styled(a, 0, x +. 8.0, y +. 55.0, T.default_font(), 12.0, (0.92, 0.95, 0.93, 1.0), T.with_wrap(T.style(), width -. 16.0), name)
+        let cost = if map do 0 else S.cost(c, 0, tool) end
+        let upkeep = if map do 0 else S.civic_tool_upkeep(tool) end
+        let affordable = c.cash >= cost
+        let unit = if tool == 53 || S.grade_tool(tool) do "/tile" else "" end
+        let caption = "$" ++ int_to_string(cost) ++ unit ++ (if upkeep > 0 do "  +  $" ++ int_to_string(upkeep) ++ "/mo" else "" end)
+        let a = if prerequisite != "" do text(a, x +. 8.0, y +. 85.0, 10.0, "Locked", false)
+          else if tool == 55 && !map do text(a, x +. 8.0, y +. 85.0, 10.5, "Click a park", true) else if cost > 0 do text(a, x +. 8.0, y +. 85.0, 10.5, caption, affordable) else a end end end
+        cards(a, c, rest, l, map, selected, hot, i + 1)
+    end
+  end
+  fn draw(u : Strata.Ui.Ui, c : Ur.Sim.City, tool : Int, group : Int, page : Int, layer : Int, mx : Float, my : Float) : Strata.Ui.Ui do
+    let w = U.width(u)
+    let h = U.height(u)
+    let a = if group == 0 do u else
+      let m = menu(group, page)
+      let l = layout(w, h, m)
+      let map = group == 7
+      let a = U.rect(u, 0, l.x, l.y, l.width, bar_y(h) -. l.y -. 7.0, background())
+      let a = if List.length(m.pages) == 0 do a else
+        pages(a, m.pages, l, page_cell(l, List.length(m.pages)), page, page_at(mx, my, w, h, group, page), 0)
+      end
+      cards(a, c, m.items, l, map, if map do layer else tool end, option_at(mx, my, w, h, group, page), 0)
+    end
+    let a = U.rect(a, 0, bar_x(w) -. 6.0, bar_y(h) -. 4.0, 7.0 *. bar_cell(w) +. 12.0, 64.0, background())
+    let a = groups(a, group, group_at(mx, my, w, h), 1)
+    let a = U.rect(a, 0, 0.0, h -. 30.0, w, 30.0, background())
+    let hovered_tool = option_at(mx, my, w, h, group, page)
+    let prerequisite = if group == 7 || hovered_tool <= 0 do "" else S.construction_requirement(c, hovered_tool) end
+    let status = if c.harbour < 0 do c.message
+      else if prerequisite != "" do prerequisite ++ "."
+      else if group == 7 && layer > 0 do Ur.Layers.legend(layer)
+      else c.message end end end
+    let a = text(a, 14.0, h -. 23.0, 11.5, status, true)
+    let a = if w >= 1250.0 do
+      centred(a, w *. 0.60, h -. 22.0, 10.5, "WASD pan   ·   Q / E orbit   ·   Scroll zoom   ·   Space pause")
+    else a end
+    if w >= 830.0 && tool > 0 && c.harbour >= 0 && !(group == 7 && layer > 0) do
+      let name = S.tool_name(tool)
+      let (size, _, _) = T.measure(T.default_font(), 11.5, name, 0.0)
+      text(a, w -. 16.0 -. size, h -. 23.0, 11.5, name, true)
+    else a end
+  end
+end

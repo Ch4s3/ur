@@ -1,0 +1,562 @@
+mod Ur.Council do
+  alias Ur.Sim as S
+
+  -- Council save data: agenda kind, sponsor, expiry, baseline, demand, target parcel plus one, and seats from index 8.
+  fn kind(c : Ur.Sim.City) : Int do S.get(c.council, 0) end
+  fn sponsor(c : Ur.Sim.City) : Int do S.get(c.council, 1) end
+  fn expires(c : Ur.Sim.City) : Int do S.get(c.council, 2) end
+  fn demand(c : Ur.Sim.City) : Int do S.get(c.council, 4) end
+  fn target(c : Ur.Sim.City) : Int do S.get(c.council, 5) - 1 end
+  -- Outcome agendas use the spare header slot and counters after the seat data.
+  -- Old saves leave these entries at zero, retaining their original terms.
+  fn agenda_issue(c : Ur.Sim.City) : Int do S.get(c.council, 7) end
+  fn baseline(c : Ur.Sim.City) : Int do S.get(c.council, 728) end
+  fn observed(c : Ur.Sim.City) : Int do S.get(c.council, 729) end
+  fn verified_months(c : Ur.Sim.City) : Int do S.get(c.council, 730) end
+  fn improvement_required(c : Ur.Sim.City) : Int do if demand(c) == 2 do 2 else 1 end end
+  fn seated(c : Ur.Sim.City, ward : Int) : Bool do S.get(c.council, 8 + ward) > 0 end
+  fn ward_name(ward : Int) : String do "Ward " ++ int_to_string(ward + 1) end
+  -- Per-seat ranges retain their original identifiers across boundary changes.
+  fn incumbent(c : Ur.Sim.City, ward : Int) : Int do S.get(c.council, 168 + ward) end
+  fn endorsement(c : Ur.Sim.City, ward : Int) : Int do S.get(c.council, 248 + ward) end
+  fn result(c : Ur.Sim.City, ward : Int) : Int do S.get(c.council, 568 + ward) end
+  fn endorsed_loser(c : Ur.Sim.City, ward : Int) : Bool do S.get(c.council, 488 + ward) == 1 end
+  fn last_election(c : Ur.Sim.City) : Int do S.get(c.council, 6) end
+  fn campaign(c : Ur.Sim.City) : Bool do c.month % 48 >= 44 end
+  fn election_month(c : Ur.Sim.City) : Int do (c.month / 48 + 1) * 48 end
+  pfn candidate(ward : Int, generation : Int) : String do
+    let given = match (ward + generation * 5) % 8 do
+      0 -> "Ari"
+      1 -> "Lin"
+      2 -> "Inez"
+      3 -> "Sato"
+      4 -> "Mara"
+      5 -> "Dev"
+      6 -> "Noor"
+      _ -> "Tavi"
+    end
+    let surname = match (ward / 8 + generation) % 5 do
+      0 -> "Vale"
+      1 -> "Chen"
+      2 -> "Rios"
+      3 -> "Park"
+      _ -> "Bello"
+    end
+    given ++ " " ++ surname
+  end
+  fn member(c : Ur.Sim.City, ward : Int) : String do
+    "Cllr. " ++ candidate(ward, incumbent(c, ward)) ++ " · " ++ ward_name(ward)
+  end
+  fn challenger(c : Ur.Sim.City, ward : Int) : String do
+    candidate(ward, incumbent(c, ward) + 1)
+  end
+  fn ward_at(c : Ur.Sim.City, lot : Int) : Int do
+    if !S.valid(lot) do -1 else
+      let cell = S.crime_district(lot)
+      if seated(c, cell) do cell else S.get(c.council, 88 + cell) - 1 end
+    end
+  end
+  pfn relationship(c : Ur.Sim.City, ward : Int) : Int do
+    let value = S.get(c.council, 328 + ward)
+    if value == 0 do 0 else value - 51 end
+  end
+  pfn adjust_relation(c : Ur.Sim.City, ward : Int, delta : Int) : Ur.Sim.City do
+    if ward < 0 || !seated(c, ward) do c else
+      { c with council: NativeArray.set_int(c.council, 328 + ward, 51 + S.clamp(relationship(c, ward) + delta, -50, 50)) }
+    end
+  end
+  fn endorse(c : Ur.Sim.City, ward : Int, side : Int) : Ur.Sim.City do
+    if !campaign(c) || ward < 0 || !seated(c, ward) || side < 0 || side > 2 do c else
+      { c with council: NativeArray.set_int(c.council, 248 + ward, side) }
+    end
+  end
+  pfn credit_work(c : Ur.Sim.City, ward : Int, gain : Int) : Ur.Sim.City do
+    let entry = S.get(c.council, 648 + ward)
+    let previous = if entry / 10 == c.month + 1 do entry % 10 else 0 end
+    let credit = S.clamp(gain, 0, 6 - previous)
+    let next = adjust_relation(c, ward, credit)
+    { next with council: NativeArray.set_int(next.council, 648 + ward, (c.month + 1) * 10 + previous + credit) }
+  end
+  pfn investments(before : Ur.Sim.City, after : Ur.Sim.City, tiles : List(Int), seen : List(Int), gain : Int) : Ur.Sim.City do
+    match tiles do
+      Nil -> after
+      Cons(lot, rest) ->
+        let ward = ward_at(before, lot)
+        if ward < 0 || List.any(seen, fn v -> v == ward) do investments(before, after, rest, seen, gain)
+        else investments(before, credit_work(after, ward, gain), rest, Cons(ward, seen), gain) end
+    end
+  end
+  fn invest(before : Ur.Sim.City, after : Ur.Sim.City, tool : Int, tiles : List(Int)) : Ur.Sim.City do
+    let public_work = S.road_tool(tool) || tool == 18 || tool == 26 || (tool >= 33 && tool <= 37) ||
+      (tool >= 44 && tool <= 47) || (tool >= 50 && tool <= 53) || (tool >= 55 && tool <= 60) || tool == 62 || tool >= 76
+    if public_work && after.cash < before.cash do investments(before, after, tiles, Nil, S.clamp((before.cash - after.cash) / 160 + 1, 1, 6)) else after end
+  end
+
+  pfn counts(c : Ur.Sim.City, i : Int, residents : NativeIntArr) : NativeIntArr do
+    if i == S.count() do residents else
+      let ward = S.crime_district(i)
+      let floors = S.residential_floors(c, i)
+      let next = if floors <= 0 do residents else NativeArray.set_int(residents, ward, S.get(residents, ward) + floors) end
+      counts(c, i + 1, next)
+    end
+  end
+
+  pfn adjacent_seat(data : NativeIntArr, ward : Int, side : Int) : Int do
+    if side == 4 do -1 else
+      let peer = match side do
+        0 -> if ward % 10 > 0 do ward - 1 else -1 end
+        1 -> if ward % 10 < 9 do ward + 1 else -1 end
+        2 -> ward - 10
+        _ -> ward + 10
+      end
+      if peer >= 0 && peer < 80 && S.get(data, 8 + peer) > 0 do peer
+      else adjacent_seat(data, ward, side + 1) end
+    end
+  end
+  pfn draw_wards(council : NativeIntArr, floors : NativeIntArr, ward : Int) : NativeIntArr do
+    if ward == 80 do council else
+      let adjacent = adjacent_seat(council, ward, 0)
+      let needed = if adjacent < 0 do 2 else 4 end
+      let owner = S.get(council, 88 + ward) - 1
+      let agenda = S.get(council, 0)
+      let held = (agenda == 3 || agenda == 4 || (agenda > 0 && S.get(council, 7) > 0)) && owner >= 0 && owner == S.get(council, 1)
+      let next = if S.get(floors, ward) < needed || S.get(council, 8 + ward) > 0 || held do council else NativeArray.set_int(council, 8 + ward, 1) end
+      draw_wards(next, floors, ward + 1)
+    end
+  end
+  pfn extend_wards(data : NativeIntArr, floors : NativeIntArr, ward : Int) : NativeIntArr do
+    if ward == 80 do data else
+      let adjacent = adjacent_seat(data, ward, 0)
+      let agenda = S.get(data, 0)
+      let held = (agenda == 3 || agenda == 4 || (agenda > 0 && S.get(data, 7) > 0)) && adjacent == S.get(data, 1)
+      let next = if !held && S.get(data, 8 + ward) == 0 && S.get(data, 88 + ward) == 0 && S.get(floors, ward) > 0 && adjacent >= 0 do
+        NativeArray.set_int(data, 88 + ward, adjacent + 1)
+      else data end
+      extend_wards(next, floors, ward + 1)
+    end
+  end
+
+  pfn next_seat(c : Ur.Sim.City, offset : Int, checked : Int) : Int do
+    if checked == 80 do -1 else
+      let ward = (offset + checked) % 80
+      if seated(c, ward) do ward else next_seat(c, offset, checked + 1) end
+    end
+  end
+  fn established(c : Ur.Sim.City) : Bool do next_seat(c, 0, 0) >= 0 end
+  fn focus(c : Ur.Sim.City, selected : Int) : Int do
+    if selected >= 0 && selected < 80 && seated(c, selected) do selected else next_seat(c, 0, 0) end
+  end
+  fn turn_seat(c : Ur.Sim.City, selected : Int, delta : Int, attempts : Int) : Int do
+    if attempts == 80 do -1 else
+      let next = (selected + delta + 80) % 80
+      if seated(c, next) do next else turn_seat(c, next, delta, attempts + 1) end
+    end
+  end
+
+  pfn ward_lot(ward : Int, offset : Int) : Int do
+    let cell = offset / 36
+    let x = ward % 10 * 6 + offset % 6 + (if cell == 1 do -6 else if cell == 2 do 6 else 0 end end)
+    let z = ward / 10 * 6 + offset / 6 % 6 + (if cell == 3 do -6 else if cell == 4 do 6 else 0 end end)
+    if x >= 0 && x < S.width() && z >= 0 && z < S.depth() do S.index(x, z) else -1 end
+  end
+
+  pfn street_access(c : Ur.Sim.City, lot : Int, d : Int) : Bool do
+    if d == 4 do false else S.street_link(c, lot, d) || street_access(c, lot, d + 1) end
+  end
+
+  type WardReport = { homes : Int, affected : NativeIntArr, examples : NativeIntArr }
+
+  fn issue_name(issue : Int) : String do
+    match issue do
+      1 -> "Power shortfalls"
+      2 -> "Water shortfalls"
+      3 -> "Sewage shortfalls"
+      4 -> "Scarce or expensive food"
+      5 -> "Long trips to jobs"
+      6 -> "No reachable jobs"
+      7 -> "Heavy pollution"
+      8 -> "Street noise"
+      9 -> "Household budgets under strain"
+      10 -> "Poor walking access to parks"
+      11 -> "Poor school access"
+      _ -> "No pressing issue"
+    end
+  end
+
+  pfn shortfall(service : Ur.Sim.UtilityDelivery, lot : Int) : Bool do
+    S.get(service.demand, lot) > S.get(service.delivered, lot)
+  end
+
+  pfn add_affected(report : WardReport, issue : Int, lot : Int, homes : Int, affected : Bool) : WardReport do
+    if !affected do report else
+      let count = NativeArray.get_int(report.affected, issue)
+      let examples = if count == 0 do NativeArray.set_int(report.examples, issue, lot + 1) else report.examples end
+      { report with affected: NativeArray.set_int(report.affected, issue, count + homes), examples: examples }
+    end
+  end
+
+  pfn survey_lot(c : Ur.Sim.City, st : Ur.Sim.Stats, report : WardReport, lot : Int, homes : Int) : WardReport do
+    let trip = S.commute(st.commutes, lot)
+    let food = match S.freight_market_at(c, lot) do
+      None -> false
+      Some(market) -> market.coverage < 60 || market.price >= 10
+    end
+    let accounts = S.household_accounts(c, st.routes, st.commutes, st.labor, lot)
+    let report = add_affected(report, 1, lot, homes, shortfall(st.utilities.electric, lot))
+    let report = add_affected(report, 2, lot, homes, shortfall(st.utilities.water, lot))
+    let report = add_affected(report, 3, lot, homes, shortfall(st.utilities.sewer, lot))
+    let report = add_affected(report, 4, lot, homes, food)
+    let report = add_affected(report, 5, lot, homes, trip > S.commute_limit() && trip < 999)
+    let report = add_affected(report, 6, lot, homes, trip >= 999)
+    let report = add_affected(report, 7, lot, homes, S.land_pollution_at(c, lot) >= 30)
+    let report = add_affected(report, 8, lot, homes, S.street_noise(c, lot) >= 16)
+    let report = add_affected(report, 9, lot, homes, S.margin(accounts) <= 4)
+    let report = add_affected(report, 10, lot, homes, S.measure(c, st, lot, 1) < 20)
+    let report = add_affected(report, 11, lot, homes, !S.has_civic(S.get(st.civic, lot), 1))
+    { report with homes: report.homes + homes }
+  end
+
+  pfn survey_ward(c : Ur.Sim.City, st : Ur.Sim.Stats, ward : Int, offset : Int, report : WardReport) : WardReport do
+    if offset >= 180 do report else
+      let lot = ward_lot(ward, offset)
+      let homes = if S.valid(lot) && ward_at(c, lot) == ward do S.occupied_homes(c, lot) else 0 end
+      let next = if homes > 0 do survey_lot(c, st, report, lot, homes) else report end
+      survey_ward(c, st, ward, offset + 1, next)
+    end
+  end
+
+  fn ward_report(c : Ur.Sim.City, st : Ur.Sim.Stats, ward : Int) : WardReport do
+    let report = { homes: 0, affected: NativeArray.make_int(12, 0), examples: NativeArray.make_int(12, 0) }
+    if ward < 0 || !seated(c, ward) do report else survey_ward(c, st, ward, 0, report) end
+  end
+
+  fn share(report : WardReport, issue : Int) : Int do
+    if report.homes == 0 || issue < 1 || issue > 11 do 0
+    else NativeArray.get_int(report.affected, issue) * 100 / report.homes end
+  end
+
+  pfn issue_pressure(report : WardReport, issue : Int) : Int do
+    let threshold = match issue do
+      1 | 2 | 3 | 4 | 7 -> 25
+      5 | 6 | 8 -> 40
+      9 -> 60
+      _ -> 75
+    end
+    let affected = share(report, issue)
+    if affected < threshold do 0 else affected - threshold + 1 end
+  end
+
+  pfn leading(report : WardReport, issue : Int, best : Int, pressure : Int) : Int do
+    if issue > 11 do best else
+      let score = issue_pressure(report, issue)
+      if score > pressure do leading(report, issue + 1, issue, score)
+      else leading(report, issue + 1, best, pressure) end
+    end
+  end
+  fn leading_issue(report : WardReport) : Int do leading(report, 1, 0, 0) end
+  pfn amenities(c : Ur.Sim.City, ward : Int, improvement : Int, offset : Int, total : Int) : Int do
+    if offset == 180 do total else
+      let lot = ward_lot(ward, offset)
+      let eligible = ward_at(c, lot) == ward && (match improvement do
+        1 -> S.get(c.plants, lot) == 18 && street_access(c, lot, 0)
+        2 -> S.get(c.parks, lot) > 0
+        6 -> S.schedule_eligible(c, lot) && S.get(c.car_free_days, lot) > 0
+        _ -> false
+      end)
+      amenities(c, ward, improvement, offset + 1, total + (if eligible do 1 else 0 end))
+    end
+  end
+
+  pfn suitable_target(c : Ur.Sim.City, lot : Int, improvement : Int) : Bool do
+    let plant = S.get(c.plants, lot)
+    S.valid(lot) && (match improvement do
+      3 -> plant == 20
+      4 -> plant > 0 && S.facility_nuisance(plant) >= 2
+      5 -> S.nightlife(c, lot) && S.quiet_at(c, lot) == 1
+      7 -> S.schedule_eligible(c, lot) && S.get(c.car_free_days, lot) > 0
+      _ -> S.schedule_eligible(c, lot) && S.get(c.car_free_days, lot) == 0
+    end)
+  end
+  pfn find_target(c : Ur.Sim.City, ward : Int, improvement : Int, offset : Int) : Int do
+    if offset == 180 do -1 else
+      let lot = ward_lot(ward, offset)
+      if ward_at(c, lot) == ward && suitable_target(c, lot, improvement) do lot else find_target(c, ward, improvement, offset + 1) end
+    end
+  end
+
+  pfn select_demand(c : Ur.Sim.City, ward : Int, preferred : Int, checked : Int) : (Int, Int) do
+    let improvement = (preferred + checked) % 7 + 1
+    if improvement <= 2 do (improvement, -1) else
+      let lot = find_target(c, ward, improvement, 0)
+      if S.valid(lot) do (improvement, if improvement == 6 do -1 else lot end) else select_demand(c, ward, preferred, checked + 1) end
+    end
+  end
+
+  pfn clear(c : Ur.Sim.City, message : String) : Ur.Sim.City do
+    { c with council: NativeArray.set_int(c.council, 0, 0), message: message }
+  end
+
+  fn progress(c : Ur.Sim.City) : Int do
+    let improvement = demand(c)
+    let lot = target(c)
+    let changed = S.valid(lot) && (match improvement do
+      3 -> S.get(c.plants, lot) == 25
+      4 -> S.get(c.plants, lot) == 0 || S.facility_nuisance(S.get(c.plants, lot)) < 2
+      5 -> S.quiet_at(c, lot) >= 2
+      7 -> S.schedule_eligible(c, lot) && S.get(c.car_free_days, lot) == 0
+      _ -> false
+    end)
+    if improvement == 1 || improvement == 2 || improvement == 6 do
+      S.clamp(amenities(c, sponsor(c), improvement, 0, 0) - S.get(c.council, 3), 0, 36)
+    else if changed do 1 else 0 end end
+  end
+
+  fn settle(c : Ur.Sim.City) : Ur.Sim.City do
+    let agenda = kind(c)
+    if agenda_issue(c) == 0 && (agenda == 3 || agenda == 4) && progress(c) >= improvement_required(c) do
+      clear(adjust_relation(c, sponsor(c), 8), member(c, sponsor(c)) ++ " lifted the hold after the local improvement.")
+    else c end
+  end
+
+  pfn roll(c : Ur.Sim.City, ward : Int, salt : Int) : Int do
+    let seed = (c.month + 13) * 9301 + (ward + 7) * 49297 + salt * 233
+    (seed % 65521 * (seed % 251 + 17) + 13849) % 100
+  end
+  fn vote_support(happiness : Int, side : Int) : Int do
+    let support = if side == 1 do 9 else if side == 2 do -9 else 0 end end
+    S.clamp(50 + (happiness - 50) * 3 / 4 + support, 8, 92)
+  end
+  pfn sentiment(c : Ur.Sim.City, st : Ur.Sim.Stats, ward : Int, offset : Int, total : Int, residents : Int) : Int do
+    if offset == 180 do (if residents > 0 do total / residents else 40 end) else
+      let lot = ward_lot(ward, offset)
+      let floors = if ward_at(c, lot) == ward do S.residential_floors(c, lot) else 0 end
+      let score = if floors > 0 do S.measure(c, st, lot, 0) else 0 end
+      sentiment(c, st, ward, offset + 1, total + score * floors, residents + floors)
+    end
+  end
+  pfn elect(c : Ur.Sim.City, st : Ur.Sim.Stats, ward : Int) : Ur.Sim.City do
+    if ward == 80 do c else if !seated(c, ward) do elect(c, st, ward + 1) else
+      let side = endorsement(c, ward)
+      let support = vote_support(sentiment(c, st, ward, 0, 0, 0), side)
+      let stays = roll(c, ward, incumbent(c, ward) + 89) < support
+      let backs_winner = (stays && side == 1) || (!stays && side == 2)
+      let backs_loser = side > 0 && !backs_winner
+      let prior_backlash = S.get(c.council, 408 + ward)
+      let backlash = if backs_loser do 2 else if stays do S.clamp(prior_backlash - 1, 0, 2) else 0 end end
+      let data = if stays do c.council else NativeArray.set_int(NativeArray.set_int(c.council, 168 + ward, incumbent(c, ward) + 1), 328 + ward, 0) end
+      let data = NativeArray.set_int(NativeArray.set_int(data, 248 + ward, 0), 408 + ward, backlash)
+      let status = if stays do 1 else 2 end
+      let data = NativeArray.set_int(NativeArray.set_int(data, 568 + ward, status), 488 + ward, if backs_loser do 1 else 0 end)
+      let next = { c with council: data }
+      let next = adjust_relation(next, ward, if backs_loser do -14 else if backs_winner do 10 else 0 end end)
+      elect(next, st, ward + 1)
+    end end
+  end
+  fn file_agenda(c : Ur.Sim.City, ward : Int, agenda : Int, term : Int) : Ur.Sim.City do
+    let data = NativeArray.set_int(NativeArray.set_int(c.council, 0, agenda), 1, ward)
+    let data = NativeArray.set_int(data, 2, c.month + 24)
+    let (improvement, lot) = if agenda == 3 || agenda == 4 do select_demand(c, ward, (term + 5) % 7, 0) else (0, -1) end
+    let data = NativeArray.set_int(data, 3, amenities(c, ward, improvement, 0, 0))
+    let data = NativeArray.set_int(NativeArray.set_int(data, 4, improvement), 5, lot + 1)
+    { c with council: NativeArray.set_int(data, 7, 0), message: member(c, ward) ++ " added an item to the council agenda." }
+  end
+  fn challenge_chance(c : Ur.Sim.City, ward : Int) : Int do
+    S.clamp(34 - relationship(c, ward) + 16 * S.get(c.council, 408 + ward), 9, 90)
+  end
+
+  pfn ward_candidate(c : Ur.Sim.City, st : Ur.Sim.Stats, ward : Int, best : (Int, Int, WardReport, Int)) : (Int, Int, WardReport, Int) do
+    if ward >= 80 do best else if !seated(c, ward) do ward_candidate(c, st, ward + 1, best) else
+      let (_, _, _, best_score) = best
+      let report = ward_report(c, st, ward)
+      let issue = leading_issue(report)
+      let severity = issue_pressure(report, issue)
+      let chance = S.clamp(challenge_chance(c, ward) + severity / 2, 0, 90)
+      let margin = chance - roll(c, ward, 173)
+      -- Relationships decide who pushes an issue. Among those who do, severe
+      -- conditions get priority over the luck of an especially low roll.
+      let score = severity * 2 + margin
+      let pick = if issue > 0 && margin > 0 && score > best_score do (ward, issue, report, score) else best end
+      ward_candidate(c, st, ward + 1, pick)
+    end end
+  end
+
+  pfn file_outcome_agenda(c : Ur.Sim.City, st : Ur.Sim.Stats) : Ur.Sim.City do
+    let empty = ward_report(c, st, -1)
+    let (ward, issue, report, _) = ward_candidate(c, st, 0, (-1, 0, empty, 0))
+    if ward < 0 do c else
+      let affected = share(report, issue)
+      let holds = affected >= 60
+      let agenda = match issue do
+        1 | 2 | 3 -> if holds do 3 else 6 end
+        4 -> if holds do 4 else 6 end
+        7 -> if holds do 7 else 6 end
+        9 -> if c.tax >= 16 && holds do 2 else if c.tax >= 10 do 1 else 6 end end
+        _ -> 6
+      end
+      let data = NativeArray.set_int(NativeArray.set_int(c.council, 0, agenda), 1, ward)
+      let data = NativeArray.set_int(NativeArray.set_int(data, 2, c.month + 8), 4, 0)
+      let data = NativeArray.set_int(NativeArray.set_int(data, 5, NativeArray.get_int(report.examples, issue)), 7, issue)
+      let data = NativeArray.set_int(NativeArray.set_int(data, 728, affected), 729, affected)
+      let data = NativeArray.set_int(NativeArray.set_int(data, 730, 0), 731, c.month)
+      let data = NativeArray.set_int(data, 732, report.homes)
+      { c with council: data, message: member(c, ward) ++ " raised a district concern. See Details / Council." }
+    end
+  end
+
+  fn outcome_goal(c : Ur.Sim.City) : Int do baseline(c) * 2 / 3 end
+
+  pfn observe_agenda(c : Ur.Sim.City, st : Ur.Sim.Stats) : Ur.Sim.City do
+    let issue = agenda_issue(c)
+    let last = S.get(c.council, 731)
+    if kind(c) == 0 || issue == 0 || c.month <= last do c else
+      let report = ward_report(c, st, sponsor(c))
+      let affected = share(report, issue)
+      let comparable = report.homes > 0 && report.homes * 5 >= S.get(c.council, 732) * 4 && (issue != 4 || Option.is_some(c.freight))
+      let checks = if comparable && affected <= outcome_goal(c) do
+        if c.month == last + 1 do verified_months(c) + 1 else 1 end
+      else 0 end
+      -- 101 marks a sample with too few comparable households to judge delivery.
+      let data = NativeArray.set_int(c.council, 729, if comparable do affected else 101 end)
+      let data = NativeArray.set_int(NativeArray.set_int(data, 730, checks), 731, c.month)
+      let c = { c with council: data }
+      if checks >= 2 do
+        clear(adjust_relation(c, sponsor(c), 8), member(c, sponsor(c)) ++ " closed the item after two months of improvement.")
+      else c end
+    end
+  end
+
+  pfn expire_agenda(c : Ur.Sim.City) : Ur.Sim.City do
+    if kind(c) > 0 && c.month >= expires(c) do
+      clear(adjust_relation(c, sponsor(c), -4), "The council agenda expired.")
+    else c end
+  end
+
+  fn advance_reporting(c : Ur.Sim.City, people : Int, snapshot : (Ur.Sim.City) -> Ur.Sim.Stats) : Ur.Sim.City do
+    let c = if people >= 120 do
+      let floors = counts(c, 0, NativeArray.make_int(80, 0))
+      { c with council: extend_wards(draw_wards(c.council, floors, 0), floors, 0) }
+    else c end
+    let vote = c.month > 0 && c.month % 48 == 0 && last_election(c) < c.month && established(c)
+    if vote do
+      let old = incumbent(c, sponsor(c))
+      let st = snapshot(c)
+      let c = elect(c, st, 0)
+      let c = if kind(c) > 0 && old != incumbent(c, sponsor(c)) do clear(c, "The new councillor dropped the previous agenda item.")
+        else expire_agenda(observe_agenda(c, st)) end
+      { c with council: NativeArray.set_int(c.council, 6, c.month), message: "Council election results are available under Details / Council." }
+    else
+      let c = settle(c)
+      if kind(c) > 0 do
+        let c = if agenda_issue(c) > 0 && c.month > S.get(c.council, 731) do observe_agenda(c, snapshot(c)) else c end
+        expire_agenda(c)
+      else if c.month == 0 || c.month % 8 != 0 || !established(c) || S.get(c.council, 731) == c.month do c else
+        file_outcome_agenda(c, snapshot(c))
+      end end
+    end
+  end
+
+  fn advance(c : Ur.Sim.City, people : Int) : Ur.Sim.City do
+    advance_reporting(c, people, fn city -> S.stats(city))
+  end
+
+  fn agenda_title(agenda : Int) : String do
+    match agenda do
+      1 -> "Request: cut income tax by 1 point"
+      2 -> "Hold: income tax increases"
+      3 -> "Hold: rezoning developed or zoned land"
+      4 -> "Hold: demolishing occupied buildings"
+      5 -> "Request: set quiet hours to 10 pm"
+      6 -> "Request: improve neighborhood conditions"
+      7 -> "Hold: new high-nuisance facilities"
+      _ -> "No pending council business"
+    end
+  end
+
+  fn agenda_title_for(c : Ur.Sim.City) : String do
+    let agenda = kind(c)
+    let issue = agenda_issue(c)
+    if agenda == 3 && issue > 0 do "Hold: rezoning while utilities are short"
+    else if agenda == 4 && issue > 0 do "Hold: demolishing occupied homes"
+    else if agenda != 6 do agenda_title(agenda)
+    else
+      match issue do
+        1 -> "Request: improve power reliability"
+        2 -> "Request: improve water reliability"
+        3 -> "Request: improve sewage collection"
+        4 -> "Request: restore affordable food"
+        5 -> "Request: shorten trips to jobs"
+        6 -> "Request: connect residents to workplaces"
+        7 -> "Request: reduce local pollution"
+        8 -> "Request: quiet the neighborhood"
+        9 -> "Request: ease household costs"
+        10 -> "Request: improve walking access to parks"
+        11 -> "Request: improve school access"
+        _ -> agenda_title(agenda)
+      end
+    end end end
+  end
+
+  fn terms(c : Ur.Sim.City) : String do
+    if agenda_issue(c) > 0 do (match agenda_issue(c) do
+      1 -> "Add reliable generation or relieve the local feeder."
+      2 -> "Connect a water source or relieve the local pipe."
+      3 -> "Add an outlet or relieve the local sewer line."
+      4 -> "Restore regular freight and affordable food."
+      5 -> "Reduce the travel time to jobs."
+      6 -> "Connect this ward to workplaces."
+      7 -> "Lower pollution exposure in the ward."
+      8 -> "Reduce exposure to loud streets or late bars."
+      9 -> "Improve what households have left after bills."
+      10 -> "Connect more homes to parks on foot."
+      _ -> "Extend school access to more homes."
+    end) else match demand(c) do
+      1 -> "Build a new school with street access in this ward."
+      2 -> "Add two parcels of park space in this ward."
+      3 -> "Upgrade the designated fire station under Civic / Services."
+      4 -> "Remove the designated high-nuisance facility."
+      5 -> "Limit the designated bar to 10 pm or earlier."
+      6 -> "Add a car-free schedule on a street in this ward."
+      7 -> "Clear the car-free schedule on the designated street."
+      _ -> if kind(c) == 2 do "The sponsor will allow increases when the hold expires." else "You can grant or decline this request." end
+    end end
+  end
+
+  fn respond(c : Ur.Sim.City, accept : Bool) : Ur.Sim.City do
+    let agenda = kind(c)
+    if (agenda != 1 && agenda != 5 && agenda != 6) || (agenda == 6 && accept) do c else
+      let next = if !accept do c else if agenda == 1 do S.policy(c, -1, 0) else { c with quiet_rule: 2 } end end
+      if accept && agenda_issue(c) > 0 do
+        { next with council: NativeArray.set_int(next.council, 0, 6), message: "Income tax lowered. The council will review household budgets." }
+      else
+        clear(adjust_relation(next, sponsor(c), if accept do 10 else -8 end), if accept do "Council request granted." else "Council request declined." end)
+      end
+    end
+  end
+
+  fn policy_block(c : Ur.Sim.City, before : Ur.Sim.City) : Bool do
+    kind(before) == 2 && c.tax > before.tax
+  end
+
+  fn building_block(c : Ur.Sim.City, tool : Int, tiles : List(Int)) : Bool do
+    let agenda = kind(c)
+    let ward = sponsor(c)
+    let issue = agenda_issue(c)
+    let zoning = tool == 2 || tool == 3 || tool == 28
+    let zone = if tool == 28 do 3 else tool - 1 end
+    if agenda == 3 && zoning do
+      List.any(tiles, fn lot -> ward_at(c, lot) == ward && S.get(c.zones, lot) > 0 && S.get(c.zones, lot) != zone && (issue == 0 || zone != 2 || issue == 1))
+    else if agenda == 4 && tool == 7 do
+      List.any(tiles, fn lot -> ward_at(c, lot) == ward && (S.occupied_homes(c, lot) > 0 || (issue == 0 && S.job_slots(c, lot) > 0)))
+    else if agenda == 7 && S.facility_nuisance(S.facility_kind(tool)) >= 3 do
+      List.any(tiles, fn lot -> ward_at(c, lot) == ward)
+    else false end end end
+  end
+
+  fn terrain_color(c : Ur.Sim.City, lot : Int) : Int do
+    let ward = ward_at(c, lot)
+    if ward < 0 || S.get(c.heights, lot) == 0 do -1
+    else if kind(c) > 0 && target(c) == lot do 6
+    else if kind(c) > 0 && sponsor(c) == ward do 10
+    else if (ward % 10 + ward / 10) % 2 == 0 do 20 else 11 end end end end
+  end
+end

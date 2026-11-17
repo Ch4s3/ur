@@ -1,0 +1,109 @@
+mod Ur.Demography do
+  -- Census marker, five age groups, four aging remainders, birth remainder,
+  -- five mortality remainders, and a voluntary departure remainder.
+  fn empty() : NativeIntArr do NativeArray.make_int(17, 0) end
+  fn initialized(data : NativeIntArr) : Bool do NativeArray.get_int(data, 0) == 1 end
+  fn age(data : NativeIntArr, group : Int) : Int do NativeArray.get_int(data, group + 1) end
+  pfn set_age(data : NativeIntArr, group : Int, people : Int) : NativeIntArr do
+    NativeArray.set_int(data, group + 1, people)
+  end
+  pfn share(total : Int, low : Int, high : Int, scale : Int) : Int do
+    total * high / scale - total * low / scale
+  end
+  pfn min(a : Int, b : Int) : Int do if a < b do a else b end end
+  fn seed(people : Int) : NativeIntArr do
+    let data = NativeArray.set_int(empty(), 0, 1)
+    let data = set_age(set_age(data, 0, share(people, 0, 6, 100)), 1, share(people, 6, 20, 100))
+    let data = set_age(set_age(data, 2, share(people, 20, 52, 100)), 3, share(people, 52, 85, 100))
+    set_age(data, 4, share(people, 85, 100, 100))
+  end
+  fn total(data : NativeIntArr) : Int do
+    age(data, 0) + age(data, 1) + age(data, 2) + age(data, 3) + age(data, 4)
+  end
+  fn working_age(data : NativeIntArr) : Int do age(data, 2) + age(data, 3) end
+  fn workforce(data : NativeIntArr, residents : Int) : Int do
+    if !initialized(data) do residents * 3 / 5 else
+      let counted = total(data)
+      if counted == 0 do 0 else working_age(data) * residents * 12 / (counted * 13) end
+    end
+  end
+
+  pfn aging_months(group : Int) : Int do
+    match group do
+      0 -> 72
+      1 -> 144
+      2 -> 264
+      _ -> 300
+    end
+  end
+  pfn mortality_months(group : Int) : Int do
+    match group do
+      0 -> 36000
+      1 -> 60000
+      2 -> 12000
+      3 -> 3600
+      _ -> 180
+    end
+  end
+  type Aging = { census : NativeIntArr, deaths : Int, adult_deaths : Int, retiring : Int, pupils : Int }
+  pfn age_groups(before : NativeIntArr, group : Int, incoming : Int, state : Aging) : Aging do
+    if group == 5 do state else
+      let present = age(before, group)
+      let mortality = mortality_months(group)
+      let risk = NativeArray.get_int(before, 11 + group) + present
+      let deaths = min(present, risk / mortality)
+      let census = NativeArray.set_int(state.census, 11 + group, risk % mortality)
+      let period = aging_months(group)
+      let aging = if group < 4 do NativeArray.get_int(before, 6 + group) + present - deaths else 0 end
+      let leaving = min(present - deaths, aging / period)
+      let census = if group < 4 do NativeArray.set_int(census, 6 + group, aging % period) else census end
+      age_groups(before, group + 1, leaving,
+        { census: set_age(census, group, present - deaths - leaving + incoming), deaths: state.deaths + deaths,
+          adult_deaths: state.adult_deaths + (if group == 2 || group == 3 do deaths else 0 end),
+          retiring: if group == 3 do leaving else state.retiring end,
+          pupils: if group == 0 do leaving else state.pupils end })
+    end
+  end
+  pfn remove(data : NativeIntArr, before : NativeIntArr, people : Int, counted : Int, group : Int, seen : Int) : NativeIntArr do
+    if group == 5 || people == 0 do data else
+      let next = seen + age(before, group)
+      let lost = share(people, seen, next, counted)
+      remove(set_age(data, group, age(data, group) - lost), before, people, counted, group + 1, next)
+    end
+  end
+  pfn settle_immigrants(data : NativeIntArr, people : Int) : NativeIntArr do
+    -- Most newcomers are working-age adults, with children and older family members.
+    let adults = (people * 3 + 2) / 5
+    let older = people / 10
+    let children = people - adults - older
+    let data = set_age(data, 0, age(data, 0) + children / 3)
+    let data = set_age(data, 1, age(data, 1) + children - children / 3)
+    let data = set_age(data, 2, age(data, 2) + (adults + 1) / 2)
+    let data = set_age(data, 3, age(data, 3) + adults / 2)
+    set_age(data, 4, age(data, 4) + older)
+  end
+
+  type Month = { census : NativeIntArr, births : Int, deaths : Int, arrived : Int, left : Int, workers_lost : Int, pupils : Int }
+  fn advance(data : NativeIntArr, homes : Int, jobs : Int, strain : Int, policy : Int) : Month do
+    let aged = age_groups(data, 0, 0, { census: data, deaths: 0, adult_deaths: 0, retiring: 0, pupils: 0 })
+    let after_deaths = total(aged.census)
+    let birth_credit = NativeArray.get_int(data, 10) + age(aged.census, 2)
+    let room = if homes * 5 > after_deaths do homes * 5 - after_deaths else 0 end
+    let births = min(room, birth_credit / 300)
+    let census = set_age(aged.census, 0, age(aged.census, 0) + births)
+    let census = NativeArray.set_int(census, 10, birth_credit % 300)
+    let before_moving = total(census)
+    let departure_credit = NativeArray.get_int(census, 16) + before_moving * (strain + 1)
+    let displaced = if before_moving > homes * 5 do before_moving - homes * 5 else 0 end
+    let leaving = min(before_moving, displaced + departure_credit / 2400)
+    let census = remove(census, census, leaving, before_moving, 0, 0)
+    let census = NativeArray.set_int(census, 16, departure_credit % 2400)
+    let remaining = before_moving - leaving
+    let places = if homes * 4 > remaining do homes * 4 - remaining else 0 end
+    let demand = if jobs > 0 && strain < 12 do 12 + jobs / 6 else if remaining == 0 && jobs > 0 do 4 else 0 end end
+    let quota = if policy == 0 do demand / 6 else if policy == 2 do demand * 2 else demand end end
+    let arrivals = min(places, quota)
+    { census: settle_immigrants(census, arrivals), births: births, deaths: aged.deaths,
+      arrived: arrivals, left: leaving, workers_lost: aged.adult_deaths + aged.retiring + working_age(aged.census) - working_age(census), pupils: aged.pupils }
+  end
+end

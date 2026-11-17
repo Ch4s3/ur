@@ -1,0 +1,201 @@
+mod Ur.Food do
+  alias Ur.Sim as S
+  type Trip = { mode : Int, stops : List(Int), legs : Int, source : Int }
+  type Routes = { next : NativeIntArr, queue : NativeIntArr, tail : Int }
+
+  pfn road(c : Ur.Sim.City, i : Int) : Bool do
+    S.valid(i) && S.get(c.roads, i) > 0
+  end
+  fn walkable(c : Ur.Sim.City, i : Int) : Bool do
+    road(c, i) || (S.valid(i) && S.get(c.transit, i) == 1)
+  end
+
+  pfn enqueue(r : Routes, i : Int, next : Int) : Routes do
+    { next: NativeArray.set_int(r.next, i, next), queue: NativeArray.set_int(r.queue, r.tail, i), tail: r.tail + 1 }
+  end
+
+  pfn visit(c : Ur.Sim.City, r : Routes, i : Int, d : Int, mode : Int) : Routes do
+    if d >= 5 do r else
+      let j = if d == 4 do S.grade_peer(c, i) else S.neighbour(i, d) end
+      let open = match mode do
+        1 -> S.motor_road(c, j)
+        2 -> S.motor_street(c, j)
+        3 -> d < 4 && S.transit_link(c, i, j, 2)
+        4 -> S.campus_edge(c, i, j) || (walkable(c, j) && (!S.valid(S.campus_root(c, i)) || i == S.campus_root(c, i)))
+        _ -> walkable(c, j)
+      end
+      let r = if open && S.get(r.next, j) < 0 && (d == 4 || int_abs(S.get(c.heights, i) - S.get(c.heights, j)) <= 12) do
+        enqueue(r, j, i)
+      else r end
+      visit(c, r, i, d + 1, mode)
+    end
+  end
+
+  pfn seed(c : Ur.Sim.City, destination : (Int) -> Bool, r : Routes, i : Int) : Routes do
+    if i >= S.count() do r else
+      let r = if destination(i) do enqueue(r, i, i) else r end
+      seed(c, destination, r, i + 1)
+    end
+  end
+
+  pfn expand(c : Ur.Sim.City, r : Routes, head : Int, mode : Int) : Routes do
+    if head >= r.tail do r else
+      expand(c, visit(c, r, S.get(r.queue, head), 0, mode), head + 1, mode)
+    end
+  end
+  pfn flood(c : Ur.Sim.City, r : Routes, head : Int, mode : Int) : NativeIntArr do
+    let result = expand(c, r, head, mode)
+    result.next
+  end
+
+  fn destinations(c : Ur.Sim.City, destination : (Int) -> Bool) : NativeIntArr do
+    let r = { next: NativeArray.make_int(2640, -1), queue: NativeArray.make_int(2640, 0), tail: 0 }
+    flood(c, seed(c, destination, r, 0), 0, 0)
+  end
+  fn campus_destinations(c : Ur.Sim.City, destination : (Int) -> Bool) : NativeIntArr do
+    let r = { next: NativeArray.make_int(2640, -1), queue: NativeArray.make_int(2640, 0), tail: 0 }
+    flood(c, seed(c, destination, r, 0), 0, 4)
+  end
+  fn driving_destinations_avoiding(c : Ur.Sim.City, target : Int, blocked : Int) : NativeIntArr do
+    let next = NativeArray.make_int(2640, -1)
+    let next = if S.valid(blocked) do NativeArray.set_int(next, blocked, blocked) else next end
+    let r = { next: next, queue: NativeArray.make_int(2640, 0), tail: 0 }
+    flood(c, enqueue(r, target, target), 0, 1)
+  end
+  fn driving_destinations(c : Ur.Sim.City, target : Int) : NativeIntArr do
+    driving_destinations_avoiding(c, target, -1)
+  end
+
+  fn fleet_search(c : Ur.Sim.City, seed_lot : Int, mode : Int) : Routes do
+    let r = { next: NativeArray.make_int(2640, -1), queue: NativeArray.make_int(2640, 0), tail: 0 }
+    let start = enqueue(r, seed_lot, seed_lot)
+    expand(c, start, 0, mode)
+  end
+
+  pfn yard_at(c : Ur.Sim.City, kind : Int, i : Int) : Int do
+    if S.get(c.plants, i) == kind do S.fleet_frontage(c, i, 0)
+    else -1 end
+  end
+
+  pfn yard_seeds(c : Ur.Sim.City, kind : Int, i : Int, r : Routes) : Routes do
+    if i == S.count() do r else
+      let road = yard_at(c, kind, i)
+      let next = if S.valid(road) && S.get(r.next, road) < 0 do enqueue(r, road, i) else r end
+      yard_seeds(c, kind, i + 1, next)
+    end
+  end
+
+  fn yard_routes(c : Ur.Sim.City, kind : Int, mode : Int) : NativeIntArr do
+    let r = { next: NativeArray.make_int(2640, -1), queue: NativeArray.make_int(2640, 0), tail: 0 }
+    flood(c, yard_seeds(c, kind, 0, r), 0, mode)
+  end
+
+  fn path_to(links : NativeIntArr, i : Int, suffix : List(Int)) : List(Int) do
+    let parent = S.get(links, i)
+    if parent == i || !S.valid(parent) do Cons(i, suffix)
+    else path_to(links, parent, Cons(i, suffix)) end
+  end
+
+  fn entrance(c : Ur.Sim.City, links : NativeIntArr, i : Int, d : Int) : Int do
+    if d >= 4 do -1 else
+      let j = S.neighbour(i, d)
+      if walkable(c, j) && S.get(links, j) >= 0 && int_abs(S.get(c.heights, i) - S.get(c.heights, j)) <= 12 do j
+      else entrance(c, links, i, d + 1) end
+    end
+  end
+
+  pfn open_water(c : Ur.Sim.City, i : Int, d : Int) : Int do
+    if d >= 4 do -1 else
+      let j = S.neighbour(i, d)
+      if S.valid(j) && S.get(c.heights, j) == 0 do d else open_water(c, i, d + 1) end
+    end
+  end
+
+  pfn fishing_run(c : Ur.Sim.City, i : Int, d : Int, left : Int) : (List(Int), Int) do
+    let j = S.neighbour(i, d)
+    if left == 0 || !S.valid(j) || S.get(c.heights, j) > 0 do (Cons(i, Nil), 0) else
+      let (stops, legs) = fishing_run(c, j, d, left - 1)
+      (Cons(i, stops), legs + 1)
+    end
+  end
+
+  pfn producers(c : Ur.Sim.City, roads : NativeIntArr, pipes : NativeIntArr, irrigation : NativeIntArr, i : Int, farms : Int, island_farms : Int, left : Int, out : List(Trip)) : List(Trip) do
+    if i >= S.count() || left <= 0 do out else
+      let kind = S.get(c.plants, i)
+      let connected = (kind == 5 || kind == 6) && S.building_access(c, roads, i) >= 0
+      let island = kind == 5 && S.food_island(c, i) == 1 && S.food_island(c, c.harbour) != 1
+      let farm = kind == 5 && connected && (if island do island_farms > 0 && S.distance(irrigation, i) >= 0 else farms > 0 && S.distance(pipes, i) >= 0 end)
+      let fish = kind == 6 && connected && S.pollution_at(c, i) < 100
+      if !farm && !fish do producers(c, roads, pipes, irrigation, i + 1, farms, island_farms, left, out) else
+        let work = if farm do { mode: 7, stops: Cons(i, Cons(i, Nil)), legs: 1, source: i }
+        else
+          let d = open_water(c, i, 0)
+          let (stops, legs) = if d < 0 do (Nil, 0) else fishing_run(c, S.neighbour(i, d), d, 3) end
+          { mode: 8, stops: Cons(i, stops), legs: if d < 0 do 0 else legs + 1 end, source: i }
+        end
+        let out = Cons(work, out)
+        producers(c, roads, pipes, irrigation, i + 1, if farm && !island do farms - 1 else farms end, if farm && island do island_farms - 1 else island_farms end, left - 1, out)
+      end
+    end
+  end
+
+  pfn route_open(c : Ur.Sim.City, stops : List(Int)) : Bool do
+    match stops do
+      Cons(a, Cons(b, rest)) ->
+        let ferry = S.get(c.ferries, a) == b + 1
+        let adjacent = S.neighbour(a, S.direction(a, b)) == b
+        if ferry || S.grade_link(c, a, b) || (adjacent && int_abs(S.get(c.heights, a) - S.get(c.heights, b)) <= 12) do
+          match rest do
+            Nil -> (!S.fire_offline(c, b) && S.retail_kind(c, b) > 0) || b == c.harbour
+            _ -> (S.motor_road(c, b) || S.get(c.ferries, b) > 0) && route_open(c, Cons(b, rest))
+          end
+        else false end
+      _ -> false
+    end
+  end
+  fn producer_traffic(c : Ur.Sim.City, st : Ur.Sim.Stats) : List(Trip) do
+    let irrigation = if st.services.island_farms > 0 do S.farm_water(c) else st.routes end
+    producers(c, st.routes, S.pipe_access(c), irrigation, 0, st.services.operating_farms, st.services.island_farms, 60, Nil)
+  end
+
+  pfn warehouse_trip(c : Ur.Sim.City, links : NativeIntArr, load : Ur.Sim.Shipment) : Trip do
+    let (_, entry) = leg(load.stops, 0)
+    let access = if load.source == c.harbour do c.harbour else entry end
+    let route = if S.get(links, access) < 0 do load.stops else
+      let tail = if access == load.source do List.drop(load.stops, 1) else load.stops end
+      path_to(links, access, tail)
+    end
+    let source = match route do
+      Cons(yard, _) -> yard
+      Nil -> load.source
+    end
+    { mode: 6, stops: route, legs: List.length(route) - 1, source: source }
+  end
+
+  pfn shipping(c : Ur.Sim.City, links : NativeIntArr, loads : List(Ur.Sim.Shipment), left : Int, out : List(Trip)) : List(Trip) do
+    if left == 0 do out else match loads do
+      Nil -> out
+      Cons(load, rest) ->
+        let kind = S.get(c.plants, load.source)
+        if (load.source == c.harbour || kind == 5 || kind == 6) && route_open(c, load.stops) do
+          let trip = warehouse_trip(c, links, load)
+          shipping(c, links, rest, left - 1, Cons(trip, out))
+        else shipping(c, links, rest, left, out) end
+    end end
+  end
+
+  fn deliveries(c : Ur.Sim.City) : List(Trip) do
+    shipping(c, yard_routes(c, 24, 1), c.shipments, 60, Nil)
+  end
+
+  fn traffic(c : Ur.Sim.City, st : Ur.Sim.Stats) : List(Trip) do
+    List.append(producer_traffic(c, st), deliveries(c))
+  end
+
+  fn leg(stops : List(Int), index : Int) : (Int, Int) do
+    match stops do
+      Cons(i, Cons(j, rest)) -> if index == 0 do (i, j) else leg(Cons(j, rest), index - 1) end
+      _ -> (-1, -1)
+    end
+  end
+end

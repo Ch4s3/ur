@@ -35,24 +35,250 @@ and a positive monthly budget.
 | Control | Action |
 | --- | --- |
 | Click or drag | Apply the selected tool |
-| 1 | Road; over water, a more expensive bridge |
+| 1 | Road ($60 per land parcel) |
 | 2 / 3 | Housing / employment zoning |
 | 4 | Power station; needs a connected road |
-| 5 | Increase permitted density, up to three levels |
+| 5 | Cycle the parcel height limit through one, two, and three storeys |
 | 6 | Grade vacant land down by 2 m, to a minimum of 1 m |
 | 7 | Clear a parcel (the harbour gateway is protected) |
-| Arrow keys | Pan |
-| Minus / equals | Zoom out / in |
+| WASD or arrow keys | Pan relative to the camera |
+| Q / E | Orbit the city |
+| Scroll wheel or + / − | Zoom in / out |
 | Space | Pause / resume |
-| Tab | Toggle 1x / 4x speed |
+| Tab | Cycle 1x / 2x / 3x speed |
 | Left / right bracket | Lower / raise tax |
 | Semicolon / apostrophe | Lower / raise energy price |
 | F5 | Screenshot (`STRATA_SHOT`, default `strata_shot.ppm`) |
-| Escape | Quit |
+| Z | Undo the last construction gesture |
+| Escape | Open or close the game menu |
 
 Hover a parcel for a development explanation. Each simulation month takes one
 second at 1x speed. Roads permit at most 3 m of elevation change between parcels.
-The initial map is 288 x 224 m, with 8 m planning parcels and 0.25 m voxel geometry.
+The founding map is 480 x 352 m, with 8 m planning parcels and 0.25 m voxel geometry. Terrain contours are sampled on a 1 m grid with
+quarter-metre elevation steps. Buildings use quarter-metre detail throughout.
+
+## Founding a city
+
+The default game starts with empty land and a landing survey. Click a cyan
+shoreline plot to establish a harbour. The harbour supplies 64 water and
+24 power to its connected networks and unlocks food imports. Extend roads,
+pipes and power lines inland, then zone housing and jobs. The first regional
+milestone is recovering the cost of a food expansion.
+
+The western island offers a broad city plain and inland groundwater.
+The volcanic island offers geothermal power, the farming island offers
+freshwater and higher crop yields, and the eastern shoals offer better
+fishing. Ferries connect local roads to harbour services. Water and power
+still require their own connections. Oil is shown as a prospect.
+
+### Earning back the first expansion
+
+Connect the farming island or the fishing shoals with a ferry from your road
+network. Build a fishery beside the shoals' terminal, or connect farms to a
+piped well on the farming island. Farms there can grow 144 food per month, and a
+clean fishery at the shoals can catch 224. Shops and local households get first claim on ferry
+capacity. Surplus cargo actually delivered to the founding harbour earns $3 per
+unit, subject to available trade capacity. Imports use the same harbour trade allowance. Local food deliveries
+share the ferry with export loads.
+
+A ferry carries up to 32, 96, or 160 units per month at its three service levels. Use **Service
+frequency** on either terminal to trade higher upkeep for more cargo capacity.
+The development panel shows the first food island's construction spend,
+cumulative net export receipts and last month's exports. Its ledger covers ferry
+construction and upkeep, island roads, pipes, food facilities and their water
+works. Try a working route in `UR_DEMO=4 ./run.sh`.
+
+## Food, power, water, and waste
+
+Use **Lay pipe** to drag a line from an existing pipe. The starter street has
+pipes under it. Pipes can cross water and can share a parcel with a road or
+building. **Remove pipe** leaves surface construction in place. Hover over a
+parcel to inspect its pipe or local resource. Water facilities and farms need
+both road and pipe access. Homes need pipe access before they can grow.
+
+- **Freshwater wells** pump 192 water per month from mapped aquifers on the
+  western island. **Rain collectors** produce 96 in wet months and 48 otherwise.
+- **Water import terminals** buy up to 160 units each at $1 per unit. **Coastal
+  desalination** produces 192 per plant, needs 12 spare power and has a running cost.
+- **Recycling plants** treat up to 160 wastewater each, use 8 power and return
+  three quarters of the treated volume. **Ocean outfalls** discharge up to 192
+  untreated wastewater each. Unhandled waste incurs a monthly cost.
+- Discharge builds up local coastal pollution. Nearby fisheries lose catch and
+  revenue as pollution rises. Removing or disconnecting an outfall lets its
+  plume decay over subsequent months.
+- Farms use 24 water to produce 96 food. Fisheries produce up to 128 food each.
+  The harbour imports any remaining food it can afford, up to 160 per month plus
+  192 per connected trade depot.
+- Standard power stations supply 100 power. Geothermal stations supply 180 on
+  the eastern volcanic field. The eastern island lacks mapped freshwater.
+
+Power, water, and sewage have limits on individual segments. New homes must
+reserve utility capacity and have access to food before construction starts.
+Water and sewage use the same pipe assets and have separate flow limits.
+
+## Electricity and trash
+
+Use **Lay power line** to extend the starter grid. Generators need grid access
+and a service road. New development needs both road and grid access.
+
+- Wind and solar output vary by month. Gas and nuclear need a monthly fuel
+  budget. Geothermal uses the eastern volcanic field. Biogas consumes collected
+  trash and supplies one unit of electricity per unit digested.
+- In **Utilities / Waste**, place small trash cans or underground bins along
+  streets. Underground bins hold more and load faster, but occupy one curb
+  parking space. Overflow raises local pollution.
+- A trash depot sends trucks to blocks with backlogs. Trucks need a connected
+  road route and room at a disposal site. Landfills have finite storage, export
+  docks charge for shipped waste, and ocean dumps stay disabled until enabled
+  in their parcel popover. Ocean dumping damages nearby fisheries.
+- Incinerators unlock at 500 residents with a trade school. They need a grid
+  connection and produce air pollution and ash. Trucks take ash to landfill or
+  export it.
+
+The **Trash collection** layer colors parcels by backlog. Parcel popovers show
+the last pickup or a facility's capacity. Run `UR_DEMO=16 ./run.sh` to see a
+depot, landfill, and both bin sizes. Existing saves start using truck collection
+when you add a bin or a new disposal facility.
+
+## Density and nuisance policy
+
+Zones can grow up to three storeys by default. The market starts at one storey
+and supports taller construction as regional population and employment rise.
+Road distance from the harbour limits attainable height. Development still
+requires demand for its use and access to the applicable utilities. Use **Cycle
+height limit** to preserve low-rise parcels.
+
+Paint a maximum nuisance level with the four nuisance tools. Quiet parcels
+permit housing. Neighbourhood parcels also allow mixed-use buildings and low
+impact facilities. Commercial parcels admit employment zones and depots.
+Industrial parcels also permit gas plants, nuclear stations, landfills, and
+outfalls. The limits are cumulative. Lowering a limit leaves existing uses in
+place and prevents incompatible new construction or expansion. Mixed-use
+buildings add both households and jobs.
+
+## Civic services
+
+The **Civic** toolbar button offers schools, clinics, fire stations and police stations.
+Place them beside a street. Each charges monthly upkeep and serves a limited
+distance along roads, so gaps, steep grades and ferry crossings can leave
+nearby parcels uncovered.
+
+Single-storey homes can start anywhere the market and utilities allow. A
+school or clinic supports a second floor in housing and mixed-use buildings.
+A third floor needs all four services. Covered residential parcels can also
+start construction sooner. Demand, commutes, utility capacity and height
+limits still apply.
+
+Select **Layers → Civic services** to see coverage. Hover over a housing or
+mixed-use parcel to see which of the four services reach it. Try a serviced
+district with `UR_DEMO=5 ./run.sh`.
+
+## Streets
+
+Choose **Local street**, **Avenue**, or **Pedestrian street** in **Roads**.
+Paint over an existing street to change its type at the retrofit price.
+Avenues cost more to maintain and have twice the traffic capacity of local
+streets. Faster driving attracts some extra trips from nearby development,
+so a new avenue can fill up. Pedestrian streets keep walking access and
+building frontage. Remove any bus route or toll before converting a street
+to pedestrian use.
+
+Two connected perpendicular segments round into a curve. Intersections and
+tram track crossings use square geometry. Try the street showcase with
+`UR_DEMO=6 ./run.sh`.
+
+In **Roads → Crossings**, drag a straight span between two existing local
+streets or avenues. Overpasses clear surface traffic; underpasses use shallow
+cuts and run below streets in their path. Road tunnels can run under hills or
+water. The portals are the only connections to the street network. Use the
+**Road crossings** map layer to trace buried roads and **Remove crossing** to
+remove a whole span without touching the surface street.
+
+In **Civic → Parks → Paint park**, hold and drag over empty parcels to paint the shape.
+Parks cost $45 per parcel and $1 per parcel each month. Connected parcels form
+a single park with generated paths, trees, benches and, in larger parks,
+occasional fountains. Larger parks encourage denser growth nearby where
+commutes and services can support it. Clear an individual parcel to reshape a
+park. **Upgrade park** improves the entire connected park. Garden upgrades
+cost $65 per parcel and landmarks cost $110 per parcel. Each level adds $1
+monthly upkeep per upgraded parcel.
+
+**Civic → Street planting** offers shade, blossom, and columnar trees, plus
+flower and hedge planters. Click or drag along streets to plant. Each street
+parcel holds one planting. See the local score in Parcel details or
+**Layers → Livability**. Switch between park walkability, commute, services,
+safety, job access, and environment. Park access follows sidewalks,
+pedestrian streets and walking paths, and citizens take leisure walks to
+reachable parks. The Livability tab charts resident averages for the last 24
+recorded months.
+
+**Show details → Safety** charts incidents, responses, and average response
+times. With the tab open, click a parcel to see its neighborhood
+history and safety score. Theft and vandalism reports count against safety
+for six months. A delayed or missed response increases the impact.
+The **Reported incidents** layer marks the latest month's cases.
+Fire stations and clinics dispatch trucks and ambulances across roads and
+wide pedestrian streets. Traffic slows all responders. Fires that burn for
+12 minutes can reach adjoining buildings, with further spread possible if
+crews take longer. Buildings close for one or two months of repair. After
+30 minutes of local fire exposure a building burns down and requires four
+months of reconstruction. Owners resume work automatically once the parcel
+has a road connection to the harbor. The parcel inspector shows the status
+and remaining time. **Layers → Emergencies → Fire recovery** maps parcels
+that are still closed. Try the aftermath showcase with `UR_DEMO=10 ./run.sh`.
+The **Fires** and **Medical calls** layers also filter the Safety chart.
+Ambulances pick patients up and deliver them to the clinic or hospital that
+can start treatment soonest. Clinics have one treatment bed and hospitals
+have four. Pickup, traffic, and bed waits can cause complications. Medical
+charts show admissions, time to treatment, and stabilized patients.
+Try the dispatch showcase with `UR_DEMO=9 ./run.sh` or the planted district
+with `UR_DEMO=8 ./run.sh`.
+
+## Transport
+
+Open **Transit** on the bottom construction toolbar to find bus, tram, subway,
+ferry and service management tools. Use **Roads** for streets, walking paths
+and tolls, **Zoning** for land use and nuisance limits, and **Utilities** for
+power, water, food and waste. The tool cards show construction costs and civic
+upkeep. Click the active category again to collapse its tray.
+
+- Drag **Draw bus route** along connected roads, then place **Bus stop** on
+  at least two route parcels.
+- Drag **Lay tram tracks** or **Dig subway tunnel** to build a line. Add
+  **Tram stop** or **Subway station** on at least two land parcels along it.
+  Rail service requires two stops or stations with grid access and live
+  generation. Tunnels can cross water. Select **Layers → Transit & jobs**
+  to see running service in cyan and unfinished lines in amber.
+- Paint **walking paths** between roads, stops, and terminals. Walking paths
+  need land or a bridge and follow the same slope limit as roads.
+- Select **Ferry route** and click two unused shoreline parcels across water.
+  Connect each terminal to its town with a road or walking path. Use **Remove
+  transport** on either terminal to remove the route.
+
+Hover over a parcel to see travel time to the nearest existing jobs. Short
+trips can support taller buildings as regional demand grows. Passenger routes
+help development reach jobs. Freight, power and water use their own networks.
+Trips include local road congestion and transit waiting and crowding. Use
+**Cycle service frequency** on a stop or ferry terminal to set one,
+two, or three departures per interval. Higher frequency adds capacity and
+operating cost. Buses share road congestion. Bus, tram, and ferry models move
+along representative segments. The simulation estimates load from nearby
+development and does not assign individual passengers to vehicles.
+
+Run `UR_DEMO=2 ./run.sh` for the transport showcase. Add
+`UR_CHANNEL_VIEW=1` for the ferry crossing or `UR_REGION_VIEW=1` for both islands.
+
+## Map layers
+
+Open **Layers** and select a map view. Click the active view again or choose
+**Off** under **Networks** to clear it. The selected view stays visible as you
+return to construction. Each view shows a colour legend in the footer.
+
+Water and electricity highlight connected and isolated segments. Transit
+shows corridors and access to jobs. Pollution shows land and coastal
+contamination. Groundwater and geothermal show where those resources occur.
+Oil potential is a prospecting view for the starter map. Oil extraction is
+not simulated. These views mark parcels above the map surface.
 
 ## Verification and measurement
 
@@ -71,14 +297,17 @@ MARCH_PIN_MAIN=1 UR_DEMO=1 UR_FRAMES=90 STRATA_SHOT=/tmp/ur.ppm .march/build/rel
 
 `UR_DEMO=1` constructs a connected two-island expansion through ordinary player
 actions, then advances it for 600 months. `UR_FRAMES` bounds a visual smoke test
-and requests a screenshot on its final frame. `UR_INPUT_LOG=1` prints sampled
+and requests a screenshot on its final frame. Set `UR_REGION_VIEW=1` to start
+with a wider view of both islands. `UR_INPUT_LOG=1` prints sampled
 pointer state for diagnosing native input.
 
 ## Architecture and current limits
 
 - `Ur.Sim`: deterministic parcel aggregates, road flood fill, power, construction
   budget, demand and policy-dependent private growth.
-- `Ur.Scene`: packed Strata voxel quads; only changed parcels are reuploaded.
+- `Ur.Scene`, `Ur.Landscape`, and `Ur.Architecture`: detailed building meshes,
+  terrain contours, vegetation, and Strata voxel shadows. Updates remesh edited
+  parcels and neighbours affected by their edges.
 - `Ur.Hud`, `Ur.Input`, `Ur`: interface, gesture ownership and bounded simulation
   clock. Idle frames reuse cached population, jobs, power and road access.
 - `Ur.Scenario`: reproducible expansion for integration tests and screenshots.
@@ -86,16 +315,142 @@ pointer state for diagnosing native input.
   are applied in the adjacent checkout and recorded in
   `docs/engine/strata-cursor.patch` for reproducibility.
 
-This is the first gameplay slice, with placeholder procedural art. It does not
+This is the first gameplay slice, with procedural voxel architecture and landscaping. It does not
 simulate the eventual tens of thousands of individual residents. Households and
 employment are aggregates; wages, area income, land markets, differentiated
-industries, trade chains, ferries, full-region streaming and most civic services
+industries, trade chains, ferries and full-region streaming
 are future work. Existing buildings do not yet abandon when conditions worsen;
 those conditions restrict new investment. Power currently follows the harbour
 road network. Terrain grading is a parcel operation, not a voxel brush.
 
-**There is no save/load yet.** Closing the app starts a fresh region next time.
+Start a new city or load your saved city from the title menu. During play,
+open **Game menu** or press Escape to save, load, or start over. Ur keeps one
+save slot at `~/.ur-save.json`. Set `UR_SAVE_PATH` to use a different file.
+
+Construction previews show a cost and outline before release. Drag roads and
+utilities along a route, or drag out a zoning rectangle. A blocked parcel
+rejects the whole gesture. Undo restores the city to the moment before the
+gesture, including the treasury and simulation month.
 
 See the [design](docs/superpowers/specs/2026-11-13-first-playable.md),
 [implementation plan](docs/superpowers/plans/2026-11-13-first-playable.md), and
 [progress and measurements](docs/progress.md).
+
+The [building and decoration style guide](docs/building-style.md) covers
+materials, model scale, frontages, and in-game review.
+
+
+Busy transit stops can attract shops and bars to paved frontage nearby.
+**Show details → Policy** sets citywide ground-floor and quiet-hour rules.
+Under **Zoning**, use **Ground floors** or **Quiet hours** to paint overrides;
+use the inherit tools to return to the citywide rule. Required storefronts
+can sit vacant if commercial demand is weak. Compare foot traffic and noise
+under **Layers → Neighborhoods**.
+
+**Roads → Car-free days** schedules closures on weekends, weekdays, Saturday
+or Sunday. Buses, pedestrians and emergency vehicles keep access. The street
+calendar advances at one day per five seconds of running simulation, alongside
+the monthly economy. Try the transit corridor with `UR_DEMO=11 ./run.sh`.
+
+### Transit and employment corridor
+
+Launch with `UR_DEMO=18 ./run.sh`. The demo starts paused. Select the bus
+stop at parcel **10, 18** with no construction tool selected. Its popup shows
+the operating frequency, headway, riders left waiting, fares, and service
+cost. Cycle to three departures with the popup button, then unpause. The
+west housing parcel being tested is **10, 19**, and the east workplace is
+**25, 19**. The fare button changes the citywide price. An expensive fare
+can price workers out of a route even when seats are available.
+
+For a reproducible comparison, build with `forge build --release` and run
+`UR_CORRIDOR_REPLAY=4 .march/build/release/ur`. Both cities begin with the
+same road network, zoning, utilities, and households. The replay changes
+only the service setting. Each month it prints the commute, jobs filled,
+visible residents assigned to those jobs, operating accounts, and the
+target parcel's construction state.
+
+### Utility capacity demo
+
+Launch with `UR_DEMO=19 ./run.sh`. The game starts paused on the Electricity
+layer. The red feeder at **9, 18** is full. Inspect the empty residential
+parcel at **16, 17** to see why construction is waiting. Choose **Utilities →
+Upgrades → Upgrade power feeder** and select the red feeder. The in-place
+upgrade costs $120 and adds $4 per month in upkeep. The same power plants
+then have a path to serve the new building.
+
+**Layers → Networks** shows Electricity, Water supply, and Sewage collection
+separately. Point at a segment to see its load and limit or at a building to
+see how much service it receives. **Utilities → Upgrades → Upgrade water and
+sewer main** increases both pipe limits. A connected pump, desalination
+plant, or recycler also needs local power to run.
+
+For the deterministic comparison, run
+`UR_UTILITY_REPLAY=4 .march/build/release/ur` after a release build. Set
+`UR_UTILITY_UPGRADED=1` with demo 19 to open the upgraded district in month four.
+
+
+### Island freight demo
+
+Launch `UR_DEMO=20 ./run.sh` and inspect **18, 16**. This starts paused at
+the upgraded feeder district with a stocked market and a sailing underway.
+Suspend sailings, unpause, and watch the shelves and the island gas plant
+run down their separate inventories. Enable backup imports to keep food
+coming through the mainland port at a higher private cost. The housing parcel
+at **16, 17** shows when food shortages block construction.
+
+To open a freight service in another city, inspect a ferry dock connected by
+road to the founding harbour. The other bank needs a road to a fishery or
+farm, and the mainland needs a grocery or restaurant. A gas plant or waste
+export dock on the island adds fuel or waste bookings. The dock lets you
+choose which cargo gets space first and buy extra market storage. The freight
+service currently manages one ferry link and one receiving market per city.
+
+After a release build, run `UR_FREIGHT_REPLAY=8 .march/build/release/ur` for
+an identical disruption with backup imports off and on, followed by a recovery.
+
+### Council district conditions demo
+
+Launch `UR_DEMO=21 ./run.sh` to open **Details → Council** on the ward map.
+Use **Next ward** to compare the affected district with its neighbor and
+**Show affected homes** to find the site behind the current agenda item.
+Councillors review occupied homes for service shortfalls, food prices and
+availability, job access, pollution, noise, budgets, and walkable amenities.
+They can issue a request or place a targeted hold. The panel shows the filing
+baseline, the latest monthly reading, and the target. Two consecutive reviews
+at the target close the item. Unresolved items expire after eight months.
+
+Run `UR_COUNCIL_REPLAY=1 .march/build/release/ur` after a release build to compare
+both wards before and after a localized plume, then see the hold clear after
+two monthly reviews with clean air.
+
+### Weather and local heat
+
+The weather readout shows air temperature and soil moisture. Inspect a parcel
+to see its local temperature. Street trees and parks cool nearby parcels,
+reduce air conditioning demand, and make walking easier during hot spells.
+
+Rain collectors store water and supply the pipe network until their tanks run
+dry. Rain restores soil moisture, reduces solar output, and slows traffic.
+Heavy rain can carry land pollution downstream to the sea. Severe rain closes
+low coastal roads and can flood low subway stations. Their pumps run after
+severe rain, need eight units of spare local electrical capacity, and cost
+$2 per day of pumping. Those charges appear under power operations.
+
+Launch `UR_DEMO=22 ./run.sh` for a storm in progress. Inspect the subway station
+at **9, 16** and the rain collector at **8, 18**.
+
+Open **Layers → Environment → Heat** to compare local air temperatures.
+Point at land for the parcel reading. Click the weather badge or open
+**Details → Overview → Weather** for seven days of forecasts and recent
+weather history.
+
+**Layers → Environment → Floodplain** shows estimated depth in severe rain on
+dry days and active flooding during severe rain. Stormwater pools in low
+ground. Parks and open land absorb runoff, especially when their soil is dry.
+Low coastal areas can also flood from nearby open water.
+
+Use **Roads → Flood protection** to upgrade drainage on existing streets
+($180 per parcel, $5/month) or draw seawalls on water ($4,200 per parcel,
+$26/month). Seawalls block coastal approaches, so exposed approaches and gaps
+can still admit seawater. The weather panel shows the seeded map's rainfall
+and temperature tendencies. The seed is preserved in the save.

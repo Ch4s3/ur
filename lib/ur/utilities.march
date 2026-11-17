@@ -1,0 +1,204 @@
+mod Ur.Utilities do
+  alias Ur.Architecture as A
+
+  -- Cut the corners of vessels into separate voxel strips.
+  pfn vessel(x : Int, y : Int, z : Int, width : Int, height : Int, trim : Int, material : Int) : List(Ur.Architecture.Piece) do
+    [A.piece(x + trim, y, z, width - 2 * trim, height, width, material),
+     A.piece(x, y, z + trim, trim, height, width - 2 * trim, material),
+     A.piece(x + width - trim, y, z + trim, trim, height, width - 2 * trim, material)]
+  end
+
+  pfn gas() : List(Ur.Architecture.Piece) do
+    let hall = [A.piece(3, 1, 5, 13, 11, 18, 17), A.piece(2, 12, 4, 15, 2, 20, 19),
+      A.piece(5, 4, 23, 9, 6, 1, 19), A.piece(4, 10, 23, 11, 1, 3, 7),
+      A.piece(5, 5, 24, 9, 1, 1, 9), A.piece(5, 8, 24, 9, 1, 1, 9),
+      A.piece(4, 1, 23, 11, 1, 5, 4),
+      A.piece(9, 14, 7, 4, 13, 4, 17), A.piece(9, 27, 7, 4, 2, 4, 6),
+      A.piece(8, 29, 6, 6, 1, 6, 4), A.piece(14, 7, 8, 10, 2, 2, 10)]
+    let fuel = List.append(vessel(19, 1, 5, 9, 7, 2, 8), vessel(20, 8, 6, 7, 2, 2, 17))
+    List.append([A.piece(18, 1, 20, 10, 1, 7, 4), A.piece(20, 2, 21, 6, 3, 4, 7),
+      A.piece(22, 5, 13, 2, 2, 9, 10)], List.append(hall, fuel))
+  end
+
+  pfn geothermal() : List(Ur.Architecture.Piece) do
+    [A.piece(4, 1, 4, 11, 5, 16, 23), A.piece(3, 6, 3, 13, 2, 18, 6),
+     A.piece(5, 3, 20, 8, 2, 1, 19), A.piece(18, 1, 6, 10, 2, 19, 4),
+     A.piece(20, 3, 8, 6, 5, 5, 7), A.piece(20, 3, 18, 6, 5, 5, 7),
+     A.piece(21, 8, 9, 4, 1, 3, 17), A.piece(21, 8, 19, 4, 1, 3, 17),
+     A.piece(21, 9, 9, 2, 5, 2, 15), A.piece(21, 14, 10, 2, 2, 12, 15),
+     A.piece(22, 9, 20, 2, 5, 2, 15), A.piece(9, 8, 11, 13, 2, 2, 7),
+     A.piece(9, 8, 17, 12, 2, 2, 9), A.piece(5, 1, 24, 21, 1, 3, 16)]
+  end
+
+  pfn freshwater() : List(Ur.Architecture.Piece) do
+    [A.piece(6, 1, 6, 11, 5, 10, 8), A.piece(5, 6, 5, 13, 2, 12, 7),
+     A.piece(8, 1, 16, 4, 4, 1, 19), A.piece(13, 3, 16, 2, 2, 1, 9),
+     A.piece(20, 1, 11, 8, 2, 8, 23), A.piece(21, 3, 12, 6, 3, 6, 7),
+     A.piece(22, 6, 13, 4, 1, 4, 12), A.piece(23, 7, 14, 2, 3, 2, 9),
+     A.piece(17, 4, 13, 4, 2, 2, 12), A.piece(9, 1, 18, 3, 1, 8, 16),
+     A.piece(19, 1, 23, 9, 1, 4, 4), A.piece(22, 2, 24, 3, 2, 2, 10)]
+  end
+
+  pfn desalination() : List(Ur.Architecture.Piece) do
+    let hall = [A.piece(3, 1, 4, 13, 9, 17, 8), A.piece(2, 10, 3, 15, 2, 19, 7),
+      A.piece(5, 4, 21, 8, 4, 1, 9), A.piece(6, 12, 6, 7, 2, 9, 19),
+      A.piece(5, 2, 22, 3, 2, 8, 9), A.piece(10, 2, 22, 3, 2, 8, 12),
+      A.piece(16, 5, 9, 6, 2, 2, 12), A.piece(16, 5, 17, 6, 2, 2, 9)]
+    List.append(hall, List.append(vessel(20, 1, 5, 8, 7, 2, 17), vessel(20, 1, 15, 8, 7, 2, 8)))
+  end
+
+  pfn loading_depot() : List(Ur.Architecture.Piece) do
+    [A.piece(3, 1, 4, 15, 8, 15, 17), A.piece(2, 9, 3, 17, 2, 17, 7),
+     A.piece(5, 1, 19, 10, 6, 1, 19), A.piece(5, 7, 19, 10, 1, 4, 10),
+     A.piece(20, 1, 5, 8, 3, 4, 6), A.piece(20, 1, 10, 8, 3, 4, 19),
+     A.piece(20, 1, 15, 8, 3, 4, 10), A.piece(21, 4, 10, 6, 3, 4, 17),
+     A.piece(4, 1, 24, 12, 1, 5, 4), A.piece(4, 2, 24, 12, 1, 1, 16)]
+  end
+
+  pfn rain_collector() : List(Ur.Architecture.Piece) do
+    [A.piece(4, 1, 5, 22, 2, 18, 17), A.piece(6, 3, 8, 18, 1, 12, 9),
+     A.piece(4, 3, 5, 22, 2, 3, 8), A.piece(4, 3, 20, 22, 2, 3, 8),
+     A.piece(4, 3, 8, 2, 2, 12, 8), A.piece(24, 3, 8, 2, 2, 12, 8),
+     A.piece(7, 4, 10, 15, 1, 1, 12), A.piece(9, 4, 16, 14, 1, 1, 12),
+     A.piece(17, 1, 24, 10, 4, 4, 7), A.piece(16, 5, 23, 12, 1, 6, 8),
+     A.piece(20, 3, 22, 3, 2, 3, 12)]
+  end
+
+  pfn water_terminal() : List(Ur.Architecture.Piece) do
+    let tanks = List.append(vessel(4, 1, 5, 10, 11, 2, 8), vessel(17, 1, 5, 10, 11, 2, 17))
+    let caps = List.append(vessel(5, 12, 6, 8, 2, 2, 7), vessel(18, 12, 6, 8, 2, 2, 7))
+    List.append([A.piece(7, 5, 14, 3, 2, 8, 12), A.piece(21, 5, 14, 3, 2, 8, 12),
+      A.piece(5, 1, 22, 21, 4, 6, 19), A.piece(4, 5, 21, 23, 1, 8, 7),
+      A.piece(11, 2, 28, 9, 2, 1, 9), A.piece(18, 7, 16, 2, 4, 2, 10)],
+      List.append(tanks, caps))
+  end
+
+  pfn clarifier(x : Int, z : Int, material : Int) : List(Ur.Architecture.Piece) do
+    [A.piece(x, 1, z, 11, 1, 13, 17),
+     A.piece(x, 2, z, 11, 3, 1, 8), A.piece(x, 2, z + 12, 11, 3, 1, 8),
+     A.piece(x, 2, z + 1, 1, 3, 11, 8), A.piece(x + 10, 2, z + 1, 1, 3, 11, 8),
+     A.piece(x + 1, 2, z + 1, 9, 1, 11, material),
+     A.piece(x + 5, 4, z, 1, 1, 13, 23), A.piece(x + 4, 3, z + 5, 3, 1, 3, 7)]
+  end
+
+  pfn recycling() : List(Ur.Architecture.Piece) do
+    let basins = List.append(clarifier(3, 4, 7), clarifier(18, 4, 9))
+    List.append([A.piece(5, 1, 20, 22, 6, 8, 17), A.piece(4, 7, 19, 24, 1, 10, 7),
+      A.piece(8, 3, 28, 5, 2, 1, 9), A.piece(18, 3, 28, 5, 2, 1, 9),
+      A.piece(13, 3, 9, 6, 2, 2, 12), A.piece(7, 2, 16, 2, 2, 5, 7),
+      A.piece(23, 2, 16, 2, 2, 5, 12)], basins)
+  end
+
+  pfn outfall() : List(Ur.Architecture.Piece) do
+    [A.piece(7, 1, 4, 18, 6, 10, 17), A.piece(6, 7, 3, 20, 1, 12, 23),
+     A.piece(11, 1, 14, 10, 2, 18, 4), A.piece(11, 3, 14, 2, 3, 18, 23),
+     A.piece(19, 3, 14, 2, 3, 18, 23), A.piece(13, 3, 14, 6, 1, 18, 7),
+     A.piece(10, 6, 23, 12, 1, 2, 17), A.piece(10, 6, 27, 12, 1, 2, 17),
+     A.piece(13, 3, 13, 6, 3, 2, 19), A.piece(4, 1, 24, 4, 1, 6, 16)]
+  end
+
+  pfn wind(offshore : Bool) : List(Ur.Architecture.Piece) do
+    let platform = if offshore do
+      [A.piece(8, 0, 8, 3, 7, 3, 17), A.piece(21, 0, 8, 3, 7, 3, 17),
+       A.piece(8, 0, 21, 3, 7, 3, 17), A.piece(21, 0, 21, 3, 7, 3, 17),
+       A.piece(7, 6, 7, 18, 2, 18, 10), A.piece(10, 8, 10, 12, 1, 12, 4)]
+    else [A.piece(11, 1, 11, 10, 2, 10, 23), A.piece(23, 1, 21, 5, 3, 5, 17)] end
+    let base = if offshore do 9 else 3 end
+    let head = if offshore do 42 else 34 end
+    List.append([A.piece(13, base, 13, 6, 6, 6, 8),
+      A.piece(14, base + 6, 14, 4, head - base - 5, 4, 8),
+      A.piece(14, base + 7, 13, 4, 2, 1, 7)], platform)
+  end
+
+  pfn solar_panel(x : Int, z : Int) : List(Ur.Architecture.Piece) do
+    [A.piece(x + 2, 1, z + 1, 2, 5, 1, 17),
+     A.piece(x + 2, 1, z + 5, 2, 3, 1, 17),
+     A.piece(x + 1, 1, z + 1, 4, 1, 5, 23),
+     A.piece(x, 6, z, 7, 1, 2, 17),
+     A.piece(x, 5, z + 2, 7, 1, 2, 17),
+     A.piece(x, 4, z + 4, 7, 1, 2, 17),
+     A.piece(x + 1, 7, z + 1, 5, 1, 1, 19),
+     A.piece(x + 1, 6, z + 2, 5, 1, 2, 19),
+     A.piece(x + 1, 5, z + 4, 5, 1, 1, 19),
+     A.piece(x + 3, 8, z + 1, 1, 1, 1, 9),
+     A.piece(x + 3, 7, z + 2, 1, 1, 2, 9),
+     A.piece(x + 3, 6, z + 4, 1, 1, 1, 9)]
+  end
+
+  pfn solar_row(z : Int) : List(Ur.Architecture.Piece) do
+    let panels = List.append(solar_panel(3, z), List.append(solar_panel(12, z), solar_panel(21, z)))
+    Cons(A.piece(5, 2, z + 3, 20, 1, 1, 4), panels)
+  end
+
+  pfn solar() : List(Ur.Architecture.Piece) do
+    let rows = List.append(solar_row(3), List.append(solar_row(11), solar_row(19)))
+    let yard = [A.piece(3, 1, 26, 25, 1, 4, 23), A.piece(4, 2, 27, 6, 2, 2, 17),
+      A.piece(4, 4, 27, 6, 1, 2, 7), A.piece(6, 3, 29, 2, 1, 1, 10),
+      A.piece(12, 2, 27, 3, 2, 2, 19), A.piece(9, 2, 26, 6, 1, 1, 4)]
+    List.append(yard, rows)
+  end
+
+  pfn nuclear() : List(Ur.Architecture.Piece) do
+    let tower = List.append(vessel(4, 1, 5, 16, 5, 3, 17), vessel(5, 6, 6, 14, 5, 3, 8))
+    let throat = List.append(vessel(6, 11, 7, 12, 8, 3, 8), vessel(5, 19, 6, 14, 4, 3, 8))
+    let rim = [A.piece(5, 23, 7, 14, 2, 2, 17), A.piece(5, 23, 17, 14, 2, 2, 17),
+      A.piece(5, 23, 9, 2, 2, 8, 17), A.piece(17, 23, 9, 2, 2, 8, 17),
+      A.piece(7, 23, 9, 10, 1, 8, 4)]
+    let hall = [A.piece(21, 1, 7, 8, 8, 17, 17), A.piece(20, 9, 6, 10, 2, 19, 19),
+      A.piece(22, 1, 24, 6, 5, 1, 19), A.piece(4, 1, 24, 16, 1, 4, 4),
+      A.piece(7, 2, 24, 9, 1, 1, 10), A.piece(23, 11, 10, 3, 3, 9, 23)]
+    List.append(hall, List.append(rim, List.append(throat, tower)))
+  end
+
+  pfn biogas() : List(Ur.Architecture.Piece) do
+    let tanks = List.append(vessel(3, 1, 4, 12, 7, 2, 7), vessel(17, 1, 4, 12, 7, 2, 7))
+    let domes = List.append(vessel(4, 8, 5, 10, 3, 2, 21), vessel(18, 8, 5, 10, 3, 2, 21))
+    let crowns = List.append(vessel(6, 11, 7, 6, 2, 1, 22), vessel(20, 11, 7, 6, 2, 1, 22))
+    List.append([A.piece(7, 1, 20, 18, 6, 8, 23), A.piece(6, 7, 19, 20, 2, 10, 19),
+      A.piece(11, 1, 28, 9, 5, 1, 4), A.piece(14, 4, 9, 4, 2, 2, 10),
+      A.piece(8, 4, 15, 3, 2, 5, 10), A.piece(22, 4, 15, 3, 2, 5, 10)],
+      List.append(crowns, List.append(domes, tanks)))
+  end
+
+  pfn waste_depot() : List(Ur.Architecture.Piece) do
+    [A.piece(4, 1, 4, 24, 8, 12, 17), A.piece(3, 9, 3, 26, 2, 21, 7),
+     A.piece(4, 1, 16, 6, 8, 8, 17), A.piece(22, 1, 16, 6, 8, 8, 17),
+     A.piece(10, 1, 16, 12, 1, 16, 4), A.piece(9, 8, 23, 14, 1, 1, 10),
+     A.piece(10, 2, 24, 1, 1, 7, 10), A.piece(21, 2, 24, 1, 1, 7, 10),
+     A.piece(5, 4, 23, 4, 3, 1, 19), A.piece(23, 4, 23, 4, 3, 1, 19),
+     A.piece(8, 11, 6, 6, 2, 6, 19), A.piece(9, 13, 7, 4, 1, 4, 17),
+     A.piece(11, 1, 16, 10, 1, 1, 17), A.piece(4, 7, 24, 6, 1, 1, 8),
+     A.piece(22, 7, 24, 6, 1, 1, 8), A.piece(7, 1, 26, 1, 3, 1, 10),
+     A.piece(24, 1, 26, 1, 3, 1, 10)]
+  end
+
+  pfn landfill() : List(Ur.Architecture.Piece) do
+    [A.piece(3, 1, 3, 26, 2, 19, 1), A.piece(5, 3, 5, 21, 2, 14, 13),
+     A.piece(9, 5, 6, 15, 2, 11, 23), A.piece(12, 7, 8, 8, 2, 7, 1),
+     A.piece(6, 5, 10, 3, 1, 4, 17), A.piece(14, 9, 9, 3, 1, 3, 19),
+     A.piece(4, 1, 24, 8, 4, 5, 8), A.piece(3, 5, 23, 10, 1, 7, 7),
+     A.piece(13, 1, 24, 15, 1, 4, 4), A.piece(15, 2, 24, 10, 1, 1, 10)]
+  end
+
+  fn model(kind : Int, base : List(Ur.Architecture.Piece)) : List(Ur.Architecture.Piece) do
+    let parts = match kind do
+      1 -> gas()
+      2 -> geothermal()
+      3 -> freshwater()
+      4 -> desalination()
+      7 -> loading_depot()
+      8 -> rain_collector()
+      9 -> water_terminal()
+      10 -> recycling()
+      11 -> outfall()
+      12 -> wind(false)
+      33 -> wind(true)
+      13 -> solar()
+      14 -> nuclear()
+      15 -> biogas()
+      16 -> waste_depot()
+      _ -> landfill()
+    end
+    List.append(parts, base)
+  end
+end

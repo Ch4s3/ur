@@ -1,0 +1,28 @@
+mod Ur.ToolArt do
+  alias Strata.Ui as U
+
+  pfn read(data : String, i : Int) : Int do
+    let c = string_byte_at(data, i)
+    if c >= 97 do c - 71
+    else if c >= 65 && c <= 90 do c - 65
+    else if c >= 48 && c <= 57 do c + 4
+    else if c == 45 do 62 else 63 end end end end
+  end
+
+  -- Each span stores x, y, width and shaded palette index on a 48 x 32 canvas.
+  pfn draw_spans(u : Strata.Ui.Ui, data : String, i : Int, length : Int, x : Float, y : Float, scale : Float) : Strata.Ui.Ui do
+    if i >= length do u else
+      let px = x +. int_to_float(read(data, i)) *. scale
+      let py = y +. int_to_float(read(data, i + 1)) *. scale
+      let width = int_to_float(read(data, i + 2)) *. scale
+      let next = U.rect(u, 0, px, py, width, scale, Ur.ToolIcons.colour(read(data, i + 3)))
+      draw_spans(next, data, i + 4, length, x, y, scale)
+    end
+  end
+
+  fn draw(u : Strata.Ui.Ui, icon : String, centre : Float, y : Float, size : Float) : Strata.Ui.Ui do
+    let data = Ur.ToolIcons.spans(icon)
+    let scale = size /. 4.0
+    draw_spans(u, data, 0, string_length(data), centre -. 24.0 *. scale, y, scale)
+  end
+end
