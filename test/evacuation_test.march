@@ -1,0 +1,134 @@
+mod EvacuationTest do
+  needs IO
+  needs IO.Console
+  needs IO.Clock
+  needs IO.Process
+  needs IO.FileRead
+  needs IO.FileWrite
+  alias Ur.Sim as S
+  pfn evacuation_steps(c : Ur.Sim.City, residents : List(Ur.Citizens.Citizen), ticks : Int) : List(Ur.Citizens.Citizen) do
+    if ticks == 0 do residents else evacuation_steps(c, Ur.Citizens.step_with(c, NativeArray.make_int(S.count(), 0), residents, 0.0, 0.5), ticks - 1) end
+  end
+  pfn reload(c : Ur.Sim.City, residents : List(Ur.Citizens.Citizen)) : List(Ur.Citizens.Citizen) do
+    let evacuation = Ur.Citizens.evacuation_trips(residents)
+    let game = { city: c, cx: 78.0, cz: 151.0, zoom: 52.0, yaw: 0.55, paused: true, speed: 1 }
+    let session = { game: game, evacuation: evacuation }
+    let path = Authority.must(Env.get("UR_TEST_EVAC_SAVE", ""))
+    let loaded = if path == "" do Ur.Save.decode_session(Ur.Save.encode_session(session))
+      else
+        match Ur.Save.save_session(path, session) do
+          Ok(_) -> Ur.Save.load_session(path)
+          Err(error) -> Err(error)
+        end
+      end
+    match loaded do
+      Err(error) ->
+        Test.assert_true(false, error)
+        Nil
+      Ok(loaded) ->
+        let restored = Ur.Citizens.restore_with(loaded.game.city, loaded.evacuation, S.access(loaded.game.city), S.population(loaded.game.city), Nil)
+        let restored_session = { loaded with evacuation: Ur.Citizens.evacuation_trips(restored) }
+        Test.assert_eq_str(Ur.Save.encode_session(restored_session), Ur.Save.encode_session(session),
+          "shelter, active route, position, and progress round-trip at save precision")
+        restored
+    end
+  end
+  pfn evacuation_checks() : Unit do
+    let base = S.new()
+    let home = S.index(10, 20)
+    let school = S.index(10, 19)
+    let calm = { base with heights: NativeArray.make_int(S.count(), 24),
+      plants: NativeArray.set_int(base.plants, school, 18) }
+    let water = NativeArray.set_int(NativeArray.set_int(calm.surface_water, home, 4), calm.harbour, 4)
+    let wet = { calm with surface_water: water, flood_active: true, flood_damage: NativeArray.set_int(calm.flood_damage, home, 2) }
+    let crowded = { wet with buildings: NativeArray.set_int(wet.buildings, home, 7) }
+    let no_room = Ur.Evacuation.plan(crowded, S.access(crowded), NativeArray.make_int(S.count(), 0))
+    Test.assert_eq_int(S.get(no_room, home), 0, "a school cannot accept more households than its available space")
+    let drill = S.advance_day(Ur.Scenario.evacuation_site())
+    let orders = Ur.Evacuation.plan(drill, S.access(drill), NativeArray.make_int(S.count(), 0))
+    let demo_home = Ur.Scenario.evacuation_home()
+    let demo_school = S.index(10, 18)
+    Test.assert_true(S.displaced_homes(drill, demo_home) > 0, "the storm floods an occupied home in the demo")
+    Test.assert_eq_int(Ur.Evacuation.open_capacity(drill, S.access(drill), demo_school), 24, "the uphill school is open")
+    Test.assert_true(!List.is_empty(Ur.Evacuation.walk_route(drill, demo_home, demo_school)), "the demo home has a dry route to school")
+    Test.assert_eq_int(S.get(orders, demo_home), demo_school + 1, "the demo assigns the flooded home to school")
+    let residents = Ur.Citizens.refresh_with(calm, Nil, S.access(calm), S.population(calm), Nil)
+    let fire = { calm with fire_recovery: NativeArray.set_int(calm.fire_recovery, home, 2),
+      surface_water: NativeArray.set_int(calm.surface_water, calm.harbour, 4) }
+    let fire_people = Ur.Citizens.refresh_with(fire, residents, S.access(fire), S.population(fire), Nil)
+    Test.assert_true(S.displaced_homes(fire, home) > 0 && S.population(fire) == S.population(calm),
+      "fire-damaged homes retain their displaced residents")
+    Test.assert_true(List.any(fire_people, fn person -> person.home == home && person.target == school && !List.is_empty(person.route)),
+      "residents of a fire-damaged home travel to shelter")
+    let quake = { calm with religion: { calm.religion with
+      curse: { god: 3, until_day: 10, site: home }, epicenter: home } }
+    Test.assert_true(S.displaced_homes(quake, home) > 0 && S.population(quake) == S.population(calm),
+      "earthquake displacement retains residents until the disaster ends")
+    let evacuated = Ur.Citizens.refresh_with(wet, residents, S.access(wet), S.population(wet), Nil)
+    Test.assert_eq_int(S.population(wet), S.population(calm), "temporary evacuation preserves residents")
+    let dry_stats = S.stats(calm)
+    let displaced_stats = S.stats(wet)
+    let rich_income = NativeArray.set_int(NativeArray.make_int(S.count(), 0), home, 400)
+    let poor_income = NativeArray.make_int(S.count(), 0)
+    let rich = { dry_stats with labor: { dry_stats.labor with local_income: Some(rich_income) } }
+    let poor = { dry_stats with labor: { dry_stats.labor with local_income: Some(poor_income) } }
+    Test.assert_true(Ur.Council.household_sentiment(calm, poor, home) <
+      Ur.Council.household_sentiment(calm, rich, home),
+      "household income pressure lowers electoral sentiment")
+    Test.assert_eq_str(Ur.Resident.religion_detail(calm, dry_stats, home), "Religion · No city patron",
+      "the resident panel explains when religion has no patron")
+    Test.assert_true(Ur.Council.household_sentiment(wet, displaced_stats, home) <
+      Ur.Council.household_sentiment(calm, dry_stats, home),
+      "flood displacement reduces the affected household's council sentiment")
+    Test.assert_true(Ur.Council.vote_support(Ur.Council.household_sentiment(wet, displaced_stats, home), 0) <
+      Ur.Council.vote_support(Ur.Council.household_sentiment(calm, dry_stats, home), 0),
+      "lower sentiment reduces incumbent support")
+    Test.assert_true(List.any(evacuated, fn person -> person.home == home && person.target == school && !List.is_empty(person.route)),
+      "flooded residents walk toward the dry school")
+    match List.find(evacuated, fn person -> person.home == home) do
+      None -> Test.assert_true(false, "an evacuee can be inspected")
+      Some(person) ->
+        let dry_mood = Ur.Resident.happiness(calm, S.stats(calm), person)
+        let wet_mood = Ur.Resident.happiness(wet, S.stats(wet), person)
+        Test.assert_true(wet_mood.score < dry_mood.score &&
+          List.any(wet_mood.concerns, fn reason -> reason.title == "Home unsafe · household displaced"),
+          "the inspector reports displacement as a cause of lower happiness")
+        match List.find(residents, fn previous -> previous.id == person.id) do
+          Some(previous) ->
+            Test.assert_eq_str(Ur.Resident.name(previous), Ur.Resident.name(person), "an evacuation preserves the resident name")
+            Test.assert_eq_str(Ur.Resident.family(previous), Ur.Resident.family(person), "an evacuation preserves the family")
+          None -> Test.assert_true(false, "the evacuee keeps their resident identity")
+        end
+    end
+    let waiting = { wet with surface_water: NativeArray.set_int(wet.surface_water, S.index(9, 20), 4) }
+    let stranded = Ur.Citizens.refresh_with(waiting, residents, S.access(waiting), S.population(waiting), Nil)
+    let stranded = reload(waiting, stranded)
+    Test.assert_true(List.any(stranded, fn person -> person.home == home && person.location == home && List.is_empty(person.route)),
+      "households wait when their only frontage floods")
+    let walking = evacuation_steps(wet, evacuated, 8)
+    Test.assert_true(List.any(walking, fn person -> person.home == home && person.progress > 0.0),
+      "the outward trip is saved between parcels")
+    let lodged = evacuation_steps(wet, reload(wet, walking), 80)
+    Test.assert_true(List.any(lodged, fn person -> person.home == home && person.location == school), "evacuees reach the shelter")
+    let repairs = { wet with surface_water: calm.surface_water }
+    let held = Ur.Citizens.refresh_with(repairs, reload(repairs, lodged), S.access(repairs), S.population(repairs), Nil)
+    Test.assert_true(List.any(held, fn person -> person.home == home && person.location == school), "households stay sheltered during repairs")
+    let returning = Ur.Citizens.refresh_with(calm, held, S.access(calm), S.population(calm), Nil)
+    Test.assert_true(List.any(returning, fn person -> person.home == home && person.target == home && !List.is_empty(person.route)),
+      "the same household starts a return trip once repairs finish")
+    let walking_home = evacuation_steps(calm, returning, 1)
+    Test.assert_true(List.any(walking_home, fn person -> person.home == home && person.progress > 0.0),
+      "the return trip is saved between parcels")
+    let returned = evacuation_steps(calm, reload(calm, walking_home), 80)
+    Test.assert_true(List.any(returned, fn person -> person.home == home && person.location == home), "households reach their original home")
+    let legacy = { city: calm, cx: 78.0, cz: 151.0, zoom: 52.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode_session(Ur.Save.encode(legacy)) do
+      Ok(loaded) -> Test.assert_true(List.is_empty(loaded.evacuation), "older saves load without evacuation records")
+      Err(error) -> Test.assert_true(false, error)
+    end
+  end
+  fn main(_cap : Cap(IO)) : Unit do
+    evacuation_checks()
+    Authority.must(println("Evacuation checks passed"))
+  end
+end

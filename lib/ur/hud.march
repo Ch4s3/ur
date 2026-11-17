@@ -243,7 +243,7 @@ mod Ur.Hud do
         let a = account_line(a, x, top +. 404.0, "Business net", S.business_accounts(c, st.routes, st.labor, st.people, st.work, hover))
         label(a, x, top +. 438.0, 11.0, S.shop_market_reason(c, st, hover), S.business_closed(c, hover) || S.storefront(c, hover) == 3)
       else a end
-      let note = if !S.fire_offline(c, hover) && S.retail_kind(c, hover) > 0 do
+      let note = if !S.building_offline(c, hover) && S.retail_kind(c, hover) > 0 do
         "Food stock " ++ int_to_string(S.get(c.shop_stock, hover)) ++ "   ·   Delivered " ++ int_to_string(S.get(c.shop_delivered, hover)) ++
         (if S.get(c.shop_sales, hover) < 8 do "   ·   Shortage" else "" end)
       else if S.freshwater(c, hover) do "Freshwater aquifer"
@@ -1144,12 +1144,44 @@ mod Ur.Hud do
     end
   end
   pfn describe_resident(c : Ur.Sim.City, person : Ur.Citizens.Citizen) : String do
-    let role = if person.study >= 0 do S.education_name(person.study) ++ " student"
-      else if S.valid(person.work) do
-        let workplace = S.building_name(c, person.work)
-        if workplace == "" do "Employed" else "Works at " ++ workplace end
-      else "No assigned job" end end
-    "Resident #" ++ int_to_string(person.id) ++ " · " ++ role
+    Ur.Resident.name(person) ++ " · " ++ Ur.Resident.role(c, person)
+  end
+  pfn citizen_panel_x(w : Float) : Float do w -. 382.0 end
+  fn citizen_panel_hit(w : Float, mx : Float, my : Float) : Bool do
+    let x = citizen_panel_x(w)
+    mx >= x && mx < x +. 362.0 && my >= 178.0 && my < 480.0
+  end
+  fn citizen_panel_close(w : Float, mx : Float, my : Float) : Bool do
+    let x = citizen_panel_x(w)
+    mx >= x +. 326.0 && mx < x +. 354.0 && my >= 186.0 && my < 214.0
+  end
+  pfn concern_rows(a : Strata.Ui.Ui, concerns : List(Ur.Resident.Concern), x : Float, y : Float) : Strata.Ui.Ui do
+    match concerns do
+      Nil -> a
+      Cons(reason, rest) -> concern_rows(label(a, x, y, 10.5, reason.title, false), rest, x, y +. 18.0)
+    end
+  end
+  fn citizen_panel(u : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, person : Ur.Citizens.Citizen) : Strata.Ui.Ui do
+    let left = citizen_panel_x(U.width(u))
+    let a = panel(u, left, 178.0, 362.0, 302.0)
+    let a = U.rect(a, 0, left +. 326.0, 186.0, 28.0, 28.0, (0.16, 0.28, 0.31, 1.0))
+    let a = label(a, left +. 335.0, 191.0, 14.0, "X", true)
+    let x = left +. 12.0
+    let status = if Ur.Citizens.sheltered(person) do "Staying in an emergency shelter"
+      else if Ur.Citizens.evacuating(person) do "Walking to shelter"
+      else if Ur.Citizens.returning_home(person) do "Returning home after repairs"
+      else if Ur.Citizens.waiting_for_shelter(person) do "Waiting for a safe route or a shelter"
+      else Ur.Resident.role(c, person) end end end end
+    let a = label(a, x, 190.0, 17.0, Ur.Resident.name(person), true)
+    let a = label(a, x, 218.0, 11.0, status, false)
+    let a = label(a, x, 240.0, 11.0, "Home · " ++ int_to_string(person.home % S.width()) ++ ", " ++ int_to_string(person.home / S.width()), false)
+    let a = label(a, x, 262.0, 11.0, Ur.Resident.family(person), false)
+    let mood = Ur.Resident.happiness(c, st, person)
+    let a = label(a, x, 292.0, 14.0, "Happiness " ++ int_to_string(mood.score) ++ " / 100", true)
+    let a = label(a, x, 316.0, 11.0, "Household budget after costs · $" ++ int_to_string(mood.money), false)
+    let a = label(a, x, 338.0, 10.5, Ur.Resident.religion_detail(c, st, person.home), false)
+    let a = label(a, x, 369.0, 11.0, if List.is_empty(mood.concerns) do "No major concerns" else "Top concerns" end, true)
+    concern_rows(a, mood.concerns, x, 392.0)
   end
   pfn resident_rows(u : Strata.Ui.Ui, c : Ur.Sim.City, people : List(Ur.Citizens.Citizen), lot : Int, x : Float, y : Float, left : Int) : Strata.Ui.Ui do
     if left == 0 do u else
@@ -1346,6 +1378,7 @@ mod Ur.Hud do
       let x = x +. 12.0
       let road = S.get(c.roads, lot)
       let kind = S.get(c.plants, lot)
+      let shelter = Ur.Evacuation.capacity(c, lot)
       let name = if S.undeveloped_zone(c, lot) do zone_heading(c, lot) else if S.freight_port(c, lot) || S.get(c.ferries, lot) > 0 do "Freight dock" else if S.get(c.stops, lot) == 2 do "Bus stop" else if S.get(c.stops, lot) == 4 do "Subway station" else if road > 0 do S.road_name(road)
         else if kind > 0 do S.facility_name(kind)
         else if S.get(c.buildings, lot) > 0 do S.building_name(c, lot)
@@ -1360,12 +1393,29 @@ mod Ur.Hud do
         let box = label(box, x, y +. 81.0, 11.0, "Upkeep $" ++ int_to_string(S.parcel_facility_upkeep(c, lot)) ++ " / month", false)
         let box = U.rect(box, 0, x, y +. 154.0, width -. 24.0, 36.0, (0.18, 0.36, 0.39, 1.0))
         label(box, x +. 10.0, y +. 164.0, 12.0, if S.temple_tier(c, lot) >= 3 do "View offerings" else "Temple details" end, true)
+      else if S.flood_repair_days(c, lot) > 0 || S.building_inundated(c, lot) || (S.power_plant(kind) && S.ground_closed(c, lot)) do
+        let box = label(box, x, y +. 57.0, 12.0, if S.power_plant(kind) do "Generation offline" else "Building closed" end, true)
+        let box = label(box, x, y +. 82.0, 10.0, S.reason_with(c, lot, st), false)
+        let box = if S.get(c.pump_orders, lot) > 0 do label(box, x, y +. 106.0, 10.0, "Pump ordered · $2 and 1 power per 25 cm removed", false) else box end
+        let displaced = S.displaced_homes(c, lot)
+        if displaced > 0 do
+          let box = label(box, x, y +. 133.0, 11.0, int_to_string(displaced) ++ " households displaced", true)
+          label(box, x, y +. 154.0, 10.0, "Their homes are reserved until repairs finish.", false)
+        else box end
+      else if shelter > 0 && (c.flood_active || S.severe_rain(c) ||
+        List.any(people, fn person -> person.shelter == lot)) do
+        let open = Ur.Evacuation.open_capacity(c, st.routes, lot)
+        let here = List.length(List.filter(people, fn person -> person.location == lot && person.shelter == lot && Ur.Citizens.emergency_move(person)))
+        let coming = List.length(List.filter(people, fn person -> person.shelter == lot && Ur.Citizens.evacuating(person)))
+        let box = label(box, x, y +. 57.0, 12.0, if open > 0 do "Emergency shelter" else "Emergency shelter closed" end, true)
+        let box = label(box, x, y +. 82.0, 11.0, int_to_string(shelter) ++ " households of capacity", false)
+        label(box, x, y +. 105.0, 11.0, int_to_string(here) ++ " sheltered · " ++ int_to_string(coming) ++ " arriving (shown)", false)
       else if S.undeveloped_zone(c, lot) do zone_reason(box, x, y +. 57.0, width, reason)
       else if S.freight_port(c, lot) || (S.get(c.ferries, lot) > 0 && Option.is_none(c.freight)) do freight_popup(box, c, x, y, width)
       else if S.get(c.stops, lot) == 2 do bus_popup(box, c, st.buses, lot, x, y, width)
       else if S.get(c.stops, lot) == 4 do
         let water = S.get(c.subway_water, lot)
-        let status = if water > 0 do "Flooded · Line closed" else if S.get(st.running_transit, lot) > 0 do "Service running" else "No service" end end
+        let status = if S.subway_inundated(c, lot) do "Flooded · Line closed" else if S.get(st.running_transit, lot) > 0 do "Service running" else "No service" end end
         let box = label(box, x, y +. 57.0, 12.0, status, true)
         if water > 0 do
           let box = label(box, x, y +. 82.0, 11.0, int_to_string(water) ++ " / 72 floodwater", false)
@@ -1406,7 +1456,7 @@ mod Ur.Hud do
       else if road > 0 do
         let load = S.road_load(st.traffic, lot)
         let capacity = S.road_capacity(c, lot)
-        let traffic = if S.storm_road_closed(c, lot) do "Flooded · Closed to traffic" else if !S.motor_road(c, lot) do "Closed to motor traffic" else
+        let traffic = if S.ground_closed(c, lot) do "Flooded · Closed to traffic and walking" else if !S.motor_road(c, lot) do "Closed to motor traffic" else
           (if load > capacity do "Congested" else if load * 2 > capacity do "Busy" else "Light" end end) ++
             " · " ++ int_to_string(load) ++ " / " ++ int_to_string(capacity) ++ " lane load"
         end end
@@ -1451,7 +1501,39 @@ mod Ur.Hud do
           label(box, x, y +. 181.0, 10.0, "Trash " ++ int_to_string(stock) ++ state ++ " · " ++ pickup, false)
         else box end
       end
-    end end end end end end end end end
+    end end end end end end end end end end end
+  end
+  fn evacuation_status(a : Strata.Ui.Ui, counts : Ur.Citizens.CitizenCounts, drill : Bool) : Strata.Ui.Ui do
+    if counts.evacuating + counts.sheltered + counts.returning + counts.stranded == 0 do a else
+      let y = if drill do 272.0 else 168.0 end
+      let a = panel(a, 18.0, y, 388.0, 57.0)
+      let a = label(a, 24.0, y +. 5.0, 13.0, "Emergency evacuation · residents shown", true)
+      label(a, 24.0, y +. 27.0, 11.0, int_to_string(counts.evacuating) ++ " evacuating · " ++
+        int_to_string(counts.sheltered) ++ " sheltered · " ++ int_to_string(counts.returning) ++ " returning · " ++
+        int_to_string(counts.stranded) ++ " waiting", false)
+    end
+  end
+  fn frame_rate(a : Strata.Ui.Ui, fps : Int) : Strata.Ui.Ui do
+    let x = U.width(a) -. 84.0
+    let text = if fps < 0 do "— FPS" else int_to_string(fps) ++ " FPS" end
+    label(panel(a, x, 181.0, 66.0, 25.0), x +. 9.0, 185.0, 11.0, text, true)
+  end
+  fn flood_drill(a : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats) : Strata.Ui.Ui do
+    let x = 24.0
+    let y = 176.0
+    let powered = st.generation.solar
+    let water = S.get(c.subway_water, Ur.Scenario.storm_station())
+    let status = if c.calendar_day < 15 && c.month == 0 do "Gas plant online. Severe rain forecast."
+      else if S.severe_rain(c) do "Gas plant flooded. Grid down."
+      else if powered == 0 do "Rain eased. Pumps have no power."
+      else if water == 0 do "Subway drained. Pumps finished."
+      else if c.pumping_cost > 0 do "Backup solar online. Pumps are draining the subway."
+      else "Backup line connected. Pumps restart at midnight." end end end end end
+    let a = panel(a, x -. 6.0, y -. 5.0, 396.0, 90.0)
+    let a = label(a, x, y, 14.0, "Flood recovery drill", true)
+    let a = label(a, x, y +. 25.0, 11.0, status, true)
+    label(a, x, y +. 50.0, 11.0, "Gas " ++ int_to_string(st.generation.gas) ++ "  ·  Solar " ++ int_to_string(powered) ++
+      "  ·  Subway water " ++ int_to_string(water) ++ "/72", false)
   end
   fn draw(c : Ur.Sim.City, st : Ur.Sim.Stats, chosen : Int, group : Int, page : Int, layer : Int, hover : Int, parcel_focus : Int, mx : Float, my : Float, reason : String, sidebar_visible : Bool, sidebar_tab : Int, finance_view : FinanceView, crime_focus : Int, council_focus : Int, religion_site : Int, religion_choice : Int, paused : Bool, speed : Int, hour : Int, weather : Int, weather_time : Float, citizens : Ur.Citizens.CitizenCounts, preview : String, can_undo : Bool, activity : List(Ur.Activity.NeighborhoodEvent)) : Strata.Ui.Ui do
     let u = Strata.Render.ui_begin(1.0)
@@ -1493,7 +1575,7 @@ mod Ur.Hud do
     let a = if layer == 34 do
       let a = label(panel(a, 18.0, 116.0, 464.0, 44.0), 24.0, 119.0, 11.0, Ur.Layers.legend(layer), true)
       let detail = if S.temple_tier(c, hover) > 0 do S.facility_name(S.get(c.plants, hover)) ++ " · " ++ Religion.temple_status(c, st, hover)
-        else if S.occupied_homes(c, hover) > 0 do
+        else if S.resident_homes(c, hover) > 0 do
           if S.worship_access(c, st, hover) do "Worship within walking distance" else "No worship coverage" end
         else "Point at a home or worship site." end end
       label(a, 24.0, 138.0, 11.0, detail, false)
@@ -1502,9 +1584,11 @@ mod Ur.Hud do
       let a = label(panel(a, 18.0, 116.0, 442.0, 44.0), 24.0, 119.0, 11.0, Ur.Layers.legend(layer), true)
       let detail = if S.get(c.seawalls, hover) > 0 do "Seawall · $26/month"
         else if S.get(c.heights, hover) > 0 do
-          let depth = S.floodplain_depth(c, hover) * 25
-          let text = if S.severe_rain(c) do "Floodwater now " else "Severe rain estimate " end
-          text ++ int_to_string(depth) ++ " cm" ++ (if S.get(c.storm_drains, hover) > 0 do " · Improved drainage" else "" end)
+          let active = S.surface_flood(c, hover)
+          let depth = (if active > 0 do active else S.floodplain_depth(c, hover) end) * 25
+          let text = if active > 0 do "Standing water " else "Severe rain estimate " end
+          let work = if S.get(c.pump_orders, hover) > 0 do " · Pump ordered" else if S.get(c.storm_drains, hover) > 0 do " · Improved drainage" else "" end end
+          text ++ int_to_string(depth) ++ " cm" ++ work
         else "Point at land to inspect flood depth." end end
       label(a, 24.0, 138.0, 11.0, detail, false)
     else a end

@@ -10,7 +10,7 @@ mod Ur.Toolbar do
   pfn menu(group : Int, page : Int) : Menu do
     match group do
       1 ->
-        let items = if page == 3 do [99, 100] else if page == 2 do Cons(71, Cons(72, Cons(73, Cons(74, Cons(75, Nil)))))
+        let items = if page == 3 do [99, 100, 101] else if page == 2 do Cons(71, Cons(72, Cons(73, Cons(74, Cons(75, Nil)))))
           else if page == 1 do Cons(50, Cons(51, Cons(52, Cons(54, Nil))))
           else Cons(1, Cons(48, Cons(49, Cons(33, Cons(40, Nil))))) end end end
         { span: 5, pages: ["Streets", "Crossings", "Car-free days", "Flood protection"], items: items }
@@ -117,6 +117,7 @@ mod Ur.Toolbar do
       90 -> "clear"
       18 | 98 | 99 -> "pipe"
       100 -> "grade"
+      101 -> "well"
       9 -> "well"
       10 -> "desal"
       14 -> "rain"

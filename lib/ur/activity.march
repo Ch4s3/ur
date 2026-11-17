@@ -18,6 +18,10 @@ mod Ur.Activity do
       if S.car_free_now(after, i) do "Street closed to cars" else "Street reopened to cars" end
     else if S.get(before.ground_areas, i) != S.get(after.ground_areas, i) do "Ground floor: " ++ S.ground_name(S.ground_at(after, i))
     else if S.get(before.quiet_areas, i) != S.get(after.quiet_areas, i) do "Quiet hours: " ++ S.quiet_name(S.quiet_at(after, i))
+    else if S.displaced_homes(after, i) > 0 && S.displaced_homes(before, i) == 0 do "Households displaced by disaster"
+    else if S.displaced_homes(before, i) > 0 && S.occupied_homes(after, i) > 0 do "Households can return after repairs"
+    else if S.flood_repair_days(after, i) > 0 && S.flood_repair_days(before, i) == 0 do "Building closed after flooding"
+    else if S.flood_repair_days(before, i) > 0 && !S.building_offline(after, i) && new_floors > 0 do "Building reopened after flood repairs"
     else if S.fire_offline(after, i) && !S.fire_offline(before, i) do "Building closed after a fire"
     else if S.fire_offline(before, i) && !S.fire_offline(after, i) && new_floors > 0 do "Building reopened after repairs"
     else if after.month > before.month && S.get(after.home_arrivals, i) > 0 do "Priced-out households moved here"
@@ -28,7 +32,7 @@ mod Ur.Activity do
     else if (old_shop == 1 || old_shop == 2) && old_shop != new_shop do storefront_name(old_shop) ++ " closed"
     else if S.get(after.construction, i) > 0 && S.get(before.construction, i) == 0 do "Private construction started"
     else if new_floors > old_floors do (if old_floors == 0 do "New building completed" else "Building gained a floor" end)
-    else "" end end end end end end end end end end end end end end
+    else "" end end end end end end end end end end end end end end end end end end
   end
 
   pfn collect(before : Ur.Sim.City, after : Ur.Sim.City, i : Int, out : List(NeighborhoodEvent), remaining : Int) : List(NeighborhoodEvent) do

@@ -516,12 +516,19 @@ mod Ur.Council do
     let support = if side == 1 do 9 else if side == 2 do -9 else 0 end end
     S.clamp(50 + (happiness - 50) * 3 / 4 + support, 8, 92)
   end
+  fn household_sentiment(c : Ur.Sim.City, st : Ur.Sim.Stats, lot : Int) : Int do
+    let financial = S.household_financial_strain(c, st, lot)
+    let labor = st.labor
+    let unemployment = if labor.workforce == 0 do 0 else S.clamp(labor.unemployed * 8 / labor.workforce, 0, 8) end
+    let displacement = if S.displaced_homes(c, lot) > 0 do 32 else 0 end
+    S.clamp(S.base_happiness(c, st, lot) - financial - unemployment - displacement, 0, 100)
+  end
   pfn sentiment(c : Ur.Sim.City, st : Ur.Sim.Stats, ward : Int, festival_days : Int, offset : Int, total : Int, residents : Int) : Int do
     if offset == 180 do (if residents > 0 do total / residents else if festival_days >= 0 do 0 else 40 end end) else
       let lot = ward_lot(ward, offset)
-      let floors = if ward_at(c, lot) == ward do S.residential_floors(c, lot) else 0 end
+      let floors = if ward_at(c, lot) == ward do S.resident_homes(c, lot) else 0 end
       let score = if floors == 0 do 0 else
-        let base = S.base_happiness(c, st, lot)
+        let base = household_sentiment(c, st, lot)
         if festival_days < 0 do base else
           let worship = S.clamp(S.get(st.worship, lot), 0, 100 - base)
           let festival = S.clamp(S.festival_result_happiness(c, lot), 0, 100 - base - worship)

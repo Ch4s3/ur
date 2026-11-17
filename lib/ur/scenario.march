@@ -405,8 +405,11 @@ mod Ur.Scenario do
     let c = S.act(c, market, 65)
     let c = { c with storefronts: NativeArray.set_int(c.storefronts, market, 1),
       waste_sites: NativeArray.set_int(c.waste_sites, waste, 18), clock_ms: 750 }
-    -- Keep the test parcel above the storm surge so this demo isolates food access.
-    let c = { c with heights: NativeArray.set_int(c.heights, feeder_demo_site(), 16) }
+    -- Keep the supply sites and dock approaches above the surge so this demo isolates food access.
+    let sites = [feeder_demo_site(), market, fish, plant, reserve, S.index(8, 21), S.index(9, 22),
+      outfall, port, island, S.index(16, 16), S.index(17, 16), S.index(27, 16), S.index(28, 16), waste]
+    let heights = List.fold_left(sites, c.heights, fn (heights, lot) -> NativeArray.set_int(heights, lot, 16))
+    let c = { c with heights: heights }
     let c = S.freight_action(c, port, 0)
     { c with message: "Inspect the freight dock at 18, 16. Suspend sailings or enable backup imports and watch the local food price." }
   end
@@ -484,6 +487,7 @@ mod Ur.Scenario do
     let heights = NativeArray.set_int(NativeArray.set_int(heights, S.index(9, 17), 12), S.index(9, 18), 16)
     let heights = NativeArray.set_int(NativeArray.set_int(heights, inland, 19), S.index(9, 20), 15)
     let heights = NativeArray.set_int(heights, c.harbour, 11)
+    let heights = NativeArray.set_int(NativeArray.set_int(heights, storm_collector(), 17), S.index(8, 19), 18)
     let heights = NativeArray.set_int(heights, storm_collector(), 16)
     { c with plants: NativeArray.set_int(plants, S.index(8, 19), 13),
       heights: heights,
@@ -493,6 +497,39 @@ mod Ur.Scenario do
         S.index(9, 17), 4), S.index(9, 18), 4), inland, 4),
       land_pollution: NativeArray.set_int(c.land_pollution, station, 90),
       month: date / 30, calendar_day: date % 30 }
+  end
+
+  fn flood_backup_tie() : Int do S.index(8, 19) end
+
+  fn flood_backup_start() : Ur.Sim.City do
+    let c = storm_site()
+    let backup = S.index(7, 19)
+    let tie = flood_backup_tie()
+    let plants = NativeArray.set_int(NativeArray.set_int(c.plants, tie, 0), backup, 13)
+    let heights = NativeArray.set_int(c.heights, backup, 19)
+    { c with plants: plants, heights: heights, calendar_day: c.calendar_day - 1,
+      clock_ms: 750, message: "Flood drill · Hilltop backup disconnected." }
+  end
+
+  fn flood_backup_turn(c : Ur.Sim.City) : Ur.Sim.City do
+    let tie = flood_backup_tie()
+    if c.month == 0 && c.calendar_day == 19 && S.get(c.grid, tie) == 0 do
+      S.act(c, tie, 26)
+    else c end
+  end
+
+  fn evacuation_home() : Int do S.index(10, 19) end
+
+  fn evacuation_site() : Ur.Sim.City do
+    let c = flood_backup_start()
+    let home = evacuation_home()
+    let next_home = S.index(10, 20)
+    let school = S.index(10, 18)
+    let heights = NativeArray.set_int(NativeArray.set_int(c.heights, home, 11), next_home, 12)
+    let heights = NativeArray.set_int(NativeArray.set_int(heights, S.index(11, 19), 0), S.index(11, 20), 0)
+    { c with heights: NativeArray.set_int(heights, school, 21),
+      buildings: NativeArray.set_int(c.buildings, home, 2),
+      plants: NativeArray.set_int(c.plants, school, 18) }
   end
 
   pfn worship_blocks(c : Ur.Sim.City, row : Int) : Ur.Sim.City do

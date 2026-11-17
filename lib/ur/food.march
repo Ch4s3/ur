@@ -3,12 +3,7 @@ mod Ur.Food do
   type Trip = { mode : Int, stops : List(Int), legs : Int, source : Int }
   type Routes = { next : NativeIntArr, queue : NativeIntArr, tail : Int }
 
-  pfn road(c : Ur.Sim.City, i : Int) : Bool do
-    S.valid(i) && S.get(c.roads, i) > 0
-  end
-  fn walkable(c : Ur.Sim.City, i : Int) : Bool do
-    road(c, i) || (S.valid(i) && S.get(c.transit, i) == 1)
-  end
+  fn walkable(c : Ur.Sim.City, i : Int) : Bool do S.pedestrian_tile(c, i) end
 
   pfn enqueue(r : Routes, i : Int, next : Int) : Routes do
     { next: NativeArray.set_int(r.next, i, next), queue: NativeArray.set_int(r.queue, r.tail, i), tail: r.tail + 1 }
@@ -21,10 +16,11 @@ mod Ur.Food do
         1 -> S.motor_road(c, j)
         2 -> S.motor_street(c, j)
         3 -> d < 4 && S.transit_link(c, i, j, 2)
-        4 -> S.campus_edge(c, i, j) || (walkable(c, j) && (!S.valid(S.campus_root(c, i)) || i == S.campus_root(c, i)))
+        4 -> (S.campus_edge(c, i, j) && !S.ground_closed(c, j)) || (walkable(c, j) && (!S.valid(S.campus_root(c, i)) || i == S.campus_root(c, i)))
+        5 | 6 -> d < 4 && S.transit_link(c, i, j, mode - 2)
         _ -> walkable(c, j)
       end
-      let r = if open && S.get(r.next, j) < 0 && (d == 4 || int_abs(S.get(c.heights, i) - S.get(c.heights, j)) <= 12) do
+      let r = if open && S.get(r.next, j) < 0 && (mode == 6 || d == 4 || int_abs(S.get(c.heights, i) - S.get(c.heights, j)) <= 12) do
         enqueue(r, j, i)
       else r end
       visit(c, r, i, d + 1, mode)
@@ -33,7 +29,7 @@ mod Ur.Food do
 
   pfn seed(c : Ur.Sim.City, destination : (Int) -> Bool, r : Routes, i : Int) : Routes do
     if i >= S.count() do r else
-      let r = if destination(i) do enqueue(r, i, i) else r end
+      let r = if destination(i) && !S.ground_closed(c, i) do enqueue(r, i, i) else r end
       seed(c, destination, r, i + 1)
     end
   end
@@ -73,7 +69,7 @@ mod Ur.Food do
   end
 
   pfn yard_at(c : Ur.Sim.City, kind : Int, i : Int) : Int do
-    if S.get(c.plants, i) == kind do S.fleet_frontage(c, i, 0)
+    if S.get(c.plants, i) == kind && !S.building_offline(c, i) do S.fleet_frontage(c, i, 0)
     else -1 end
   end
 
@@ -122,7 +118,7 @@ mod Ur.Food do
   pfn producers(c : Ur.Sim.City, roads : NativeIntArr, pipes : NativeIntArr, irrigation : NativeIntArr, i : Int, farms : Int, island_farms : Int, left : Int, out : List(Trip)) : List(Trip) do
     if i >= S.count() || left <= 0 do out else
       let kind = S.get(c.plants, i)
-      let connected = (kind == 5 || kind == 6) && S.building_access(c, roads, i) >= 0
+      let connected = (kind == 5 || kind == 6) && !S.building_offline(c, i) && S.building_access(c, roads, i) >= 0
       let island = kind == 5 && S.food_island(c, i) == 1 && S.food_island(c, c.harbour) != 1
       let farm = kind == 5 && connected && (if island do island_farms > 0 && S.distance(irrigation, i) >= 0 else farms > 0 && S.distance(pipes, i) >= 0 end)
       let fish = kind == 6 && connected && S.pollution_at(c, i) < 100
@@ -146,8 +142,8 @@ mod Ur.Food do
         let adjacent = S.neighbour(a, S.direction(a, b)) == b
         if ferry || S.grade_link(c, a, b) || (adjacent && int_abs(S.get(c.heights, a) - S.get(c.heights, b)) <= 12) do
           match rest do
-            Nil -> (!S.fire_offline(c, b) && S.retail_kind(c, b) > 0) || b == c.harbour
-            _ -> (S.motor_road(c, b) || S.get(c.ferries, b) > 0) && route_open(c, Cons(b, rest))
+            Nil -> (!S.building_offline(c, b) && S.retail_kind(c, b) > 0) || b == c.harbour
+            _ -> (S.motor_road(c, b) || (S.get(c.ferries, b) > 0 && !S.ground_closed(c, b))) && route_open(c, Cons(b, rest))
           end
         else false end
       _ -> false
@@ -177,7 +173,8 @@ mod Ur.Food do
       Nil -> out
       Cons(load, rest) ->
         let kind = S.get(c.plants, load.source)
-        if (load.source == c.harbour || kind == 5 || kind == 6) && route_open(c, load.stops) do
+        if (load.source == c.harbour || kind == 5 || kind == 6) && !S.ground_closed(c, load.source) &&
+          !S.building_offline(c, load.source) && route_open(c, load.stops) do
           let trip = warehouse_trip(c, links, load)
           shipping(c, links, rest, left - 1, Cons(trip, out))
         else shipping(c, links, rest, left, out) end

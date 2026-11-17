@@ -1,0 +1,98 @@
+mod Ur.Resident do
+  alias Ur.Sim as S
+
+  type Concern = { title : String, strain : Int }
+  type Happiness = { score : Int, money : Int, concerns : List(Concern) }
+
+  pfn given(seed : Int) : String do
+    match seed % 16 do
+      0 -> "Mira"
+      1 -> "Arun"
+      2 -> "Imani"
+      3 -> "Theo"
+      4 -> "Lina"
+      5 -> "Mateo"
+      6 -> "Noor"
+      7 -> "Ari"
+      8 -> "Sana"
+      9 -> "Ren"
+      10 -> "Isabel"
+      11 -> "Felix"
+      12 -> "Sora"
+      13 -> "Anya"
+      14 -> "Samir"
+      _ -> "Niko"
+    end
+  end
+
+  pfn surname(id : Int) : String do
+    match Strata.Seed.mix(id, 158) % 12 do
+      0 -> "Chen"
+      1 -> "Okafor"
+      2 -> "Sato"
+      3 -> "Rivera"
+      4 -> "Bennett"
+      5 -> "Haddad"
+      6 -> "Park"
+      7 -> "Costa"
+      8 -> "Shah"
+      9 -> "Moreau"
+      10 -> "Adebayo"
+      _ -> "Ito"
+    end
+  end
+
+  fn name(person : Ur.Citizens.Citizen) : String do
+    given(Strata.Seed.mix(person.id, 331)) ++ " " ++ surname(person.id)
+  end
+
+  fn family(person : Ur.Citizens.Citizen) : String do
+    let first = Strata.Seed.mix(person.id, 331)
+    let relatives = Strata.Seed.mix(person.id, 641) % 4
+    match relatives do
+      0 -> "Lives alone"
+      1 -> "Partner " ++ given(first + 3)
+      2 -> "Child " ++ given(first + 7)
+      _ -> "Partner " ++ given(first + 3) ++ " · Child " ++ given(first + 7)
+    end
+  end
+
+  fn role(c : Ur.Sim.City, person : Ur.Citizens.Citizen) : String do
+    if person.study >= 0 do S.education_name(person.study) ++ " student"
+    else if S.valid(person.work) do
+      let workplace = S.building_name(c, person.work)
+      if workplace == "" do "Employed" else "Works at " ++ workplace end
+    else "No assigned job" end end
+  end
+
+  fn religion_detail(c : Ur.Sim.City, st : Ur.Sim.Stats, home : Int) : String do
+    if S.patron(c) == 0 do "Religion · No city patron" else
+      let room = 100 - S.base_happiness(c, st, home)
+      let worship = S.clamp(S.get(st.worship, home), 0, room)
+      let festival = S.clamp(S.festival_happiness(c, home), 0, room - worship)
+      let access = if S.worship_access(c, st, home) do "Worship accessible" else "No worship access" end
+      access ++ " · Worship +" ++ int_to_string(worship) ++ " · Festival +" ++ int_to_string(festival)
+    end
+  end
+
+  fn happiness(c : Ur.Sim.City, st : Ur.Sim.Stats, person : Ur.Citizens.Citizen) : Happiness do
+    let home = person.home
+    let money = S.margin(S.household_accounts(c, st.routes, st.commutes, st.labor, home))
+    let financial = S.household_financial_strain(c, st, home)
+    let unemployed = person.study < 0 && !S.valid(person.work)
+    let displaced = S.displaced_homes(c, home) > 0
+    let concerns = [
+      { title: "Home unsafe · household displaced", strain: if displaced do 100 else 0 end },
+      { title: "Housing and living costs exceed income", strain: financial * 2 },
+      { title: "No assigned job", strain: if unemployed do 56 else 0 end },
+      { title: "Slow or difficult commute", strain: if S.valid(person.work) do 100 - S.measure(c, st, home, 2) else 0 end },
+      { title: "Limited access to civic services", strain: 100 - S.measure(c, st, home, 3) },
+      { title: "Crime and emergency harm nearby", strain: 100 - S.measure(c, st, home, 4) },
+      { title: "Noise, pollution, or limited street greenery", strain: 100 - S.measure(c, st, home, 6) },
+      { title: "Limited walkable park access", strain: (100 - S.measure(c, st, home, 1)) / 2 }]
+    let concerns = List.filter(concerns, fn concern -> concern.strain >= 30)
+    let concerns = List.take(List.sort_by(concerns, fn (a, b) -> a.strain >= b.strain), 3)
+    let score = S.measure(c, st, home, 0) - financial - (if unemployed do 8 else 0 end) - (if displaced do 32 else 0 end)
+    { score: S.clamp(score, 0, 100), money: money, concerns: concerns }
+  end
+end

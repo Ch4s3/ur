@@ -6,6 +6,7 @@ mod Ur.Save do
   needs IO.Process
   alias Ur.Sim as S
   type Game = { city : Ur.Sim.City, cx : Float, cz : Float, zoom : Float, yaw : Float, paused : Bool, speed : Int }
+  type Session = { game : Game, evacuation : List(Ur.Citizens.EvacuationTrip) }
 
   fn path() : String do
     let home = Authority.must(Env.get("HOME", "."))
@@ -624,6 +625,7 @@ mod Ur.Save do
       Cons(("market_history", Json.encode_array(List.map(v.market_history, fn sample -> enc_array(sample, 17, Nil)))),
       Cons(("finance_history", Json.encode_array(List.map(v.finance_history, encode_month))),
       Cons(("climate_seed", Json.encode_int(v.climate_seed)),
+      Cons(("pump_orders", enc_array(v.pump_orders, 2639, Nil)),
       Cons(("surface_water", enc_array(v.surface_water, 2639, Nil)),
       Cons(("flood_damage", enc_array(v.flood_damage, 2639, Nil)),
       Cons(("flood_active", Json.encode_bool(v.flood_active)),
@@ -633,7 +635,7 @@ mod Ur.Save do
       Cons(("subway_water", enc_array(v.subway_water, 2639, Nil)),
       Cons(("soil_moisture", Json.encode_int(v.soil_moisture)),
       Cons(("pumping_cost", Json.encode_int(v.pumping_cost)),
-      Cons(("message", Json.encode_string(v.message)), Nil)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+      Cons(("message", Json.encode_string(v.message)), Nil))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
   end
   pfn decode_city(j : Json.JsonValue) : Result(Ur.Sim.City, String) do
     let? freight = match Json.get(j, "freight") do
@@ -820,6 +822,7 @@ mod Ur.Save do
       None -> Ok(0)
       Some(value) -> integer(value)
     end
+    let? pump_orders = optional_array(j, "pump_orders", 1)
     let? surface_water = optional_array(j, "surface_water", 16)
     let? flood_damage = optional_array(j, "flood_damage", 10)
     let? flood_active = match Json.get(j, "flood_active") do
@@ -859,7 +862,7 @@ mod Ur.Save do
     let? raw_message = field(j, "message")
     let? message = string(raw_message)
     if !((harbour == -1 || S.valid(harbour)) && (ferry_start == -1 || S.valid(ferry_start)) && month >= 0 && construction_spend >= 0 && tax >= 0 && tax <= 25 && energy >= 1 && energy <= 12) do Err("Invalid city values.") else
-    Ok({ climate_seed: S.clamp(climate_seed, 0, 2147483646), storm_drains: storm_drains, seawalls: seawalls, surface_water: surface_water, flood_damage: flood_damage, flood_active: flood_active, rain_tanks: rain_tanks, subway_water: subway_water, soil_moisture: S.clamp(soil, 0, 100), pumping_cost: S.clamp(pumping, 0, 200000),
+    Ok({ climate_seed: S.clamp(climate_seed, 0, 2147483646), storm_drains: storm_drains, seawalls: seawalls, pump_orders: pump_orders, surface_water: surface_water, flood_damage: flood_damage, flood_active: flood_active, rain_tanks: rain_tanks, subway_water: subway_water, soil_moisture: S.clamp(soil, 0, 100), pumping_cost: S.clamp(pumping, 0, 200000),
       waste_live: waste_live, waste_bins: waste_bins, waste_stock: waste_stock, waste_sites: waste_sites,
       waste_last: waste_last, waste_log: waste_log, waste_runs: waste_runs, council: council, religion: religion, construction_spend: construction_spend, island_exports: island_exports, island_crops: island_crops, island_catch: island_catch,
       shop_imports: shop_imports, harbour: harbour, ferry_start: ferry_start, trash: trash,
@@ -904,17 +907,72 @@ mod Ur.Save do
       zoom: zoom, yaw: yaw, paused: paused })
     end
   end
-  fn encode(game : Game) : String do
-    Json.to_string(Json.encode_object(Cons(("version", Json.encode_int(1)), Cons(("game", encode_game(game)), Nil))))
+  pfn encode_evacuation(trip : Ur.Citizens.EvacuationTrip) : Json.JsonValue do
+    Json.encode_object([
+      ("id", Json.encode_int(trip.id)),
+      ("home", Json.encode_int(trip.home)),
+      ("shelter", Json.encode_int(trip.shelter)),
+      ("activity", Json.encode_int(trip.activity)),
+      ("location", Json.encode_int(trip.location)),
+      ("target", Json.encode_int(trip.target)),
+      ("route", Json.encode_array(List.map(trip.route, Json.encode_int))),
+      ("previous", Json.encode_int(trip.previous)),
+      ("progress", Json.encode_number(trip.progress)),
+      ("wait", Json.encode_number(trip.wait))])
   end
-  fn decode(text : String) : Result(Game, String) do
+  pfn evacuation_int(j : Json.JsonValue, name : String) : Result(Int, String) do
+    let? raw = field(j, name)
+    integer(raw)
+  end
+  pfn decode_evacuation(j : Json.JsonValue) : Result(Ur.Citizens.EvacuationTrip, String) do
+    let? id = evacuation_int(j, "id")
+    let? home = evacuation_int(j, "home")
+    let? shelter = evacuation_int(j, "shelter")
+    let? activity = evacuation_int(j, "activity")
+    let? location = evacuation_int(j, "location")
+    let? target = evacuation_int(j, "target")
+    let? previous = evacuation_int(j, "previous")
+    let? raw_route = field(j, "route")
+    let? route = items(raw_route, parcel, S.count())
+    let? raw_progress = field(j, "progress")
+    let? progress = number(raw_progress)
+    let? raw_wait = field(j, "wait")
+    let? wait = number(raw_wait)
+    let valid_phase = match route do
+      Nil -> S.valid(location) && (activity == 10 || (activity == 8 && location == shelter && target == shelter))
+      Cons(_, Cons(_, _)) ->
+        location == -1 && ((activity == 7 && S.valid(shelter) && target == shelter) || (activity == 9 && target == home))
+      _ -> false
+    end
+    if id >= 0 && S.valid(home) && List.all([shelter, target, previous], fn lot -> lot == -1 || S.valid(lot)) &&
+      progress >= 0.0 && progress <= 1.0 && valid_phase do
+      Ok({ id: id, home: home, shelter: shelter, activity: activity, location: location, target: target,
+        route: route, previous: previous, progress: progress, wait: wait })
+    else Err("Invalid evacuation trip.") end
+  end
+  fn encode_session(session : Session) : String do
+    let extra = if List.is_empty(session.evacuation) do Nil
+      else [("evacuation", Json.encode_array(List.map(session.evacuation, encode_evacuation)))] end
+    Json.to_string(Json.encode_object(Cons(("version", Json.encode_int(1)), Cons(("game", encode_game(session.game)), extra))))
+  end
+  fn encode(game : Game) : String do encode_session({ game: game, evacuation: Nil }) end
+  fn decode_session(text : String) : Result(Session, String) do
     let? json = Json.parse(text)
     let? tag = field(json, "version")
     let? version = integer(tag)
     if version == 1 do
-      let? game = field(json, "game")
-      decode_game(game)
+      let? raw_game = field(json, "game")
+      let? game = decode_game(raw_game)
+      let? evacuation = match Json.get(json, "evacuation") do
+        None -> Ok(Nil)
+        Some(raw) -> items(raw, decode_evacuation, 96)
+      end
+      Ok({ game: game, evacuation: evacuation })
     else Err("Unsupported save version.") end
+  end
+  fn decode(text : String) : Result(Game, String) do
+    let? session = decode_session(text)
+    Ok(session.game)
   end
   fn exists(path : String) : Bool do
     match File.exists(path) do
@@ -922,20 +980,27 @@ mod Ur.Save do
       Err(_) -> false
     end
   end
-  fn load(path : String) : Result(Game, String) do
+  fn load_session(path : String) : Result(Session, String) do
     match File.read(path) do
-      Ok(Ok(text)) -> decode(text)
+      Ok(Ok(text)) -> decode_session(text)
       _ -> Err("Could not read the saved city.")
     end
   end
-  fn save(path : String, game : Game) : Result(Unit, String) do
+  fn load(path : String) : Result(Game, String) do
+    let? session = load_session(path)
+    Ok(session.game)
+  end
+  fn save_session(path : String, session : Session) : Result(Unit, String) do
     let staging = path ++ "." ++ int_to_string(Authority.must(Process.pid())) ++ ".tmp"
-    match File.write(staging, encode(game)) do
+    match File.write(staging, encode_session(session)) do
       Ok(Ok(_)) -> match File.rename(staging, path) do
         Ok(Ok(_)) -> Ok(())
         _ -> Err("Could not replace the saved city.")
       end
       _ -> Err("Could not write the saved city.")
     end
+  end
+  fn save(path : String, game : Game) : Result(Unit, String) do
+    save_session(path, { game: game, evacuation: Nil })
   end
 end

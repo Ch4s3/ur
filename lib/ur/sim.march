@@ -29,7 +29,7 @@ mod Ur.Sim do
     council : NativeIntArr, religion : Religion,
     climate_seed : Int,
     storm_drains : NativeIntArr, seawalls : NativeIntArr,
-    surface_water : NativeIntArr, flood_damage : NativeIntArr, flood_active : Bool,
+    pump_orders : NativeIntArr, surface_water : NativeIntArr, flood_damage : NativeIntArr, flood_active : Bool,
     rain_tanks : NativeIntArr, subway_water : NativeIntArr, soil_moisture : Int, pumping_cost : Int,
     calendar_day : Int, clock_ms : Int, street_day : Int, car_free_days : NativeIntArr,
     ground_rule : Int, quiet_rule : Int, ground_areas : NativeIntArr, quiet_areas : NativeIntArr, storefronts : NativeIntArr, footfall : NativeIntArr,
@@ -323,7 +323,7 @@ mod Ur.Sim do
   end
   pfn unclaimed_with_heights(heights : NativeIntArr) : City do
     let zero = NativeArray.make_int(2640, 0)
-    { census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(2640, 0), religion: new_religion(), climate_seed: 0, storm_drains: zero, seawalls: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, soil_moisture: 70, pumping_cost: 0, grades: NativeArray.make_int(2640, 0), grade_cover: NativeArray.make_int(2640, 0), parks: NativeArray.make_int(2640, 0), park_tiers: NativeArray.make_int(2640, 0), streetscape: NativeArray.make_int(2640, 0), sidewalk_items: NativeArray.make_int(2640, 0), campus: NativeArray.make_int(2640, 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(2640, 0), empty_homes: NativeArray.make_int(2640, 0), home_arrivals: NativeArray.make_int(2640, 0), neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(2640, 0), property_status: NativeArray.make_int(2640, 0), property_arrears: NativeArray.make_int(2640, 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(2640, 0), calendar_day: 0, clock_ms: 675, street_day: 0, car_free_days: NativeArray.make_int(2640, 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(2640, 0), quiet_areas: NativeArray.make_int(2640, 0), storefronts: NativeArray.make_int(2640, 0), footfall: NativeArray.make_int(2640, 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, freight: None, shop_stock: zero, shop_sales: zero, shop_delivered: zero, shop_imports: 0, shipments: Nil, harbour: -1, founding_map: true, heights: heights, roads: zero, tolls: zero, public_parking: zero,
+    { census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(2640, 0), religion: new_religion(), climate_seed: 0, storm_drains: zero, seawalls: zero, pump_orders: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, soil_moisture: 70, pumping_cost: 0, grades: NativeArray.make_int(2640, 0), grade_cover: NativeArray.make_int(2640, 0), parks: NativeArray.make_int(2640, 0), park_tiers: NativeArray.make_int(2640, 0), streetscape: NativeArray.make_int(2640, 0), sidewalk_items: NativeArray.make_int(2640, 0), campus: NativeArray.make_int(2640, 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(2640, 0), empty_homes: NativeArray.make_int(2640, 0), home_arrivals: NativeArray.make_int(2640, 0), neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(2640, 0), property_status: NativeArray.make_int(2640, 0), property_arrears: NativeArray.make_int(2640, 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(2640, 0), calendar_day: 0, clock_ms: 675, street_day: 0, car_free_days: NativeArray.make_int(2640, 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(2640, 0), quiet_areas: NativeArray.make_int(2640, 0), storefronts: NativeArray.make_int(2640, 0), footfall: NativeArray.make_int(2640, 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, freight: None, shop_stock: zero, shop_sales: zero, shop_delivered: zero, shop_imports: 0, shipments: Nil, harbour: -1, founding_map: true, heights: heights, roads: zero, tolls: zero, public_parking: zero,
       transit: zero, stops: zero, ferries: zero, ferry_start: -1, service: NativeArray.make_int(2640, 1), bus_headways: NativeArray.make_int(2640, 0), bus_fare: 1,
       zones: zero, density: NativeArray.make_int(2640, 3), nuisance: NativeArray.make_int(2640, 3),
       buildings: zero, housing_losses: zero, business_losses: zero, construction: zero, plants: zero, paused_facilities: zero, pipes: zero, grid: zero, pollution: zero, land_pollution: zero, air_pollution: zero,
@@ -357,7 +357,7 @@ mod Ur.Sim do
   end
   fn new() : City do
     let zero = NativeArray.make_int(2640, 0)
-    seed({ census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(2640, 0), religion: new_religion(), climate_seed: 0, storm_drains: zero, seawalls: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, soil_moisture: 70, pumping_cost: 0, grades: NativeArray.make_int(2640, 0), grade_cover: NativeArray.make_int(2640, 0), parks: NativeArray.make_int(2640, 0), park_tiers: NativeArray.make_int(2640, 0), streetscape: NativeArray.make_int(2640, 0), sidewalk_items: NativeArray.make_int(2640, 0), campus: NativeArray.make_int(2640, 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(2640, 0), empty_homes: NativeArray.make_int(2640, 0), home_arrivals: NativeArray.make_int(2640, 0), neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(2640, 0), property_status: NativeArray.make_int(2640, 0), property_arrears: NativeArray.make_int(2640, 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(2640, 0), calendar_day: 0, clock_ms: 0, street_day: 0, car_free_days: NativeArray.make_int(2640, 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(2640, 0), quiet_areas: NativeArray.make_int(2640, 0), storefronts: NativeArray.make_int(2640, 0), footfall: NativeArray.make_int(2640, 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, freight: None, shop_stock: NativeArray.make_int(2640, 0), shop_sales: NativeArray.set_int(NativeArray.make_int(2640, 0), index(8, 20), 8), shop_delivered: NativeArray.make_int(2640, 0), shop_imports: 0, shipments: Nil, harbour: index(9, 21), founding_map: false, heights: terrain_fill(NativeArray.make_int(2640, 0), 0), roads: NativeArray.make_int(2640, 0), tolls: NativeArray.make_int(2640, 0), public_parking: NativeArray.make_int(2640, 0), transit: NativeArray.make_int(2640, 0), stops: NativeArray.make_int(2640, 0), ferries: NativeArray.make_int(2640, 0), ferry_start: -1, service: NativeArray.make_int(2640, 1), bus_headways: NativeArray.make_int(2640, 0), bus_fare: 1,
+    seed({ census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(2640, 0), religion: new_religion(), climate_seed: 0, storm_drains: zero, seawalls: zero, pump_orders: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, soil_moisture: 70, pumping_cost: 0, grades: NativeArray.make_int(2640, 0), grade_cover: NativeArray.make_int(2640, 0), parks: NativeArray.make_int(2640, 0), park_tiers: NativeArray.make_int(2640, 0), streetscape: NativeArray.make_int(2640, 0), sidewalk_items: NativeArray.make_int(2640, 0), campus: NativeArray.make_int(2640, 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(2640, 0), empty_homes: NativeArray.make_int(2640, 0), home_arrivals: NativeArray.make_int(2640, 0), neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(2640, 0), property_status: NativeArray.make_int(2640, 0), property_arrears: NativeArray.make_int(2640, 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(2640, 0), calendar_day: 0, clock_ms: 0, street_day: 0, car_free_days: NativeArray.make_int(2640, 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(2640, 0), quiet_areas: NativeArray.make_int(2640, 0), storefronts: NativeArray.make_int(2640, 0), footfall: NativeArray.make_int(2640, 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, freight: None, shop_stock: NativeArray.make_int(2640, 0), shop_sales: NativeArray.set_int(NativeArray.make_int(2640, 0), index(8, 20), 8), shop_delivered: NativeArray.make_int(2640, 0), shop_imports: 0, shipments: Nil, harbour: index(9, 21), founding_map: false, heights: terrain_fill(NativeArray.make_int(2640, 0), 0), roads: NativeArray.make_int(2640, 0), tolls: NativeArray.make_int(2640, 0), public_parking: NativeArray.make_int(2640, 0), transit: NativeArray.make_int(2640, 0), stops: NativeArray.make_int(2640, 0), ferries: NativeArray.make_int(2640, 0), ferry_start: -1, service: NativeArray.make_int(2640, 1), bus_headways: NativeArray.make_int(2640, 0), bus_fare: 1,
       zones: NativeArray.make_int(2640, 0), density: NativeArray.make_int(2640, 3), nuisance: NativeArray.make_int(2640, 3), buildings: NativeArray.make_int(2640, 0), housing_losses: NativeArray.make_int(2640, 0), business_losses: NativeArray.make_int(2640, 0), construction: NativeArray.make_int(2640, 0),
       plants: NativeArray.set_int(NativeArray.set_int(NativeArray.make_int(2640, 0), index(8, 21), 1), index(9, 22), 3),
       paused_facilities: NativeArray.make_int(2640, 0), pipes: NativeArray.set_int(NativeArray.make_int(2640, 0), index(9, 21), 1), grid: NativeArray.make_int(2640, 0), pollution: NativeArray.make_int(2640, 0), land_pollution: NativeArray.make_int(2640, 0), air_pollution: NativeArray.make_int(2640, 0), trash: 0, waste_live: false, waste_bins: NativeArray.make_int(count(), 0), waste_stock: NativeArray.make_int(count(), 0), waste_sites: NativeArray.make_int(count(), 0), waste_last: NativeArray.make_int(count(), 0), waste_log: NativeArray.make_int(count(), 0), waste_runs: Nil,
@@ -1272,7 +1272,7 @@ mod Ur.Sim do
   end
   pfn park_sources(c : City, i : Int, field : ParkWalk, q : NativeIntArr, tail : Int) : (ParkWalk, NativeIntArr, Int) do
     if i == count() do (field, q, tail)
-    else if get(c.parks, i) > 0 do
+    else if get(c.parks, i) > 0 && !ground_closed(c, i) do
       let field = { steps: NativeArray.set_int(field.steps, i, 0), next: NativeArray.set_int(field.next, i, i) }
       park_sources(c, i + 1, field, NativeArray.set_int(q, tail, i), tail + 1)
     else park_sources(c, i + 1, field, q, tail) end end
@@ -1597,9 +1597,8 @@ mod Ur.Sim do
   end
   fn fire_offline(c : City, i : Int) : Bool do get(c.fire_recovery, i) > 0 end
   fn building_offline(c : City, i : Int) : Bool do
-    fire_offline(c, i) || flood_repair_days(c, i) > 0 ||
-      ((get(c.buildings, i) > 0 || get(c.plants, i) > 0) &&
-        (quake_near(c, i, 3) || ((curse_god(c) == 1 || curse_god(c) == 4) && building_inundated(c, i))))
+    fire_offline(c, i) || flood_repair_days(c, i) > 0 || building_inundated(c, i) ||
+      ((get(c.buildings, i) > 0 || get(c.plants, i) > 0) && quake_near(c, i, 3))
   end
   fn fire_rebuilding(c : City, i : Int) : Bool do get(c.fire_recovery, i) >= 4 end
   fn fire_months_left(c : City, i : Int) : Int do
@@ -1616,8 +1615,19 @@ mod Ur.Sim do
   fn homes_at(c : City, i : Int) : Int do
     home_floors(c, i) * (if get(c.zones, i) == 3 do 3 else 4 end)
   end
+  pfn tenanted_homes(c : City, i : Int) : Int do
+    let homes = homes_at(c, i)
+    if homes == 0 || housing_vacant(c, i) do 0 else clamp(homes - get(c.empty_homes, i), 0, homes) end
+  end
   fn occupied_homes(c : City, i : Int) : Int do
-    if building_offline(c, i) || housing_vacant(c, i) do 0 else clamp(homes_at(c, i) - get(c.empty_homes, i), 0, homes_at(c, i)) end
+    if building_offline(c, i) do 0 else tenanted_homes(c, i) end
+  end
+  fn displaced_homes(c : City, i : Int) : Int do
+    if tenanted_homes(c, i) > 0 && building_offline(c, i) do tenanted_homes(c, i) else 0 end
+  end
+  fn resident_homes(c : City, i : Int) : Int do
+    let displaced = displaced_homes(c, i)
+    if displaced > 0 do displaced else occupied_homes(c, i) end
   end
   fn residential_floors(c : City, i : Int) : Int do
     if occupied_homes(c, i) > 0 do home_floors(c, i) else 0 end
@@ -1831,7 +1841,7 @@ mod Ur.Sim do
     end
   end
   fn active_program_at(c : City, lot : Int) : Int do
-    if facility_paused(c, lot) do -1 else program_at(c, lot) end
+    if facility_paused(c, lot) || building_offline(c, lot) do -1 else program_at(c, lot) end
   end
   fn program_at(c : City, lot : Int) : Int do
     let kind = get(c.plants, lot)
@@ -1950,7 +1960,7 @@ mod Ur.Sim do
     if i >= count() do seats else
       let kind = get(c.plants, i)
       let stage = school_stage(kind)
-      let seats = if stage >= 0 && building_access(c, routes, i) >= 0 do
+      let seats = if stage >= 0 && !building_offline(c, i) && building_access(c, routes, i) >= 0 do
         NativeArray.set_int(seats, stage, get(seats, stage) + school_capacity(kind))
       else seats end
       school_seats(c, routes, i + 1, seats)
@@ -2137,7 +2147,7 @@ mod Ur.Sim do
   pfn sum(c : City, i : Int, kind : Int, total : Int) : Int do
     if i >= count() do total else
       let b = get(c.buildings, i)
-      let v = if kind == 0 do occupied_homes(c, i) * 4
+      let v = if kind == 0 do resident_homes(c, i) * 4
         else if kind == 1 do job_slots(c, i)
         else if kind == 2 do (if building_offline(c, i) do 0 else b * 4 end)
         else parking_upkeep(get(c.public_parking, i)) + road_upkeep(get(c.roads, i)) + flood_upkeep(c, i) + (if get(c.parks, i) > 0 do 1 + get(c.park_tiers, i) else 0 end) + 4 * (if get(c.grade_cover, i) > 0 do 1 else 0 end) + utility_upkeep(get(c.pipes, i)) + utility_upkeep(get(c.grid, i)) + parcel_facility_upkeep(c, i) end end end
@@ -2218,14 +2228,17 @@ mod Ur.Sim do
   end
   pfn connected_count(c : City, a : NativeIntArr, kind : Int, i : Int, total : Int) : Int do
     if i >= count() do total
-    else connected_count(c, a, kind, i + 1, total + (if get(c.plants, i) == kind && building_access(c, a, i) >= 0 do 1 else 0 end)) end
+    else connected_count(c, a, kind, i + 1, total + (if get(c.plants, i) == kind && !building_offline(c, i) && building_access(c, a, i) >= 0 do 1 else 0 end)) end
   end
   fn power_plant(kind : Int) : Bool do
     kind == 1 || kind == 2 || (kind >= 12 && kind <= 15) || kind == 33
   end
+  fn generator_online(c : City, lot : Int) : Bool do
+    surface_flood(c, lot) < 2 && !building_offline(c, lot) && !facility_paused(c, lot)
+  end
   pfn utility_count(c : City, roads : NativeIntArr, pipes : NativeIntArr, kind : Int, i : Int, total : Int) : Int do
     if i >= count() do total else
-      let active = get(c.plants, i) == kind && (kind != 1 || managed_plant_ready(c, i)) && !facility_paused(c, i) && facility_road_ready(c, roads, kind, i) && distance(pipes, i) >= 0 &&
+      let active = get(c.plants, i) == kind && !building_offline(c, i) && (!power_plant(kind) || generator_online(c, i)) && (kind != 1 || managed_plant_ready(c, i)) && !facility_paused(c, i) && facility_road_ready(c, roads, kind, i) && distance(pipes, i) >= 0 &&
         ((kind != 3 && kind != 5) || remote_food_island(c, i) != 1)
       utility_count(c, roads, pipes, kind, i + 1, total + (if active do 1 else 0 end))
     end
@@ -2264,27 +2277,31 @@ mod Ur.Sim do
   pfn wind_generation(c : City, grid : NativeIntArr, i : Int, total : Int) : Int do
     if i == count() do total else
       let kind = get(c.plants, i)
-      let power = if wind_turbine(kind) && distance(grid, i) >= 0 do
+      let power = if wind_turbine(kind) && generator_online(c, i) && distance(grid, i) >= 0 do
         let speed = (wind_at(c, i)).speed
         if kind == 33 do speed * 3 else 16 + speed * 2 end
       else 0 end
       wind_generation(c, grid, i + 1, total + power)
     end
   end
+  pfn harbour_power(c : City, grid : NativeIntArr) : Int do
+    if c.founding_map && valid(c.harbour) && get(grid, c.harbour) >= 0 && surface_flood(c, c.harbour) < 2 do 24 else 0 end
+  end
   fn generation(c : City, roads : NativeIntArr) : Power do
     let grid = grid_access(c)
     let trash = waste_on_grid(c, roads, grid)
     let booked_gas = match c.freight do
-      Some(route) -> if route.fuel > 0 && get(c.plants, route.plant) == 1 && !facility_paused(c, route.plant) &&
+      Some(route) -> if route.fuel > 0 && get(c.plants, route.plant) == 1 && generator_online(c, route.plant) &&
         distance(grid, route.plant) >= 0 && building_access(c, roads, route.plant) >= 0 do 1 else 0 end
       None -> 0
     end
     let gas_units = clamp(c.cash / 16, 0, utility_count(c, roads, grid, 1, 0, 0) - booked_gas)
     let nuclear_units = clamp((c.cash - gas_units * 16) / 40, 0, utility_count(c, roads, grid, 14, 0, 0))
     let solar_rate = solar_output(c)
-    { gas: (gas_units + booked_gas) * 100 + (if c.founding_map && valid(c.harbour) && get(grid, c.harbour) >= 0 do 24 else 0 end), geothermal: 180 * utility_count(c, roads, grid, 2, 0, 0),
+    { gas: (gas_units + booked_gas) * 100 + harbour_power(c, grid), geothermal: 180 * utility_count(c, roads, grid, 2, 0, 0),
       wind: wind_generation(c, grid, 0, 0), solar: solar_rate * utility_count(c, roads, grid, 13, 0, 0),
-      nuclear: nuclear_units * 360, biogas: if c.waste_live do clamp(get(c.waste_log, 7) + get(c.waste_log, 8) + get(c.waste_log, 9), 0, 96) else trash.digested end,
+      nuclear: nuclear_units * 360, biogas: if !c.waste_live do trash.digested
+        else if utility_count(c, roads, grid, 15, 0, 0) > 0 do clamp(get(c.waste_log, 7) + get(c.waste_log, 8) + get(c.waste_log, 9), 0, 96) else 0 end end,
       cost: gas_units * 16 + nuclear_units * 40 }
   end
   fn power_total(p : Power) : Int do p.gas + p.geothermal + p.wind + p.solar + p.nuclear + p.biogas end
@@ -2312,7 +2329,7 @@ mod Ur.Sim do
   end
   pfn air_sources(c : City, roads : NativeIntArr, grid : NativeIntArr, traffic : NativeIntArr, i : Int, out : NativeIntArr) : NativeIntArr do
     if i == count() do out else
-      let gas = get(c.plants, i) == 1 && c.cash >= 16 && distance(grid, i) >= 0 && building_access(c, roads, i) >= 0
+      let gas = get(c.plants, i) == 1 && generator_online(c, i) && c.cash >= 16 && distance(grid, i) >= 0 && building_access(c, roads, i) >= 0
       let exhaust = if motor_street(c, i) do clamp((road_load(traffic, i) - 14) / 3, 0, 20) else 0 end
       let level = clamp(get(c.air_pollution, i) - 5, 0, 100) + exhaust + (if gas do 32 else 0 end)
       air_sources(c, roads, grid, traffic, i + 1, NativeArray.set_int(out, i, level))
@@ -2357,14 +2374,14 @@ mod Ur.Sim do
   end
   pfn catch_total(c : City, roads : NativeIntArr, i : Int, total : Int) : Int do
     if i >= count() do total else
-      let fish = if get(c.plants, i) == 6 && !freight_producer(c, i) && building_access(c, roads, i) >= 0 && remote_food_island(c, i) == 0 do catch_yield(c, i) else 0 end
+      let fish = if get(c.plants, i) == 6 && !building_offline(c, i) && !freight_producer(c, i) && building_access(c, roads, i) >= 0 && remote_food_island(c, i) == 0 do catch_yield(c, i) else 0 end
       catch_total(c, roads, i + 1, total + fish)
     end
   end
   fn water_total(r : Services) : Int do r.wells + r.rain + r.desal + r.recycled + r.imported_water end
   pfn island_utility_count(c : City, roads : NativeIntArr, pipes : NativeIntArr, kind : Int, i : Int, total : Int) : Int do
     if i >= count() do total else
-      let active = get(c.plants, i) == kind && remote_food_island(c, i) == 1 && facility_road_ready(c, roads, kind, i) && distance(pipes, i) >= 0
+      let active = get(c.plants, i) == kind && !building_offline(c, i) && remote_food_island(c, i) == 1 && facility_road_ready(c, roads, kind, i) && distance(pipes, i) >= 0
       island_utility_count(c, roads, pipes, kind, i + 1, total + (if active do 1 else 0 end))
     end
   end
@@ -2431,7 +2448,7 @@ mod Ur.Sim do
     out : Ur.UtilitiesNetwork.Network) : Ur.UtilitiesNetwork.Network do
     if lot == count() do out else
       let kind = get(c.plants, lot)
-      let generator = kind == 1 || kind == 2 || (kind >= 12 && kind <= 15) || kind == 33
+      let generator = power_plant(kind) && generator_online(c, lot)
       let units = if !generator || !managed_plant_ready(c, lot) || !utility_site(c, roads, grid, kind, lot) do 0 else
         match kind do
           1 -> clamp(gas, 0, 100)
@@ -2560,7 +2577,7 @@ mod Ur.Sim do
     let loads = utility_loads(c, people, sum(c, 0, 0, 0), 0, 0, temperature(c), { electric: zero, water: zero, sewer: zero })
     let grid = grid_access(c)
     let pipes = pipe_access(c)
-    let bootstrap = if c.founding_map do 24 else 0 end
+    let bootstrap = harbour_power(c, grid)
     let electric = Net.add_source(network(c.grid, 0), c.harbour, bootstrap)
     let source = electrical_sources(c, roads, grid, 0, gen.gas - bootstrap, gen.nuclear, gen.biogas, electric)
     let grid_paths = Net.connected(source)
@@ -2756,6 +2773,7 @@ mod Ur.Sim do
     match t do
       99 -> "Upgrade storm drainage"
       100 -> "Build seawall"
+      101 -> "Toggle emergency pumping"
       91 -> "Small trash can"
       92 -> "Underground trash bin"
       96 -> "Remove trash bins"
@@ -3035,7 +3053,7 @@ mod Ur.Sim do
   end
   fn service_delay(c : City, i : Int, mode : Int) : Int do
     let runs = frequency(c, i)
-    let seats = if mode == 2 do bus_seats() else if mode == 3 do 28 else if mode == 4 do 48 else 32 end end end
+    let seats = transit_seats(mode)
     let demand = local_trips(c, i, 0, 0) + get(c.footfall, i) / 4 + stop_customer_trips(c, i, 0, 0)
     let headway = get(c.bus_headways, i)
     let wait = if mode == 2 && headway > 0 do headway / 2 else 4 - runs end
@@ -3047,6 +3065,7 @@ mod Ur.Sim do
   fn transit_link(c : City, i : Int, j : Int, mode : Int) : Bool do
     valid(j) && mode >= 2 && get(c.transit, j) == mode &&
       (mode != 2 || (motor_street(c, i) && motor_street(c, j) && !storm_road_closed(c, i) && !storm_road_closed(c, j))) &&
+      (mode != 3 || (surface_flood(c, i) < 2 && surface_flood(c, j) < 2)) &&
       (mode == 4 || int_abs(get(c.heights, i) - get(c.heights, j)) <= 12)
   end
   type TransitLine = { seen : NativeIntArr, queue : NativeIntArr, tail : Int }
@@ -3073,8 +3092,11 @@ mod Ur.Sim do
       mark_line(c, grid, line, mode, NativeArray.set_int(running, i, if stop do 2 else 1 end), head + 1)
     end
   end
+  fn subway_inundated(c : City, lot : Int) : Bool do
+    get(c.subway_water, lot) > 0 || (get(c.stops, lot) == 4 && ground_closed(c, lot))
+  end
   pfn flooded_line(c : City, line : TransitLine, head : Int) : Bool do
-    head < line.tail && (get(c.subway_water, get(line.queue, head)) > 0 || flooded_line(c, line, head + 1))
+    head < line.tail && (subway_inundated(c, get(line.queue, head)) || flooded_line(c, line, head + 1))
   end
   pfn transit_lines(c : City, grid : NativeIntArr, power : Int, seen : NativeIntArr, running : NativeIntArr, i : Int) : NativeIntArr do
     if i >= count() do running else
@@ -3096,6 +3118,9 @@ mod Ur.Sim do
   type BusLine = { id : Int, requested : Int, departures : Int, headway : Int, length : Int, demand : Int, boarded : Int }
   type BusNetwork = { lines : List(BusLine), line_at : NativeIntArr, service : NativeIntArr, headways : NativeIntArr, fares : NativeIntArr, other_modes : NativeIntArr }
   fn bus_seats() : Int do 12 end
+  fn transit_seats(mode : Int) : Int do
+    if mode == 2 do bus_seats() else if mode == 3 do 28 else if mode == 4 do 48 else 32 end end end
+  end
   fn next_bus_fare(c : City) : Int do
     match c.bus_fare do
       0 -> 1
@@ -3178,21 +3203,23 @@ mod Ur.Sim do
     let road_i = get(c.roads, i) > 0
     let road_j = get(c.roads, j) > 0
     let level = int_abs(get(c.heights, i) - get(c.heights, j)) <= 12
-    if level && ((a && (b || road_j)) || (b && road_i)) do 3
+    if (road_i || a || get(c.ferries, i) > 0) && (road_j || b || get(c.ferries, j) > 0) &&
+      (ground_closed(c, i) || ground_closed(c, j)) do 999
+    else if level && ((a && (b || road_j)) || (b && road_i)) do 3
     else if level && road_i && road_j do
       if !motor_road(c, i) || !motor_road(c, j) do 3 else
         let base = if get(c.roads, i) == 2 && get(c.roads, j) == 2 do 3 else 4 end
         base + delay_for(c, i, lane_demand(traffic, i, direction(i, j))) + 3 * get(c.tolls, j)
       end
     else if (get(c.ferries, i) > 0 && road_j) || (get(c.ferries, j) > 0 && road_i) do 3
-    else 999 end end end
+    else 999 end end end end
   end
   pfn near_cost(c : City, traffic : NativeIntArr, running : NativeIntArr, street : NativeIntArr, riding : NativeIntArr, i : Int, d : Int, ground : Int, onboard : Int) : (Int, Int) do
     if d >= 4 do (ground, onboard) else
       let j = neighbour(i, d)
       let station_path = (get(running, i) == 2 && get(c.roads, i) == 0 && (get(c.roads, j) > 0 || get(c.transit, j) == 1)) ||
         (get(running, j) == 2 && get(c.roads, j) == 0 && (get(c.roads, i) > 0 || get(c.transit, i) == 1))
-      let walk = if !valid(j) do 999 else if station_path && int_abs(get(c.heights, i) - get(c.heights, j)) <= 12 do get(street, j) + 3
+      let walk = if !valid(j) do 999 else if station_path && !ground_closed(c, i) && !ground_closed(c, j) && int_abs(get(c.heights, i) - get(c.heights, j)) <= 12 do get(street, j) + 3
         else get(street, j) + surface_edge(c, traffic, i, j) end end
       let mode = get(c.transit, i)
       let rail = if get(running, i) > 0 && get(running, j) > 0 && transit_link(c, i, j, mode) do
@@ -3207,9 +3234,9 @@ mod Ur.Sim do
     let before = get(street, i)
     let old_ride = get(riding, i)
     let peer = get(c.ferries, i) - 1
-    let ferry = if valid(peer) && (curse_god(c) != 4 || (!ground_closed(c, i) && !ground_closed(c, peer))) do get(street, peer) + 5 + segment_wait(c, i, peer, 5) else 999 end
+    let ferry = if valid(peer) && !ground_closed(c, i) && !ground_closed(c, peer) do get(street, peer) + 5 + segment_wait(c, i, peer, 5) else 999 end
     let ramp = grade_peer(c, i)
-    let grade = if valid(ramp) do get(street, ramp) + 3 * span_distance(i, ramp) + delay_for(c, i, lane_demand(traffic, i, direction(i, ramp))) else 999 end
+    let grade = if valid(ramp) && !ground_closed(c, i) && !ground_closed(c, ramp) do get(street, ramp) + 3 * span_distance(i, ramp) + delay_for(c, i, lane_demand(traffic, i, direction(i, ramp))) else 999 end
     let ground = if ferry < before do ferry else before end
     let ground = if grade < ground do grade else ground end
     let (ground, onboard) = near_cost(c, traffic, running, street, riding, i, 0, ground, old_ride)
@@ -3239,7 +3266,7 @@ mod Ur.Sim do
   pfn seed_jobs(c : City, running : NativeIntArr, costs : NativeIntArr, i : Int, d : Int) : NativeIntArr do
     if d >= 4 do costs else
       let j = neighbour(i, d)
-      let active = valid(j) && (get(c.roads, j) > 0 || get(c.transit, j) == 1 || get(running, j) == 2 || get(c.ferries, j) > 0)
+      let active = valid(j) && (get(c.roads, j) > 0 || get(c.transit, j) == 1 || get(running, j) == 2 || get(c.ferries, j) > 0) && !ground_closed(c, j)
       seed_jobs(c, running, if active do NativeArray.set_int(costs, j, 0) else costs end, i, d + 1)
     end
   end
@@ -3928,7 +3955,14 @@ mod Ur.Sim do
   end
   pfn flood_work(c : City, lot : Int, tool : Int) : City do
     let price = cost(c, lot, tool)
-    if tool == 99 && (get(c.roads, lot) <= 0 || get(c.heights, lot) <= 0) do
+    if tool == 101 do
+      if get(c.heights, lot) <= 0 do { c with message: "Order emergency pumping on a land parcel." }
+      else
+        let active = get(c.pump_orders, lot) == 0
+        { c with pump_orders: NativeArray.set_int(c.pump_orders, lot, if active do 1 else 0 end),
+          message: if active do "Emergency pumping scheduled." else "Emergency pumping canceled." end }
+      end
+    else if tool == 99 && (get(c.roads, lot) <= 0 || get(c.heights, lot) <= 0) do
       { c with message: "Upgrade drainage on an existing street on land." }
     else if tool == 100 && (get(c.heights, lot) != 0 || get(c.roads, lot) > 0 || get(c.grade_cover, lot) > 0 ||
       get(c.transit, lot) > 0 || get(c.plants, lot) > 0 || get(c.ferries, lot) > 0) do
@@ -3939,10 +3973,10 @@ mod Ur.Sim do
       { c with cash: c.cash - price, storm_drains: NativeArray.set_int(c.storm_drains, lot, 1), message: "Storm drainage upgraded." }
     else
       { c with cash: c.cash - price, seawalls: NativeArray.set_int(c.seawalls, lot, 1), message: "Seawall built." }
-    end end end end end
+    end end end end end end
   end
   fn draft_act(c : City, i : Int, tool : Int) : City do
-    let next = if c.harbour >= 0 && valid(i) && (tool == 99 || tool == 100) do flood_work(c, i, tool)
+    let next = if c.harbour >= 0 && valid(i) && (tool == 99 || tool == 100 || tool == 101) do flood_work(c, i, tool)
       else if valid(i) && tool == 7 && get(c.seawalls, i) > 0 do
         { c with seawalls: NativeArray.set_int(c.seawalls, i, 0), message: "Seawall removed." }
       else if c.harbour >= 0 && valid(i) && (tool == 91 || tool == 92 || tool == 96) do build_waste_bins(c, i, tool)
@@ -4074,6 +4108,10 @@ mod Ur.Sim do
   pfn housing_rent(c : City, routes : NativeIntArr, i : Int) : Int do
     let base = base_home_rent(c, routes, i)
     base + rent_adjustment(c, rent_tier(base)) + neighborhood_rent(c, i)
+  end
+  fn household_financial_strain(c : City, st : Stats, i : Int) : Int do
+    let balance = margin(household_accounts(c, st.routes, st.commutes, st.labor, i))
+    clamp(0 - balance * 3, 0, 35)
   end
   fn household_accounts(c : City, routes : NativeIntArr, commutes : NativeIntArr, labor : Labor, i : Int) : Accounts do
     let trip = commute(commutes, i)
@@ -4476,13 +4514,14 @@ mod Ur.Sim do
   pfn civic_streets(c : City, routes : NativeIntArr, search : CivicSearch, i : Int, steps : Int, d : Int) : CivicSearch do
     if d >= 4 do search else
       let j = neighbour(i, d)
-      let next = if civic_edge(c, i, j) && get(c.roads, j) > 0 && get(routes, j) >= 0 && get(search.distance, j) < 0 do civic_enqueue(search, j, steps) else search end
+      let next = if civic_edge(c, i, j) && get(c.roads, j) > 0 && get(routes, j) >= 0 && get(search.distance, j) < 0 &&
+        !ground_closed(c, j) do civic_enqueue(search, j, steps) else search end
       civic_streets(c, routes, next, i, steps, d + 1)
     end
   end
   pfn civic_seeds(c : City, routes : NativeIntArr, kind : Int, i : Int, search : CivicSearch) : CivicSearch do
     if i >= count() do search else
-      let next = if get(c.plants, i) == kind && building_access(c, routes, i) >= 0 do civic_streets(c, routes, search, i, 0, 0) else search end
+      let next = if get(c.plants, i) == kind && !building_offline(c, i) && building_access(c, routes, i) >= 0 do civic_streets(c, routes, search, i, 0, 0) else search end
       civic_seeds(c, routes, kind, i + 1, next)
     end
   end
@@ -4491,7 +4530,8 @@ mod Ur.Sim do
     if d > 4 do coverage else
       let j = if d == 4 do i else neighbour(i, d) end
       let mask = get(coverage, j)
-      let next = if civic_edge(c, i, j) && get(c.heights, j) > 0 && !has_civic(mask, bit) do NativeArray.set_int(coverage, j, mask + bit) else coverage end
+      let next = if civic_edge(c, i, j) && get(c.heights, j) > 0 && !has_civic(mask, bit) &&
+        !ground_closed(c, j) do NativeArray.set_int(coverage, j, mask + bit) else coverage end
       civic_mark(c, next, i, bit, d + 1)
     end
   end
@@ -4577,7 +4617,7 @@ mod Ur.Sim do
       minutes: NativeArray.set_int(search.minutes, road, minutes), tail: search.tail + 1 }
   end
   fn responder_road(c : City, kind : Int, i : Int) : Bool do
-    (motor_street(c, i) && !storm_road_closed(c, i)) || (kind >= 3 && get(c.roads, i) == 3)
+    (motor_street(c, i) || (kind >= 3 && get(c.roads, i) == 3)) && !ground_closed(c, i)
   end
   pfn patrol_edges(c : City, traffic : NativeIntArr, call : Incident, search : PatrolSearch, i : Int, d : Int) : PatrolSearch do
     if d == 5 do search else
@@ -4628,7 +4668,7 @@ mod Ur.Sim do
   end
   pfn emergency_stations(c : City, i : Int, stations : List(Int)) : List(Int) do
     if i == count() do stations else
-      emergency_stations(c, i + 1, if (get(c.plants, i) >= 19 && get(c.plants, i) <= 22) || get(c.plants, i) == 25 do Cons(i, stations) else stations end)
+      emergency_stations(c, i + 1, if !building_offline(c, i) && ((get(c.plants, i) >= 19 && get(c.plants, i) <= 22) || get(c.plants, i) == 25) do Cons(i, stations) else stations end)
     end
   end
   pfn dispatch(c : City, traffic : NativeIntArr, stations : List(Int), busy : NativeIntArr, call : Incident) : (Incident, NativeIntArr) do
@@ -4911,13 +4951,13 @@ mod Ur.Sim do
       else if trip <= 42 do base
       else clamp(base, 1, 2) end end end
     if zone == 0 do Unzoned
+    else if ground_closed(c, i) do Flooded
     else if dist < 0 do NoRoad
     else if get(c.buildings, i) >= get(c.density, i) do Full
     else if use_nuisance(zone) > get(c.nuisance, i) do Restricted
     else if get(c.buildings, i) >= potential do Market
     else if get(c.buildings, i) >= civic_density(c, civic, i, potential) do
       if get(civic, i) % 4 == 0 do NeedsSchoolOrClinic else NeedsCivicServices end
-    else if surface_flood(c, i) >= 2 do Flooded
     else if zone != 2 && land_pollution_at(c, i) >= 65 do Dirty
     else
     let utilities = utility_block(c, capacity, i)
@@ -4949,6 +4989,11 @@ mod Ur.Sim do
     else if ((get(c.buildings, i) > 0 || get(c.plants, i) > 0) && quake_near(c, i, 3)) ||
       (get(c.roads, i) > 0 && quake_near(c, i, 2)) do
       "Earthquake damage · Repairs in progress (" ++ int_to_string(curse_days(c)) ++ " days left)"
+    else if flood_repair_days(c, i) > 0 do
+      if surface_flood(c, i) > 0 do "Flood damage · Repairs wait for dry ground"
+      else "Flood damage · Repairs in progress (" ++ int_to_string(flood_repair_days(c, i)) ++ " days left)" end
+    else if power_plant(get(c.plants, i)) && ground_closed(c, i) do "Generator offline · Flooded"
+    else if building_inundated(c, i) do "Building offline · Flooded"
     else if get(c.public_parking, i) > 0 && !undeveloped_zone(c, i) do
       let kind = get(c.public_parking, i)
       parking_name(kind) ++ " · " ++ int_to_string(parking_spaces(kind)) ++ " spaces · $" ++ int_to_string(parking_fee(kind)) ++ " per visit" ++
@@ -4981,9 +5026,6 @@ mod Ur.Sim do
       else if (kind <= 2 || (kind >= 12 && kind <= 15)) && distance(grid_access(c), i) < 0 do name ++ " needs a connected power line"
       else if kind == 6 || kind == 11 do name ++ " | Coastal pollution " ++ int_to_string(pollution_at(c, i)) ++ "%"
       else name ++ " connected to the regional network" end end end end end end end end end
-    else if flood_repair_days(c, i) > 0 do
-      if surface_flood(c, i) > 0 do "Flood damage · Repairs wait for dry ground"
-      else "Flood damage · Repairs in progress (" ++ int_to_string(flood_repair_days(c, i)) ++ " days left)" end
     else if fire_offline(c, i) do
       let status = if fire_rebuilding(c, i) do "Burned down · Rebuilding" else "Fire damage · Closed for repairs" end
       let months = fire_months_left(c, i)
@@ -4995,11 +5037,12 @@ mod Ur.Sim do
     else if housing_vacant(c, i) do "Homes vacant after sustained unaffordability"
     else if get(c.construction, i) > 0 do
       let remaining = get(c.buildings, i) + 2 - get(c.construction, i)
-      if building_access(c, st.routes, i) < 0 do "Construction paused · Connect to the road network"
+      if ground_closed(c, i) do "Construction paused · Flooded parcel"
+      else if building_access(c, st.routes, i) < 0 do "Construction paused · Connect to the road network"
       else
         let days = remaining * 3 - c.calendar_day % 3
         "Under construction | " ++ int_to_string(days) ++ (if days == 1 do " day left" else " days left" end)
-      end
+      end end
     else if get(c.pipes, i) > 0 && get(c.zones, i) == 0 do (if get(pipe_access(c), i) >= 0 do "Connected water and sewer pipe" else "Pipe disconnected from the harbour network" end)
     else if get(c.heights, i) == 0 do "Sea channel: use a ferry to cross"
     else if get(c.heights, i) > 28 do "Mountain slope: grade before zoning"
@@ -5010,8 +5053,8 @@ mod Ur.Sim do
         NoFood -> if local_food_shortage(c, i) do "Local food shortage · Restore sailings or fund backup imports" else status_text(status) end
         Ready -> if undeveloped_zone(c, i) do "Eligible for development. Waiting for private investment." else status_text(status) end
         _ -> status_text(status)
-      end end
-    end end end end end end end end end end end end end end end end end end end
+      end
+    end end end end end end end end end end end end end end end end end end end end end end
   end
   pfn food_room(c : City, a : NativeIntArr, people : Int, utilities : UtilityReport, gen : Power) : Bool do
     let next = services_with(c, a, people + 16, gen, utilities)
@@ -5039,7 +5082,7 @@ mod Ur.Sim do
       let next = if stage == 0 do c
       else if level >= get(c.density, i) || use_nuisance(get(c.zones, i)) > get(c.nuisance, i) do
         { c with construction: NativeArray.set_int(c.construction, i, 0) }
-      else if quake_near(c, i, 3) || building_access(c, roads, i) < 0 do c
+      else if ground_closed(c, i) || building_offline(c, i) || building_access(c, roads, i) < 0 do c
       else if stage + (if favor_god(c) == 3 do 1 else 0 end) > level do
         { c with construction: NativeArray.set_int(c.construction, i, 0),
           buildings: NativeArray.set_int(c.buildings, i, level + 1) }
@@ -5118,7 +5161,7 @@ mod Ur.Sim do
   type FreightSearch = { links : NativeIntArr, queue : NativeIntArr, tail : Int }
   type Freight = { island_crops : Int, island_catch : Int, supply : NativeIntArr, ferry_room : NativeIntArr, stock : NativeIntArr, sales : NativeIntArr, arrived : NativeIntArr, loads : List(Shipment) }
 
-  pfn freight_stop(c : City, i : Int) : Bool do motor_road(c, i) || (get(c.ferries, i) > 0 && (curse_god(c) != 4 || !ground_closed(c, i))) end
+  pfn freight_stop(c : City, i : Int) : Bool do motor_road(c, i) || (get(c.ferries, i) > 0 && !ground_closed(c, i)) end
   pfn freight_add(r : FreightSearch, i : Int, toward : Int) : FreightSearch do
     { links: NativeArray.set_int(r.links, i, toward), queue: NativeArray.set_int(r.queue, r.tail, i), tail: r.tail + 1 }
   end
@@ -5133,7 +5176,7 @@ mod Ur.Sim do
   pfn freight_seeds(c : City, supply : NativeIntArr, kind : Int, i : Int, r : FreightSearch) : FreightSearch do
     if i >= count() do r else
       let source = if kind == 0 do i == c.harbour else get(c.plants, i) == kind end
-      let r = if source && get(supply, i) > 0 do freight_add(r, i, i) else r end
+      let r = if source && get(supply, i) > 0 && !ground_closed(c, i) do freight_add(r, i, i) else r end
       freight_seeds(c, supply, kind, i + 1, r)
     end
   end
@@ -5207,7 +5250,7 @@ mod Ur.Sim do
   pfn supply_parcels(c : City, roads : NativeIntArr, pipes : NativeIntArr, irrigation : NativeIntArr, i : Int, farms : Int, island_farms : Int, supply : NativeIntArr, ferries : NativeIntArr) : (NativeIntArr, NativeIntArr) do
     if i >= count() do (supply, ferries) else
       let kind = get(c.plants, i)
-      let linked = building_access(c, roads, i) >= 0
+      let linked = (kind == 5 || kind == 6) && !building_offline(c, i) && building_access(c, roads, i) >= 0
       let island = kind == 5 && remote_food_island(c, i) == 1
       let farm = kind == 5 && !freight_producer(c, i) && linked && (if island do island_farms > 0 && distance(irrigation, i) >= 0 else farms > 0 && distance(pipes, i) >= 0 end)
       let managed = match c.freight do
@@ -5406,7 +5449,7 @@ mod Ur.Sim do
         let kind = get(c.plants, route.producer)
         let producing = (kind == 6 || (kind == 5 && (distance(farm_water(c), route.producer) >= 0 || distance(pipe_access(c), route.producer) >= 0))) &&
           !building_offline(c, route.producer) && valid(freight_entrance(c, island, route.producer, 0))
-        let plant = valid(route.plant) && get(c.plants, route.plant) == 1 && !building_offline(c, route.plant) &&
+        let plant = valid(route.plant) && get(c.plants, route.plant) == 1 && generator_online(c, route.plant) &&
           valid(freight_entrance(c, island, route.plant, 0))
         let waste_connected = valid(route.waste_site) && get(c.plants, route.waste_site) == 34 &&
           valid(freight_entrance(c, island, route.waste_site, 0))
@@ -5467,7 +5510,7 @@ mod Ur.Sim do
   end
   pfn waste_depot(c : City, i : Int) : Int do
     if i == count() do -1 else
-      if get(c.plants, i) == 16 && motor_road(c, fleet_frontage(c, i, 0)) do i else waste_depot(c, i + 1) end
+      if get(c.plants, i) == 16 && !building_offline(c, i) && motor_road(c, fleet_frontage(c, i, 0)) do i else waste_depot(c, i + 1) end
     end
   end
   pfn waste_pickup(c : City, search : PatrolSearch, i : Int, best : Int, score : Int) : Int do
@@ -5483,7 +5526,7 @@ mod Ur.Sim do
     end
   end
   pfn waste_room(c : City, grid : NativeIntArr, kind : Int, lot : Int) : Int do
-    if get(c.plants, lot) != kind || facility_paused(c, lot) do 0 else
+    if get(c.plants, lot) != kind || facility_paused(c, lot) || building_offline(c, lot) do 0 else
       match kind do
         15 -> if distance(grid, lot) >= 0 do 36 else 0 end
         17 -> clamp(landfill_capacity() - get(c.waste_sites, lot), 0, 48)
@@ -5555,6 +5598,7 @@ mod Ur.Sim do
   end
   fn waste_route_open(c : City, run : WasteRun) : Bool do
     get(c.plants, run.depot) == 16 && get(c.plants, run.site) == run.kind && !facility_paused(c, run.site) &&
+      !building_offline(c, run.depot) && !building_offline(c, run.site) &&
       waste_edges_open(c, run.route, run.depot, run.site)
   end
   pfn waste_increment(log : NativeIntArr, i : Int, n : Int) : NativeIntArr do
@@ -5737,20 +5781,6 @@ mod Ur.Sim do
   end
   fn rain_tank_capacity() : Int do 2400 end
 
-  pfn outlet_target(c : City, lot : Int, arm : Int, best : Int) : Int do
-    if arm >= 4 do best else
-      let peer = neighbour(lot, arm)
-      let best = if get(c.surface_water, peer) > get(c.surface_water, best) do peer else best end
-      outlet_target(c, lot, arm + 1, best)
-    end
-  end
-  pfn pump_target(c : City, lot : Int) : Int do
-    if get(c.storm_drains, lot) > 0 do
-      let target = outlet_target(c, lot, 0, lot)
-      if get(c.surface_water, target) > 0 do target else -1 end
-    else -1 end
-  end
-
   -- Standing water is measured in quarter metres. Each day the water level
   -- falls by gravity where it has a route to sea, and by absorption and evaporation elsewhere.
   pfn surface_day(c : City, lot : Int, storm : Bool, evaporation : Int, active : Bool) : City do
@@ -5780,7 +5810,7 @@ mod Ur.Sim do
 
   pfn weather_sites(c : City, lot : Int, sites : List(Int)) : List(Int) do
     if lot >= count() do sites else
-      let tracked = get(c.plants, lot) == 8 || get(c.stops, lot) == 4 || get(c.storm_drains, lot) > 0 ||
+      let tracked = get(c.plants, lot) == 8 || get(c.stops, lot) == 4 || get(c.pump_orders, lot) > 0 ||
         get(c.rain_tanks, lot) > 0 || get(c.subway_water, lot) > 0
       weather_sites(c, lot + 1, if tracked do Cons(lot, sites) else sites end)
     end
@@ -5821,13 +5851,13 @@ mod Ur.Sim do
         else (electric, flood, 0) end
         let next = { c with rain_tanks: NativeArray.set_int(c.rain_tanks, lot, stock - used),
           subway_water: NativeArray.set_int(c.subway_water, lot, water), pumping_cost: c.pumping_cost + charge }
-        let target = if rain < 4 && next.cash - next.pumping_cost > 0 do pump_target(next, lot) else -1 end
-        let (next, electric) = if valid(target) do
-          let (test, delivered) = Net.draw(electric, lot, 4)
-          if delivered == 4 do
-            let left = clamp(get(next.surface_water, target) - 3, 0, 16)
-            ({ next with surface_water: NativeArray.set_int(next.surface_water, target, left), pumping_cost: next.pumping_cost + 1 }, test)
-          else (next, electric) end
+        let attempted = if rain < 4 && get(next.pump_orders, lot) > 0 do
+          clamp(get(next.surface_water, lot), 0, clamp((next.cash - next.pumping_cost) / 2, 0, 16))
+        else 0 end
+        let (next, electric) = if attempted > 0 do
+          let (test, delivered) = Net.draw(electric, lot, attempted)
+          let left = get(next.surface_water, lot) - delivered
+          ({ next with surface_water: NativeArray.set_int(next.surface_water, lot, left), pumping_cost: next.pumping_cost + 2 * delivered }, test)
         else (next, electric) end
         operate_weather_sites(next, rest, roads, pipes, report, electric, rain)
     end
@@ -5947,11 +5977,11 @@ mod Ur.Sim do
     let dry = if curse_god(c) == 2 do 20 else if temperature(c) >= 30 do 11 else 7 end end
     let c = { c with soil_moisture: clamp(c.soil_moisture + recharge - dry, 0, 100) }
     let c = if rain >= 3 do rain_runoff(c, 0, rain - 1) else c end
-    let evaporation = if rain >= 3 do 0 else if temperature(c) >= 30 do 2 else 1 end end
+    let evaporation = if rain >= 2 do 0 else if temperature(c) >= 30 do 2 else 1 end end
     let c = if rain == 4 || curse_god(c) == 4 || c.flood_active do surface_day(c, 0, rain == 4, evaporation, false) else c end
     if List.is_empty(sites) do c else
       let c = collect_rain(c, sites, catchment)
-      let needs_network = List.any(sites, fn lot -> get(c.rain_tanks, lot) > 0 || (rain < 4 && (get(c.subway_water, lot) > 0 || valid(pump_target(c, lot)))))
+      let needs_network = List.any(sites, fn lot -> get(c.rain_tanks, lot) > 0 || (rain < 4 && (get(c.subway_water, lot) > 0 || (get(c.pump_orders, lot) > 0 && get(c.surface_water, lot) > 0))))
       if !needs_network do c else
         let roads = access(c)
         let gen = generation(c, roads)

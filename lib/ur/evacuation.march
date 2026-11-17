@@ -1,0 +1,90 @@
+mod Ur.Evacuation do
+  alias Ur.Sim as S
+
+  type Shelter = { lot : Int, remaining : Int, paths : NativeIntArr }
+
+  fn capacity(c : Ur.Sim.City, lot : Int) : Int do
+    let kind = S.get(c.plants, lot)
+    if lot == c.harbour && S.valid(lot) do 12
+    else if kind == 18 do 24
+    else if kind == 26 do 48
+    else 0 end end end
+  end
+
+  fn open_capacity(c : Ur.Sim.City, routes : NativeIntArr, lot : Int) : Int do
+    let rooms = capacity(c, lot)
+    if rooms > 0 && !S.ground_closed(c, lot) && !S.building_offline(c, lot) &&
+      !S.facility_paused(c, lot) && S.building_access(c, routes, lot) >= 0 do rooms else 0 end
+  end
+
+  pfn trace(paths : NativeIntArr, lot : Int, remaining : Int) : List(Int) do
+    if !S.valid(lot) || remaining <= 0 do Nil else
+      let next = S.get(paths, lot)
+      if next == lot do [lot] else Cons(lot, trace(paths, next, remaining - 1)) end
+    end
+  end
+
+  pfn with_paths(c : Ur.Sim.City, paths : NativeIntArr, from : Int) : List(Int) do
+    if !S.valid(from) do Nil
+    else if S.get(paths, from) >= 0 do trace(paths, from, S.count())
+    else
+      let road = Ur.Food.entrance(c, paths, from, 0)
+      if S.valid(road) do Cons(from, trace(paths, road, S.count())) else Nil end
+    end end
+  end
+
+  fn walk_route(c : Ur.Sim.City, from : Int, target : Int) : List(Int) do
+    if !S.valid(target) || !S.valid(from) do Nil
+    else with_paths(c, Ur.Food.destinations(c, fn lot -> lot == target), from) end
+  end
+
+  pfn shelters(c : Ur.Sim.City, routes : NativeIntArr, lot : Int, out : List(Shelter)) : List(Shelter) do
+    if lot == S.count() do List.reverse(out) else
+      let rooms = open_capacity(c, routes, lot)
+      let out = if rooms > 0 do
+        Cons({ lot: lot, remaining: rooms, paths: Ur.Food.destinations(c, fn i -> i == lot) }, out)
+      else out end
+      shelters(c, routes, lot + 1, out)
+    end
+  end
+
+  pfn best_shelter(c : Ur.Sim.City, sites : List(Shelter), home : Int, households : Int, best : Int, steps : Int) : Int do
+    match sites do
+      Nil -> best
+      Cons(site, rest) ->
+        let path = if site.remaining >= households do with_paths(c, site.paths, home) else Nil end
+        let length = List.length(path)
+        if length > 0 && length < steps do best_shelter(c, rest, home, households, site.lot, length)
+        else best_shelter(c, rest, home, households, best, steps) end
+    end
+  end
+
+  pfn assign(c : Ur.Sim.City, sites : List(Shelter), homes : List(Int), previous : NativeIntArr, orders : NativeIntArr) : NativeIntArr do
+    match homes do
+      Nil -> orders
+      Cons(home, rest) ->
+        let households = S.displaced_homes(c, home)
+        let preferred = S.get(previous, home) - 2
+        let lot = if List.any(sites, fn site -> site.lot == preferred && site.remaining >= households) do preferred
+          else best_shelter(c, sites, home, households, -1, S.count() + 1) end
+        if lot < 0 do assign(c, sites, rest, previous, orders) else
+          let sites = List.map(sites, fn site ->
+            if site.lot == lot do { site with remaining: site.remaining - households } else site end)
+          assign(c, sites, rest, previous, NativeArray.set_int(orders, home, lot + 1))
+        end
+    end
+  end
+
+  pfn affected(c : Ur.Sim.City, previous : NativeIntArr, lot : Int, lodged : List(Int), waiting : List(Int)) : List(Int) do
+    if lot == S.count() do List.append(List.reverse(lodged), List.reverse(waiting))
+    else if S.displaced_homes(c, lot) == 0 do affected(c, previous, lot + 1, lodged, waiting)
+    else if S.get(previous, lot) >= 2 do affected(c, previous, lot + 1, Cons(lot, lodged), waiting)
+    else affected(c, previous, lot + 1, lodged, Cons(lot, waiting)) end end end
+  end
+
+  fn plan(c : Ur.Sim.City, routes : NativeIntArr, previous : NativeIntArr) : NativeIntArr do
+    let orders = NativeArray.make_int(S.count(), 0)
+    let homes = affected(c, previous, 0, Nil, Nil)
+    if List.is_empty(homes) do orders else assign(c, shelters(c, routes, 0, Nil), homes, previous, orders) end
+  end
+end

@@ -38,7 +38,7 @@ mod Ur.Build do
   end
 
   pfn changed(old : Ur.Sim.City, next : Ur.Sim.City, i : Int) : Bool do
-    old.cash != next.cash || S.get(old.seawalls, i) != S.get(next.seawalls, i) || S.get(old.waste_bins, i) != S.get(next.waste_bins, i) || old.harbour != next.harbour || old.ferry_start != next.ferry_start ||
+    old.cash != next.cash || S.get(old.pump_orders, i) != S.get(next.pump_orders, i) || S.get(old.seawalls, i) != S.get(next.seawalls, i) || S.get(old.waste_bins, i) != S.get(next.waste_bins, i) || old.harbour != next.harbour || old.ferry_start != next.ferry_start ||
       S.get(old.car_free_days, i) != S.get(next.car_free_days, i) || S.get(old.ground_areas, i) != S.get(next.ground_areas, i) || S.get(old.quiet_areas, i) != S.get(next.quiet_areas, i) ||
       S.get(old.streetscape, i) != S.get(next.streetscape, i) || S.get(old.parks, i) != S.get(next.parks, i) || S.get(old.grade_cover, i) != S.get(next.grade_cover, i) || S.get(old.pipes, i) != S.get(next.pipes, i) || S.get(old.grid, i) != S.get(next.grid, i) ||
       S.get(old.public_parking, i) != S.get(next.public_parking, i) || S.get(old.nuisance, i) != S.get(next.nuisance, i) || S.get(old.tolls, i) != S.get(next.tolls, i) ||

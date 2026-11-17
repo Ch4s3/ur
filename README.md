@@ -483,3 +483,26 @@ Use **Roads → Flood protection** to upgrade drainage on existing streets
 $26/month). Seawalls block coastal approaches, so exposed approaches and gaps
 can still admit seawater. The weather panel shows the seeded map's rainfall
 and temperature tendencies. The seed is preserved in the save.
+
+Floodwater follows the terrain and lingers after storms. Coastal outflow,
+evaporation, and absorption lower it over time. Deep floodwater closes roads
+and walking paths, takes submerged generators offline, and damages buildings.
+Repairs start after the parcel dries.
+
+**Roads → Flood protection → Toggle emergency pumping** marks any land parcel
+for pumping once severe rain eases. Removing 25 cm of water costs $2 and one
+unit of spare local electricity. Unpowered pumps wait without charging.
+
+For a flood and recovery comparison, launch
+`UR_DEMO=22 UR_LAYER=33 ./run.sh`. Add `UR_FLOOD_DAYS=6` to open several days
+later with the same terrain and storm.
+
+`UR_DEMO=22 UR_LAYER=33 UR_FLOOD_BACKUP=1 ./run.sh` opens the flood recovery
+drill, paused at 3× before the storm. The drill connects hilltop solar after
+the first recovery day, so you can watch the subway pumps restart.
+
+Add `UR_EVAC_DEMO=1` to the flood recovery drill to watch residents from low
+houses walk to the uphill elementary school and return once repairs finish.
+In any city, dry elementary schools, secondary schools, and the harbor can
+house evacuees. Open the parcel inspector for shelter capacity. Households wait
+when all reachable shelters are full or the approach is flooded.

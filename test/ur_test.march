@@ -750,6 +750,98 @@ mod UrTest do
       Err(error) -> Test.assert_true(false, error)
     end
   end
+  pfn flood_recovery_checks() : Unit do
+    let base = S.new()
+    let home = S.index(10, 20)
+    let road = S.index(9, 20)
+    let plant = S.index(8, 21)
+    let water = NativeArray.set_int(NativeArray.set_int(base.surface_water, home, 10), road, 6)
+    let c = { base with surface_water: water, flood_active: true }
+    Test.assert_true(!S.severe_rain(c) && !S.motor_road(c, road) && !S.pedestrian_tile(c, road),
+      "standing water still blocks motor traffic and foot traffic after the rain")
+    let natural = S.advance_day(c)
+    Test.assert_true(S.surface_flood(natural, home) > 0 && S.surface_flood(natural, home) < 10,
+      "standing water drains slowly without pumping")
+    Test.assert_true(S.flood_repair_days(natural, home) > 0 && S.occupied_homes(natural, home) == 0,
+      "deep standing water damages and closes the building")
+    let work = Ur.Build.preview(c, 101, -1, home)
+    Test.assert_true(work.valid && S.get(work.city.pump_orders, home) == 1, "emergency pumping can be ordered on a non-road parcel")
+    let pumped = S.advance_day(work.city)
+    let removed = S.surface_flood(natural, home) - S.surface_flood(pumped, home)
+    Test.assert_true(removed > 0 && pumped.pumping_cost == removed * 2, "the pump charges only for the water it removes")
+    let failed_grid = { work.city with grid: NativeArray.make_int(2640, 0) }
+    let disconnected = S.advance_day(failed_grid)
+    Test.assert_eq_int(S.surface_flood(disconnected, home), S.surface_flood(natural, home), "without power an emergency pump makes no progress")
+    Test.assert_eq_int(disconnected.pumping_cost, 0, "an unpowered surface pump costs nothing")
+    let shutdown = { c with surface_water: NativeArray.set_int(c.surface_water, plant, 8) }
+    Test.assert_true((S.generation(base, S.access(base))).gas > 0 && (S.generation(shutdown, S.access(shutdown))).gas == 0,
+      "flooded generation shuts down immediately")
+    let no_generation = S.advance_day(S.act(shutdown, home, 101))
+    Test.assert_eq_int(no_generation.pumping_cost, 0, "the only flooded generator cannot power the emergency pump")
+    let game = { city: natural, cx: 78.0, cz: 151.0, zoom: 52.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(game)) do
+      Ok(saved) ->
+        Test.assert_eq_int(S.surface_flood(saved.city, home), S.surface_flood(natural, home), "standing water survives loading")
+        Test.assert_eq_int(S.flood_repair_days(saved.city, home), S.flood_repair_days(natural, home), "flood damage survives loading")
+      Err(error) -> Test.assert_true(false, error)
+    end
+  end
+  pfn storm_drill_days(c : Ur.Sim.City, remaining : Int) : Ur.Sim.City do
+    if remaining == 0 do c
+    else storm_drill_days(Ur.Scenario.flood_backup_turn(S.advance_day(c)), remaining - 1) end
+  end
+  pfn flood_integration_checks() : Unit do
+    let base = Ur.Scenario.flood_backup_start()
+    let station = Ur.Scenario.storm_station()
+    let inland = S.index(9, 19)
+    let clear = S.stats(base)
+    let storm = storm_drill_days(base, 1)
+    let outage = S.stats(storm)
+    Test.assert_true(clear.generation.gas > 0 && S.get(clear.running_transit, inland) == 2,
+      "the gas plant powers subway service before the storm")
+    Test.assert_eq_int(outage.generation.gas, 0, "the first day of severe rain knocks out gas")
+    Test.assert_eq_int(S.get(S.transit_service(storm, clear.power), inland), 0,
+      "surface flooding closes a low subway entrance even with power, before the daily floodwater update")
+    let waiting = storm_drill_days(storm, 4)
+    Test.assert_true(S.get(waiting.subway_water, station) == 72 && waiting.pumping_cost == 0,
+      "the station gains no pump progress or expense on the first dry-enough day without power")
+    let restored = S.advance_day(waiting)
+    let recovered = S.stats(restored)
+    Test.assert_true(recovered.generation.gas == 0 && recovered.generation.solar > 0 &&
+      S.get(restored.subway_water, station) < S.get(waiting.subway_water, station),
+      "hilltop backup runs the pumps while gas remains offline")
+    Test.assert_eq_int(S.get(recovered.running_transit, inland), 0, "the connected line stays closed until drained")
+    let uncharged = S.stats({ restored with pumping_cost: 0 })
+    Test.assert_eq_int(recovered.budget.power_cost - uncharged.budget.power_cost, 2, "pump charges reach the power budget")
+    let drained = S.stats(storm_drill_days(restored, 5))
+    Test.assert_eq_int(S.get(drained.running_transit, inland), 2, "subway service resumes once pumped dry")
+
+    let path = S.index(30, 8)
+    let west = S.index(29, 8)
+    let east = S.index(31, 8)
+    let home = S.index(10, 20)
+    let school = S.index(10, 19)
+    let project = S.index(10, 18)
+    let level = NativeArray.make_int(S.count(), 24)
+    let roads = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(base.roads, west, 1), path, 3), east, 1)
+    let dry = { base with heights: level, roads: roads, calendar_day: 2,
+      plants: NativeArray.set_int(base.plants, school, 18),
+      construction: NativeArray.set_int(base.construction, project, 1) }
+    let water = NativeArray.set_int(NativeArray.set_int(dry.surface_water, path, 4), home, 4)
+    let water = NativeArray.set_int(NativeArray.set_int(water, school, 4), project, 8)
+    let wet = { dry with surface_water: water, flood_active: true }
+    let dry_walk = Ur.Food.destinations(dry, fn lot -> lot == east)
+    let wet_walk = Ur.Food.destinations(wet, fn lot -> lot == east)
+    Test.assert_true(S.get(dry_walk, west) == path && S.get(wet_walk, west) < 0, "walking routes avoid flooded crossings")
+    Test.assert_true(S.responder_road(dry, 3, path) && !S.responder_road(wet, 3, path) && !S.responder_road(wet, 4, path),
+      "fire trucks and ambulances cannot use a submerged pedestrian street")
+    Test.assert_true(S.occupied_homes(dry, home) > 0 && S.occupied_homes(wet, home) == 0,
+      "deep water closes occupied housing as soon as the parcel floods")
+    Test.assert_true(S.get((S.stats(dry)).school_seats, 0) > 0 && S.get((S.stats(wet)).school_seats, 0) == 0,
+      "a flooded elementary school loses its seats")
+    Test.assert_true(S.get((S.advance_day(dry)).buildings, project) == 1 &&
+      S.get((S.advance_day(wet)).construction, project) == 1, "construction waits for the parcel to drain")
+  end
   pfn weather_checks() : Unit do
     let storm = Ur.Scenario.storm_site()
     let station = Ur.Scenario.storm_station()
@@ -1105,6 +1197,8 @@ mod UrTest do
     check_religious_council()
     check_religion_controls()
     bus_depot_clearance()
+    flood_recovery_checks()
+    flood_integration_checks()
     floodplain_checks()
     weather_checks()
     council_outcome_checks()

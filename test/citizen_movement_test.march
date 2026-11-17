@@ -1,0 +1,85 @@
+mod CitizenMovementTest do
+  needs IO
+  needs IO.Console
+  alias Ur.Sim as S
+
+  pfn first(people : List(Ur.Citizens.Citizen)) : Ur.Citizens.Citizen do
+    match people do
+      Cons(person, _) -> person
+      Nil -> panic("Expected a citizen in the test town")
+    end
+  end
+  pfn rest_hour(people : List(Ur.Citizens.Citizen)) : Int do
+    let person = first(people)
+    person.rest_hour
+  end
+
+  pfn working_hours(c : Ur.Sim.City, base : Ur.Citizens.Citizen, empty : NativeIntArr) : Unit do
+    let person = { base with work: -1, study: -1, shop: -1, park: -1, location: base.home,
+      route: Nil, activity: 0, wait: 0.0 }
+    let step = fn (people, hour) -> Ur.Citizens.step_with_bus(c, empty, None, people, int_to_float(hour) *. 0.075 +. 0.03, 0.02, empty, 0.0)
+    let people = step([person], 3)
+    Test.assert_eq_int(rest_hour(people), 3, "a settled indoor citizen waits for their next in-game hour")
+    let people = step(people, 3)
+    Test.assert_eq_int(rest_hour(people), 3, "waiting indoors needs no countdown")
+    let people = step(people, 4)
+    Test.assert_eq_int(rest_hour(people), 4, "the citizen checks their schedule again at the next hour")
+    Test.assert_eq_int(rest_hour(Ur.Citizens.wake_indoor(people)), -1, "city changes invalidate a sleeping citizen's schedule immediately")
+    let wet = { c with surface_water: NativeArray.set_int(c.surface_water, person.home, 8),
+      flood_damage: NativeArray.set_int(c.flood_damage, person.home, 2), flood_active: true }
+    let evacuated = Ur.Citizens.refresh(wet, people)
+    Test.assert_true(List.any(evacuated, fn evacuee ->
+      evacuee.id == person.id && Ur.Citizens.emergency_move(evacuee) && evacuee.rest_hour < 0),
+      "someone waiting indoors is eligible for immediate evacuation")
+  end
+
+  pfn transit_mode(c : Ur.Sim.City, base : Ur.Citizens.Citizen, empty : NativeIntArr, mode : Int) : Unit do
+    let board = S.index(10, 17)
+    let middle = S.index(11, 17)
+    let exit = S.index(12, 17)
+    let target = S.index(12, 18)
+    let transit = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(empty, board, mode), middle, mode), exit, mode)
+    let stops = NativeArray.set_int(NativeArray.set_int(empty, board, mode), exit, mode)
+    let roads = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(c.roads, board, 1), middle, 1), exit, 1)
+    let c = { c with transit: transit, stops: stops, roads: roads, heights: NativeArray.make_int(S.count(), 16) }
+    let running = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(empty, board, 2), middle, 1), exit, 2)
+    let trip = { mode: mode, stops: [board, middle, exit], legs: 2, source: board }
+    let run = { slot: 1, trip: trip, progress: 0.35, stop_wait: 0.0 }
+    let capacity = S.transit_seats(mode)
+    let waiting = List.map(List.range(0, capacity + 1), fn id -> { base with
+      id: id, board: board, alight: exit, target: target, location: -1, route: [board, middle, exit, target],
+      wait: 0.0, progress: 0.0, transit_phase: 2, bus_slot: -1, car_phase: 0, rest_hour: -1 })
+    let step = fn (people, active) -> Ur.Citizens.step_with_bus(c, running, Some({ routes: [trip], active: active }), people, 0.6, 0.02, empty, 0.0)
+    let boarded = step(waiting, [run])
+    Test.assert_eq_int(List.length(List.filter(boarded, fn person -> person.bus_slot == run.slot)), capacity,
+      "each vehicle boards a group up to its capacity")
+    let passing = step(boarded, [{ run with progress: 1.35 }])
+    Test.assert_eq_int(List.length(List.filter(passing, fn person -> person.bus_slot == run.slot && person.progress == 1.35)), capacity,
+      "all passengers use the same vehicle progress")
+    let arrived = step(passing, [{ run with progress: 2.35 }])
+    Test.assert_eq_int(List.length(List.filter(arrived, fn person -> person.bus_slot < 0 && person.transit_phase == 4 && person.route == [exit, target])), capacity,
+      "passengers alight together and retain their specific walking leg")
+    let cancelled = step(boarded, Nil)
+    Test.assert_eq_int(List.length(List.filter(cancelled, fn person -> person.bus_slot < 0 && person.location == board)), capacity,
+      "a cancelled vehicle returns its passengers to the boarding stop")
+    if mode >= 3 do
+      let planned = Ur.Fleet.routes(c, running)
+      Test.assert_true(List.any(planned, fn route -> route.mode == mode && route.legs == 2),
+        "powered stations dispatch an actual shared rail vehicle")
+      let active = Ur.Fleet.step(c, NativeArray.make_int(S.count() * 4, 0), Nil, planned, 0.0, true)
+      Test.assert_true(List.any(active, fn vehicle -> vehicle.trip.mode == mode), "the rail fleet actually dispatches")
+      let closed = Ur.Fleet.routes(c, empty)
+      let active = Ur.Fleet.step(c, NativeArray.make_int(S.count() * 4, 0), active, closed, 0.02, true)
+      Test.assert_false(List.any(active, fn vehicle -> vehicle.trip.mode == mode), "loss of service cancels an active rail run")
+    else () end
+  end
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let city = Ur.Scenario.evacuation_site()
+    let resident = first(Ur.Citizens.refresh(city, Nil))
+    let empty = NativeArray.make_int(S.count(), 0)
+    working_hours(city, resident, empty)
+    List.each([2, 3, 4], fn mode -> transit_mode(city, resident, empty, mode))
+    Authority.must(println("Citizen movement checks passed"))
+  end
+end
