@@ -57,6 +57,39 @@ second at 1x speed. Roads permit at most 3 m of elevation change between parcels
 The founding map is 480 x 352 m, with 8 m planning parcels and 0.25 m voxel geometry. Terrain contours are sampled on a 1 m grid with
 quarter-metre elevation steps. Buildings use quarter-metre detail throughout.
 
+## Planning streets and crossings
+
+Choose a street type in **Roads → Streets**. **Quick street** builds on
+release. **Plan street** lets you click to add waypoints and drag any pin
+to revise the route. Hover a placed waypoint and press **R** to flip its
+incoming bend, or flip the live end of the route. Hold **Alt** to preview
+the other bend and **Shift** to bypass snapping. **N** toggles snapping.
+
+Use **Block** or **Grid** to drag a layout, then drag either corner to resize
+it. Grid spacing is in parcels. The layout leaves frontage between the
+outer road and the last interior street. Green markers identify new frontage.
+**Replace street** selects a corridor between junctions. Click farther along
+a connected street to extend it. Orange markers identify attached infrastructure.
+
+In **Roads → Crossings**, choose an **Overpass**, **Underpass**, or **Road
+tunnel**. Place two portals on the same axis, then drag either portal to move it.
+Mountain tunnels meet the approach streets at grade. Tunnels under water
+descend through recessed ramps. The profile shows where each road goes underground.
+The Road crossings layer shows built routes through terrain or water.
+Press **T** or choose **Layers → Crossings → Tunnel cutaway** to open the
+terrain and water above built tunnels. Press **T** again to restore the surface.
+
+Press **Enter** or click **Build** to confirm a draft, **Escape** or right-click
+to cancel, and **Z** to undo a confirmed project in one step.
+
+```sh
+UR_DEMO=29 UR_ROAD_DEMO=1 ./run.sh
+```
+
+Choose **1** for the harbour route, **2** for a grid, **3** for a mountain
+tunnel, or **4** for a channel tunnel. Add `UR_ROAD_BUILT=1` to start with
+the selected project built.
+
 ## Founding a city
 
 The default game starts with empty land and a landing survey. Click a cyan

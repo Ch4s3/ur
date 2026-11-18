@@ -1,0 +1,173 @@
+mod RoadPlanningTest do
+  needs IO.Console
+  needs IO.Clock
+  needs IO.Process
+  needs IO.FileRead
+  needs IO.FileWrite
+  alias Ur.Sim as S
+  alias Ur.Build as RoadBuild
+
+  pfn fixture() : Ur.Sim.City do
+    let c = S.new()
+    let zero = NativeArray.make_int(S.count(), 0)
+    { c with heights: NativeArray.make_int(S.count(), 10), harbour: S.index(2, 10),
+      roads: NativeArray.set_int(zero, S.index(2, 10), 1), zones: zero, buildings: zero, plants: zero,
+      cash: 20000 }
+  end
+  pfn surface() : Unit do
+    let c = fixture()
+    let a = S.index(3, 10)
+    let m = S.index(4, 10)
+    let b = S.index(5, 10)
+    let p = RoadBuild.preview(c, 1, a, b)
+    Test.assert_true(p.valid && p.cost == 180 && p.upkeep == 9 && p.length == 24, "Quick street and its quote agree")
+    Test.assert_eq_int(p.city.cash, c.cash - 180, "Confirmation deducts the quoted amount")
+    let low = { c with cash: 179 }
+    let requoted = RoadBuild.preview(low, 1, a, b)
+    Test.assert_true(!requoted.valid && requoted.city.cash == 179 && S.get(requoted.city.roads, a) == 0,
+      "A quote can be revalidated after the treasury changes")
+    let grade = { c with heights: NativeArray.set_int(c.heights, b, 22) }
+    Test.assert_true((RoadBuild.preview(grade, 1, a, b)).valid, "Exactly 3 metres of rise is allowed")
+    let steep = { c with heights: NativeArray.set_int(c.heights, b, 23) }
+    let p = RoadBuild.preview(steep, 1, a, b)
+    Test.assert_true(!p.valid && p.blocked == b && p.edge == m && p.city.cash == c.cash, "Steep edge identifies both parcels and charges nothing")
+    let water = { c with heights: NativeArray.set_int(c.heights, b, 0) }
+    let p = RoadBuild.preview(water, 1, a, b)
+    Test.assert_true(!p.valid && !p.changed && p.blocked == b && p.city.cash == c.cash && S.get(p.city.roads, a) == 0, "Blocked final parcel rolls back the whole street")
+    let end_lot = S.index(5, 12)
+    let d = { RoadBuild.new_draft() with mode: 1, points: [{ lot: a, flip: false }, { lot: end_lot, flip: false }] }
+    Test.assert_true(!(RoadBuild.planned(water, 1, d, true)).valid, "Horizontal first runs into water")
+    let alternate = { d with points: [{ lot: a, flip: false }, { lot: end_lot, flip: true }] }
+    Test.assert_true((RoadBuild.planned(water, 1, alternate, true)).valid, "Vertical first bypasses the same water")
+    let added = RoadBuild.draft_input(d, 1, S.index(6, 12), S.index(6, 12), true, true, false, false)
+    let dragged = RoadBuild.draft_input(added, 1, S.index(7, 12), S.index(7, 12), false, true, false, false)
+    Test.assert_eq_int(RoadBuild.end_point(dragged), S.index(7, 12), "A placed waypoint can be dragged")
+    Test.assert_eq_int(List.length((RoadBuild.reset(dragged)).points), 0, "Cancellation discards all waypoints")
+  end
+  pfn layouts() : Unit do
+    let c = fixture()
+    let a = S.index(3, 10)
+    let b = S.index(11, 18)
+    let middle = S.index(7, 14)
+    let block = RoadBuild.grid(a, b, S.width())
+    let grid = RoadBuild.grid(a, b, 4)
+    Test.assert_eq_int(List.length(block), 32, "One block places only its perimeter")
+    Test.assert_eq_int(List.length(grid), 45, "A two by two grid counts shared junctions once")
+    let remainder = RoadBuild.grid(a, S.index(8, 15), 4)
+    Test.assert_eq_int(List.length(remainder), 20, "A short remainder leaves frontage by the perimeter")
+    let p = RoadBuild.road_preview(c, 1, grid, true)
+    Test.assert_true(p.valid && p.cost == 45 * 60 && !List.is_empty(p.frontage), "Grids quote unique street parcels and show frontage")
+    let shared = RoadBuild.road_preview((RoadBuild.preview(c, 1, a, S.index(11, 10))).city, 1, grid, true)
+    Test.assert_eq_int(shared.cost, 36 * 60, "An existing edge is free")
+    let lake = { c with heights: NativeArray.set_int(c.heights, middle, 0) }
+    let blocked = RoadBuild.road_preview(lake, 1, grid, true)
+    Test.assert_true(!blocked.valid && blocked.blocked == middle && blocked.city.cash == c.cash, "Water on an interior road blocks the whole grid")
+    let fitted = RoadBuild.road_preview(lake, 1, RoadBuild.grid(a, S.index(6, 18), 4), true)
+    Test.assert_true(fitted.valid && fitted.changed, "Resizing the grid avoids an interior obstruction")
+  end
+  pfn replace() : Unit do
+    let c = fixture()
+    let a = S.index(3, 14)
+    let m = S.index(4, 14)
+    let b = S.index(5, 14)
+    let c = (RoadBuild.preview(c, 1, a, b)).city
+    let c = { c with transit: NativeArray.set_int(c.transit, m, 2), stops: NativeArray.set_int(c.stops, m, 1),
+      storm_drains: NativeArray.set_int(c.storm_drains, m, 1) }
+    let d = { RoadBuild.new_draft() with mode: 4, points: [{ lot: m, flip: false }] }
+    let p = RoadBuild.planned(c, 48, d, true)
+    Test.assert_true(p.valid && p.cost == 195 && p.upkeep == 9, "Replace selects and prices the whole corridor")
+    Test.assert_true(S.get(p.city.transit, m) == 2 && S.get(p.city.stops, m) == 1 && S.get(p.city.storm_drains, m) == 1, "Widening preserves compatible infrastructure")
+    let p = RoadBuild.planned(c, 49, d, true)
+    Test.assert_true(!p.valid && p.blocked == m && p.city.cash == c.cash, "Bus route blocks pedestrian conversion at its exact parcel")
+    let cleared = { c with transit: NativeArray.set_int(c.transit, m, 0), stops: NativeArray.set_int(c.stops, m, 0) }
+    let p = RoadBuild.planned(cleared, 49, d, true)
+    Test.assert_true(p.valid && S.get(p.city.roads, b) == 3 && S.get(p.city.storm_drains, m) == 1, "Cleared corridor can become pedestrian while keeping drainage")
+  end
+  pfn solid_at(parts : List(Ur.Architecture.Piece), x : Int, y : Int, z : Int) : Bool do
+    List.any(parts, fn p -> x >= p.x && x < p.x + p.w && y >= p.y && y < p.y + p.h && z >= p.z && z < p.z + p.d)
+  end
+  pfn tunnels() : Unit do
+    let c = fixture()
+    let a = S.index(3, 10)
+    let mid = S.index(6, 10)
+    let b = S.index(10, 10)
+    let approach = S.index(10, 11)
+    let roads = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(c.roads, a, 1), b, 2), approach, 2)
+    let mountain = { c with roads: roads, heights: NativeArray.set_int(c.heights, mid, 68), buildings: NativeArray.set_int(c.buildings, mid, 1) }
+    let tunnel = RoadBuild.crossing(mountain, 52, a, b)
+    Test.assert_true(tunnel.valid && tunnel.cost == 8 * 310 && tunnel.length == 56 && tunnel.upkeep == 8 * 4, "Mountain tunnel has a buildable quote")
+    Test.assert_true(S.grade_link(tunnel.city, a, b) && !S.grade_link(tunnel.city, a, mid) &&
+      S.get(tunnel.city.buildings, mid) == 1 && S.get(tunnel.city.roads, mid) == 0 && S.get(S.access(tunnel.city), b) >= 0, "Tunnel links only portals and preserves the surface above")
+    let west = Ur.Landscape.tunnel_portal(tunnel.city, a, b, true)
+    let east = Ur.Landscape.tunnel_portal(tunnel.city, b, a, false)
+    Test.assert_true(!solid_at(west, 28, 15, 13) && !solid_at(west, 28, 15, 19) &&
+      solid_at(west, 31, 23, 16) && !solid_at(east, 3, 15, 16) && solid_at(east, 0, 23, 16),
+      "Mountain portal roofs frame openings at the inward parcel edges")
+    Test.assert_true(S.grade_surface(tunnel.city, a, b, 0.05) == 10.0 &&
+      S.grade_surface(tunnel.city, a, b, 0.5) == 10.0 && S.grade_surface(tunnel.city, b, a, 0.05) == 10.0 &&
+      Ur.Landscape.ground_height(tunnel.city, a % S.width() * 32 + 27, a / S.width() * 32 + 16) == 10,
+      "Mountain tunnel follows street level without a dip")
+    let higher = { tunnel.city with heights: NativeArray.set_int(tunnel.city.heights, b, 18) }
+    Test.assert_true(S.grade_surface(higher, a, b, 0.5 /. 7.0) == 10.0 &&
+      Math.abs(S.grade_surface(higher, a, b, 0.5) -. 14.0) < 0.001 &&
+      S.grade_surface(higher, b, a, 0.5 /. 7.0) == 18.0, "Dry bore climbs directly between different mouth elevations")
+    let (horizontal, vertical) = S.road_turn(tunnel.city, b)
+    let curve = Ur.Landscape.portal_street(tunnel.city, b, 10)
+    Test.assert_true(horizontal == 0 && vertical == 3 && solid_at(curve, 0, 10, 16) &&
+      solid_at(curve, 16, 10, 31) && !solid_at(curve, 31, 10, 16) && !solid_at(curve, 16, 10, 0),
+      "Cutaway approach connects the bore to the south street without paving past either end")
+    let (x, z, dx, dz) = Ur.Scene.street_pose(tunnel.city, a, b, 1.0, 5.0)
+    let (next_x, next_z, next_dx, next_dz) = Ur.Scene.street_pose(tunnel.city, b, approach, 0.0, 5.0)
+    Test.assert_true(Math.abs(x -. next_x) < 0.001 && Math.abs(z -. next_z) < 0.001 &&
+      Math.abs(dx -. next_dx) < 0.001 && Math.abs(dz -. next_dz) < 0.001 && dx > 0.5 && dz > 0.5,
+      "Vehicles join the surface street with a continuous turn")
+    Test.assert_true(List.any(west, fn p -> p.material == 28) && !List.any(east, fn p -> p.material == 28),
+      "Tunnel lamps need local power")
+    let surface = { tunnel.city with roads: NativeArray.set_int(tunnel.city.roads, a + 1, 1) }
+    Test.assert_true(solid_at(Ur.Landscape.structures(surface, a, 0), 27, 10, 16),
+      "A surface street crossing a portal retains both lanes")
+    let channel = { c with roads: roads, heights: NativeArray.set_int(c.heights, mid, 0) }
+    let sea = RoadBuild.crossing(channel, 52, a, b)
+    Test.assert_true(S.grade_surface(sea.city, a, b, 12.0 /. (7.0 *. 32.0)) <= 2.0 &&
+      Ur.Landscape.ground_height(sea.city, a % S.width() * 32 + 27, a / S.width() * 32 + 16) < 5,
+      "Channel approach still descends into an excavated trench")
+    List.each([tunnel.city, sea.city], fn city ->
+      let there = Ur.Food.driving_destinations(city, b)
+      let back = Ur.Food.driving_destinations(city, a)
+      Test.assert_true(S.get(there, a) == b && S.get(back, b) == a && S.get(there, mid) < 0 &&
+        Ur.Citizens.connected(city, a, b) && !Ur.Citizens.connected(city, a, mid),
+        "Vehicle routes use the tunnel in both directions and only enter at its portals"))
+    Test.assert_true(sea.valid && S.grade_surface(sea.city, a, b, 0.5) < 0.0 &&
+      S.grade_surface(sea.city, a, b, 0.0) == 10.0 && S.grade_surface(sea.city, a, b, 1.0) == 10.0, "Channel tunnel stays below sea level and meets both approach roads")
+    let coast = { channel with heights: NativeArray.set_int(NativeArray.set_int(channel.heights, a, 28), a + 1, 0) }
+    let coast_tunnel = RoadBuild.crossing(coast, 52, a, b)
+    Test.assert_true(coast_tunnel.valid && S.grade_surface(coast_tunnel.city, a, b, 0.5 / 7.0) < 0.0, "Tunnel descends below water before entering the channel")
+    let overlap = RoadBuild.crossing(sea.city, 52, a, b)
+    Test.assert_true(!overlap.valid && overlap.blocked == a && overlap.city.cash == sea.city.cash, "Crossings cannot overlap")
+    let terminal = { channel with ferries: NativeArray.set_int(channel.ferries, b, a + 1) }
+    Test.assert_eq_int((RoadBuild.crossing(terminal, 52, a, b)).blocked, b, "Ferry terminal rejects a tunnel portal")
+    let far = S.index(18, 10)
+    let long = { channel with roads: NativeArray.set_int(channel.roads, far, 1) }
+    Test.assert_true(!(RoadBuild.crossing(long, 50, a, far)).valid && (RoadBuild.crossing(long, 52, a, far)).valid, "Long span requires a tunnel")
+    let game = { city: sea.city, cx: 60.0, cz: 80.0, zoom: 30.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(game)) do
+      Err(message) -> Test.assert_true(false, message)
+      Ok(loaded) ->
+        Test.assert_true(S.grade_link(loaded.city, b, a) && S.grade_source(loaded.city, mid) == a &&
+          loaded.city.cash == channel.cash - sea.cost, "Tunnel and treasury survive save/load")
+        let removed = S.act(loaded.city, mid, 54)
+        Test.assert_true(!S.grade_link(removed, a, b) && S.get(removed.roads, a) == 1 && S.get(removed.roads, b) == 2, "Removal preserves both surface approaches")
+    end
+  end
+  fn main(_cap : Cap(IO)) : Unit do
+    List.each([1, 2, 3, 4], fn kind ->
+      let demo = Ur.Scenario.road_planning(kind, false)
+      let quote = RoadBuild.planned(demo.city, demo.tool, demo.draft, true)
+      Test.assert_true(quote.valid && quote.changed, "Demo project can be built " ++ int_to_string(kind) ++ " " ++ quote.reason))
+    surface()
+    layouts()
+    replace()
+    tunnels()
+    Authority.must(println("Road planning checks passed"))
+  end
+end

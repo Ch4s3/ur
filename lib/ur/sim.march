@@ -1031,16 +1031,19 @@ mod Ur.Sim do
     if arm < 2 do phase >= 7 && phase < 14 else phase == 15 || phase < 6 end
   end
   fn road_turn(c : City, i : Int) : (Int, Int) do
-    if !valid(i) || get(c.heights, i) == 0 || get(c.roads, i) == 0 || get(c.transit, i) == 3 || c.harbour == i || get(c.grades, i) > 0 do (-1, -1) else
-      let west = street_link(c, i, 0)
-      let east = street_link(c, i, 1)
-      let north = street_link(c, i, 2)
-      let south = street_link(c, i, 3)
+    if !valid(i) || get(c.heights, i) == 0 || get(c.roads, i) == 0 || get(c.transit, i) == 3 || c.harbour == i do (-1, -1)
+    else if get(c.grades, i) > 0 && !mountain_tunnel(c, i, grade_peer(c, i)) do (-1, -1) else
+      let bore = if get(c.grades, i) > 0 do direction(i, grade_peer(c, i)) else -1 end
+      let west = bore == 0 || street_link(c, i, 0)
+      let east = bore == 1 || street_link(c, i, 1)
+      let north = bore == 2 || street_link(c, i, 2)
+      let south = bore == 3 || street_link(c, i, 3)
       if west == east || north == south do (-1, -1)
       else (if west do 0 else 1 end, if north do 2 else 3 end) end
-    end
+    end end
   end
   fn grade_tool(tool : Int) : Bool do tool >= 50 && tool <= 52 end
+  fn crossing_upkeep() : Int do 4 end
   fn grade_peer(c : City, i : Int) : Int do get(c.grades, i) % (count() + 1) - 1 end
   fn grade_kind(c : City, i : Int) : Int do get(c.grades, i) / (count() + 1) end
   fn grade_link(c : City, a : Int, b : Int) : Bool do valid(b) && grade_peer(c, a) == b end
@@ -1052,35 +1055,54 @@ mod Ur.Sim do
     if a / width() == b / width() do (if a < b do 1 else -1 end)
     else if a < b do width() else 0 - width() end end
   end
+  pfn dry_span(c : City, i : Int, last : Int, step : Int) : Bool do
+    i == last || (get(c.heights, i) > 0 && dry_span(c, i + step, last, step))
+  end
+  fn mountain_tunnel(c : City, a : Int, b : Int) : Bool do
+    grade_kind(c, a) == 3 && grade_link(c, a, b) && a != b &&
+      (a / width() == b / width() || a % width() == b % width()) &&
+      dry_span(c, a + grade_step(a, b), b, grade_step(a, b))
+  end
   pfn write_grade_cover(a : NativeIntArr, i : Int, target : Int, step : Int, value : Int) : NativeIntArr do
     let a = NativeArray.set_int(a, i, value)
     if i == target do a else write_grade_cover(a, i + step, target, step, value) end
   end
-  pfn grade_room(c : City, i : Int, target : Int, step : Int, kind : Int, ceiling : Int) : Bool do
+  pfn grade_obstruction(c : City, i : Int, target : Int, step : Int, kind : Int, ceiling : Int) : Int do
     let free = !valid(grade_source(c, i)) && !surface_parking(c, i) && (kind == 1 || get(c.public_parking, i) != 3) && (kind != 2 || get(c.heights, i) >= 8) &&
       (kind != 1 || (!building_offline(c, i) && get(c.buildings, i) == 0 && get(c.plants, i) == 0 && get(c.construction, i) == 0 && get(c.zones, i) == 0 && get(c.parks, i) == 0 && get(c.streetscape, i) == 0 && get(c.heights, i) <= ceiling))
-    free && (i == target || grade_room(c, i + step, target, step, kind, ceiling))
+    if !free do i else if i == target do -1 else grade_obstruction(c, i + step, target, step, kind, ceiling) end end
   end
-  fn build_grade(c : City, a : Int, b : Int, tool : Int) : City do
+  type CrossingQuote = { price : Int, blocked : Int, reason : String }
+  pfn crossing_portal(c : City, i : Int) : Bool do
+    motor_street(c, i) && get(c.heights, i) > 0 && i != c.harbour && get(c.ferries, i) == 0
+  end
+  fn crossing_quote(c : City, a : Int, b : Int, tool : Int) : CrossingQuote do
     let kind = tool - 49
     let length = span_distance(a, b)
     let price = cost(c, a, tool) * (length + 1)
     if !grade_tool(tool) || !valid(a) || !valid(b) || length < 2 || (a % width() != b % width() && a / width() != b / width()) do
-      { c with message: "Drag a straight route of at least three parcels." }
+      { price: 0, blocked: b, reason: "Choose a straight route of at least three parcels." }
     else if kind < 3 && (length > 10 || int_abs(get(c.heights, a) - get(c.heights, b)) > 12) do
-      { c with message: "Use nearby portals at similar elevations, or build a road tunnel." }
-    else if !motor_street(c, a) || !motor_street(c, b) || get(c.heights, a) == 0 || get(c.heights, b) == 0 ||
-      a == c.harbour || b == c.harbour || get(c.ferries, a) > 0 || get(c.ferries, b) > 0 do
-      { c with message: "Both portals need a local street or avenue on land, away from terminals." }
-    else if !grade_room(c, a, b, grade_step(a, b), kind, (get(c.heights, a) + get(c.heights, b) - int_abs(get(c.heights, a) - get(c.heights, b))) / 2 + 12) do
-      { c with message: "This route is obstructed. Try a clear crossing or a deeper tunnel." }
-    else if c.cash < price do { c with message: "Not enough funds for that crossing." }
+      { price: price, blocked: b, reason: "Use nearby portals at similar elevations, or build a road tunnel." }
+    else if !crossing_portal(c, a) || !crossing_portal(c, b) do
+      { price: price, blocked: if crossing_portal(c, a) do b else a end, reason: "Both portals need a local street or avenue on land, away from terminals." }
     else
-      let tag = kind * (count() + 1)
+      let ah = get(c.heights, a)
+      let bh = get(c.heights, b)
+      let blocked = grade_obstruction(c, a, b, grade_step(a, b), kind, (if ah < bh do ah else bh end) + 12)
+      let reason = if valid(blocked) do "Crossing obstructed. Try a clear span or a road tunnel."
+        else if c.cash < price do "Not enough funds for that crossing." else "" end end
+      { price: price, blocked: blocked, reason: reason }
+    end end end
+  end
+  fn build_grade(c : City, a : Int, b : Int, tool : Int) : City do
+    let quote = crossing_quote(c, a, b, tool)
+    if quote.reason != "" do { c with message: quote.reason } else
+      let tag = (tool - 49) * (count() + 1)
       let grades = NativeArray.set_int(NativeArray.set_int(c.grades, a, tag + b + 1), b, tag + a + 1)
       { c with grades: grades, grade_cover: write_grade_cover(c.grade_cover, a, b, grade_step(a, b), a + 1),
-        cash: c.cash - price, construction_spend: c.construction_spend + price, message: tool_name(tool) ++ " opened." }
-    end end end end end
+        cash: c.cash - quote.price, construction_spend: c.construction_spend + quote.price, message: tool_name(tool) ++ " opened." }
+    end
   end
   pfn remove_grade(c : City, i : Int) : City do
     let a = grade_source(c, i)
@@ -1097,13 +1119,40 @@ mod Ur.Sim do
       24.0 *. progress *. progress *. (3.0 -. 2.0 *. progress)
     end
   end
+  pfn tunnel_ramp(c : City, portal : Int, other : Int, half : Float) : Float do
+    let step = grade_step(portal, other)
+    let safe = if get(c.heights, portal + step) == 0 do 0.5
+      else if half >= 1.5 && get(c.heights, portal + 2 * step) == 0 do 1.5 else 2.5 end end
+    if half < safe do half else safe end
+  end
+  fn tunnel_mouth_run() : Int do 12 end
+  pfn smooth_ramp(t : Float) : Float do t *. t *. (3.0 -. 2.0 *. t) end
+  pfn tunnel_drop(depth : Float, elevation : Float, distance : Float, run : Float) : Float do
+    let mouth = int_to_float(tunnel_mouth_run()) /. 32.0
+    let entrance = int_to_float(clamp(float_to_int(elevation) - 1, 0, 10))
+    if run <= 0.5 do depth *. smooth_ramp(if distance >= run do 1.0 else distance /. run end)
+    else if distance <= mouth do entrance *. smooth_ramp(distance /. mouth)
+    else if distance >= run do depth
+    else entrance +. (depth -. entrance) *. smooth_ramp((distance -. mouth) /. (run -. mouth)) end end end
+  end
   fn grade_surface(c : City, a : Int, b : Int, t : Float) : Float do
     let start = int_to_float(get(c.heights, a))
     let finish = int_to_float(get(c.heights, b))
     let parcels = span_distance(a, b)
     let span = int_to_float(parcels)
     let kind = grade_kind(c, a)
-    let lift = if kind == 1 && parcels >= 3 do
+    if mountain_tunnel(c, a, b) do
+      -- Keep each half-parcel approach at street level, with a direct grade between the mouths.
+      let u = (t *. span -. 0.5) /. (span -. 1.0)
+      start +. (finish -. start) *. (if u < 0.0 do 0.0 else if u > 1.0 do 1.0 else u end end)
+    else
+    let lift = if kind == 3 do
+      let depth = (start +. finish +. Math.abs(start -. finish)) *. 0.5 +. 8.0
+      let distance = span *. (if t < 0.5 do t else 1.0 -. t end)
+      let run = if t <= 0.5 do tunnel_ramp(c, a, b, span *. 0.5) else tunnel_ramp(c, b, a, span *. 0.5) end
+      let entrance = if t <= 0.5 do start else finish end
+      0.0 -. tunnel_drop(depth, entrance, distance, run)
+    else if kind == 1 && parcels >= 3 do
       let run = if parcels >= 5 do 2.5 else 1.5 end
       let position = t *. span
       -- Sample at the same parcel boundaries used by the deck renderer.
@@ -1120,7 +1169,17 @@ mod Ur.Sim do
       let height = if kind == 1 do 24.0 else if kind == 2 do 0.0 -. 8.0 else 0.0 end end
       height *. ramp
     end
+    end
     start +. (finish -. start) *. t +. lift
+    end
+  end
+  pfn tunnel_lip_at(c : City, portal : Int, peer : Int, distance : Int, span : Float) : Int do
+    if distance <= 3 || grade_surface(c, portal, peer, int_to_float(distance) /. span) >= 1.0 do distance
+    else tunnel_lip_at(c, portal, peer, distance - 1, span) end
+  end
+  fn tunnel_lip(c : City, portal : Int, peer : Int) : Int do
+    if mountain_tunnel(c, portal, peer) do 16
+    else tunnel_lip_at(c, portal, peer, tunnel_mouth_run(), int_to_float(span_distance(portal, peer) * 32)) end
   end
   pfn visit(c : City, network : Int, dist : NativeIntArr, queue : NativeIntArr, tail : Int, i : Int, d : Int) : (NativeIntArr, NativeIntArr, Int) do
     if d >= 4 do (dist, queue, tail)
@@ -2210,7 +2269,7 @@ mod Ur.Sim do
       let v = if kind == 0 do resident_homes(c, i) * 4
         else if kind == 1 do job_slots(c, i)
         else if kind == 2 do (if building_offline(c, i) do 0 else b * 4 end)
-        else parking_upkeep(get(c.public_parking, i)) + road_upkeep(get(c.roads, i)) + flood_upkeep(c, i) + (if get(c.parks, i) > 0 do 1 + get(c.park_tiers, i) else 0 end) + 4 * (if get(c.grade_cover, i) > 0 do 1 else 0 end) + utility_upkeep(get(c.pipes, i)) + utility_upkeep(get(c.grid, i)) + parcel_facility_upkeep(c, i) end end end
+        else parking_upkeep(get(c.public_parking, i)) + road_upkeep(get(c.roads, i)) + flood_upkeep(c, i) + (if get(c.parks, i) > 0 do 1 + get(c.park_tiers, i) else 0 end) + (if get(c.grade_cover, i) > 0 do crossing_upkeep() else 0 end) + utility_upkeep(get(c.pipes, i)) + utility_upkeep(get(c.grid, i)) + parcel_facility_upkeep(c, i) end end end
       sum(c, i + 1, kind, total + v)
     end
   end
@@ -3690,14 +3749,18 @@ mod Ur.Sim do
     else if get(c.heights, i) == 0 do { c with message: "Streets need land. Use a ferry to cross water." }
     else if get(c.heights, i) > 28 do { c with message: "Too steep for a street. Grade the land first." }
     else if target == 3 && valid(grade_peer(c, i)) do { c with message: "Remove the road crossing before pedestrianising its portal." }
-    else if target == 3 && (get(c.transit, i) == 2 || get(c.tolls, i) > 0) do
-      { c with message: "Remove the bus route or toll before pedestrianising this street." }
+    else if target == 3 && get(c.transit, i) == 2 do
+      { c with message: "Remove the bus route before pedestrianising this street." }
+    else if target == 3 && get(c.tolls, i) > 0 do
+      { c with message: "Remove the toll before pedestrianising this street." }
+    else if target == 3 && get(c.car_free_days, i) > 0 do
+      { c with message: "Clear the car-free schedule before pedestrianising this street." }
     else if existing == 0 && (get(c.ferries, i) > 0 || building_offline(c, i) || get(c.buildings, i) > 0 || get(c.construction, i) > 0 || get(c.plants, i) > 0 || get(c.parks, i) > 0) do
       { c with message: "Occupied parcel. Clear it before laying a street." }
     else if c.cash < price do { c with message: "Not enough funds for this street." }
     else { c with roads: NativeArray.set_int(c.roads, i, target), zones: NativeArray.set_int(c.zones, i, 0),
       cash: c.cash - price, message: road_name(target) ++ (if existing == 0 do " built." else " replaced the existing street." end) }
-    end end end end end end end end
+    end end end end end end end end end end
   end
   pfn apply_tool(c : City, i : Int, tool : Int) : City do
     if c.harbour < 0 do land(c, i)

@@ -151,6 +151,39 @@ mod Ur.Scenario do
     road_demo_path(c, Cons(S.index(31, 24), Cons(S.index(31, 25), Cons(S.index(31, 26), Nil))), 48)
   end
 
+  type RoadDemo = { city : Ur.Sim.City, draft : Ur.Build.Draft, tool : Int, cx : Float, cz : Float, zoom : Float }
+  pfn road_point(x : Int, z : Int) : Ur.Build.Point do { lot: S.index(x, z), flip: false } end
+  fn road_planning(kind : Int, built : Bool) : RoadDemo do
+    let base = S.new()
+    let base = road_demo_path({ base with clock_ms: 825, cash: 24000 }, [S.index(10, 16), S.index(11, 16)], 1)
+    let start = Ur.Build.new_draft()
+    let config = match kind do
+      3 ->
+        let west = List.map(List.range(9, 17), fn z -> S.index(5, z))
+        let harbor = List.map(List.range(6, 9), fn x -> S.index(x, 16))
+        let approaches = List.append(List.append(west, harbor), [S.index(15, 9), S.index(15, 10), S.index(15, 11)])
+        { city: road_demo_path(base, approaches, 1), draft: { start with points: [road_point(5, 9), road_point(15, 9)] },
+          tool: 52, cx: 84.0, cz: 78.0, zoom: 71.0 }
+      4 ->
+        let approaches = List.append(
+          List.map(List.range(12, 19), fn x -> S.index(x, 16)),
+          [S.index(18, 15), S.index(18, 14), S.index(18, 13), S.index(19, 13), S.index(20, 13),
+            S.index(24, 13), S.index(25, 13), S.index(26, 13)])
+        { city: road_demo_path(base, approaches, 1), draft: { start with points: [road_point(20, 13), road_point(24, 13)] },
+          tool: 52, cx: 179.0, cz: 112.0, zoom: 52.0 }
+      2 ->
+        { city: base, draft: { start with mode: 3, spacing: 3, points: [road_point(11, 16), road_point(18, 21)] },
+          tool: 1, cx: 117.0, cz: 149.0, zoom: 64.0 }
+      _ ->
+        { city: base, draft: { start with mode: 1, points: [road_point(11, 16), road_point(13, 16), road_point(13, 19), road_point(17, 19)] },
+          tool: 1, cx: 112.0, cz: 153.0, zoom: 52.0 }
+    end
+    if !built do config else
+      let p = Ur.Build.planned(config.city, config.tool, config.draft, true)
+      { config with city: if p.valid && p.changed do p.city else { config.city with message: p.reason } end,
+        draft: Ur.Build.reset(config.draft) }
+    end
+  end
   fn parks_and_crossings() : Ur.Sim.City do
     let c = street_district()
     let a = S.index(22, 25)
