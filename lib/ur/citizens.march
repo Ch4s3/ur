@@ -280,7 +280,7 @@ mod Ur.Citizens do
   end
   pfn qualified(c : Ur.Sim.City, lot : Int, skill : Int) : Bool do
     let needed = S.job_requirement(c, lot)
-    S.qualified_for(skill, needed)
+    S.qualified_for(skill, needed) || ((S.get(c.plants, lot) == 14 || S.get(c.plants, lot) == 22) && skill == 2)
   end
   type Hire = { work : Int, route : List(Int), rank : Int, board : Int, left : Int }
   type EducationRoutes = { schools : List(NativeIntArr), population : Int, hires : Map(Int, List(Hire)), shelters : NativeIntArr }
@@ -319,7 +319,9 @@ mod Ur.Citizens do
       let (field, fields) = match Map.get(planned.fields, hire.workplace, Map.int_cmp) do
         Some(field) -> (field, planned.fields)
         None ->
-          let field = Ur.Food.destinations(c, fn lot -> lot == hire.workplace)
+          let root = S.campus_root(c, hire.workplace)
+          let entrance = if S.valid(root) do root else hire.workplace end
+          let field = Ur.Food.destinations(c, fn lot -> lot == entrance)
           (field, Map.insert(planned.fields, hire.workplace, field, Map.int_cmp))
       end
       let (walk_to, route) = destination(c, field, hire.origin)

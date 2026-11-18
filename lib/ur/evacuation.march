@@ -8,13 +8,16 @@ mod Ur.Evacuation do
     if lot == c.harbour && S.valid(lot) do 12
     else if kind == 18 do 24
     else if kind == 26 do 48
-    else 0 end end end
+    else if kind == 42 do 64
+    else 0 end end end end
   end
 
   fn open_capacity(c : Ur.Sim.City, routes : NativeIntArr, lot : Int) : Int do
     let rooms = capacity(c, lot)
     if rooms > 0 && !S.ground_closed(c, lot) && !S.building_offline(c, lot) &&
-      !S.facility_paused(c, lot) && S.building_access(c, routes, lot) >= 0 do rooms else 0 end
+      !S.facility_paused(c, lot) && S.building_access(c, routes, lot) >= 0 do
+      if S.get(c.plants, lot) == 42 do rooms * S.facility_staffed(c, lot) / 100 else rooms end
+    else 0 end
   end
 
   pfn trace(paths : NativeIntArr, lot : Int, remaining : Int) : List(Int) do

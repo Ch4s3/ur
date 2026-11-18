@@ -490,6 +490,14 @@ mod Ur.Landscape do
           A.piece(19, 1, 19, 3, 2, 6, 24), A.piece(10, 3, 20, 3, 1, 4, 22),
           A.piece(19, 3, 20, 3, 1, 4, 22), A.piece(5, 4, 24, 2, 3, 1, 9),
           A.piece(25, 4, 24, 2, 3, 1, 9)], base)
+      42 -> List.append([
+        A.piece(3, 1, 4, 26, 10, 20, 8), A.piece(2, 11, 3, 28, 2, 22, 7),
+        A.piece(5, 4, 24, 6, 4, 1, 9), A.piece(21, 4, 24, 6, 4, 1, 9),
+        A.piece(12, 1, 24, 8, 7, 1, 19), A.piece(10, 8, 24, 12, 1, 5, 7),
+        A.piece(11, 9, 24, 10, 1, 4, 8), A.piece(13, 1, 25, 6, 1, 7, 16),
+        A.piece(14, 13, 7, 4, 1, 10, 6), A.piece(11, 13, 10, 10, 1, 4, 6),
+        A.piece(5, 1, 26, 4, 2, 4, 24), A.piece(23, 1, 26, 4, 2, 4, 24),
+        A.piece(6, 3, 27, 2, 2, 2, 22), A.piece(24, 3, 27, 2, 2, 2, 22)], base)
       18 -> elementary(base)
       26 -> secondary(base)
       27 -> trade_workshop(base)
@@ -699,6 +707,15 @@ mod Ur.Landscape do
     else if S.surface_parking(c, i) do parking_pieces(c, i)
     else if kind > 0 do
       let parts = facility(kind)
+      let parts = if S.get(c.facility_expansion, i) == 1 do List.append([
+        A.piece(0, 1, 5, 4, 8, 15, 5), A.piece(0, 9, 4, 5, 1, 17, 7),
+        A.piece(0, 4, 20, 3, 3, 1, 9)], parts)
+        else if S.get(c.facility_expansion, i) == 2 do List.append([
+        A.piece(26, 1, 5, 6, 8, 15, 8), A.piece(26, 9, 4, 6, 1, 17, 7),
+        A.piece(27, 4, 20, 4, 3, 1, 9)], parts)
+        else if S.get(c.facility_expansion, i) == 3 do List.append([
+          A.piece(8, 30, 6, 6, 3, 6, 17), A.piece(7, 33, 5, 8, 1, 8, 19),
+          A.piece(9, 34, 7, 4, 1, 4, 7)], parts) else parts end end end
       let parts = if kind == 4 || kind == 9 || kind == 11 || kind == 34 || kind == 35 do A.orient(parts, shore_frontage(c, i, 0))
         else if (kind == 16 || kind == 23) && S.valid(S.fleet_frontage(c, i, 0)) do A.orient(parts, S.direction(i, S.fleet_frontage(c, i, 0)))
         else if kind >= 18 || kind == 1 || kind == 7 do A.orient(parts, frontage(c, i, 0)) else parts end end end

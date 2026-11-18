@@ -1434,7 +1434,9 @@ mod Ur.Hud do
       else if S.get(c.stops, lot) == 2 do bus_popup(box, c, st.buses, lot, x, y, width)
       else if S.get(c.stops, lot) == 4 do
         let water = S.get(c.subway_water, lot)
-        let status = if S.subway_inundated(c, lot) do "Flooded · Line closed" else if S.get(st.running_transit, lot) > 0 do "Service running" else "No service" end end
+        let status = if S.subway_inundated(c, lot) do "Flooded · Line closed"
+          else if S.facility_staffed(c, lot) == 0 do "Needs trade-qualified staff"
+          else if S.get(st.running_transit, lot) > 0 do "Service running" else "No service" end end end
         let box = label(box, x, y +. 57.0, 12.0, status, true)
         if water > 0 do
           let box = label(box, x, y +. 82.0, 11.0, int_to_string(water) ++ " / 72 floodwater", false)
@@ -1458,6 +1460,9 @@ mod Ur.Hud do
         let upkeep = S.parcel_facility_upkeep(c, lot)
         let box = label(box, x, y +. 81.0, 11.0, "Facility upkeep $" ++ int_to_string(upkeep) ++ " / month", false)
         let box = label(box, x, y +. 106.0, 10.0, detail, false)
+        let jobs = S.job_slots(c, lot)
+        let box = if jobs > 0 do label(box, x, y +. 127.0, 10.0,
+          int_to_string(S.get(st.staffed_jobs, lot)) ++ "/" ++ int_to_string(jobs) ++ " staff · " ++ S.job_vacancy_reason(c, st, lot), true) else box end
         let action = if paused do resume else stop end
         let box = U.rect(box, 0, x, y +. 154.0, width -. 24.0, 36.0,
           if paused do (0.20, 0.39, 0.32, 1.0) else (0.32, 0.26, 0.18, 1.0) end)
@@ -1507,6 +1512,8 @@ mod Ur.Hud do
         let top = if homes > 0 do y +. 119.0 else y +. 54.0 end
         let box = if jobs > 0 do label(box, x, top, 11.0, "Employees · " ++ int_to_string(S.get(st.staffed_jobs, lot)) ++ "/" ++ int_to_string(jobs) ++ " positions filled", true) else box end
         let top = if jobs > 0 do top +. 20.0 else top end
+        let box = if jobs > 0 && S.get(st.staffed_jobs, lot) < jobs do label(box, x, top, 10.0, S.job_vacancy_reason(c, st, lot), false) else box end
+        let top = if jobs > 0 && S.get(st.staffed_jobs, lot) < jobs do top +. 20.0 else top end
         let box = if S.public_trade(c, lot) do
           label(box, x, top, 11.0, (if S.business_open(c, lot, hour) do "Open · " else "Closed · " end) ++ business_hours(c, lot), false)
         else if S.business_closed(c, lot) do label(box, x, top, 11.0, "Vacant business premises", false) else box end end
