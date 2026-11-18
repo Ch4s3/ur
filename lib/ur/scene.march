@@ -56,6 +56,11 @@ mod Ur.Scene do
       29 -> (255, 239, 214)
       30 -> (252, 86, 68)
       31 -> (100, 156, 255)
+      32 -> (69, 62, 66)
+      33 -> (94, 88, 95)
+      34 -> (128, 125, 137)
+      35 -> (248, 106, 27)
+      36 -> (255, 154, 32)
       _ -> (93, 142, 91)
     end
   end
@@ -76,9 +81,10 @@ mod Ur.Scene do
     end
   end
   pfn palette(i : Int, r : Strata.Blocks.Registry) : Strata.Blocks.Registry do
-    if i >= 32 do r else
+    if i >= 37 do r else
       let (red, green, blue) = colour(i)
-      let a = pixels(NativeArray.make_u8(1024, 255), i, 0, red, green, blue)
+      let alpha = if i >= 32 && i <= 34 do 122 - (i - 32) * 31 else 255 end
+      let a = pixels(NativeArray.make_u8(1024, alpha), i, 0, red, green, blue)
       if !Vk.texture_set(i, a) do Ur.AppError.stop("Material texture upload failed") else () end
       let roughness = if i == 3 do 65 else if i == 9 || i == 19 do 116 else 245 end end
       let d = Strata.Blocks.with_material(Strata.Blocks.with_faces(Strata.Blocks.def(), i, i, i), roughness, 0)
@@ -90,6 +96,8 @@ mod Ur.Scene do
         29 -> Strata.Blocks.with_emission(d, 255, 228, 190, 215)
         30 -> Strata.Blocks.with_emission(d, 255, 36, 19, 235)
         31 -> Strata.Blocks.with_emission(d, 38, 103, 255, 235)
+        35 -> Strata.Blocks.with_emission(d, 255, 63, 8, 160)
+        36 -> Strata.Blocks.with_emission(d, 255, 139, 17, 190)
         _ -> d
       end
       match Strata.Blocks.register(r, d) do
@@ -172,7 +180,7 @@ mod Ur.Scene do
     end
   end
   fn setup() : Unit do
-    if !Vk.set_light_box(29, 2) || !Vk.textures_create(16, 32) do Ur.AppError.stop("Could not allocate Strata materials and lighting") else () end
+    if !Vk.set_light_box(29, 2) || !Vk.textures_create(16, 37) do Ur.AppError.stop("Could not allocate Strata materials and lighting") else () end
     let r = palette(0, Strata.Blocks.empty())
     if !Vk.textures_commit() || !Strata.Render.upload_blocks(r) do Ur.AppError.stop("Could not upload Strata materials") else () end
     sea(0, face(empty(), 0, 0, 0, 32, 32, 0, 3))
@@ -829,36 +837,150 @@ mod Ur.Scene do
       end
     end
   end
-  pfn incident_marker(c : Ur.Sim.City, call : Ur.Sim.Incident, burning : Bool, age : Float, slot : Int) : Unit do
+  -- Fleet vehicles occupy 15940–16119. Keep incident meshes out of the sea slots.
+  pfn incident_slot(index : Int) : Int do 16120 + index * 2 end
+  pfn window_slot(slot : Int, side : Int) : Int do slot + 32 + side end
+  pfn clear_window_smoke(slot : Int) : Unit do
+    Vk.chunk_free(window_slot(slot, 0))
+    Vk.chunk_free(window_slot(slot, 1))
+  end
+  pfn flame_tongue(mesh : Mesh, x : Int, z : Int, phase : Float, strength : Int) : Mesh do
+    let rise = strength + float_to_int((1.0 +. Math.sin(phase)) *. 2.4)
+    let lean = float_to_int(Math.sin(phase +. 1.3) *. 2.0)
+    let mesh = box(mesh, x - 2, 0, z - 2, 5, 2, 5, 30)
+    let mesh = box(mesh, x - 2, 1, z - 1, 4, 3, 4, 35)
+    let mesh = box(mesh, x - 1, 2, z - 1, 3, rise, 3, 36)
+    let mesh = box(mesh, x + lean, rise, z - 1, 2, 3, 2, 26)
+    let mesh = box(mesh, x + lean, rise + 3, z, 1, 2, 1, 36)
+    box(mesh, x - 2, 2, z - 2, 1, 2, 2, 28)
+  end
+  pfn embers(mesh : Mesh, motion : Float, seed : Float, ember : Int) : Mesh do
+    if ember == 6 do mesh else
+      let phase = motion *. (1.3 +. int_to_float(ember) *. 0.23) +. seed +. int_to_float(ember) *. 0.38
+      let t = phase -. Math.floor(phase)
+      let x = 9 + ember * 2 + float_to_int(t *. Math.sin(phase *. 2.0) *. 5.0)
+      let y = 6 + float_to_int(t *. 19.0)
+      let z = 13 + ember % 3 * 3 + float_to_int(t *. 4.0)
+      embers(box(mesh, x, y, z, 1, 1, 1, if ember % 3 == 0 do 28 else 36 end), motion, seed, ember + 1)
+    end
+  end
+  pfn drifting_smoke(mesh : Mesh, wind : Ur.Sim.Wind, motion : Float, seed : Float, puff : Int) : Mesh do
+    if puff == 4 do mesh else
+      let phase = motion *. 1.8 +. int_to_float(puff) *. 0.25 +. seed
+      let t = phase -. Math.floor(phase)
+      let drift = t *. int_to_float(S.clamp(wind.speed / 2, 2, 12))
+      let size = 5 + float_to_int(t *. 6.0)
+      let x = 15 - size / 2 + float_to_int(Math.cos(wind.heading) *. drift)
+      let z = 15 - size / 2 + float_to_int(Math.sin(wind.heading) *. drift)
+      let x = S.clamp(x, 0, 32 - size)
+      let z = S.clamp(z, 0, 32 - size)
+      let y = 7 + float_to_int(t *. 18.0)
+      let tex = 32 + float_to_int(t *. 3.0)
+      let mesh = box(mesh, x + 1, y, z + 1, size - 2, 1, size - 2, tex)
+      let mesh = box(mesh, x, y + 1, z, size, 3, size, tex)
+      let mesh = box(mesh, x + 1, y + 4, z + 1, size - 2, 1, size - 2, tex)
+      drifting_smoke(mesh, wind, motion, seed, puff + 1)
+    end
+  end
+  pfn vent_window(parts : List(Ur.Architecture.Piece), east : Bool) : Option(Ur.Architecture.Piece) do
+    List.fold_left(parts, None, fn (selected, piece) ->
+      let glass = piece.material == 9 || piece.material == 15
+      let outward = if east do piece.w == 1 && piece.x > 17 && piece.d >= 3
+        else piece.d == 1 && piece.z > 17 && piece.w >= 3 end
+      if !glass || !outward || piece.h < 3 || piece.h > 5 do selected else
+        match selected do
+          None -> Some(piece)
+          Some(best) -> if piece.y > best.y do Some(piece) else selected end
+        end
+      end)
+  end
+  pfn window_puffs(mesh : Mesh, east : Bool, wind : Ur.Sim.Wind, motion : Float, puff : Int) : Mesh do
+    if puff == 5 do mesh else
+      let phase = motion *. 1.4 +. int_to_float(puff) *. 0.20
+      let t = phase -. Math.floor(phase)
+      let outward = 1 + float_to_int(t *. 8.0)
+      let drift = t *. t *. int_to_float(S.clamp(wind.speed / 3, 2, 10))
+      let size = 3 + float_to_int(t *. 5.0)
+      let x = 12 + (if east do outward else 0 end) + float_to_int(Math.cos(wind.heading) *. drift)
+      let z = 12 + (if east do 0 else outward end) + float_to_int(Math.sin(wind.heading) *. drift)
+      let x = S.clamp(x - size / 2, 0, 32 - size)
+      let z = S.clamp(z - size / 2, 0, 32 - size)
+      let y = 2 + float_to_int(t *. t *. 18.0)
+      let tex = 32 + float_to_int(t *. 3.0)
+      let mesh = box(mesh, x, y, z, size, 2 + size / 3, size, tex)
+      let mesh = box(mesh, x + 1, y + 2 + size / 3, z + 1, size - 2, 1, size - 2, tex)
+      window_puffs(mesh, east, wind, motion, puff + 1)
+    end
+  end
+  pfn draw_window_smoke(parts : List(Ur.Architecture.Piece), east : Bool, wind : Ur.Sim.Wind, motion : Float,
+    x : Float, z : Float, slot : Int) : Unit do
+    match vent_window(parts, east) do
+      None -> Vk.chunk_free(slot)
+      Some(pane) ->
+        let px = x +. int_to_float(pane.x + (if east do pane.w else pane.w / 2 end) - 12)
+        let pz = z +. int_to_float(pane.z + (if east do pane.d / 2 else pane.d end) - 12)
+        let y = int_to_float(pane.y)
+        let m = { words: NativeArray.make_i32(72, 0), quads: 0 }
+        let width = if east do 1 else S.clamp(pane.w, 3, 5) end
+        let depth = if east do S.clamp(pane.d, 3, 5) else 1 end
+        let m = box(m, 12 - width / 2, 0, 12 - depth / 2, width, pane.h, depth, 19)
+        let m = box(m, 12, 0, 12, 1, 2 + float_to_int(1.0 +. Math.sin(motion *. 13.0)), 1, 35)
+        let smoke = window_puffs({ words: NativeArray.make_i32(128, 0), quads: 0 }, east, wind, motion, 0)
+        if Vk.body_begin(slot) && Vk.chunk_part(0, m.words, m.quads) && Vk.chunk_part(2, smoke.words, smoke.quads) && Vk.chunk_commit() do
+          Vk.slot_pose(slot, px *. 0.25, y *. 0.25, pz *. 0.25, 0.0, 0.0, 0.0, 1.0)
+        else Ur.AppError.stop("Window smoke upload failed") end
+    end
+  end
+  pfn fire_fx(c : Ur.Sim.City, lot : Int, wind : Ur.Sim.Wind, motion : Float, slot : Int) : Unit do
+    let x = int_to_float(lot % S.width() * 32)
+    let z = int_to_float(lot / S.width() * 32)
+    let parts = L.structures(c, lot, 0)
+    let roof = List.fold_left(parts, S.get(c.heights, lot), fn (top, piece) ->
+      if piece.x <= 15 && piece.x + piece.w > 15 && piece.z <= 16 && piece.z + piece.d > 16 && piece.y + piece.h > top do
+        piece.y + piece.h
+      else top end)
+    let y = int_to_float(roof - 1)
+    let seed = int_to_float(lot % 13) *. 0.13
+    let phase = motion *. 11.0 +. seed
+    let m = { words: NativeArray.make_i32(384, 0), quads: 0 }
+    let m = flame_tongue(m, 15, 15, phase, 6)
+    let m = flame_tongue(m, 10, 18, phase +. 2.5, 3)
+    let m = flame_tongue(m, 20, 16, phase +. 4.8, 4)
+    let m = flame_tongue(m, 16, 20, phase +. 1.7, 2)
+    let m = embers(m, motion, seed, 0)
+    let smoke = drifting_smoke({ words: NativeArray.make_i32(160, 0), quads: 0 }, wind, motion, seed, 0)
+    if Vk.body_begin(slot) && Vk.chunk_part(0, m.words, m.quads) && Vk.chunk_part(2, smoke.words, smoke.quads) && Vk.chunk_commit() do
+      Vk.slot_pose(slot, x *. 0.25, y *. 0.25, z *. 0.25, 0.0, 0.0, 0.0, 1.0)
+      Vk.beacon(x +. 15.0, y +. 4.0, z +. 16.0, 27)
+      draw_window_smoke(parts, true, wind, motion +. seed, x, z, window_slot(slot, 0))
+      draw_window_smoke(parts, false, wind, motion +. seed +. 0.29, x, z, window_slot(slot, 1))
+    else Ur.AppError.stop("Fire effect upload failed") end
+  end
+  pfn incident_marker(c : Ur.Sim.City, call : Ur.Sim.Incident, slot : Int) : Unit do
     let x = call.lot % S.width() * 32 + 13
     let z = call.lot / S.width() * 32 + 13
     let y = S.get(c.heights, call.lot) + S.get(c.buildings, call.lot) * 11 + 9
     let material = if call.response < 0 do 6 else 10 end
     let mesh = { words: NativeArray.make_i32(64, 0), quads: 0 }
-    let mesh = if burning do
-      let height = 6 + float_to_int(age *. 16.0) % 4
-      let mesh = box(mesh, 0, 0, 0, 7, 4, 7, 6)
-      let mesh = box(mesh, 2, 2, 2, 4, height, 4, 15)
-      box(mesh, 3, 2, 3, 2, height - 2, 2, 10)
-    else if call.kind == 4 do
+    let mesh = if call.kind == 4 do
       let mesh = box(mesh, 2, 0, 2, 2, 7, 2, 6)
       box(mesh, 0, 2, 2, 6, 2, 2, 6)
     else
       let mesh = box(mesh, 2, 0, 2, 2, 2, 2, material)
       box(mesh, 1, 3, 1, 4, 5, 4, material)
-    end end
+    end
     if Vk.chunk_begin(slot, x, y, z, 0) && Vk.chunk_part(0, mesh.words, mesh.quads) && Vk.chunk_commit() do ()
     else Ur.AppError.stop("Incident marker upload failed") end
   end
-  pfn draw_spread(c : Ur.Sim.City, call : Ur.Sim.Incident, lots : List(Int), age : Float, used : Int) : Int do
+  pfn draw_spread(c : Ur.Sim.City, lots : List(Int), wind : Ur.Sim.Wind, motion : Float, used : Int) : Int do
     if used == 16 do used else
       match lots do
         Nil -> used
         Cons(lot, rest) ->
-          let slot = 10560 + used * 2
-          incident_marker(c, { call with lot: lot }, true, age, slot)
+          let slot = incident_slot(used)
+          fire_fx(c, lot, wind, motion, slot)
           Vk.chunk_free(slot + 1)
-          draw_spread(c, call, rest, age, used + 1)
+          draw_spread(c, rest, wind, motion, used + 1)
       end
     end
   end
@@ -884,17 +1006,17 @@ mod Ur.Scene do
       Cons(i, rest) -> last_street(rest, i)
     end
   end
-  pfn medical_vehicle(c : Ur.Sim.City, call : Ur.Sim.Incident, transfer : Ur.Sim.MedicalTransfer, age : Float, progress : Float, marker : Int) : Unit do
+  pfn medical_vehicle(c : Ur.Sim.City, call : Ur.Sim.Incident, transfer : Ur.Sim.MedicalTransfer, progress : Float, marker : Int) : Unit do
     let inbound = 0.55 +. int_to_float(call.travel) /. 32.0
     let after_arrival = (progress -. 1.0) *. inbound
     if progress < 1.0 do
-      incident_marker(c, call, false, age, marker)
+      incident_marker(c, call, marker)
       if progress >= 0.0 && !List.is_empty(call.road) do patrol_vehicle(c, call, progress, marker + 1)
       else Vk.chunk_free(marker + 1) end
     else
       match transfer.route do
         Nil ->
-          incident_marker(c, call, false, age, marker)
+          incident_marker(c, call, marker)
           Vk.chunk_free(marker + 1)
         Cons(curb, _) ->
           if after_arrival < 0.26 do
@@ -916,48 +1038,54 @@ mod Ur.Scene do
       end
     end
   end
-  pfn draw_calls(c : Ur.Sim.City, calls : List(Ur.Sim.Incident), age : Float, used : Int) : Int do
+  pfn draw_calls(c : Ur.Sim.City, calls : List(Ur.Sim.Incident), month : Int, age : Float, wind : Ur.Sim.Wind, motion : Float, used : Int) : Int do
     if used == 16 do used else
       match calls do
         Nil -> used
         Cons(call, rest) ->
           let since_report = age -. int_to_float(call.reported) /. 120.0
-          if since_report < 0.0 || since_report >= (if call.kind == 4 do 5.4 else 2.2 end) do draw_calls(c, rest, age, used) else
-            let marker = 10560 + used * 2
+          if since_report < 0.0 || since_report >= (if call.kind == 4 do 5.4 else 2.2 end) do draw_calls(c, rest, month, age, wind, motion, used) else
+            let marker = incident_slot(used)
             let wait = int_to_float(call.response - call.travel) /. 75.0
             let progress = (since_report -. wait) /. (0.55 +. int_to_float(call.travel) /. 32.0)
-            let burning = call.kind == 3 && (call.response < 0 || progress < 1.0)
+            let burning = if call.kind != 3 do false else
+              let duration = if call.response < 0 do 2.2 else wait +. 0.55 +. int_to_float(call.travel) /. 32.0 end
+              let rain = S.fire_burn_percent(S.weather_on(c, month, S.incident_day(call.reported)))
+              since_report < duration *. int_to_float(rain) /. 100.0
+            end
+            if burning do () else clear_window_smoke(marker) end
             match call.medical do
-              Some(transfer) -> medical_vehicle(c, call, transfer, since_report, progress, marker)
+              Some(transfer) -> medical_vehicle(c, call, transfer, progress, marker)
               None ->
-                incident_marker(c, call, burning, since_report, marker)
+                if burning do fire_fx(c, call.lot, wind, motion, marker) else incident_marker(c, call, marker) end
                 if call.response >= 0 && !List.is_empty(call.road) && progress >= 0.0 && progress < 1.0 do
                   patrol_vehicle(c, call, progress, marker + 1)
                 else Vk.chunk_free(marker + 1) end
             end
             let spread = if burning && since_report > 0.3 do List.take(call.spread, 1 + float_to_int((since_report -. 0.3) *. 5.0)) else Nil end
-            draw_calls(c, rest, age, draw_spread(c, call, spread, since_report, used + 1))
+            draw_calls(c, rest, month, age, wind, motion, draw_spread(c, spread, wind, motion, used + 1))
           end
       end
     end
   end
-  pfn recent_calls(c : Ur.Sim.City, history : List(Ur.Sim.CrimeMonth), elapsed : Float, used : Int) : Int do
+  pfn recent_calls(c : Ur.Sim.City, history : List(Ur.Sim.CrimeMonth), elapsed : Float, wind : Ur.Sim.Wind, motion : Float, used : Int) : Int do
     match history do
       Nil -> used
       Cons(month, rest) ->
         let age = int_to_float((c.month - month.month) * S.days_per_month()) *. S.day_seconds() +. elapsed
-        if age >= 6.4 || used == 16 do used else recent_calls(c, rest, elapsed, draw_calls(c, month.calls, age, used)) end
+        if age >= int_to_float(S.days_per_month()) *. S.day_seconds() +. 6.4 || used == 16 do used else recent_calls(c, rest, elapsed, wind, motion, draw_calls(c, month.calls, month.month, age, wind, motion, used)) end
     end
   end
   pfn clear_incidents(used : Int) : Unit do
     if used == 16 do () else
-      Vk.chunk_free(10560 + used * 2)
-      Vk.chunk_free(10561 + used * 2)
+      Vk.chunk_free(incident_slot(used))
+      Vk.chunk_free(incident_slot(used) + 1)
+      clear_window_smoke(incident_slot(used))
       clear_incidents(used + 1)
     end
   end
-  fn incidents(c : Ur.Sim.City, elapsed : Float) : Unit do
-    clear_incidents(recent_calls(c, c.crime_history, elapsed, 0))
+  fn incidents(c : Ur.Sim.City, elapsed : Float, wind : Ur.Sim.Wind, motion : Float) : Unit do
+    clear_incidents(recent_calls(c, c.crime_history, elapsed, wind, motion, 0))
   end
   pfn delivery_pose(c : Ur.Sim.City, trip : Ur.Food.Trip, i : Int, j : Int, index : Int, t : Float, forward : Bool, slot : Int) : Unit do
     let curb = !street_tile(c, i) || !street_tile(c, j)

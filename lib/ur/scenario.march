@@ -179,7 +179,8 @@ mod Ur.Scenario do
   fn emergency_district() : Ur.Sim.City do
     let hospital = S.index(34, 23)
     let c = S.act(green_district(), hospital, 7)
-    let c = { c with plants: NativeArray.set_int(c.plants, hospital, 22) }
+    -- Clear skies keep the fire plume and response crews visible in this demo.
+    let c = { c with plants: NativeArray.set_int(c.plants, hospital, 22), climate_seed: 186, clock_ms: 525 }
     let traffic = S.stats(c)
     let stations = Cons(S.index(29, 21), Cons(S.index(30, 23), Cons(hospital, Nil)))
     let fire = { lot: S.index(33, 21), kind: 3, reported: 0, station: -1, response: -1, travel: 0, road: Nil, spread: Nil, medical: None }
@@ -192,7 +193,8 @@ mod Ur.Scenario do
       Cons(_, rest) -> rest
       Nil -> Nil
     end
-    { c with crime_history: Cons({ month: c.month, calls: Cons(fire, Cons(medical, Nil)) }, history) }
+    let c = S.fire_pollution(c, [fire])
+    { c with crime_history: Cons({ month: c.month, calls: [fire, medical] }, history) }
   end
 
   fn fire_recovery_home() : Int do S.index(33, 21) end

@@ -186,9 +186,64 @@ mod EvacuationTest do
     let resolved = Ur.Council.advance({ review with month: 10 }, S.population(review))
     Test.assert_eq_int(Ur.Council.kind(resolved), 0, "a second review resolves the recovery request")
   end
+  pfn fire_weather_checks() : Unit do
+    let base = S.new()
+    let home = S.index(15, 20)
+    let east = S.neighbour(home, 1)
+    let west = S.neighbour(home, 0)
+    let empty = NativeArray.make_int(S.count(), 0)
+    let buildings = NativeArray.set_int(NativeArray.set_int(empty, home, 3), east, 2)
+    let dry = { base with buildings: buildings, plants: empty, air_pollution: empty, calendar_day: 0 }
+    let wet = { dry with religion: { dry.religion with curse: { god: 1, until_day: 10, site: home } } }
+    let call = { lot: home, kind: 3, reported: 0, station: -1, response: -1, travel: 0, road: Nil, spread: Nil, medical: None }
+    let traffic = NativeArray.make_int(S.count() * 4, 0)
+    let (dry_call, _) = S.run_emergency(dry, traffic, Nil, empty, call)
+    let (wet_call, _) = S.run_emergency(wet, traffic, Nil, empty, call)
+    let dry_fire = S.apply_building_fires(dry, [dry_call])
+    let wet_fire = S.apply_building_fires(wet, [wet_call])
+    Test.assert_true(S.fire_rebuilding(dry_fire, home) && !S.fire_rebuilding(wet_fire, home), "severe rain reduces fire damage even without a crew")
+    Test.assert_true(List.length(wet_call.spread) <= List.length(dry_call.spread), "rain limits the spread distance")
+    let dry_plume = S.fire_pollution(dry, [call])
+    let wet_plume = S.fire_pollution(wet, [call])
+    Test.assert_true(S.get(dry_plume.air_pollution, east) > S.get(wet_plume.air_pollution, east) &&
+      S.get(dry_plume.air_pollution, east) > S.get(dry_plume.air_pollution, west), "the dry fire sends a stronger plume downwind")
+    let drifting = S.drift_pollution(dry_plume, traffic)
+    let farther = S.neighbour(east, 1)
+    Test.assert_true(S.get(drifting.air_pollution, farther) > S.get(dry_plume.air_pollution, farther) &&
+      S.get(drifting.air_pollution, home) < S.get(dry_plume.air_pollution, home), "smoke keeps moving and the source clears after the fire")
+  end
+  pfn earthquake_fire_checks() : Unit do
+    let old = S.new()
+    let gas = S.index(15, 20)
+    let home = S.neighbour(gas, 1)
+    let farther = S.neighbour(home, 1)
+    let empty = NativeArray.make_int(S.count(), 0)
+    let lots = NativeArray.set_int(NativeArray.set_int(empty, home, 2), farther, 2)
+    let city = { old with buildings: lots, plants: NativeArray.set_int(empty, gas, 1), air_pollution: empty,
+      calendar_day: 12, clock_ms: 750, religion: { old.religion with
+        curse: { god: 3, until_day: 22, site: gas }, curse_stamp: 1, epicenter: gas } }
+    Test.assert_true(S.earthquake_fire_risk(city, gas) > S.earthquake_fire_risk(city, home) &&
+      S.earthquake_fire_risk(city, home) > S.earthquake_fire_risk(city, farther), "ignition risk is strongest at and around gas infrastructure")
+    let burning = S.earthquake_fires(city)
+    match burning.crime_history do
+      Cons(month, _) ->
+        Test.assert_true(List.any(month.calls, fn call -> call.lot == gas && call.kind == 3 && S.incident_day(call.reported) == 12),
+          "a gas fire is recorded when the earthquake happens")
+        Test.assert_true(S.get(burning.air_pollution, gas) > 0, "earthquake fires enter the air pollution field")
+      Nil -> Test.assert_true(false, "the deterministic quake ignites the gas site")
+    end
+    let saved = { city: burning, cx: 78.0, cz: 151.0, zoom: 52.0, yaw: 0.55, paused: true, speed: 1 }
+    let encoded = Ur.Save.encode(saved)
+    match Ur.Save.decode(encoded) do
+      Ok(loaded) -> Test.assert_eq_str(Ur.Save.encode(loaded), encoded, "midmonth ignition times and pollution survive save and load")
+      Err(error) -> Test.assert_true(false, error)
+    end
+  end
   fn main(_cap : Cap(IO)) : Unit do
     evacuation_checks()
     fire_recovery_checks()
+    fire_weather_checks()
+    earthquake_fire_checks()
     Authority.must(println("Evacuation checks passed"))
   end
 end

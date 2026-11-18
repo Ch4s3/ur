@@ -247,8 +247,11 @@ history and safety score. Theft and vandalism reports count against safety
 for six months. A delayed or missed response increases the impact.
 The **Reported incidents** layer marks the latest month's cases.
 Fire stations and clinics dispatch trucks and ambulances across roads and
-wide pedestrian streets. Traffic slows all responders. Fires that burn for
-12 minutes can reach adjoining buildings, with further spread possible if
+wide pedestrian streets. Traffic slows all responders. Voxel flames shed
+embers and smoke, and the pollution layer shows the plume as wind carries
+it across the city. Rain shortens fires and reduces their smoke and spread.
+Earthquakes can ignite fires, especially at gas plants and nearby buildings.
+Fires that burn for 12 minutes can reach adjoining buildings, with further spread possible if
 crews take longer. Buildings close for one or two months of repair. After
 30 minutes of local fire exposure a building burns down and requires four
 months of reconstruction. Work proceeds when the site is dry and connected

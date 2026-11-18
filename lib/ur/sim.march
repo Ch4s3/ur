@@ -579,8 +579,9 @@ mod Ur.Sim do
   pfn begin_curse(c : City, god : Int, site : Int) : City do
     let curse = { god: god, until_day: absolute_day(c) + curse_duration(god), site: site }
     let center = if god == 3 do quake_epicenter(c, (absolute_day(c) * 31 + c.religion.rolls * 173) % count(), 0) else -1 end
-    { c with religion: { c.religion with curse: curse, curse_stamp: c.religion.rolls, epicenter: center },
+    let c = { c with religion: { c.religion with curse: curse, curse_stamp: c.religion.rolls, epicenter: center },
       message: god_name(god) ++ " sent " ++ curse_name(god) ++ "." }
+    if valid(center) do earthquake_fires(c) else c end
   end
   fn make_offering(c : City, st : Stats, lot : Int, tier : Int) : City do
     let reason = offering_block(c, st, lot, tier)
@@ -2347,14 +2348,16 @@ mod Ur.Sim do
       drift_air(field, west_east, north_south, x_share, z_share, i + 1, NativeArray.set_int(out, i, clamp((local + incoming) / 100, 0, 100)))
     end
   end
-  pfn update_air(c : City, roads : NativeIntArr, traffic : NativeIntArr) : NativeIntArr do
+  pfn advect_air(c : City, field : NativeIntArr) : NativeIntArr do
     let wind = regional_wind(c)
     let x = Math.cos(wind.heading)
     let z = Math.sin(wind.heading)
     let share = int_to_float(wind.speed) *. 1.5
-    let field = air_sources(c, roads, grid_access(c), traffic, 0, NativeArray.make_int(count(), 0))
     drift_air(field, if x >= 0.0 do 0 else 1 end, if z >= 0.0 do 2 else 3 end,
       float_to_int(Math.abs(x) *. share), float_to_int(Math.abs(z) *. share), 0, NativeArray.make_int(count(), 0))
+  end
+  pfn update_air(c : City, roads : NativeIntArr, traffic : NativeIntArr) : NativeIntArr do
+    advect_air(c, air_sources(c, roads, grid_access(c), traffic, 0, NativeArray.make_int(count(), 0)))
   end
   fn drift_pollution(c : City, traffic : NativeIntArr) : City do
     if !valid(c.harbour) do c else { c with air_pollution: update_air(c, access(c), traffic) } end
@@ -4716,10 +4719,22 @@ mod Ur.Sim do
       end
     end
   end
+  fn fire_burn_percent(weather : Int) : Int do
+    match weather do
+      2 -> 82
+      3 -> 60
+      4 -> 35
+      _ -> 100
+    end
+  end
+  pfn fire_minutes(c : City, call : Incident) : Int do
+    let duration = if call.response < 0 do 42 else call.response end
+    duration * fire_burn_percent(current_weather(c)) / 100
+  end
   fn run_emergency(c : City, traffic : NativeIntArr, stations : List(Int), busy : NativeIntArr, call : Incident) : (Incident, NativeIntArr) do
     let (call, busy) = dispatch(c, traffic, stations, busy, call)
     if call.kind == 3 do
-      let rounds = if call.response < 0 do 3 else call.response / 12 end
+      let rounds = fire_minutes(c, call) / 12
       let spread = List.drop(List.reverse(fire_front(c, Cons(call.lot, Nil), Cons(call.lot, Nil), Nil, rounds)), 1)
       ({ call with spread: spread }, busy)
     else (call, busy) end
@@ -4746,13 +4761,91 @@ mod Ur.Sim do
         damage_fire_lots(c, call, rest, duration)
     end
   end
-  fn apply_building_fires(c : City, calls : List(Incident)) : City do
+  pfn smoke_sources(c : City, call : Incident, lots : List(Int), duration : Int, field : NativeIntArr) : NativeIntArr do
+    match lots do
+      Nil -> field
+      Cons(lot, rest) ->
+        let minutes = duration - 12 * span_distance(call.lot, lot)
+        let field = if valid(lot) && minutes > 0 do
+          let floors = get(c.buildings, lot)
+          let smoke = clamp(minutes * (2 + clamp(floors, 0, 5)), 0, 110)
+          NativeArray.set_int(field, lot, clamp(get(field, lot) + smoke, 0, 150))
+        else field end
+        smoke_sources(c, call, rest, duration, field)
+    end
+  end
+  pfn add_fire_air(air : NativeIntArr, smoke : NativeIntArr, lot : Int) : NativeIntArr do
+    if lot >= count() do air else
+      let amount = get(smoke, lot)
+      let air = if amount == 0 do air else NativeArray.set_int(air, lot, clamp(get(air, lot) + amount, 0, 100)) end
+      add_fire_air(air, smoke, lot + 1)
+    end
+  end
+  fn fire_pollution(c : City, calls : List(Incident)) : City do
+    if !List.any(calls, fn call -> call.kind == 3) do c else
+      let smoke = List.fold_left(calls, NativeArray.make_int(count(), 0), fn (field, call) ->
+        if call.kind == 3 do smoke_sources(c, call, Cons(call.lot, call.spread), fire_minutes(c, call), field) else field end)
+      let plume = advect_air(c, advect_air(c, smoke))
+      { c with air_pollution: add_fire_air(c.air_pollution, plume, 0) }
+    end
+  end
+  pfn apply_fire_damage(c : City, calls : List(Incident)) : City do
     match calls do
       Nil -> c
       Cons(call, rest) ->
-        let duration = if call.response < 0 do 42 else call.response end
-        let c = if call.kind == 3 do damage_fire_lots(c, call, Cons(call.lot, call.spread), duration) else c end
-        apply_building_fires(c, rest)
+        let c = if call.kind == 3 do damage_fire_lots(c, call, Cons(call.lot, call.spread), fire_minutes(c, call)) else c end
+        apply_fire_damage(c, rest)
+    end
+  end
+  fn apply_building_fires(c : City, calls : List(Incident)) : City do
+    apply_fire_damage(fire_pollution(c, calls), calls)
+  end
+  fn incident_day(reported : Int) : Int do
+    reported / float_to_int(day_seconds() *. 120.0)
+  end
+  fn earthquake_fire_risk(c : City, lot : Int) : Int do
+    if !quake_near(c, lot, 3) do 0
+    else if get(c.plants, lot) == 1 do 75
+    else if get(c.buildings, lot) == 0 do 0
+    else if List.any([0, 1, 2, 3], fn arm -> get(c.plants, neighbour(lot, arm)) == 1) do 45
+    else if quake_near(c, lot, 1) do 18 else 7 end end end end end
+  end
+  pfn quake_ignitions(c : City, center : Int, offset : Int, remaining : Int, lots : List(Int)) : List(Int) do
+    if offset == 49 || remaining == 0 do List.reverse(lots) else
+      let x = center % width() + offset % 7 - 3
+      let z = center / width() + offset / 7 - 3
+      let lot = if x >= 0 && x < width() && z >= 0 && z < depth() do index(x, z) else -1 end
+      let roll = Strata.Seed.cell(c.climate_seed, 331, lot, absolute_day(c), curse_stamp(c)) % 100
+      if roll < earthquake_fire_risk(c, lot) do quake_ignitions(c, center, offset + 1, remaining - 1, Cons(lot, lots))
+      else quake_ignitions(c, center, offset + 1, remaining, lots) end
+    end
+  end
+  pfn dispatch_quake_fires(c : City, lots : List(Int), traffic : NativeIntArr, stations : List(Int), reported : Int,
+    busy : NativeIntArr, out : List(Incident)) : List(Incident) do
+    match lots do
+      Nil -> List.reverse(out)
+      Cons(lot, rest) ->
+        let call = { lot: lot, kind: 3, reported: reported, station: -1, response: -1, travel: 0, road: Nil, spread: Nil, medical: None }
+        let (call, busy) = run_emergency(c, traffic, stations, busy, call)
+        dispatch_quake_fires(c, rest, traffic, stations, reported, busy, Cons(call, out))
+    end
+  end
+  fn earthquake_fires(c : City) : City do
+    let center = curse_epicenter(c)
+    if curse_god(c) != 3 || !valid(center) do c else
+      let sites = quake_ignitions(c, center, 0, 6, Nil)
+      if List.is_empty(sites) do c else
+        let reported = c.calendar_day * float_to_int(day_seconds() *. 120.0) + c.clock_ms * 120 / 1000
+        let calls = dispatch_quake_fires(c, sites, road_traffic(c, access(c)), emergency_stations(c, 0, Nil), reported,
+          NativeArray.make_int(count(), 0), Nil)
+        let history = match c.crime_history do
+          Cons(latest, rest) -> if latest.month == c.month do Cons({ latest with calls: List.append(calls, latest.calls) }, rest)
+            else Cons({ month: c.month, calls: calls }, c.crime_history) end
+          Nil -> [{ month: c.month, calls: calls }]
+        end
+        let c = apply_building_fires(c, calls)
+        { c with crime_history: List.take(history, 24) }
+      end
     end
   end
   fn advance_fire_recovery(c : City, roads : NativeIntArr, i : Int) : City do
@@ -5728,8 +5821,10 @@ mod Ur.Sim do
     let reservations = reserve_utilities(c, a, networks)
     let civic = civic_access_with(c, a)
     let walk = park_walk(c)
-    let incident_month = simulate_with_health(next, traffic, labor, health_pressure(c))
-    let next = apply_building_fires(next, incident_month.calls)
+    let incident_city = { next with calendar_day: 0 }
+    let incident_month = simulate_with_health(incident_city, traffic, labor, health_pressure(c))
+    let damaged = apply_building_fires(incident_city, incident_month.calls)
+    let next = { damaged with calendar_day: next.calendar_day }
     let (arrears, recovered) = property_ledger(next, 0, c.property_arrears, 0)
     let receipts = recovered + c.property_sales
     let finance = { month: next.month, revenue: monthly.revenue + receipts, budget: monthly, construction: c.construction_spend,

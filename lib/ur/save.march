@@ -416,7 +416,8 @@ mod Ur.Save do
     end
     let answered = S.valid(station) && response >= 0 && response <= 45 && travel >= 2 && travel <= response && !List.is_empty(road)
     let unanswered = station == -1 && response == -1 && travel == 0 && List.is_empty(road)
-    if kind < 1 || kind > 4 || reported < 0 || reported > 100 || !(answered || unanswered) do Err("Invalid incident data.")
+    let valid_time = reported >= 0 && (reported <= 100 || (kind == 3 && S.incident_day(reported) < S.days_per_month()))
+    if kind < 1 || kind > 4 || !valid_time || !(answered || unanswered) do Err("Invalid incident data.")
     else Ok({ lot: lot, kind: kind, reported: reported, station: station, response: response, travel: travel, road: road, spread: spread, medical: medical }) end
   end
   pfn encode_crime(v : Ur.Sim.CrimeMonth) : Json.JsonValue do

@@ -302,8 +302,8 @@ mod Ur do
         :patron -> S.dedicate(c, religion_value)
         :festival_policy -> S.set_festival_policy(c, religion_value)
         :offering_policy -> S.set_offering_policy(c, religion_value)
-        :offer -> S.make_offering(c, p.stats, religion_site, religion_value)
-        :rededicate -> Ur.Council.respond_rededication(c, religion_value == 1)
+        :offer -> S.make_offering(stamp_clock(c, p.elapsed), p.stats, religion_site, religion_value)
+        :rededicate -> Ur.Council.respond_rededication(stamp_clock(c, p.elapsed), religion_value == 1)
         _ -> c
       end
       let rededication_answered = religion_action == :rededicate && Ur.Council.rededication_target(before_religion) > Ur.Council.rededication_target(c)
@@ -482,7 +482,8 @@ mod Ur do
       else p.preview_chunks end
       let reason = if hovered != p.hovered || popup != p.popup || parcel_focus != p.parcel_focus || sidebar_tab != p.sidebar_tab || paint || undone || midnight || due || policy_changed || day_changed || building_day do S.reason_with(c, inspect, st) else p.reason end
       Ur.Scene.begin_vehicle_lights(hour)
-      Ur.Scene.incidents(c, int_to_float(c.calendar_day) *. S.day_seconds() +. elapsed)
+      let wind = S.regional_wind(c)
+      Ur.Scene.incidents(c, int_to_float(c.calendar_day) *. S.day_seconds() +. elapsed, wind, traffic_time)
       let rotor_phases = Ur.Scene.vehicles(c, p.city, p.rotor_phases, traffic_time, elapsed, game_dt,
         paint || undone || midnight || policy_changed || p.frame == 0, 0)
       let food = if paint || undone || midnight do Ur.Food.producer_traffic(c, st) else p.food end
@@ -537,7 +538,6 @@ mod Ur do
       let weather = S.current_weather(c)
       let weather_time = int_to_float(c.month * S.days_per_month() + c.calendar_day) *. S.day_seconds() +. elapsed
       Ur.Scene.daylight(elapsed, weather)
-      let wind = S.regional_wind(c)
       let (cloud_x, cloud_z) = p.cloud_offset
       let drift = dt *. int_to_float(wind.speed) /. 3.6
       let cloud_offset = (cloud_x +. Math.cos(wind.heading) *. drift, cloud_z +. Math.sin(wind.heading) *. drift)
@@ -796,7 +796,7 @@ mod Ur do
         6 -> (222.0, 190.0, 52.0)
         7 -> (222.0, 200.0, 52.0)
         8 -> (230.0, 219.0, 37.0)
-        9 -> (249.0, 178.0, 52.0)
+        9 -> (250.0, 177.0, 43.0)
         10 -> (249.0, 178.0, 37.0)
         11 -> (107.0, 150.0, 71.0)
         12 | 13 | 21 | 22 | 27 -> (78.0, 151.0, 52.0)
