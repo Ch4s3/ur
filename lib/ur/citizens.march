@@ -603,10 +603,11 @@ mod Ur.Citizens do
       end
     end
   end
-  pfn reserve(c : Ur.Sim.City, cars : List(Citizen), occupied : Occupied) : Occupied do
+  pfn reserve(c : Ur.Sim.City, cars : List(Actor), occupied : Occupied) : Occupied do
     match cars do
       Nil -> occupied
-      Cons(person, rest) ->
+      Cons(entry, rest) ->
+        let person = entry.person
         match person.route do
         Cons(a, Cons(b, tail)) ->
           let occupied = if driving(c, person, a, b) do
@@ -1094,9 +1095,10 @@ mod Ur.Citizens do
         queue_boarding(c, active, motion, rest, seats, dt, Cons(next, out))
     end
   end
-  pfn transit_boarding(c : Ur.Sim.City, active : List(Ur.Fleet.Run), motion : NativeFloatArr, cars : List(Citizen), waiters : List(Citizen), dt : Float) : List(Citizen) do
+  pfn transit_boarding(c : Ur.Sim.City, active : List(Ur.Fleet.Run), motion : NativeFloatArr, cars : List(Actor), waiters : List(Citizen), dt : Float) : List(Citizen) do
     if List.is_empty(waiters) do Nil else
-      let seats = List.fold_left(cars, NativeArray.make_int(180, 0), fn (seats, rider) ->
+      let seats = List.fold_left(cars, NativeArray.make_int(180, 0), fn (seats, entry) ->
+        let rider = entry.person
         let slot = rider.bus_slot
         if slot < 0 do seats else
           let progress = NativeArray.get_float(motion, slot)
@@ -1322,8 +1324,8 @@ mod Ur.Citizens do
       end
     end
   end
-  pfn active_parking(cars : List(Citizen), keys : Map(Int, Int)) : Map(Int, Int) do
-    List.fold_left(cars, keys, fn (keys, person) -> park_actor(keys, person, 1))
+  pfn active_parking(cars : List(Actor), keys : Map(Int, Int)) : Map(Int, Int) do
+    List.fold_left(cars, keys, fn (keys, entry) -> park_actor(keys, entry.person, 1))
   end
   pfn crossing_reservation(reservations : Map(Int, Int), arm : Int, delta : Int) : Map(Int, Int) do
     if arm < 0 do reservations else
@@ -1438,24 +1440,24 @@ mod Ur.Citizens do
       end
     end
   end
+  -- [active] collects, newest first, the actors that stay active.
   pfn advance_actors(c : Ur.Sim.City, running : NativeIntArr, bus : Option(TransitService), actors : List(Actor),
-    roster : Roster, occupied : Occupied, dt : Float, tick_time : Float, motion : NativeFloatArr, boarding : List(Citizen),
+    roster : Roster, active : List(Actor), occupied : Occupied, dt : Float, tick_time : Float, motion : NativeFloatArr, boarding : List(Citizen),
     guard : Int -> Citizen -> Citizen -> Citizen, schedule : Bool) : Roster do
     match actors do
-      Nil -> { roster with active: List.reverse(roster.active) }
+      Nil -> { roster with active: List.reverse(active) }
       Cons(entry, rest) ->
         let (person, occupied) = advance_person(c, running, bus, entry.person, occupied, roster.clock, dt, motion, boarding)
         let person = guard(entry.slot, entry.person, person)
         let entry = { entry with person: person }
         let event = if schedule do plan_walk(entry, occupied, tick_time, roster.walk_time, guard) else None end
-        let roster = match event do
-          Some(event) -> queue_walk(roster, event)
+        match event do
+          Some(event) -> advance_actors(c, running, bus, rest, queue_walk(roster, event), active, occupied, dt, tick_time, motion, boarding, guard, schedule)
           None ->
             let wake = wake_at(c, person, roster.clock)
-            if wake == -1 do { roster with active: Cons(entry, roster.active) }
-            else sleep_actor(c, roster, entry, wake) end
+            if wake == -1 do advance_actors(c, running, bus, rest, roster, Cons(entry, active), occupied, dt, tick_time, motion, boarding, guard, schedule)
+            else advance_actors(c, running, bus, rest, sleep_actor(c, roster, entry, wake), active, occupied, dt, tick_time, motion, boarding, guard, schedule) end
         end
-        advance_actors(c, running, bus, rest, roster, occupied, dt, tick_time, motion, boarding, guard, schedule)
     end
   end
   pfn step_roster(c : Ur.Sim.City, walk : WalkMap, running : NativeIntArr, bus : Option(TransitService), roster : Roster, time : Float,
@@ -1470,16 +1472,18 @@ mod Ur.Citizens do
       let occupancy = { walk: walk, lanes: NativeArray.make_int(S.count() * 16, 0), parking_keys: roster.reservations,
         junctions: junctions, crossings: reserve_walks(roster), signal_tick: S.signal_tick(traffic_time) }
       let (roster, waking) = dispatch_walks(c, roster, occupancy, traffic_time, float_to_int(Math.floor(time *. 40.0)), guard, Nil)
-      let cars = List.map(roster.active, fn entry -> entry.person)
+      let cars = roster.active
+      let roster = { roster with active: Nil }
       let occupancy = { occupancy with parking_keys: active_parking(cars, roster.reservations), crossings: reserve_walks(roster) }
       let (motion, boarding) = match bus do
         Some(service) ->
           let motion = Ur.Fleet.passenger_progress(service.active)
-          let waiters = List.fold_left(cars, Nil, fn (waiters, person) -> if transit_waiter(c, running, person) do Cons(person, waiters) else waiters end)
+          let waiters = List.fold_left(cars, Nil, fn (waiters, entry) -> if transit_waiter(c, running, entry.person) do Cons(entry.person, waiters) else waiters end)
           (motion, transit_boarding(c, service.active, motion, cars, waiters, dt))
         None -> (Ur.Fleet.passenger_progress(Nil), Nil)
       end
-      let next = advance_actors(c, running, bus, roster.active, { roster with active: Nil }, reserve(c, cars, occupancy),
+      let occupancy = reserve(c, cars, occupancy)
+      let next = advance_actors(c, running, bus, cars, roster, Nil, occupancy,
         dt, traffic_time, motion, boarding, guard, schedule)
       { next with active: merge_actors(next.active, List.sort_by(waking, slot_order)) }
     end
