@@ -579,7 +579,7 @@ mod Ur.Save do
       Some(route) -> [("freight", encode_freight(route))]
       None -> Nil
     end
-    let fields = Cons(("utility_service", enc_array(v.utility_service, 2639, Nil)), freight)
+    let fields = List.append([("founders", Json.encode_int(v.founders)), ("world_seed", Json.encode_int(v.world_seed)), ("world_setup", enc_array(v.setup, 6, Nil)), ("utility_service", enc_array(v.utility_service, 2639, Nil))], freight)
     Json.encode_object(List.append(Cons(("religion", encode_religion(v.religion)), fields),
       Cons(("bus_fare", Json.encode_int(v.bus_fare)),
       Cons(("waste_live", Json.encode_bool(v.waste_live)),
@@ -870,6 +870,31 @@ mod Ur.Save do
     let? raw_pollution = field(j, "pollution")
     let? pollution = array(raw_pollution, 2640, 2147483647)
     let? air_pollution = optional_array(j, "air_pollution", 100)
+    let? founders = match Json.get(j, "founders") do
+      None -> Ok(0)
+      Some(value) -> integer(value)
+    end
+    let? world_seed = match Json.get(j, "world_seed") do
+      None -> Ok(-1)
+      Some(value) -> integer(value)
+    end
+    let? setup = match Json.get(j, "world_setup") do
+      None -> Ok(S.default_setup())
+      Some(value) -> match array(value, 7, 48) do
+        Ok(settings) -> Ok(settings)
+        Err(_) ->
+          let old = match array(value, 6, 48) do
+            Ok(settings) -> Ok(settings)
+            Err(_) -> array(value, 5, 48)
+          end
+          let? previous = old
+          let settings = S.default_setup()
+          let settings = NativeArray.set_int(NativeArray.set_int(settings, 0, S.get(previous, 0)), 1, S.get(previous, 1))
+          let settings = NativeArray.set_int(NativeArray.set_int(settings, 2, S.get(previous, 2)), 3, S.get(previous, 3))
+          let wet = if NativeArray.length_int(previous) >= 6 do S.get(previous, 5) else S.get(previous, 2) end
+          Ok(NativeArray.set_int(NativeArray.set_int(settings, 4, S.get(previous, 4)), 5, wet))
+      end
+    end
     let? climate_seed = match Json.get(j, "climate_seed") do
       None -> Ok(0)
       Some(value) -> integer(value)
@@ -914,7 +939,7 @@ mod Ur.Save do
     let? raw_message = field(j, "message")
     let? message = string(raw_message)
     if !((harbour == -1 || S.valid(harbour)) && (ferry_start == -1 || S.valid(ferry_start)) && month >= 0 && construction_spend >= 0 && tax >= 0 && tax <= 25 && energy >= 1 && energy <= 12) do Err("Invalid city values.") else
-    Ok({ climate_seed: S.clamp(climate_seed, 0, 2147483646), storm_drains: storm_drains, seawalls: seawalls, pump_orders: pump_orders, surface_water: surface_water, flood_damage: flood_damage, flood_active: flood_active, rain_tanks: rain_tanks, subway_water: subway_water, soil_moisture: S.clamp(soil, 0, 100), pumping_cost: S.clamp(pumping, 0, 200000),
+    Ok({ founders: S.clamp(founders, 0, 12), world_seed: world_seed, setup: setup, climate_seed: S.clamp(climate_seed, 0, 2147483646), storm_drains: storm_drains, seawalls: seawalls, pump_orders: pump_orders, surface_water: surface_water, flood_damage: flood_damage, flood_active: flood_active, rain_tanks: rain_tanks, subway_water: subway_water, soil_moisture: S.clamp(soil, 0, 100), pumping_cost: S.clamp(pumping, 0, 200000),
       waste_live: waste_live, waste_bins: waste_bins, waste_stock: waste_stock, waste_sites: waste_sites,
       waste_last: waste_last, waste_log: waste_log, waste_runs: waste_runs, council: council, religion: religion, construction_spend: construction_spend, island_exports: island_exports, island_crops: island_crops, island_catch: island_catch,
       shop_imports: shop_imports, harbour: harbour, ferry_start: ferry_start, trash: trash,

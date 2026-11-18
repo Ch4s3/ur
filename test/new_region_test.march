@@ -1,0 +1,121 @@
+mod NewRegionTest do
+  needs IO
+  needs IO.Console
+  needs IO.Clock
+  needs IO.Process
+  needs IO.FileRead
+  needs IO.FileWrite
+  alias Ur.Sim as S
+
+  pfn landing(c : Ur.Sim.City, i : Int) : Int do
+    if i >= S.count() do -1 else if S.can_land(c, i) do i else landing(c, i + 1) end end
+  end
+  pfn outer_land(c : Ur.Sim.City, i : Int, total : Int) : Int do
+    if i >= S.count() do total else
+      outer_land(c, i + 1, total + (if i % S.width() >= 38 && S.get(c.heights, i) > 0 do 1 else 0 end))
+    end
+  end
+  pfn resources(c : Ur.Sim.City, i : Int, total : Int) : Int do
+    if i >= S.count() do total else
+      resources(c, i + 1, total + (if S.freshwater(c, i) || S.geothermal(c, i) do 1 else 0 end))
+    end
+  end
+  pfn satellites_separate(c : Ur.Sim.City, i : Int) : Bool do
+    if i >= S.count() do true else
+      let linked = if i % S.width() < 38 || S.get(c.heights, i) == 0 do true else
+        List.all([0, 1, 2, 3], fn direction ->
+          let j = S.neighbour(i, direction)
+          !S.valid(j) || j % S.width() < 38 || S.get(c.heights, j) == 0 || S.food_island(c, i) == S.food_island(c, j))
+      end
+      if linked do satellites_separate(c, i + 1) else false end
+    end
+  end
+  pfn elevations(c : Ur.Sim.City, i : Int, total : Int) : Int do
+    if i >= S.count() do total else elevations(c, i + 1, total + S.get(c.heights, i)) end
+  end
+  pfn highlands(c : Ur.Sim.City, i : Int, total : Int) : Int do
+    if i >= S.count() do total else
+      highlands(c, i + 1, total + (if i % S.width() < 35 && S.get(c.heights, i) >= 30 do 1 else 0 end))
+    end
+  end
+  pfn founding_construction() : Unit do
+    let dock = S.index(20, 36)
+    let street = S.index(20, 35)
+    let homes = S.index(19, 35)
+    let heights = NativeArray.set_int(NativeArray.set_int(NativeArray.make_int(S.count(), 8), S.index(20, 37), 0), S.index(21, 37), 0)
+    let empty = S.unclaimed()
+    let city = S.land({ empty with heights: heights }, dock)
+    let city = S.act(city, street, 1)
+    let city = S.act(city, S.index(19, 36), 21)
+    let city = S.act(city, S.index(20, 34), 14)
+    let city = S.act(city, street, 18)
+    let city = S.act(city, S.index(21, 36), 17)
+    let city = S.act(S.act(city, homes, 2), S.index(21, 35), 3)
+    let city = S.act(city, street, 26)
+    let initial = S.stats(city)
+    Test.assert_true(initial.work == 0 && S.housing_demand(initial) > 0 &&
+      S.reason_with(city, homes, initial) == "Eligible for development. Waiting for private investment.",
+      "Founding households create housing demand before jobs exist")
+    let finished = S.advance(city, 8)
+    Test.assert_true(S.get(finished.buildings, homes) > 0 && finished.founders < city.founders,
+      "Serviced housing is built and founding households move in")
+  end
+  fn main(_cap : Cap(IO)) : Unit do
+    let setup = S.default_setup()
+    let single = NativeArray.set_int(setup, 1, 1)
+    let many = NativeArray.set_int(setup, 1, 4)
+    let a = S.unclaimed_setup(123456, single)
+    let b = S.unclaimed_setup(123456, many)
+    Test.assert_true(outer_land(a, 0, 0) == 0 && outer_land(b, 0, 0) > 0, "Island setting controls outer islands")
+    Test.assert_true(satellites_separate(b, 0), "Satellite islands have water channels between them")
+    let other = S.unclaimed_setup(654321, many)
+    Test.assert_true(satellites_separate(other, 0), "A second seed keeps satellite islands separate")
+    Test.assert_true(outer_land(b, 0, 0) != outer_land(other, 0, 0), "Satellite island area varies with seed")
+    let d = S.unclaimed_setup(123456, single)
+    Test.assert_true(S.get(a.heights, S.index(20, 20)) == S.get(d.heights, S.index(20, 20)) &&
+      S.current_weather(a) == S.current_weather(d), "Seed reproduces terrain and climate")
+    let low = { b with setup: NativeArray.set_int(S.default_setup(), 4, 0), heights: NativeArray.make_int(S.count(), 10) }
+    let high = { b with setup: NativeArray.set_int(S.default_setup(), 4, 4), heights: NativeArray.make_int(S.count(), 10) }
+    Test.assert_true(resources(high, 0, 0) > resources(low, 0, 0), "Resource abundance changes usable deposits")
+    let cold = { b with setup: NativeArray.set_int(S.default_setup(), 2, 0) }
+    let warm = { b with setup: NativeArray.set_int(S.default_setup(), 2, 4) }
+    Test.assert_true(S.climate_heat(warm) > S.climate_heat(cold) && S.climate_rain(warm) == S.climate_rain(cold),
+      "Temperature setting does not alter rainfall")
+    let dry = { b with setup: NativeArray.set_int(S.default_setup(), 5, 0) }
+    let wet = { b with setup: NativeArray.set_int(S.default_setup(), 5, 4) }
+    Test.assert_true(S.climate_rain(wet) > S.climate_rain(dry) && S.climate_heat(wet) == S.climate_heat(dry),
+      "Rainfall setting does not alter temperature")
+    let large = S.unclaimed_setup(123456, NativeArray.set_int(S.default_setup(), 0, 4))
+    Test.assert_true(List.all(List.range(0, S.depth()), fn z ->
+      S.get(large.heights, S.index(35, z)) == 0 && S.get(large.heights, S.index(36, z)) == 0 && S.get(large.heights, S.index(37, z)) == 0),
+      "Even the largest main island has water separating the outer islands")
+    let flat = S.unclaimed_setup(123456, NativeArray.set_int(S.default_setup(), 6, 0))
+    let mountainous = S.unclaimed_setup(123456, NativeArray.set_int(S.default_setup(), 6, 4))
+    Test.assert_true(elevations(mountainous, 0, 0) > elevations(flat, 0, 0) &&
+      highlands(mountainous, 0, 0) > highlands(flat, 0, 0) * 2,
+      "Mountain setting adds extensive highlands")
+    let shore = landing(b, 0)
+    Test.assert_true(S.valid(shore), "Generated region offers a landing")
+    let city = S.land(b, shore)
+    Test.assert_true(S.population(city) == 24 && S.resident_homes(city, shore) == 6,
+      "Founders arrive at the harbour and have temporary homes")
+    let home = S.neighbour(shore, 1)
+    let home = if S.valid(home) do home else S.neighbour(shore, 0) end
+    let developed = { city with heights: NativeArray.set_int(city.heights, home, 10),
+      zones: NativeArray.set_int(city.zones, home, 1), buildings: NativeArray.set_int(city.buildings, home, 1),
+      empty_homes: NativeArray.set_int(city.empty_homes, home, 4) }
+    let stats = S.stats(developed)
+    let moved = S.relocate_households(developed, stats.routes, stats.commutes, stats.labor)
+    Test.assert_true(moved.founders == 2 && S.resident_homes(moved, home) == 4 &&
+      S.households_at(moved, home) == List.take(S.households_at(city, shore), 4) && S.population(moved) == 24,
+      "Founding families move into homes with their identities intact")
+    let session = { game: { city: city, cx: 60.0, cz: 80.0, zoom: 30.0, yaw: 0.55, paused: true, speed: 1 }, evacuation: Nil }
+    match Ur.Save.decode_session(Ur.Save.encode_session(session)) do
+      Err(message) -> Test.assert_true(false, message)
+      Ok(loaded) -> Test.assert_true(loaded.game.city.world_seed == 123456 && S.get(loaded.game.city.setup, 1) == 4 &&
+        S.population(loaded.game.city) == 24 && loaded.game.city.founders == 6, "Run seed, settings and founders survive save and load")
+    end
+    founding_construction()
+    Authority.must(println("New region checks passed"))
+  end
+end

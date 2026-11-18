@@ -3,6 +3,7 @@ mod Ur.Menu do
   needs Window
   alias Strata.Ui as U
   alias Strata.Text as T
+  alias Strata.Controls as Controls
 
 
   pfn left(w : Float) : Float do (w -. 344.0) *. 0.5 end
@@ -61,7 +62,7 @@ mod Ur.Menu do
       buttons(a, x, y +. 44.0, boot, saved, confirm, hover, row + 1)
     end
   end
-  fn draw(boot : Bool, saved : Bool, confirm : Atom, notice : String, mx : Float, my : Float) : Strata.Ui.Ui do
+  fn draw(boot : Bool, saved : Bool, confirm : Atom, notice : String, mx : Float, my : Float, seed : Int) : Strata.Ui.Ui do
     let a = Strata.Render.ui_begin(1.0)
     let w = U.width(a)
     let h = U.height(a)
@@ -73,7 +74,81 @@ mod Ur.Menu do
     let a = T.text(a, 0, x +. 22.0, y +. 18.0, T.default_font(), 32.0, (0.93, 0.96, 0.94, 1.0), if boot do "UR" else "Game menu" end)
     let a = T.text(a, 0, x +. 23.0, y +. 68.0, T.default_font(), 13.0, (0.65, 0.79, 0.79, 1.0), if boot do "The island region" else "Manage your city" end)
     let a = buttons(a, x +. 22.0, y +. 108.0, boot, saved, confirm, at(mx, my, w, h, boot, saved), 0)
+    let a = if !boot && seed >= 0 do T.text(a, 0, x +. 22.0, y +. 370.0, T.default_font(), 11.0, (0.65, 0.79, 0.79, 1.0), "Region seed  " ++ seed_code(seed)) else a end
     T.styled(a, 0, x +. 22.0, y +. (if boot do 254.0 else 338.0 end), T.default_font(), 12.0,
       (0.76, 0.84, 0.82, 1.0), T.with_wrap(T.style(), 300.0), notice)
   end
+  fn seed_code(seed : Int) : String do Controls.base36(seed) end
+  fn setup_click(mx : Float, my : Float, w : Float, h : Float) : (Int, Int) do
+    let x = mx -. (w -. 520.0) *. 0.5
+    let y = my -. (h -. 580.0) *. 0.5
+    if y >= 505.0 && y < 543.0 do
+      if x >= 30.0 && x < 180.0 do (8, 0)
+      else if x >= 310.0 && x < 490.0 do (9, 0) else (-1, 0) end end
+    else if y >= 70.0 && y < 105.0 && x >= 370.0 && x < 490.0 do (7, 0)
+    else if y >= 70.0 && y < 105.0 && x >= 30.0 && x < 350.0 do (10, 0)
+    else if y >= 125.0 && y < 475.0 && x >= 200.0 && x <= 480.0 do
+      let row = float_to_int((y -. 125.0) /. 50.0)
+      let value = Controls.slider_step(x, 210.0, 260.0, if row == 1 do 4 else 5 end)
+      (row, if value < 0 do 0 else if value > 4 do 4 else value end end)
+    else (-1, 0) end end end end
+  end
+  fn setup_drag(mx : Float, w : Float, row : Int) : Int do
+    Controls.slider_step(mx, (w -. 520.0) *. 0.5 +. 210.0, 260.0, if row == 1 do 4 else 5 end)
+  end
+  fn setup_index(row : Int) : Int do
+    if row == 3 do 5 else if row == 4 do 6 else if row == 5 do 3 else if row == 6 do 4 else row end end end end
+  end
+  pfn setup_label(index : Int) : String do
+    match index do
+      0 -> "Main island size"
+      1 -> "Number of islands"
+      2 -> "Temperature"
+      3 -> "Rainfall"
+      4 -> "Mountains"
+      5 -> "Founding population"
+      _ -> "Resource abundance"
+    end
+  end
+  pfn setup_value(setup : NativeIntArr, index : Int) : Int do
+    let value = NativeArray.get_int(setup, setup_index(index))
+    if index == 1 do value - 1 else if index == 5 do (value - 16) / 8 else value end end
+  end
+  pfn setup_rows(a : Strata.Ui.Ui, setup : NativeIntArr, x : Float, y : Float, i : Int) : Strata.Ui.Ui do
+    if i == 7 do a else
+      let value = NativeArray.get_int(setup, setup_index(i))
+      let pos = setup_value(setup, i)
+      let description = if i == 1 || i == 5 do int_to_string(value)
+        else if i == 2 do (match value do 0 -> "Cool" | 1 -> "Mild" | 2 -> "Varied" | 3 -> "Warm" | _ -> "Hot" end)
+        else if i == 3 do (match value do 0 -> "Dry" | 1 -> "Drier" | 2 -> "Varied" | 3 -> "Wetter" | _ -> "Wet" end)
+        else (match value do 0 -> "Low" | 1 -> "Modest" | 2 -> "Medium" | 3 -> "High" | _ -> "Very high" end) end end end
+      let a = T.text(a, 0, x +. 30.0, y, T.default_font(), 14.0, (0.90, 0.95, 0.94, 1.0), setup_label(i))
+      let a = Controls.slider(a, x +. 210.0, y, 260.0, pos, if i == 1 do 4 else 5 end,
+        (0.27, 0.38, 0.39, 1.0), (0.40, 0.78, 0.71, 1.0))
+      let a = T.text(a, 0, x +. 210.0, y +. 20.0, T.default_font(), 11.0, (0.65, 0.79, 0.79, 1.0), description)
+      setup_rows(a, setup, x, y +. 50.0, i + 1)
+    end
+  end
+  fn draw_setup(setup : NativeIntArr, seed : Int, focused : Bool) : Strata.Ui.Ui do
+    let a = Strata.Render.ui_begin(1.0)
+    let w = U.width(a)
+    let h = U.height(a)
+    let x = (w -. 520.0) *. 0.5
+    let y = (h -. 580.0) *. 0.5
+    let a = U.rect(a, 0, 0.0, 0.0, w, h, (0.015, 0.036, 0.043, 0.65))
+    let a = U.rect(a, 0, x, y, 520.0, 580.0, (0.05, 0.10, 0.13, 0.98))
+    let a = T.text(a, 0, x +. 30.0, y +. 20.0, T.default_font(), 25.0, (0.93, 0.96, 0.94, 1.0), "New island region")
+    let a = Controls.text_field(a, x +. 30.0, y +. 70.0, 320.0, 35.0, "Seed  " ++ seed_code(seed), focused,
+      if focused do (0.13, 0.27, 0.29, 1.0) else (0.10, 0.20, 0.24, 1.0) end, (0.93, 0.96, 0.94, 1.0), 14.0)
+    let a = U.rect(a, 0, x +. 370.0, y +. 70.0, 120.0, 35.0, (0.10, 0.20, 0.24, 1.0))
+    let a = T.text(a, 0, x +. 388.0, y +. 79.0, T.default_font(), 13.0, (0.93, 0.96, 0.94, 1.0), "New seed")
+    let a = setup_rows(a, setup, x, y +. 125.0, 0)
+    let a = T.text(a, 0, x +. 30.0, y +. 476.0, T.default_font(), 11.0, (0.65, 0.79, 0.79, 1.0),
+      "Founders stay at the harbour until homes are available.")
+    let a = U.rect(a, 0, x +. 30.0, y +. 505.0, 150.0, 38.0, (0.10, 0.20, 0.24, 1.0))
+    let a = T.text(a, 0, x +. 48.0, y +. 515.0, T.default_font(), 14.0, (0.93, 0.96, 0.94, 1.0), "Back")
+    let a = U.rect(a, 0, x +. 310.0, y +. 505.0, 180.0, 38.0, (0.23, 0.41, 0.40, 1.0))
+    T.text(a, 0, x +. 329.0, y +. 515.0, T.default_font(), 14.0, (0.93, 0.96, 0.94, 1.0), "Create region")
+  end
+
 end
