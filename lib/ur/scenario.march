@@ -195,9 +195,14 @@ mod Ur.Scenario do
     { c with crime_history: Cons({ month: c.month, calls: Cons(fire, Cons(medical, Nil)) }, history) }
   end
 
+  fn fire_recovery_home() : Int do S.index(33, 21) end
   fn fire_recovery_district() : Ur.Sim.City do
     let c = green_district()
-    let fire = { lot: S.index(33, 21), kind: 3, reported: 0, station: S.index(29, 21),
+    let home = fire_recovery_home()
+    let c = { c with zones: NativeArray.set_int(c.zones, home, 1),
+      buildings: NativeArray.set_int(c.buildings, home, 2), housing_losses: NativeArray.set_int(c.housing_losses, home, 0),
+      empty_homes: NativeArray.set_int(c.empty_homes, home, 0), clock_ms: 750 }
+    let fire = { lot: home, kind: 3, reported: 0, station: S.index(29, 21),
       response: 34, travel: 8, road: Nil, spread: Cons(S.index(32, 21), Nil), medical: None }
     S.apply_building_fires(c, Cons(fire, Nil))
   end

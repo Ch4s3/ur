@@ -20,7 +20,7 @@ mod Ur.Diagnosis do
     let pressure = if capacity > 0 && S.motor_road(c, lot) do load * 100 / capacity else 0 end
     let waste = S.waste_overflow(c, lot)
     let footfall = S.get(c.footfall, lot)
-    { homes: report.homes + homes, shops: report.shops + (if S.storefront(c, lot) == 1 do 1 else 0 end),
+    { homes: report.homes + homes, shops: report.shops + (if S.storefront(c, lot) == 1 && S.shop_occupied(c, lot) do 1 else 0 end),
       bars: report.bars + (if S.nightlife(c, lot) do 1 else 0 end),
       stops: report.stops + (if S.get(c.stops, lot) >= 2 && S.get(st.running_transit, lot) > 0 do 1 else 0 end),
       footfall: if footfall > report.footfall do footfall else report.footfall end,

@@ -271,10 +271,7 @@ mod Ur.Council do
     if offset == 180 do (homes, damaged, example) else
       let lot = ward_lot(ward, offset)
       -- Temporarily displaced households remain in the recovery count.
-      let residents = if ward_at(c, lot) != ward || S.housing_vacant(c, lot) do 0 else
-        let capacity = S.homes_at(c, lot)
-        S.clamp(capacity - S.get(c.empty_homes, lot), 0, capacity)
-      end
+      let residents = if ward_at(c, lot) == ward do S.resident_homes(c, lot) else 0 end
       let affected = residents > 0 && S.curse_impact(c, lot)
       curse_damage(c, ward, offset + 1, homes + residents, damaged + (if affected do residents else 0 end),
         if affected && example < 0 do lot else example end)
@@ -343,6 +340,8 @@ mod Ur.Council do
 
   type WardReport = { homes : Int, affected : NativeIntArr, examples : NativeIntArr }
 
+  fn displacement_issue() : Int do 16 end
+
   fn issue_name(issue : Int) : String do
     match issue do
       1 -> "Power shortfalls"
@@ -360,6 +359,7 @@ mod Ur.Council do
       13 -> "Support for more festivals"
       14 -> "Festival strain on services"
       15 -> "Homes affected by the curse"
+      16 -> "Displaced households"
       _ -> "No pressing issue"
     end
   end
@@ -408,20 +408,32 @@ mod Ur.Council do
   pfn survey_ward(c : Ur.Sim.City, st : Ur.Sim.Stats, ward : Int, offset : Int, report : WardReport) : WardReport do
     if offset >= 180 do report else
       let lot = ward_lot(ward, offset)
-      let homes = if S.valid(lot) && ward_at(c, lot) == ward do S.occupied_homes(c, lot) else 0 end
-      let next = if homes > 0 do survey_lot(c, st, report, lot, homes) else report end
+      let next = if ward_at(c, lot) != ward do report else
+        let homes = S.occupied_homes(c, lot)
+        if homes > 0 do survey_lot(c, st, report, lot, homes) else
+          let displaced = S.displaced_homes(c, lot)
+          add_affected(report, displacement_issue(), lot, displaced, displaced > 0)
+        end
+      end
       survey_ward(c, st, ward, offset + 1, next)
     end
   end
 
   fn ward_report(c : Ur.Sim.City, st : Ur.Sim.Stats, ward : Int) : WardReport do
-    let report = { homes: 0, affected: NativeArray.make_int(15, 0), examples: NativeArray.make_int(15, 0) }
+    let report = { homes: 0, affected: NativeArray.make_int(17, 0), examples: NativeArray.make_int(17, 0) }
     if ward < 0 || !seated(c, ward) do report else survey_ward(c, st, ward, 0, report) end
   end
 
+  fn displaced(report : WardReport) : Int do NativeArray.get_int(report.affected, displacement_issue()) end
+  fn sample_homes(report : WardReport, issue : Int) : Int do
+    report.homes + (if issue == displacement_issue() do displaced(report) else 0 end)
+  end
   fn share(report : WardReport, issue : Int) : Int do
-    if report.homes == 0 || issue < 1 || issue > 14 do 0
-    else NativeArray.get_int(report.affected, issue) * 100 / report.homes end
+    let homes = sample_homes(report, issue)
+    if homes == 0 || issue < 1 || issue > displacement_issue() do 0 else
+      let affected = NativeArray.get_int(report.affected, issue) * 100
+      if issue == displacement_issue() do (affected + homes - 1) / homes else affected / homes end
+    end
   end
 
   pfn issue_pressure(report : WardReport, issue : Int) : Int do
@@ -430,6 +442,7 @@ mod Ur.Council do
       5 | 6 | 8 -> 40
       9 -> 60
       13 | 14 -> 35
+      16 -> 15
       _ -> 75
     end
     let affected = share(report, issue)
@@ -437,7 +450,7 @@ mod Ur.Council do
   end
 
   pfn leading(report : WardReport, issue : Int, best : Int, pressure : Int) : Int do
-    if issue > 14 do best else
+    if issue > displacement_issue() do best else
       let score = issue_pressure(report, issue)
       if score > pressure do leading(report, issue + 1, issue, score)
       else leading(report, issue + 1, best, pressure) end
@@ -643,12 +656,14 @@ mod Ur.Council do
       let data = NativeArray.set_int(NativeArray.set_int(data, 5, NativeArray.get_int(report.examples, issue)), 7, issue)
       let data = NativeArray.set_int(NativeArray.set_int(data, 728, affected), 729, affected)
       let data = NativeArray.set_int(NativeArray.set_int(data, 730, 0), 731, c.month)
-      let data = NativeArray.set_int(data, 732, report.homes)
+      let data = NativeArray.set_int(data, 732, sample_homes(report, issue))
       { c with council: data, message: member(c, ward) ++ " raised a district concern. See Details / Council." }
     end
   end
 
-  fn outcome_goal(c : Ur.Sim.City) : Int do baseline(c) * 2 / 3 end
+  fn outcome_goal(c : Ur.Sim.City) : Int do
+    if agenda_issue(c) == displacement_issue() do 0 else baseline(c) * 2 / 3 end
+  end
 
   pfn observe_agenda(c : Ur.Sim.City, st : Ur.Sim.Stats) : Ur.Sim.City do
     let issue = agenda_issue(c)
@@ -661,9 +676,12 @@ mod Ur.Council do
         (homes, if homes > 0 do damaged * 100 / homes else 0 end)
       else
         let report = ward_report(c, st, sponsor(c))
-        (report.homes, share(report, issue))
+        (sample_homes(report, issue), share(report, issue))
       end
-      let comparable = homes > 0 && homes * 5 >= S.get(c.council, 732) * 4 && (issue != 4 || Option.is_some(c.freight))
+      let filed = S.get(c.council, 732)
+      let comparable = homes > 0 &&
+        (if issue == displacement_issue() do homes >= filed else homes * 5 >= filed * 4 end) &&
+        (issue != 4 || Option.is_some(c.freight))
       let checks = if comparable && affected <= outcome_goal(c) do
         if c.month == last + 1 do verified_months(c) + 1 else 1 end
       else 0 end
@@ -750,6 +768,7 @@ mod Ur.Council do
         11 -> "Request: improve school access"
         12 -> "Request: improve walking access to worship"
         15 -> "Request: repair curse damage"
+        16 -> "Request: restore displaced households' homes"
         _ -> agenda_title(agenda)
       end
     end end end
@@ -771,6 +790,7 @@ mod Ur.Council do
       13 -> "Adopt Public Holidays to serve more residents."
       14 -> if demand(c) == 2 do "Suspend festivals while local services recover." else "Return to Local Observance to reduce demand." end
       15 -> "Restore affected homes and services in this ward."
+      16 -> "Keep repair sites dry and connected to the road network."
       _ -> "Extend school access to more homes."
     end) else match demand(c) do
       1 -> "Build a new school with street access in this ward."

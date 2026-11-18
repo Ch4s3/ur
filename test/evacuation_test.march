@@ -127,8 +127,68 @@ mod EvacuationTest do
       Err(error) -> Test.assert_true(false, error)
     end
   end
+  pfn fire_recovery_checks() : Unit do
+    let base = S.new()
+    let home = S.index(10, 20)
+    let school = S.index(10, 19)
+    let ward = S.crime_district(home)
+    let empty = NativeArray.make_int(S.count(), 0)
+    let city = { base with heights: NativeArray.make_int(S.count(), 24),
+      plants: NativeArray.set_int(base.plants, school, 18),
+      buildings: NativeArray.set_int(empty, home, 2),
+      storefronts: NativeArray.set_int(base.storefronts, home, 1),
+      surface_water: NativeArray.set_int(base.surface_water, base.harbour, 4),
+      empty_homes: NativeArray.set_int(base.empty_homes, home, 1),
+      council: NativeArray.set_int(base.council, 8 + ward, 1) }
+    let before = Ur.Citizens.refresh(city, Nil)
+    let tenants = S.occupied_homes(city, home)
+    Test.assert_true(tenants > 0, "the fire fixture starts with tenants")
+    let call = { lot: home, kind: 3, reported: 0, station: -1, response: -1, travel: 0, road: Nil, spread: Nil, medical: None }
+    let ruin = S.apply_building_fires(city, [call])
+    Test.assert_eq_int(S.displaced_homes(ruin, home), tenants, "a burned-down home keeps exactly its former tenants")
+    Test.assert_eq_int(S.occupied_homes(ruin, home), 0, "the ruin remains unavailable to the housing market")
+    Test.assert_eq_int(S.population(ruin), S.population(city), "a rebuilding site retains its households in the census")
+    let ruin = S.grow_storefronts(ruin, empty, empty)
+    Test.assert_eq_int(S.displaced_homes(ruin, home), tenants, "a closed shop floor cannot become extra households while rebuilding")
+    Test.assert_false(S.shop_occupied(ruin, home), "the closed storefront has no operating shop")
+    let flooded = { ruin with surface_water: NativeArray.set_int(ruin.surface_water, home, 4) }
+    let stalled = S.advance_fire_recovery(flooded, S.access(flooded), 0)
+    Test.assert_eq_int(S.fire_months_left(stalled, home), 4, "standing floodwater pauses fire reconstruction")
+    let report = Ur.Council.ward_report(ruin, S.stats(ruin), ward)
+    let issue = Ur.Council.displacement_issue()
+    Test.assert_eq_int(Ur.Council.displaced(report), tenants, "the ward counts the households displaced by the fire")
+    Test.assert_eq_int(Ur.Council.share(report, issue), 100, "a fully displaced ward still represents its households")
+    let agenda = Ur.Council.advance({ ruin with month: 8 }, S.population(ruin))
+    Test.assert_eq_int(Ur.Council.agenda_issue(agenda), issue, "the councillor can put disaster recovery on the agenda")
+    Test.assert_eq_int(Ur.Council.target(agenda), home, "the request points the player to a damaged home")
+    let evacuees = Ur.Citizens.refresh(ruin, before)
+    let outbound = List.filter(evacuees, fn person -> person.home == home)
+    Test.assert_eq_int(List.length(outbound), tenants * 4, "all residents from the ruined building have shelter trips")
+    Test.assert_true(List.all(outbound, fn person -> Ur.Citizens.evacuating(person) && person.shelter == school),
+      "the school takes in the households while rebuilding is underway")
+    let lodged = evacuation_steps(ruin, reload(ruin, evacuation_steps(ruin, evacuees, 5)), 80)
+    let repaired = List.fold_left([1, 2, 3, 4], ruin, fn (state, _) -> S.advance_fire_recovery(state, S.access(state), 0))
+    Test.assert_eq_int(S.occupied_homes(repaired, home), tenants, "rebuilding restores the original occupied homes")
+    let returning = Ur.Citizens.refresh(repaired, reload(ruin, lodged))
+    let restored = evacuation_steps(repaired, returning, 80)
+    let returned = List.filter(restored, fn person -> person.home == home && person.location == home)
+    let original = List.filter(before, fn person -> person.home == home)
+    Test.assert_true(List.map(returned, fn person -> person.id) == List.map(original, fn person -> person.id),
+      "the same residents return once their building is rebuilt")
+    let report = Ur.Council.ward_report(repaired, S.stats(repaired), ward)
+    Test.assert_eq_int(Ur.Council.share(report, issue), 0, "after reconstruction the ward records recovery")
+    let recovered = { repaired with council: agenda.council, month: 9 }
+    let cleared = { recovered with buildings: empty }
+    let missing = Ur.Council.advance(cleared, S.population(cleared))
+    Test.assert_eq_int(Ur.Council.verified_months(missing), 0, "removing damaged housing does not count as recovery")
+    let review = Ur.Council.advance(recovered, S.population(recovered))
+    Test.assert_eq_int(Ur.Council.verified_months(review), 1, "the first review credits safe homes")
+    let resolved = Ur.Council.advance({ review with month: 10 }, S.population(review))
+    Test.assert_eq_int(Ur.Council.kind(resolved), 0, "a second review resolves the recovery request")
+  end
   fn main(_cap : Cap(IO)) : Unit do
     evacuation_checks()
+    fire_recovery_checks()
     Authority.must(println("Evacuation checks passed"))
   end
 end

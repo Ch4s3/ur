@@ -2062,10 +2062,13 @@ mod UrTest do
     Test.assert_eq_int(Ur.Council.endorsement(after_vote, ward), 0, "elections clear the endorsements for the next term")
     Test.assert_true(Ur.Council.result(after_vote, ward) > 0, "the ward has an election result")
     let safe_ward = S.crime_district(S.index(10, 21))
-    let backed_challenger = Ur.Council.endorse(campaign, safe_ward, 2)
-    let losing_vote = Ur.Council.advance({ backed_challenger with month: 48 }, S.population(backed_challenger))
+    -- Use a term whose roll stays below the incumbent's minimum support.
+    let safe_campaign = { campaign with month: 140 }
+    let neutral_vote = Ur.Council.advance({ safe_campaign with month: 144 }, S.population(safe_campaign))
+    let backed_challenger = Ur.Council.endorse(safe_campaign, safe_ward, 2)
+    let losing_vote = Ur.Council.advance({ backed_challenger with month: 144 }, S.population(backed_challenger))
     Test.assert_true(Ur.Council.endorsed_loser(losing_vote, safe_ward), "the fixture records an endorsement of a losing challenger")
-    Test.assert_true(Ur.Council.challenge_chance(losing_vote, safe_ward) > Ur.Council.challenge_chance(election, safe_ward), "the winner is more likely to challenge the mayor after a losing endorsement")
+    Test.assert_true(Ur.Council.challenge_chance(losing_vote, safe_ward) > Ur.Council.challenge_chance(neutral_vote, safe_ward), "the winner is more likely to challenge the mayor after a losing endorsement")
     let funded = Ur.Council.invest(campaign, { campaign with cash: campaign.cash - 500 }, 44, Cons(lot, Nil))
     Test.assert_true(Ur.Council.challenge_chance(funded, ward) < Ur.Council.challenge_chance(campaign, ward), "investment buys goodwill in the receiving ward")
     Test.assert_eq_int(Ur.Council.challenge_chance(funded, safe_ward), Ur.Council.challenge_chance(campaign, safe_ward), "investment does not improve relations with a different ward")

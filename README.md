@@ -251,10 +251,12 @@ wide pedestrian streets. Traffic slows all responders. Fires that burn for
 12 minutes can reach adjoining buildings, with further spread possible if
 crews take longer. Buildings close for one or two months of repair. After
 30 minutes of local fire exposure a building burns down and requires four
-months of reconstruction. Owners resume work automatically once the parcel
-has a road connection to the harbor. The parcel inspector shows the status
-and remaining time. **Layers → Emergencies → Fire recovery** maps parcels
-that are still closed. Try the aftermath showcase with `UR_DEMO=10 ./run.sh`.
+months of reconstruction. Work proceeds when the site is dry and connected
+to the harbor by road. Households keep their homes reserved and walk to
+available shelters while they wait. The parcel inspector shows how repairs
+are progressing and where residents are sheltered. **Layers → Emergencies →
+Fire recovery** maps closures. Try `UR_DEMO=10 ./run.sh` and unpause to watch
+the evacuation.
 The **Fires** and **Medical calls** layers also filter the Safety chart.
 Ambulances pick patients up and deliver them to the clinic or hospital that
 can start treatment soonest. Clinics have one treatment bed and hospitals
@@ -444,6 +446,8 @@ Use **Next ward** to compare the affected district with its neighbor and
 **Show affected homes** to find the site behind the current agenda item.
 Councillors review occupied homes for service shortfalls, food prices and
 availability, job access, pollution, noise, budgets, and walkable amenities.
+Displaced households stay in their home ward's report. A councillor can
+request recovery and verify that homes are safe again over two monthly reviews.
 They can issue a request or place a targeted hold. The panel shows the filing
 baseline, the latest monthly reading, and the target. Two consecutive reviews
 at the target close the item. Unresolved items expire after eight months.
