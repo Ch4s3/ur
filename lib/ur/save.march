@@ -529,12 +529,58 @@ mod Ur.Save do
         wrath_god: S.get(state, 23), festival_feedback: feedback, festival_absence: absence, festival_attending: attending })
     end
   end
+  pfn encode_households(book : Ur.Sim.Households) : Json.JsonValue do
+    let addresses = Map.fold(book.addresses, Nil, fn (entries, lot, keys) ->
+      let entry = Json.encode_array(Cons(Json.encode_int(lot), List.map(keys, Json.encode_int)))
+      Cons(entry, entries))
+    Json.encode_object([("next", Json.encode_int(book.next)), ("addresses", Json.encode_array(addresses))])
+  end
+  pfn decode_household_keys(values : List(Json.JsonValue), keys : List(Int), limit : Int) : Result(List(Int), String) do
+    match values do
+      Nil -> Ok(List.reverse(keys))
+      Cons(raw, rest) ->
+        if limit <= 0 do Err("Too many households at an address.") else
+          let? key = integer(raw)
+          decode_household_keys(rest, Cons(key, keys), limit - 1)
+        end
+    end
+  end
+  pfn decode_address(value : Json.JsonValue) : Result((Int, List(Int)), String) do
+    match value do
+      Json.Array(Cons(raw_lot, keys)) ->
+        let? lot = parcel(raw_lot)
+        let? keys = decode_household_keys(keys, Nil, 64)
+        Ok((lot, keys))
+      _ -> Err("Invalid household address.")
+    end
+  end
+  pfn decode_households(value : Json.JsonValue) : Result(Ur.Sim.Households, String) do
+    let? raw_next = field(value, "next")
+    let? next = integer(raw_next)
+    let? raw_addresses = field(value, "addresses")
+    let? entries = items(raw_addresses, decode_address, S.count())
+    let addresses = List.fold_left(entries, Map.empty(), fn (book, entry) ->
+      let (lot, keys) = entry
+      Map.insert(book, lot, keys, Map.int_cmp))
+    let keys = List.sort_by(List.flat_map(entries, fn entry ->
+      let (_, keys) = entry
+      keys), fn (a, b) -> a < b)
+    let first = S.new_households()
+    let next_is_valid = next >= first.next && next <= 16777216
+    let keys_are_valid = List.fold_left(keys, (-1, next_is_valid), fn (state, key) ->
+      match state do
+        (prior, valid) -> (key, valid && key > prior && key < next)
+      end)
+    let (_, valid) = keys_are_valid
+    if valid do Ok({ next: next, addresses: addresses }) else Err("Invalid household identities.") end
+  end
   pfn encode_city(v : Ur.Sim.City) : Json.JsonValue do
     let freight = match v.freight do
       Some(route) -> [("freight", encode_freight(route))]
       None -> Nil
     end
-    Json.encode_object(List.append(Cons(("religion", encode_religion(v.religion)), freight),
+    let fields = Cons(("utility_service", enc_array(v.utility_service, 2639, Nil)), freight)
+    Json.encode_object(List.append(Cons(("religion", encode_religion(v.religion)), fields),
       Cons(("bus_fare", Json.encode_int(v.bus_fare)),
       Cons(("waste_live", Json.encode_bool(v.waste_live)),
       Cons(("waste_bins", enc_array(v.waste_bins, 2639, Nil)),
@@ -621,6 +667,8 @@ mod Ur.Save do
       Cons(("business_sector", enc_array(v.business_sector, 2639, Nil)),
       Cons(("empty_homes", enc_array(v.empty_homes, 2639, Nil)),
       Cons(("home_arrivals", enc_array(v.home_arrivals, 2639, Nil)),
+      Cons(("housing_search", enc_array(v.housing_search, 2639, Nil)),
+      Cons(("newcomer_grace", enc_array(v.newcomer_grace, 2639, Nil)),
       Cons(("neighborhood_rents", enc_array(v.neighborhood_rents, 79, Nil)),
       Cons(("rent_pressure", enc_array(v.rent_pressure, 4, Nil)),
       Cons(("market_history", Json.encode_array(List.map(v.market_history, fn sample -> enc_array(sample, 17, Nil)))),
@@ -636,7 +684,7 @@ mod Ur.Save do
       Cons(("subway_water", enc_array(v.subway_water, 2639, Nil)),
       Cons(("soil_moisture", Json.encode_int(v.soil_moisture)),
       Cons(("pumping_cost", Json.encode_int(v.pumping_cost)),
-      Cons(("message", Json.encode_string(v.message)), Nil))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+      Cons(("message", Json.encode_string(v.message)), Nil))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
   end
   pfn decode_city(j : Json.JsonValue) : Result(Ur.Sim.City, String) do
     let? freight = match Json.get(j, "freight") do
@@ -794,7 +842,10 @@ mod Ur.Save do
     end
     let? business_sector = optional_array(j, "business_sector", 7)
     let? empty_homes = optional_array(j, "empty_homes", 12)
-    let? home_arrivals = optional_array(j, "home_arrivals", 12)
+    let? home_arrivals = optional_array(j, "home_arrivals", 120)
+    let? utility_service = optional_array(j, "utility_service", 121)
+    let? housing_search = optional_array(j, "housing_search", S.housing_grace())
+    let? newcomer_grace = optional_array(j, "newcomer_grace", 100000000)
     let? neighborhood_rents = match Json.get(j, "neighborhood_rents") do
       None -> Ok(NativeArray.make_int(80, 0))
       Some(raw) -> array(raw, 80, 180)
@@ -875,7 +926,7 @@ mod Ur.Save do
       density: density, nuisance: nuisance, buildings: buildings, housing_losses: housing_losses,
       business_losses: business_losses, construction: construction, plants: plants, paused_facilities: paused_facilities, pipes: pipes,
       grid: grid, pollution: pollution, land_pollution: land_pollution, air_pollution: air_pollution, founding_map: founding_map,
-      expansion: expansion, shipments: shipments, finance_history: finance_history, market_history: market_history, campus: campus, census: census, population_history: population_history, immigration: S.clamp(immigration, 0, 2), education: education, specializations: specializations, business_sector: business_sector, empty_homes: empty_homes, home_arrivals: home_arrivals, neighborhood_rents: neighborhood_rents, rent_pressure: rent_pressure, business_age: business_age, property_status: property_status, property_arrears: property_arrears, property_sales: property_sales, crime_history: crime_history, livability_history: livability_history, message: message })
+      expansion: expansion, shipments: shipments, finance_history: finance_history, market_history: market_history, campus: campus, households: S.new_households(), utility_service: utility_service, shelter_demand: None, census: census, population_history: population_history, immigration: S.clamp(immigration, 0, 2), education: education, specializations: specializations, business_sector: business_sector, empty_homes: empty_homes, home_arrivals: home_arrivals, housing_search: housing_search, newcomer_grace: newcomer_grace, neighborhood_rents: neighborhood_rents, rent_pressure: rent_pressure, business_age: business_age, property_status: property_status, property_arrears: property_arrears, property_sales: property_sales, crime_history: crime_history, livability_history: livability_history, message: message })
     end
   end
   pfn encode_game(v : Game) : Json.JsonValue do
@@ -908,6 +959,14 @@ mod Ur.Save do
       zoom: zoom, yaw: yaw, paused: paused })
     end
   end
+  pfn encode_shelter_travel(v : Ur.Citizens.ShelterTravel) : Json.JsonValue do
+    Json.encode_object([
+      ("work", Json.encode_int(v.work)), ("study", Json.encode_int(v.study)),
+      ("qualification", Json.encode_int(v.qualification)), ("position", Json.encode_int(v.position)),
+      ("parking", Json.encode_int(v.parking)), ("arrival", Json.encode_int(v.arrival)),
+      ("car", Json.encode_int(v.car_phase)), ("transit", Json.encode_int(v.transit_phase)),
+      ("board", Json.encode_int(v.board)), ("alight", Json.encode_int(v.alight))])
+  end
   pfn encode_evacuation(trip : Ur.Citizens.EvacuationTrip) : Json.JsonValue do
     Json.encode_object([
       ("id", Json.encode_int(trip.id)),
@@ -919,11 +978,41 @@ mod Ur.Save do
       ("route", Json.encode_array(List.map(trip.route, Json.encode_int))),
       ("previous", Json.encode_int(trip.previous)),
       ("progress", Json.encode_number(trip.progress)),
-      ("wait", Json.encode_number(trip.wait))])
+      ("wait", Json.encode_number(trip.wait)),
+      ("travel", encode_shelter_travel(trip.travel))])
   end
   pfn evacuation_int(j : Json.JsonValue, name : String) : Result(Int, String) do
     let? raw = field(j, name)
     integer(raw)
+  end
+  pfn parking_value(j : Json.JsonValue, key : String) : Result(Int, String) do
+    let? raw = field(j, key)
+    match raw do
+      Json.Number(n) ->
+        if n >= 0.0 && n < int_to_float(S.count()) *. int_to_float(S.count()) *. int_to_float(S.count()) *. 2880.0 &&
+          Math.floor(n) == n do Ok(float_to_int(n)) else Err("Invalid evacuation parking.") end
+      _ -> Err("Missing evacuation parking.")
+    end
+  end
+  pfn decode_shelter_travel(j : Json.JsonValue) : Result(Ur.Citizens.ShelterTravel, String) do
+    let? work = evacuation_int(j, "work")
+    let? study = evacuation_int(j, "study")
+    let? qualification = evacuation_int(j, "qualification")
+    let? position = evacuation_int(j, "position")
+    let? parking = parking_value(j, "parking")
+    let? arrival = parking_value(j, "arrival")
+    let? car = evacuation_int(j, "car")
+    let? transit = evacuation_int(j, "transit")
+    let? board = evacuation_int(j, "board")
+    let? alight = evacuation_int(j, "alight")
+    if List.all([work, board, alight], fn lot -> lot == -1 || S.valid(lot)) &&
+      study >= -1 && study <= 8 && qualification >= 0 && qualification <= 8 && position >= 0 &&
+      car >= 0 && car <= 3 && (car == 0 || (parking > 0 && arrival > 0)) &&
+      transit >= 0 && transit <= 4 && transit != 3 && (transit == 0 || (S.valid(board) && S.valid(alight))) &&
+      (car == 0 || transit == 0) do
+      Ok({ work: work, study: study, qualification: qualification, position: position,
+        parking: parking, arrival: arrival, car_phase: car, transit_phase: transit, board: board, alight: alight })
+    else Err("Invalid shelter commute.") end
   end
   pfn decode_evacuation(j : Json.JsonValue) : Result(Ur.Citizens.EvacuationTrip, String) do
     let? id = evacuation_int(j, "id")
@@ -939,31 +1028,40 @@ mod Ur.Save do
     let? progress = number(raw_progress)
     let? raw_wait = field(j, "wait")
     let? wait = number(raw_wait)
+    let? raw_travel = field(j, "travel")
+    let? travel = decode_shelter_travel(raw_travel)
+    let commute = S.valid(shelter) && ((activity == 11 && S.valid(travel.work) && target == travel.work) ||
+      (activity == 12 && target == shelter))
     let valid_phase = match route do
-      Nil -> S.valid(location) && (activity == 10 || (activity == 8 && location == shelter && target == shelter))
+      Nil -> S.valid(location) && (commute || activity == 10 || (activity == 8 && location == shelter && target == shelter))
       Cons(_, Cons(_, _)) ->
-        location == -1 && ((activity == 7 && S.valid(shelter) && target == shelter) || (activity == 9 && target == home))
+        location == -1 && (commute || (activity == 7 && S.valid(shelter) && target == shelter) || (activity == 9 && target == home))
       _ -> false
     end
     if id >= 0 && S.valid(home) && List.all([shelter, target, previous], fn lot -> lot == -1 || S.valid(lot)) &&
       progress >= 0.0 && progress <= 1.0 && valid_phase do
       Ok({ id: id, home: home, shelter: shelter, activity: activity, location: location, target: target,
-        route: route, previous: previous, progress: progress, wait: wait })
+        previous: previous, route: route, progress: progress, wait: wait, travel: travel })
     else Err("Invalid evacuation trip.") end
   end
   fn encode_session(session : Session) : String do
     let extra = if List.is_empty(session.evacuation) do Nil
       else [("evacuation", Json.encode_array(List.map(session.evacuation, encode_evacuation)))] end
-    Json.to_string(Json.encode_object(Cons(("version", Json.encode_int(1)), Cons(("game", encode_game(session.game)), extra))))
+    let fields = [("version", Json.encode_int(2)), ("game", encode_game(session.game)),
+      ("households", encode_households(session.game.city.households))]
+    Json.to_string(Json.encode_object(List.append(fields, extra)))
   end
   fn encode(game : Game) : String do encode_session({ game: game, evacuation: Nil }) end
   fn decode_session(text : String) : Result(Session, String) do
     let? json = Json.parse(text)
     let? tag = field(json, "version")
     let? version = integer(tag)
-    if version == 1 do
+    if version == 2 do
       let? raw_game = field(json, "game")
       let? game = decode_game(raw_game)
+      let? raw_households = field(json, "households")
+      let? households = decode_households(raw_households)
+      let game = { game with city: { game.city with households: households } }
       let? evacuation = match Json.get(json, "evacuation") do
         None -> Ok(Nil)
         Some(raw) -> items(raw, decode_evacuation, S.population(game.city))

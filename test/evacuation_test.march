@@ -110,6 +110,14 @@ mod EvacuationTest do
       "the outward trip is saved between parcels")
     let lodged = evacuation_steps(wet, reload(wet, walking), 80)
     Test.assert_true(List.any(lodged, fn person -> person.home == home && person.location == school), "evacuees reach the shelter")
+    let trips = Ur.Citizens.evacuation_trips(lodged)
+    let sheltered = List.length(List.filter(trips, fn trip -> trip.location == school && trip.shelter == school))
+    let with_guests = { wet with shelter_demand: Ur.Citizens.shelter_demand(trips) }
+    let utilities = (S.stats(with_guests)).utilities
+    Test.assert_true(sheltered > 0 && S.get(utilities.water.demand, school) == sheltered,
+      "water demand follows residents who reached shelter")
+    Test.assert_true(S.get(utilities.sewer.demand, school) > 0 && S.get(utilities.water.demand, home) == 0,
+      "shelters generate sewage and flooded homes leave the residential load")
     let repairs = { wet with surface_water: calm.surface_water }
     let held = Ur.Citizens.refresh_with(repairs, reload(repairs, lodged), S.access(repairs), S.population(repairs), Nil)
     Test.assert_true(List.any(held, fn person -> person.home == home && person.location == school), "households stay sheltered during repairs")
@@ -123,7 +131,7 @@ mod EvacuationTest do
     Test.assert_true(List.any(returned, fn person -> person.home == home && person.location == home), "households reach their original home")
     let legacy = { city: calm, cx: 78.0, cz: 151.0, zoom: 52.0, yaw: 0.55, paused: true, speed: 1 }
     match Ur.Save.decode_session(Ur.Save.encode(legacy)) do
-      Ok(loaded) -> Test.assert_true(List.is_empty(loaded.evacuation), "older saves load without evacuation records")
+      Ok(loaded) -> Test.assert_true(List.is_empty(loaded.evacuation), "a city save can omit evacuation records")
       Err(error) -> Test.assert_true(false, error)
     end
   end
@@ -239,11 +247,126 @@ mod EvacuationTest do
       Err(error) -> Test.assert_true(false, error)
     end
   end
+  pfn housing_alignment_checks() : Unit do
+    let base = S.new()
+    let home = S.index(10, 20)
+    let blank = NativeArray.make_int(S.count(), 0)
+    let routes = NativeArray.make_int(S.count(), 0)
+    let trips = NativeArray.make_int(S.count(), 80)
+    let city = { base with zones: NativeArray.set_int(blank, home, 1), buildings: NativeArray.set_int(blank, home, 1),
+      housing_losses: NativeArray.set_int(blank, home, 3), tax: 25, energy: 12 }
+    let labor = { workforce: 10, employed: 0, unemployed: 10, vacancies: 0, wages: 0, local_income: Some(blank), fares: None }
+    let first = S.housing_settlement(city, routes, trips, labor)
+    Test.assert_true(S.occupied_homes(first.city, home) > 0 && first.departures == 0 && S.get(first.city.housing_search, home) == 1,
+      "priced-out tenants stay while looking for another home")
+    let city = List.fold_left([1, 2], first.city, fn (c, _) -> S.relocate_households(c, routes, trips, labor))
+    let expired = S.housing_settlement(city, routes, trips, labor)
+    Test.assert_true(expired.departures == 4 && S.occupied_homes(expired.city, home) == 0,
+      "tenants leave only after the housing search expires")
+    let affordable = { expired.city with tax: 9, energy: 2, immigration: 2 }
+    let admitted = S.advance_population(affordable, Ur.Demography.seed(0), labor, routes, 0)
+    Test.assert_true(S.population(admitted) > 0 && S.occupied_homes(admitted, home) > 0 &&
+      S.get(admitted.newcomer_grace, home) > admitted.month, "newcomers fill affordable vacancies with time to look for work")
+    Test.assert_true(!List.any(S.households_at(admitted, home), fn key -> List.any(S.households_at(first.city, home), fn original -> original == key)),
+      "newcomers do not inherit the identities of families who left")
+    let secure = S.housing_settlement(admitted, routes, trips, labor)
+    Test.assert_true(secure.departures == 0 && S.get(secure.city.housing_losses, home) == 0,
+      "the settlement grace prevents starting a housing search immediately")
+    let game = { city: admitted, cx: 78.0, cz: 151.0, zoom: 52.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(game)) do
+      Ok(loaded) -> Test.assert_eq_int(S.get(loaded.city.newcomer_grace, home), S.get(admitted.newcomer_grace, home),
+        "the immigration grace period survives a save")
+      Err(error) -> Test.assert_true(false, error)
+    end
+  end
+  pfn commute_steps(c : Ur.Sim.City, residents : List(Ur.Citizens.Citizen), time : Float, ticks : Int) : List(Ur.Citizens.Citizen) do
+    if ticks == 0 do residents else
+      let next = Ur.Citizens.step_with(c, NativeArray.make_int(S.count(), 0), residents, time, 0.25)
+      commute_steps(c, next, time, ticks - 1)
+    end
+  end
+  pfn shelter_commute_checks() : Unit do
+    let base = S.new()
+    let home = S.index(9, 20)
+    let shelter = S.index(10, 20)
+    let workplace = S.index(18, 20)
+    let classroom = S.index(19, 20)
+    let zero = NativeArray.make_int(S.count(), 0)
+    let street = List.map(List.range(9, 20), fn x -> S.index(x, 19))
+    let roads = List.fold_left(street, zero, fn (roads, lot) -> NativeArray.set_int(roads, lot, 1))
+    let roads = NativeArray.set_int(NativeArray.set_int(roads, home, 1), base.harbour, 1)
+    let town = { base with heights: NativeArray.make_int(S.count(), 24), roads: roads, street_day: 1,
+      zones: NativeArray.set_int(NativeArray.set_int(zero, home, 1), workplace, 2),
+      buildings: NativeArray.set_int(NativeArray.set_int(zero, home, 1), workplace, 1),
+      plants: NativeArray.set_int(NativeArray.set_int(zero, shelter, 18), classroom, 18) }
+    let people = Ur.Citizens.refresh_with(town, Nil, S.access(town), S.population(town), Nil)
+    match people do
+      Cons(adult, Cons(pupil, others)) ->
+        let wet = { town with flood_damage: NativeArray.set_int(zero, home, 2), flood_active: true }
+        let adult = { adult with work: workplace, study: -1, qualification: 0, work_position: 1, parking: 0, shelter: shelter,
+          activity: 8, location: shelter, target: shelter, route: Nil, wait: 0.0 }
+        let pupil = { pupil with work: classroom, study: 0, parking: 0, shelter: shelter,
+          activity: 8, location: shelter, target: shelter, route: Nil, wait: 0.0 }
+        let others = List.map(others, fn person -> { person with parking: 0, shelter: shelter,
+          activity: 8, location: shelter, target: shelter, route: Nil, wait: 0.0 })
+        let duties = { wet with shelter_demand: Ur.Citizens.shelter_demand(Ur.Citizens.evacuation_trips([adult, pupil])) }
+        let hiring = S.employment(duties, S.access(duties), S.population(duties))
+        Test.assert_true(List.any(hiring.matches, fn hire -> hire.home == home && hire.origin == shelter && hire.workplace == workplace),
+          "jobs match displaced workers from the shelter while wages still go to their household")
+        let noon = S.day_seconds() *. 0.5
+        let night = S.day_seconds() *. 0.98
+        let departed = commute_steps(wet, [adult, pupil], noon, 1)
+        let morning = Ur.Citizens.step_with(wet, zero, departed, noon, 0.05)
+        Test.assert_true(List.all(morning, fn person -> Ur.Citizens.shelter_commute(person) &&
+          person.shelter == shelter && person.target == person.work && !List.is_empty(person.route) && person.progress > 0.0),
+          "a worker and a pupil depart the shelter and walk to their assigned destinations")
+        let restored = reload(wet, List.append(morning, others))
+        let day = commute_steps(wet, restored, noon, 220)
+        let counts = Ur.Citizens.tally(wet, day)
+        Test.assert_eq_int(counts.at_work, 1, "a sheltered worker arrives at work after reloading")
+        Test.assert_eq_int(counts.studying, 1, "a sheltered pupil arrives at school after reloading")
+        let evening = commute_steps(wet, day, night, 220)
+        Test.assert_true(List.length(evening) > 0 && List.all(evening, fn person ->
+          person.home == home && person.location == shelter && Ur.Citizens.sheltered(person)),
+          "the worker and pupil return to their assigned shelter")
+        let closed = { wet with surface_water: NativeArray.set_int(zero, S.index(14, 19), 10) }
+        let stranded = commute_steps(closed, [adult], noon, 3)
+        Test.assert_true(List.any(stranded, fn person -> person.location == shelter && List.is_empty(person.route)),
+          "a severed commute leaves the resident at the shelter")
+        let garage = S.index(11, 20)
+        let parking_road = S.index(11, 19)
+        let garage_town = { wet with public_parking: NativeArray.set_int(zero, garage, 1) }
+        Test.assert_eq_int(List.length(Ur.Evacuation.walk_route(garage_town, shelter, parking_road)), 3,
+          "reachability uses the nearest dry shelter exit")
+        let space = Ur.Citizens.parking_code({ lot: home, road: parking_road, site: garage, kind: 3, bay: 0, edge: 3, steps: 0 })
+        let driving = commute_steps(garage_town, [{ adult with parking: space }], noon, 2)
+        Test.assert_true(List.any(driving, fn person -> person.by_car && person.parking == space),
+          "a sheltered worker can walk to their own reachable car and take it to work")
+        let car_save = reload(garage_town, List.append(driving, Cons(pupil, others)))
+        Test.assert_true(List.any(car_save, fn person -> person.id == adult.id && person.by_car &&
+          person.parking == space && person.arrival > 0), "a private car and its reserved arrival bay survive reloading")
+        let board = S.index(10, 19)
+        let alight = S.index(18, 19)
+        let line = List.drop(List.take(street, 10), 1)
+        let transit = List.fold_left(line, zero, fn (modes, lot) -> NativeArray.set_int(modes, lot, 3))
+        let running = NativeArray.set_int(NativeArray.set_int(transit, board, 2), alight, 2)
+        let tram_town = { wet with transit: transit }
+        let route = { mode: 3, stops: line, legs: 8, source: board }
+        let service = Some({ routes: [route], active: Nil })
+        let commute = Ur.Citizens.step_with_bus(tram_town, running, service, [adult], noon, 0.10, zero, noon)
+        Test.assert_true(List.any(commute, fn person -> person.transit_phase == 1 &&
+          person.board == board && person.alight == alight && person.target == workplace),
+          "a shelter commute can choose an operating tram route")
+      _ -> Test.assert_true(false, "the shelter commute town has an adult and a pupil")
+    end
+  end
   fn main(_cap : Cap(IO)) : Unit do
     evacuation_checks()
     fire_recovery_checks()
     fire_weather_checks()
     earthquake_fire_checks()
+    housing_alignment_checks()
+    shelter_commute_checks()
     Authority.must(println("Evacuation checks passed"))
   end
 end

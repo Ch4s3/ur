@@ -24,12 +24,24 @@ mod Ur.Evacuation do
     end
   end
 
+  pfn shortest_frontage(c : Ur.Sim.City, paths : NativeIntArr, from : Int, edge : Int,
+    best : List(Int), limit : Int) : List(Int) do
+    if edge == 4 do best else
+      let road = S.neighbour(from, edge)
+      let route = if Ur.Food.walkable(c, road) && S.get(paths, road) >= 0 && S.pedestrian_edge(c, from, road) do
+        trace(paths, road, limit) else Nil end
+      let length = List.length(route)
+      if length > 0 && length < limit do shortest_frontage(c, paths, from, edge + 1, route, length)
+      else shortest_frontage(c, paths, from, edge + 1, best, limit) end
+    end
+  end
+
   pfn with_paths(c : Ur.Sim.City, paths : NativeIntArr, from : Int) : List(Int) do
     if !S.valid(from) do Nil
     else if S.get(paths, from) >= 0 do trace(paths, from, S.count())
     else
-      let road = Ur.Food.entrance(c, paths, from, 0)
-      if S.valid(road) do Cons(from, trace(paths, road, S.count())) else Nil end
+      let route = shortest_frontage(c, paths, from, 0, Nil, S.count() + 1)
+      if List.is_empty(route) do Nil else Cons(from, route) end
     end end
   end
 

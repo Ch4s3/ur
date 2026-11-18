@@ -1572,8 +1572,12 @@ mod UrTest do
     Test.assert_true(S.business_closed(closed_business, business_plot), "four loss months close the business")
     let reopened = S.tick({ closed_business with roads: c.roads })
     Test.assert_false(S.business_closed(reopened, business_plot), "an existing storefront can reopen after access returns")
-    Test.assert_eq_int(S.occupied_homes(closed_business, home_plot), 0, "disconnected households vacate the building")
-    Test.assert_true(S.occupied_homes(S.tick(reopened), home_plot) > 0, "reachable jobs bring households back to vacant homes")
+    Test.assert_true(S.occupied_homes(closed_business, home_plot) > 0 && S.get(closed_business.housing_search, home_plot) == 1,
+      "disconnected households stay while searching for housing")
+    let disconnected = S.advance(closed_business, S.housing_grace())
+    Test.assert_eq_int(S.occupied_homes(disconnected, home_plot), 0, "disconnected households leave when the search expires")
+    let resettled = S.advance({ disconnected with roads: c.roads }, 2)
+    Test.assert_true(S.occupied_homes(resettled, home_plot) > 0, "affordable homes reopen to newcomers when access returns")
     Test.assert_true((S.household_accounts({ c with tax: 25 }, staffed.routes, staffed.commutes, staffed.labor, home_plot)).tax > home_account.tax, "income tax lowers take-home pay")
     let neutral = S.neutral_rent_pressure()
     let supply = NativeArray.set_int(NativeArray.make_int(10, 0), 2, 24)
@@ -1602,16 +1606,30 @@ mod UrTest do
     let wages = { workforce: 10, employed: 10, unemployed: 0, vacancies: 0, wages: 210, local_income: None, fares: None }
     let rental_city = { c with zones: housing_zones, buildings: homes, housing_losses: losses,
       footfall: NativeArray.set_int(blank, origin, 48), tax: 25, energy: 8 }
+    let people = S.population(rental_city) - 1
+    let before_move = Ur.Citizens.refresh_with(rental_city, Nil, access, people, Nil)
     let moved = S.relocate_households(rental_city, access, journey, wages)
     Test.assert_eq_int(S.get(moved.home_arrivals, nearer), 4, "priced-out households choose the cheaper total commute and rent cost")
     Test.assert_eq_int(S.get(moved.home_arrivals, farther), 0, "a lower asking rent can lose to a much shorter commute")
     Test.assert_eq_int(S.occupied_homes(moved, nearer), 4, "moving households fill exactly the homes they occupy")
     Test.assert_eq_int(S.population(moved), S.population(rental_city), "local relocation conserves the matched households")
     Test.assert_true(S.neighborhood_rent(moved, nearer) > S.neighborhood_rent(moved, origin), "relocation raises rent in the receiving neighborhood")
+    let after_move = Ur.Citizens.refresh_with(moved, before_move, access, people, Nil)
+    let relocated = List.filter(before_move, fn person -> person.home == origin)
+    Test.assert_true(!List.is_empty(relocated) && List.all(relocated, fn original ->
+      List.any(after_move, fn current -> current.id == original.id && current.home == nearer &&
+        current.location == nearer && current.household == original.household &&
+        Ur.Resident.name(current) == Ur.Resident.name(original) && Ur.Resident.family(current) == Ur.Resident.family(original))),
+      "priced-out families keep all members and relationships at the new address")
     match Ur.Save.decode(Ur.Save.encode({ game with city: moved })) do
       Ok(loaded) ->
         Test.assert_eq_int(S.occupied_homes(loaded.city, nearer), 4, "partial occupancy survives a save")
         Test.assert_eq_int(S.neighborhood_rent(loaded.city, nearer), S.neighborhood_rent(moved, nearer), "local rent pressure survives a save")
+        let restored = Ur.Citizens.refresh_with(loaded.city, Nil, access, people, Nil)
+        Test.assert_true(List.all(relocated, fn original ->
+          List.any(restored, fn current -> current.id == original.id && current.home == nearer &&
+            Ur.Resident.name(current) == Ur.Resident.name(original) && Ur.Resident.family(current) == Ur.Resident.family(original))),
+          "a fresh roster rebuild retains relocated household identities and relationships")
       Err(error) -> Test.assert_true(false, error)
     end
     let primary_site = S.index(10, 18)
@@ -1795,7 +1813,10 @@ mod UrTest do
     Test.assert_true(S.pollution_at(S.advance(stopped, 10), fish_plot) < S.pollution_at(polluted, fish_plot), "coast recovers after discharge stops")
     let importer = S.act(S.act(desal, coast, 7), coast, 15)
     let dry = { importer with plants: NativeArray.set_int(importer.plants, S.index(9, 22), 0) }
-    Test.assert_eq_int((S.stats(dry)).services.imported_water, S.population(dry), "water imports cover unmet demand")
+    let water_imports = S.stats(dry)
+    Test.assert_true(water_imports.services.imported_water > S.population(dry) &&
+      water_imports.services.imported_water == water_imports.utilities.water.total,
+      "water imports serve both households and commercial premises")
     Test.assert_eq_int((S.stats({ dry with cash: 0 })).services.imported_water, 0, "water imports require cash")
     let cut_grid = S.act(c, S.index(9, 21), 27)
     Test.assert_eq_int((S.stats(cut_grid)).power, 0, "disconnecting the grid stops power")

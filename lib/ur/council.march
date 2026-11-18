@@ -534,7 +534,7 @@ mod Ur.Council do
     let labor = st.labor
     let unemployment = if labor.workforce == 0 do 0 else S.clamp(labor.unemployed * 8 / labor.workforce, 0, 8) end
     let displacement = if S.displaced_homes(c, lot) > 0 do 32 else 0 end
-    S.clamp(S.base_happiness(c, st, lot) - financial - unemployment - displacement, 0, 100)
+    S.clamp(S.base_happiness(c, st, lot) - financial - unemployment - displacement - S.utility_strain(c, lot), 0, 100)
   end
   pfn sentiment(c : Ur.Sim.City, st : Ur.Sim.Stats, ward : Int, festival_days : Int, offset : Int, total : Int, residents : Int) : Int do
     if offset == 180 do (if residents > 0 do total / residents else if festival_days >= 0 do 0 else 40 end end) else

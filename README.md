@@ -115,6 +115,11 @@ both road and pipe access. Homes need pipe access before they can grow.
 Power, water, and sewage have limits on individual segments. New homes must
 reserve utility capacity and have access to food before construction starts.
 Water and sewage use the same pipe assets and have separate flow limits.
+Homes and businesses can ride out brief interruptions. The city checks for
+severe shortfalls every five days. After 30 days of disruption, the next
+monthly settlement closes affected businesses and sends affected households
+looking for an affordable home with enough utility capacity. Families who
+cannot find one have three months to search before leaving the region.
 
 ## Electricity and trash
 

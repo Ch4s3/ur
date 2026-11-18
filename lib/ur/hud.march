@@ -932,7 +932,7 @@ mod Ur.Hud do
     let a = finance_button(a, x, y +. 292.0, 96.0, S.immigration_name(0), c.immigration == 0)
     let a = finance_button(a, x +. 96.0, y +. 292.0, 96.0, S.immigration_name(1), c.immigration == 1)
     let a = finance_button(a, x +. 192.0, y +. 292.0, 96.0, S.immigration_name(2), c.immigration == 2)
-    label(a, x, y +. 329.0, 11.0, "Newcomers need housing and access to jobs.", false)
+    label(a, x, y +. 329.0, 11.0, "Newcomers need an affordable home and have three months to find work.", false)
   end
   fn diagnosis_row_at(mx : Float, my : Float, w : Float, h : Float) : Int do
     let right = menu_x(w) +. menu_width(w) -. 17.0
@@ -1172,14 +1172,22 @@ mod Ur.Hud do
     let a = label(a, left +. 335.0, 191.0, 14.0, "X", true)
     let x = left +. 12.0
     let status = if Ur.Citizens.sheltered(person) do "Staying in an emergency shelter"
+      else if Ur.Citizens.shelter_commute(person) do
+        if person.target == person.shelter do "Returning to emergency shelter"
+        else if person.location == person.work do Ur.Resident.role(c, person) ++ " · Sheltered"
+        else if person.study >= 0 do "Commuting from shelter to school" else "Commuting from shelter to work" end end end
       else if Ur.Citizens.evacuating(person) do "Walking to shelter"
       else if Ur.Citizens.returning_home(person) do "Returning home after repairs"
       else if Ur.Citizens.waiting_for_shelter(person) do "Waiting for a safe route or a shelter"
-      else Ur.Resident.role(c, person) end end end end
+      else Ur.Resident.role(c, person) end end end end end
     let a = label(a, x, 190.0, 17.0, Ur.Resident.name(person), true)
     let a = label(a, x, 218.0, 11.0, status, false)
     let a = label(a, x, 240.0, 11.0, "Home · " ++ int_to_string(person.home % S.width()) ++ ", " ++ int_to_string(person.home / S.width()), false)
-    let a = label(a, x, 262.0, 11.0, Ur.Resident.family(person), false)
+    let family = Ur.Resident.family_members(person)
+    let a = if List.is_empty(family) do label(a, x, 262.0, 11.0, "Lives alone", false) else
+      let a = label(a, x, 262.0, 11.0, String.join(List.take(family, 2), " · "), false)
+      if List.length(family) > 2 do label(a, x, 276.0, 11.0, String.join(List.drop(family, 2), " · "), false) else a end
+    end
     let mood = Ur.Resident.happiness(c, st, person)
     let a = label(a, x, 292.0, 14.0, "Happiness " ++ int_to_string(mood.score) ++ " / 100", true)
     let a = label(a, x, 316.0, 11.0, "Household budget after costs · $" ++ int_to_string(mood.money), false)
@@ -1492,7 +1500,9 @@ mod Ur.Hud do
         let jobs = S.job_slots(c, lot)
         let box = if homes > 0 do
           let box = label(box, x, y +. 54.0, 12.0, "Housing · " ++ int_to_string(S.occupied_homes(c, lot)) ++ "/" ++ int_to_string(homes) ++ " occupied", true)
-          resident_rows(box, c, people, lot, x, y +. 75.0, 2)
+          let in_search = S.get(c.housing_search, lot) > 0 || S.get(c.newcomer_grace, lot) > c.month || S.utility_disruption(c, lot) > 0
+          let box = if in_search do label(box, x, y +. 75.0, 10.5, S.home_market_reason(c, st, lot), true) else box end
+          resident_rows(box, c, people, lot, x, y +. (if in_search do 92.0 else 75.0 end), if in_search do 1 else 2 end)
         else box end
         let top = if homes > 0 do y +. 119.0 else y +. 54.0 end
         let box = if jobs > 0 do label(box, x, top, 11.0, "Employees · " ++ int_to_string(S.get(st.staffed_jobs, lot)) ++ "/" ++ int_to_string(jobs) ++ " positions filled", true) else box end
@@ -1500,6 +1510,9 @@ mod Ur.Hud do
         let box = if S.public_trade(c, lot) do
           label(box, x, top, 11.0, (if S.business_open(c, lot, hour) do "Open · " else "Closed · " end) ++ business_hours(c, lot), false)
         else if S.business_closed(c, lot) do label(box, x, top, 11.0, "Vacant business premises", false) else box end end
+        let box = if S.utility_disruption(c, lot) > 0 && (jobs > 0 || S.business_closed(c, lot)) do
+          label(box, x, top +. 21.0, 10.5, S.shop_market_reason(c, st, lot), true)
+        else box end
         let box = if S.get(c.public_parking, lot) > 0 do
           let parking = S.get(c.public_parking, lot)
           label(box, x, top +. 21.0, 11.0, S.parking_name(parking) ++ " · " ++ int_to_string(S.parking_spaces(parking)) ++ " spaces", false)

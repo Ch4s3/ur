@@ -92,7 +92,7 @@ mod Ur do
     { c with clock_ms: float_to_int(elapsed *. 1000.0) }
   end
   pfn restore(p : Play, game : Ur.Save.Game, trips : List(Ur.Citizens.EvacuationTrip)) : Play do
-    let c = game.city
+    let c = { game.city with shelter_demand: Ur.Citizens.shelter_demand(trips) }
     let stats = S.stats(c)
     let walk_map = Ur.Citizens.walk_map(c)
     let layer = if c.harbour < 0 do 8 else 0 end
@@ -427,8 +427,14 @@ mod Ur do
       let motion_time = if undone || just_landed do phase else p.traffic_time end
       let traffic_time = motion_time +. game_dt
       let start = Vk.time()
-      -- An edit invalidates speculative work. Only the current frame can commit a day.
-      let day_plan = if policy_changed || click || release || undone do None else p.day_plan end
+      -- Shelter arrivals can change between speculative planning and midnight.
+      let evacuation = midnight && Ur.Citizens.has_evacuation(p.citizens)
+      let day_plan = if policy_changed || click || release || undone || evacuation do None else p.day_plan end
+      let c = if midnight && evacuation do
+        let trips = Ur.Citizens.evacuation_trips(Ur.Citizens.snapshot(p.citizens))
+        { c with shelter_demand: Ur.Citizens.shelter_demand(trips) }
+      else if midnight && Option.is_some(c.shelter_demand) do { c with shelter_demand: None }
+      else c end end
       let (day, day_ready) = if midnight do
         complete_day(day_plan, c, p.stats.traffic, p.sanitation.completed, p.flood_drill)
       else
@@ -495,7 +501,7 @@ mod Ur do
       Ur.Scene.fleet(c, fleet, p.fleet)
       let evacuation_update = flood_day || ((midnight || paint) && Ur.Citizens.has_evacuation(p.citizens))
       let rebuild = undone || evacuation_update || operation_changed || ((paint || due || policy_changed || day_changed || building_day || flood_day) &&
-        (st.people != p.stats.people || S.assignments_changed(p.stats.job_matches, st.job_matches) || Ur.Citizens.education_changed(c, p.city) || Ur.Citizens.changed(c, p.city, 0)))
+        (st.people != p.stats.people || S.households_changed(c.households, p.city.households) || S.assignments_changed(p.stats.job_matches, st.job_matches) || Ur.Citizens.education_changed(c, p.city) || Ur.Citizens.changed(c, p.city, 0)))
       let reset_roster = rebuild || scene_changed
       let pace_changed = if midnight do
         let previous = S.temperature(p.city)
@@ -570,7 +576,7 @@ mod Ur do
       if Strata.Render.draw_ui(hud) do () else Ur.AppError.stop("HUD overflow") end
       if pressed(keys, p.keys, 13) || (p.limit > 0 && p.frame == p.limit - 1) do Vk.request_shot() else () end
       let day_plan = if midnight do None else
-        if steps > 0 && !paused && Option.is_none(day_plan) &&
+        if steps > 0 && !paused && Option.is_none(day_plan) && Option.is_none(c.shelter_demand) &&
           (List.is_empty(c.waste_runs) || S.street_hour(elapsed) >= 21) do
           start_day_plan(c, st.traffic, sanitation.completed, p.flood_drill)
         else day_plan end
