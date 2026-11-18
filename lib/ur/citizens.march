@@ -1235,9 +1235,22 @@ mod Ur.Citizens do
       { person with progress: person.progress +. (event.limit -. person.progress) *. t }
     end
   end
+  -- The progress of walker_at(event, time), without copying the citizen.
+  pfn walk_progress(event : WalkEvent, time : Float) : Float do
+    let person = event.entry.person
+    if event.limit == person.progress || time <= event.started do person.progress else
+      let t = if time >= event.finish do 1.0 else (time -. event.started) /. (event.finish -. event.started) end
+      person.progress +. (event.limit -. person.progress) *. t
+    end
+  end
   fn each_walk(roster : Roster, draw : Int -> Citizen -> Unit) : Unit do
     Map.fold(roster.walk_events, (), fn (_, _, events) ->
       List.each(events, fn event -> draw(event.entry.slot, walker_at(event, roster.walk_time))))
+  end
+  -- Each scheduled walker as its slot, its citizen at the start of the walk, and its current progress.
+  fn each_walk_progress(roster : Roster, draw : Int -> Citizen -> Float -> Unit) : Unit do
+    Map.fold(roster.walk_events, (), fn (_, _, events) ->
+      List.each(events, fn event -> draw(event.entry.slot, event.entry.person, walk_progress(event, roster.walk_time))))
   end
   fn begin_walk_frame(roster : Roster) : Roster do { roster with walk_exits: Nil } end
   pfn walk_entries(roster : Roster) : List(Actor) do
