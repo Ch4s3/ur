@@ -2,6 +2,7 @@ mod Ur do
   needs IO
   needs IO.Foreign
   needs IO.Process
+  needs IO.Spawn
   needs Window
   alias Strata.Ffi.Vk as Vk
   alias Ur.Sim as S
@@ -9,9 +10,11 @@ mod Ur do
   alias Ur.Build as Build
   alias Ur.Menu as Menu
   type FrameRate = { since : Float, drawn : Int, value : Int }
-  type Play = { flood_drill : Bool, sanitation : Ur.Scene.SanitationShift, truck_selected : Bool, citizen_focus : Int, activity : List(Ur.Activity.NeighborhoodEvent), fleet : List(Ur.Fleet.Run), fleet_routes : List(Ur.Food.Trip), city : Ur.Sim.City, stats : Ur.Sim.Stats, food : List(Ur.Food.Trip), citizens : List(Ur.Citizens.Citizen), traffic_time : Float, rotor_phases : NativeF32Arr, cloud_offset : (Float, Float), cx : Float, cz : Float, zoom : Float, yaw : Float, tool : Int, group : Int, page : Int, layer : Int, sidebar_visible : Bool, sidebar_tab : Int, crime_focus : Int, council_focus : Int, finance_view : Ur.Hud.FinanceView, paused : Bool, speed : Int,
+  type DayResult = { city : Ur.Sim.City, stats : Ur.Sim.Stats }
+  type DayPlan = { completed : List(Int), task : Task(DayResult) }
+  type Play = { flood_drill : Bool, sanitation : Ur.Scene.SanitationShift, truck_selected : Bool, citizen_focus : Int, activity : List(Ur.Activity.NeighborhoodEvent), fleet : List(Ur.Fleet.Run), fleet_routes : List(Ur.Food.Trip), city : Ur.Sim.City, stats : Ur.Sim.Stats, food : List(Ur.Food.Trip), citizens : Ur.Citizens.Roster, walk_map : Ur.Citizens.WalkMap, day_plan : Option(DayPlan), traffic_time : Float, rotor_phases : NativeF32Arr, cloud_offset : (Float, Float), cx : Float, cz : Float, zoom : Float, yaw : Float, tool : Int, group : Int, page : Int, layer : Int, sidebar_visible : Bool, sidebar_tab : Int, crime_focus : Int, council_focus : Int, finance_view : Ur.Hud.FinanceView, paused : Bool, speed : Int,
     sidewalk_spot : Int, keys : Int, mouse : Bool, anchor : Int, stroke : List(Int), hovered : Int, parcel_focus : Int, popup : Int, religion_site : Int, religion_choice : Int, reason : String, preview : Ur.Build.Preview, preview_chunks : Int, undo : List(Ur.Sim.City), time : Float, elapsed : Float,
-    frame : Int, drawn : Int, limit : Int, trace_input : Bool, tick_ms : Float, fps : FrameRate,
+    frame : Int, drawn : Int, limit : Int, profile : Bool, trace_input : Bool, tick_ms : Float, fps : FrameRate,
     menu_open : Bool, boot : Bool, notice : String, confirm : Atom, save_path : String, saved : Bool, quit : Bool }
   pfn minimum(a : Float, b : Float) : Float do if a < b do a else b end end
   pfn maximum(a : Float, b : Float) : Float do if a > b do a else b end end
@@ -42,11 +45,46 @@ mod Ur do
     if i >= 7 do tool else select_tool(now, old, i + 1, if pressed(now, old, i) do i + 1 else tool end) end
   end
   pfn axis(negative : Int, positive : Int) : Float do (if Vk.key(positive) do 1.0 else 0.0 end) -. (if Vk.key(negative) do 1.0 else 0.0 end) end
-  pfn move_citizens(c : Ur.Sim.City, running : NativeIntArr, bus : Ur.Citizens.TransitService, citizens : List(Ur.Citizens.Citizen), time : Float, dt : Float, clock_dt : Float, steps : Int, junctions : NativeIntArr, traffic_time : Float) : List(Ur.Citizens.Citizen) do
+  pfn move_citizens(c : Ur.Sim.City, walk : Ur.Citizens.WalkMap, running : NativeIntArr, bus : Ur.Citizens.TransitService, citizens : Ur.Citizens.Roster, time : Float, dt : Float, clock_dt : Float, steps : Int, junctions : NativeIntArr, traffic_time : Float) : Ur.Citizens.Roster do
     if steps == 0 do citizens else
       let next_time = time +. clock_dt
       let motion = traffic_time +. dt
-      move_citizens(c, running, bus, Ur.Citizens.step_with_bus(c, running, Some(bus), citizens, next_time, dt, junctions, motion), next_time, dt, clock_dt, steps - 1, junctions, motion)
+      let citizens = Ur.Citizens.step_guarded(c, walk, running, Some(bus), citizens, next_time, dt, junctions, motion,
+        fn (slot, before, after) -> Ur.Scene.yield_to_vehicle(c, walk, slot, before, after))
+      move_citizens(c, walk, running, bus, citizens, next_time, dt, clock_dt, steps - 1, junctions, motion)
+    end
+  end
+  pfn roll_day(c : Ur.Sim.City, traffic : NativeIntArr, completed : List(Int), flood_drill : Bool) : DayResult do
+    let runs = List.filter(c.waste_runs, fn run -> List.any(completed, fn site -> site == run.pickup))
+    let next = S.advance_day_with_traffic({ c with waste_runs: runs }, traffic)
+    let next = if flood_drill do Ur.Scenario.flood_backup_turn(next) else next end
+    let next = Ur.Council.observe_religion(next)
+    let due = next.month != c.month
+    let next = if due do next else S.drift_pollution(next, traffic) end
+    let stats = S.stats(next)
+    let city = if due do Ur.Council.advance_reporting(next, stats.people, fn _ -> stats) else next end
+    { city: city, stats: stats }
+  end
+  pfn start_day_plan(c : Ur.Sim.City, traffic : NativeIntArr, completed : List(Int), flood_drill : Bool) : Option(DayPlan) do
+    match Task.async(fn () -> roll_day(c, traffic, completed, flood_drill)) do
+      Ok(task) -> Some({ completed: completed, task: task })
+      Err(_) -> None
+    end
+  end
+  pfn complete_day(plan : Option(DayPlan), c : Ur.Sim.City, traffic : NativeIntArr, completed : List(Int), flood_drill : Bool) : (DayResult, Bool) do
+    match plan do
+      Some(prepared) ->
+        if prepared.completed != completed do (roll_day(c, traffic, completed, flood_drill), false) else
+          match Task.poll(prepared.task) do
+            Some(Ok(result)) -> (result, true)
+            Some(Err(_)) -> (roll_day(c, traffic, completed, flood_drill), false)
+            None -> match Task.await(prepared.task) do
+              Ok(result) -> (result, false)
+              Err(_) -> (roll_day(c, traffic, completed, flood_drill), false)
+            end
+          end
+        end
+      None -> (roll_day(c, traffic, completed, flood_drill), false)
     end
   end
   pfn clock_phase(c : Ur.Sim.City) : Float do int_to_float(c.clock_ms) /. 1000.0 end
@@ -56,8 +94,10 @@ mod Ur do
   pfn restore(p : Play, game : Ur.Save.Game, trips : List(Ur.Citizens.EvacuationTrip)) : Play do
     let c = game.city
     let stats = S.stats(c)
+    let walk_map = Ur.Citizens.walk_map(c)
     let layer = if c.harbour < 0 do 8 else 0 end
-    let citizens = Ur.Citizens.restore_with(c, trips, stats.routes, stats.people, stats.job_matches)
+    let people = Ur.Citizens.restore_with(c, trips, stats.routes, stats.people, stats.job_matches)
+    let citizens = Ur.Citizens.index(c, people, int_to_float(S.absolute_day(c)) *. S.day_seconds() +. clock_phase(c))
     let food = Ur.Food.producer_traffic(c, stats)
     let fleet_routes = Ur.Fleet.routes_with(c, stats.running_transit, stats.buses)
     Ur.Scene.sync(p.city, c, 0, false, true, S.street_hour(p.elapsed), S.street_hour(clock_phase(c)),
@@ -69,8 +109,9 @@ mod Ur do
     let rotor_phases = Ur.Scene.vehicles(c, p.city, NativeArray.make_f32(S.count(), 0.0), 0.0, clock_phase(c), 0.0, true, 0)
     Ur.Scene.food_vehicles(c, food, p.food, 0.0, 0)
     Ur.Scene.fleet(c, Nil, p.fleet)
-    Ur.Scene.citizen_vehicles(c, citizens, p.citizens, S.street_hour(clock_phase(c)) >= 18 || S.street_hour(clock_phase(c)) < 6, false, 0)
-    { p with flood_drill: false, sanitation: Ur.Scene.empty_sanitation(), truck_selected: false, citizen_focus: -1, activity: Nil, fleet: Ur.Fleet.step(c, stats.traffic, Nil, fleet_routes, 0.0, true), fleet_routes: fleet_routes, city: c, stats: stats, food: food, citizens: citizens, cx: game.cx, cz: game.cz, zoom: game.zoom, yaw: game.yaw,
+    Ur.Scene.clear_scheduled_walks(p.citizens)
+    Ur.Scene.citizen_vehicles(c, walk_map, Ur.Citizens.visible_actors(citizens), Ur.Citizens.visible_actors(p.citizens), S.street_hour(clock_phase(c)) >= 18 || S.street_hour(clock_phase(c)) < 6, false)
+    { p with flood_drill: false, sanitation: Ur.Scene.empty_sanitation(), truck_selected: false, citizen_focus: -1, activity: Nil, fleet: Ur.Fleet.step(c, stats.traffic, Nil, fleet_routes, 0.0, true), fleet_routes: fleet_routes, city: c, stats: stats, food: food, citizens: citizens, walk_map: walk_map, day_plan: None, cx: game.cx, cz: game.cz, zoom: game.zoom, yaw: game.yaw,
       paused: game.paused, speed: game.speed, menu_open: false, boot: false, confirm: :nothing,
       notice: "", layer: layer, group: 1, page: 0, tool: 1, anchor: -1, stroke: Nil, hovered: -1, parcel_focus: -1, popup: -1, religion_site: -1, religion_choice: 0, sidewalk_spot: -1, undo: Nil,
       preview: Build.preview(c, 0, -1, -1), preview_chunks: 0, elapsed: clock_phase(c), traffic_time: clock_phase(c), rotor_phases: rotor_phases, cloud_offset: (0.0, 0.0), sidebar_tab: 0, crime_focus: -1, council_focus: -1,
@@ -83,7 +124,7 @@ mod Ur do
       :quit -> { p with quit: true }
       :save_city ->
         let game = { city: stamp_clock(p.city, p.elapsed), cx: p.cx, cz: p.cz, zoom: p.zoom, yaw: p.yaw, paused: p.paused, speed: p.speed }
-        let evacuation = Ur.Citizens.evacuation_trips(p.citizens)
+        let evacuation = Ur.Citizens.evacuation_trips(Ur.Citizens.snapshot(p.citizens))
         match Ur.Save.save_session(p.save_path, { game: game, evacuation: evacuation }) do
           Ok(_) -> { p with saved: true, notice: "City saved.", confirm: :nothing }
           Err(error) -> { p with notice: error, confirm: :nothing }
@@ -102,10 +143,14 @@ mod Ur do
       _ -> p
     end
   end
+  pfn tracked_citizens(c : Ur.Sim.City, roster : Ur.Citizens.Roster) : Int do
+    let counts = Ur.Citizens.indexed_counts(c, roster)
+    counts.tracked
+  end
   pfn run_frames(p : Play) : Unit do
     Vk.poll()
     if Vk.should_close() || p.quit || (p.limit > 0 && p.frame >= p.limit) do
-      Authority.must(println("ur: frames=" ++ int_to_string(p.frame) ++ " drawn=" ++ int_to_string(p.drawn) ++ " month=" ++ int_to_string(p.city.month) ++ " day=" ++ int_to_string(p.city.calendar_day + 1) ++ " population=" ++ int_to_string(S.population(p.city)) ++ " fps=" ++ int_to_string(p.fps.value) ++ " tick_ms=" ++ float_to_string(p.tick_ms) ++ " frame_cpu_ms=" ++ float_to_string(Vk.stat(0)) ++ " gpu_ms=" ++ float_to_string(Vk.stat(3)) ++ " quads=" ++ int_to_string(Vk.live_quads()) ++ " refused=" ++ int_to_string(Vk.refused())))
+      Authority.must(println("ur: frames=" ++ int_to_string(p.frame) ++ " drawn=" ++ int_to_string(p.drawn) ++ " month=" ++ int_to_string(p.city.month) ++ " day=" ++ int_to_string(p.city.calendar_day + 1) ++ " population=" ++ int_to_string(S.population(p.city)) ++ " detailed=" ++ int_to_string(tracked_citizens(p.city, p.citizens)) ++ " fps=" ++ int_to_string(p.fps.value) ++ " tick_ms=" ++ float_to_string(p.tick_ms) ++ " frame_cpu_ms=" ++ float_to_string(Vk.stat(0)) ++ " gpu_ms=" ++ float_to_string(Vk.stat(3)) ++ " quads=" ++ int_to_string(Vk.live_quads()) ++ " refused=" ++ int_to_string(Vk.refused())))
       Vk.close()
     else if p.menu_open do
       let time = Vk.time()
@@ -302,7 +347,7 @@ mod Ur do
       let truck_selected = if truck_closed || tool != 0 || sidebar_visible || Vk.mouse_button(1) do false
         else if click && !over_ui do truck_clicked else p.truck_selected end end
       let citizen_focus = if citizen_closed || tool != 0 || sidebar_visible || Vk.mouse_button(1) || truck_clicked do -1
-        else if click && !over_ui && S.valid(c.harbour) do Ur.Scene.citizen_pick(c, view, p.citizens, mx, my) else p.citizen_focus end end
+        else if click && !over_ui && S.valid(c.harbour) do Ur.Scene.citizen_pick(c, p.walk_map, view, Ur.Citizens.visible_people(p.citizens), mx, my) else p.citizen_focus end end
       let popup = if c.harbour < 0 || tool != 0 || Vk.mouse_button(1) || sidebar_visible || popup_action == 1 || truck_clicked || citizen_focus >= 0 do -1
         else if click && !over_ui do (if S.can_pause_facility(c, hovered) do hovered else target end) else p.popup end end
       let parcel_focus = if S.valid(activity_lot) do activity_lot
@@ -382,19 +427,22 @@ mod Ur do
       let motion_time = if undone || just_landed do phase else p.traffic_time end
       let traffic_time = motion_time +. game_dt
       let start = Vk.time()
-      let next = if midnight do
-        let runs = List.filter(c.waste_runs, fn run -> List.any(p.sanitation.completed, fn site -> site == run.pickup))
-        S.advance_day_with_traffic({ c with waste_runs: runs }, p.stats.traffic)
-      else c end
-      let next = if midnight && p.flood_drill do Ur.Scenario.flood_backup_turn(next) else next end
-      let next = if midnight do Ur.Council.observe_religion(next) else next end
+      -- An edit invalidates speculative work. Only the current frame can commit a day.
+      let day_plan = if policy_changed || click || release || undone do None else p.day_plan end
+      let (day, day_ready) = if midnight do
+        complete_day(day_plan, c, p.stats.traffic, p.sanitation.completed, p.flood_drill)
+      else
+        let stats = if paint || undone || policy_changed do S.stats(c) else p.stats end
+        ({ city: c, stats: stats }, false)
+      end
+      let next = day.city
       let due = next.month != c.month
-      let next = if midnight && !due do S.drift_pollution(next, p.stats.traffic) else next end
       let day_changed = next.street_day != c.street_day && (next.street_day >= 5 || c.street_day >= 5)
       let building_day = midnight && !due && (next.calendar_day % 3 == 0 || next.calendar_day % 5 == 0) &&
         S.development_changed(next, p.city, 0)
-      let st = if paint || undone || midnight || policy_changed || day_changed || building_day do S.stats(next) else p.stats end
-      let c = if due do Ur.Council.advance_reporting(next, st.people, fn _ -> st) else next end
+      let st = day.stats
+      let c = next
+      let day_ms = if p.profile && midnight do (Vk.time() -. start) *. 1000.0 else 0.0 end
       let campaign_opened = !(Ur.Council.campaign(p.city) && Ur.Council.established(p.city)) && Ur.Council.campaign(c) && due && Ur.Council.established(c)
       let council_voted = Ur.Council.last_election(c) > Ur.Council.last_election(p.city) && due
       let paused = paused || campaign_opened || council_voted
@@ -444,22 +492,46 @@ mod Ur do
       let old_fleet = if undone do Nil else p.fleet end
       let fleet = Ur.Fleet.step_at(c, st.traffic, old_fleet, wanted, elapsed, game_dt, fleet_changed || p.frame == 0, st.junctions, signal_after)
       Ur.Scene.fleet(c, fleet, p.fleet)
-      let evacuation_update = flood_day || ((midnight || paint) && List.any(p.citizens, Ur.Citizens.emergency_move))
-      let citizens = if undone do Ur.Citizens.refresh_with(c, if List.any(p.citizens, Ur.Citizens.emergency_move) do p.citizens else Nil end, st.routes, st.people, st.job_matches) else if evacuation_update || operation_changed || ((paint || due || policy_changed || day_changed || building_day || flood_day) && (st.people != p.stats.people || S.assignments_changed(p.stats.job_matches, st.job_matches) || Ur.Citizens.education_changed(c, p.city) || Ur.Citizens.changed(c, p.city, 0))) do Ur.Citizens.refresh_with(c, p.citizens, st.routes, st.people, st.job_matches) else p.citizens end end
-      let citizens = if scene_changed || midnight do Ur.Citizens.wake_indoor(citizens) else citizens end
-      let citizens = if steps == 0 do citizens else
-        let advanced = move_citizens(S.operating_city(c, st.buses), st.running_transit, { routes: wanted, active: fleet }, citizens, calendar_time, dt, dt *. clock_rate, steps, st.junctions, motion_time)
-        Ur.Scene.yield_to_vehicles(c, citizens, advanced, 0)
+      let evacuation_update = flood_day || ((midnight || paint) && Ur.Citizens.has_evacuation(p.citizens))
+      let rebuild = undone || evacuation_update || operation_changed || ((paint || due || policy_changed || day_changed || building_day || flood_day) &&
+        (st.people != p.stats.people || S.assignments_changed(p.stats.job_matches, st.job_matches) || Ur.Citizens.education_changed(c, p.city) || Ur.Citizens.changed(c, p.city, 0)))
+      let reset_roster = rebuild || scene_changed
+      let pace_changed = if midnight do
+        let previous = S.temperature(p.city)
+        let current = S.temperature(c)
+        previous != current && (previous > 28 || current > 28)
+      else false end
+      let citizens = if reset_roster do
+        Ur.Scene.clear_scheduled_walks(p.citizens)
+        let old = if undone && !Ur.Citizens.has_evacuation(p.citizens) do Nil else Ur.Citizens.snapshot(p.citizens) end
+        let people = if rebuild do Ur.Citizens.refresh_with(c, old, st.routes, st.people, st.job_matches) else old end
+        Ur.Citizens.index(c, Ur.Citizens.wake_indoor(people), calendar_time)
+      else
+        let citizens = Ur.Citizens.begin_walk_frame(p.citizens)
+        if pace_changed do Ur.Citizens.wake_walkers(citizens) else citizens end
       end
+      let walk_map = if midnight || scene_changed do Ur.Citizens.walk_map(c) else p.walk_map end
+      let move_start = if p.profile do Vk.time() else 0.0 end
+      let citizens = if steps == 0 do citizens else
+        move_citizens(S.operating_city(c, st.buses), walk_map, st.running_transit, { routes: wanted, active: fleet }, citizens, calendar_time, dt, dt *. clock_rate, steps, st.junctions, motion_time)
+      end
+      let move_ms = if p.profile do (Vk.time() -. move_start) *. 1000.0 else 0.0 end
       let night = hour >= 18 || hour < 6
       let moment = Ur.Scene.sanitation_moment(c, elapsed)
       let prior_shift = if midnight || undone do Ur.Scene.empty_sanitation() else p.sanitation end
-      let sanitation = Ur.Scene.sanitation_shift(c, phase, prior_shift, moment, citizens)
-      let citizens = Ur.Citizens.sanitation_crew(citizens, p.sanitation.driver, sanitation.driver)
+      let sanitation = Ur.Scene.sanitation_shift_indexed(c, phase, prior_shift, moment, citizens)
+      let citizens = if sanitation.driver != p.sanitation.driver || (rebuild && sanitation.driver >= 0) do
+        Ur.Scene.clear_walk_exits(citizens)
+        Ur.Scene.clear_scheduled_walks(citizens)
+        let people = Ur.Citizens.sanitation_crew(Ur.Citizens.snapshot(citizens), p.sanitation.driver, sanitation.driver)
+        Ur.Citizens.index(c, people, calendar_time +. game_dt *. clock_rate)
+      else citizens end
       Ur.Scene.sanitation_truck(c, moment, sanitation.driver, night)
-      Ur.Scene.citizen_vehicles(c, citizens, p.citizens, night, !scene_changed && p.frame > 0, 0)
+      Ur.Scene.clear_walk_exits(citizens)
+      Ur.Scene.citizen_vehicles(c, walk_map, Ur.Citizens.visible_actors(citizens), Ur.Citizens.visible_actors(p.citizens), night, !scene_changed && p.frame > 0)
+      Ur.Scene.scheduled_walks(c, walk_map, citizens)
       let truck_selected = truck_selected && sanitation.driver >= 0 && sanitation.pickup == p.sanitation.pickup && !undone
-      let citizen_stats = Ur.Citizens.tally(c, citizens)
+      let citizen_stats = Ur.Citizens.indexed_counts(c, citizens)
       if layer != p.layer || (layer > 0 && (flood_day || religion_event)) || (midnight && (layer == 29 || layer == 30 || layer == 26 || layer == 4 || layer == 3 || layer == 9 || layer == 32 || layer == 33 || layer == 34 || Ur.Layers.is_utility(layer))) || (layer > 0 && (paint || undone || policy_changed || day_changed || (due && (layer == 3 || layer == 4 || layer == 9 || Ur.Layers.is_utility(layer) || layer >= 12)))) do Ur.Scene.map_layer(c, st, layer) else () end
       Ur.Scene.camera(cx, cz, zoom, if h > 0.0 do w /. h else 1.6 end, yaw)
       let weather = S.current_weather(c)
@@ -475,7 +547,7 @@ mod Ur do
       let point = Ur.Scene.tile_anchor(c, popup, w, h, cx, cz, zoom, yaw)
       let hud = if p.flood_drill && !sidebar_visible do Ur.Hud.flood_drill(hud, c, st) else hud end
       let hud = if !sidebar_visible do Ur.Hud.evacuation_status(hud, citizen_stats, p.flood_drill) else hud end
-      let selected_citizen = if citizen_focus >= 0 do List.find(citizens, fn person -> person.id == citizen_focus) else None end
+      let selected_citizen = if citizen_focus >= 0 do Ur.Citizens.find(citizens, citizen_focus) else None end
       let citizen_focus = if Option.is_some(selected_citizen) do citizen_focus else -1 end
       let hud = if citizen_focus >= 0 do
         match selected_citizen do
@@ -488,16 +560,40 @@ mod Ur do
           Some(truck) -> Ur.Hud.truck_popup(hud, c, view, truck, sanitation.driver, Ur.Scene.sanitation_point(c, view, moment, sanitation.driver))
           None -> hud
         end
-      else if S.valid(popup) do Ur.Hud.tile_popup(hud, c, st, popup, point, hour, citizens, reason)
+      else if S.valid(popup) do
+        let people = if S.get(c.roads, popup) > 0 do List.map(citizens.active, fn entry -> entry.person)
+          else Ur.Citizens.at_parcel(citizens, popup) end
+        Ur.Hud.tile_popup(hud, c, st, popup, point, hour, people, reason)
       else if tool == 0 && !sidebar_visible && !mouse do
         Ur.Hud.undeveloped_hover(hud, c, hovered, Ur.Scene.tile_anchor(c, hovered, w, h, cx, cz, zoom, yaw), reason)
       else hud end end end end
       if Strata.Render.draw_ui(hud) do () else Ur.AppError.stop("HUD overflow") end
       if pressed(keys, p.keys, 13) || (p.limit > 0 && p.frame == p.limit - 1) do Vk.request_shot() else () end
-      let drawn = p.drawn + (if Vk.frame() do 1 else 0 end)
-      run_frames({ flood_drill: p.flood_drill, sanitation: sanitation, truck_selected: truck_selected, citizen_focus: citizen_focus, activity: activity, fleet: fleet, fleet_routes: wanted, city: c, stats: st, food: food, citizens: citizens, traffic_time: traffic_time, rotor_phases: rotor_phases, cloud_offset: cloud_offset, cx: cx, cz: cz, zoom: zoom, yaw: yaw, tool: tool, group: group, page: page, layer: layer, sidebar_visible: sidebar_visible && !S.valid(activity_lot) && !S.valid(council_lot) && !S.valid(diagnosis_lot), sidebar_tab: sidebar_tab, crime_focus: crime_focus, council_focus: council_focus, finance_view: finance_view, paused: paused, speed: speed,
+      let day_plan = if midnight do None else
+        if steps > 0 && !paused && Option.is_none(day_plan) &&
+          (List.is_empty(c.waste_runs) || S.street_hour(elapsed) >= 21) do
+          start_day_plan(c, st.traffic, sanitation.completed, p.flood_drill)
+        else day_plan end
+      end
+      let render_start = if p.profile do Vk.time() else 0.0 end
+      let drew = Vk.frame()
+      let drawn = p.drawn + (if drew do 1 else 0 end)
+      if p.profile do
+        let frame_end = Vk.time()
+        Authority.must(println("perf frame=" ++ int_to_string(p.frame) ++ " speed=" ++ int_to_string(steps) ++
+          " detailed=" ++ int_to_string(citizen_stats.tracked) ++ " walking=" ++ int_to_string(citizen_stats.walking) ++
+          " driving=" ++ int_to_string(citizen_stats.driving) ++ " riding=" ++ int_to_string(citizen_stats.riding) ++
+          " wall_ms=" ++ float_to_string((frame_end -. time) *. 1000.0) ++
+          " day_ms=" ++ float_to_string(day_ms) ++ " day_ready=" ++ int_to_string(if day_ready do 1 else 0 end) ++
+          " move_ms=" ++ float_to_string(move_ms) ++ " update_ms=" ++ float_to_string((render_start -. time) *. 1000.0) ++
+          " renderer_ms=" ++ float_to_string(Vk.stat(0)) ++ " gpu_ms=" ++ float_to_string(Vk.stat(3)) ++
+          " cull_gpu_ms=" ++ float_to_string(Vk.stat(26)) ++ " geometry_gpu_ms=" ++ float_to_string(Vk.stat(27)) ++
+          " batch_instances=" ++ int_to_string(float_to_int(Vk.stat(30))) ++ " batch_draws=" ++ int_to_string(float_to_int(Vk.stat(31))) ++
+          " opaque_commands=" ++ int_to_string(float_to_int(Vk.stat(32)))))
+      else () end
+      run_frames({ flood_drill: p.flood_drill, sanitation: sanitation, truck_selected: truck_selected, citizen_focus: citizen_focus, activity: activity, fleet: fleet, fleet_routes: wanted, city: c, stats: st, food: food, citizens: citizens, walk_map: walk_map, day_plan: day_plan, traffic_time: traffic_time, rotor_phases: rotor_phases, cloud_offset: cloud_offset, cx: cx, cz: cz, zoom: zoom, yaw: yaw, tool: tool, group: group, page: page, layer: layer, sidebar_visible: sidebar_visible && !S.valid(activity_lot) && !S.valid(council_lot) && !S.valid(diagnosis_lot), sidebar_tab: sidebar_tab, crime_focus: crime_focus, council_focus: council_focus, finance_view: finance_view, paused: paused, speed: speed,
         sidewalk_spot: spot, keys: keys, mouse: mouse, anchor: anchor, stroke: if mouse do stroke else Nil end, hovered: hovered, parcel_focus: parcel_focus, popup: popup, religion_site: religion_site, religion_choice: religion_choice, reason: reason, preview: preview, preview_chunks: preview_chunks, undo: undo,
-        time: time, elapsed: elapsed, frame: p.frame + 1, drawn: drawn, limit: p.limit, trace_input: p.trace_input, tick_ms: tick_ms, fps: fps, menu_open: false, boot: false, notice: "", confirm: :nothing, save_path: p.save_path, saved: p.saved, quit: false })
+        time: time, elapsed: elapsed, frame: p.frame + 1, drawn: drawn, limit: p.limit, profile: p.profile, trace_input: p.trace_input, tick_ms: tick_ms, fps: fps, menu_open: false, boot: false, notice: "", confirm: :nothing, save_path: p.save_path, saved: p.saved, quit: false })
     end end end
   end
   pfn corridor_report(label : String, c : Ur.Sim.City) : Unit do
@@ -593,7 +689,10 @@ mod Ur do
     let council = Authority.must(Env.get_int("UR_COUNCIL_REPLAY", 0))
     let drill = Authority.must(Env.get_int("UR_FLOOD_BACKUP", 0))
     let evacuation_demo = Authority.must(Env.get_int("UR_EVAC_DEMO", 0)) > 0
-    let quad_capacity = S.clamp(Authority.must(Env.get_int("UR_QUAD_CAPACITY", 524288)), 524288, 4194304)
+    let demo = Authority.must(Env.get_int("UR_DEMO", 0))
+    let metro = demo == 28
+    let profile = Authority.must(Env.get_int("UR_PERF", 0)) > 0
+    let quad_capacity = S.clamp(Authority.must(Env.get_int("UR_QUAD_CAPACITY", if metro do 4194304 else 524288 end)), 524288, 4194304)
     if drill == 2 do flood_backup_report(Ur.Scenario.flood_backup_start(), 9)
     else if council > 0 do
       let base = Ur.Scenario.council_outcome_baseline()
@@ -630,11 +729,12 @@ mod Ur do
       let start = unix_time_ms()
       let after = S.advance(c, bench)
       Authority.must(println("months=" ++ int_to_string(bench) ++ " elapsed_ms=" ++ int_to_string(unix_time_ms() - start) ++ " population=" ++ int_to_string(S.population(after)) ++ " cash=" ++ int_to_string(after.cash)))
-    else if Vk.open(1440, 900, false, quad_capacity) do
-      Vk.set_vsync(true)
+    else if Vk.open_slots(1440, 900, false, quad_capacity, Ur.Scene.citizen_chunk_slots()) do
+      Vk.set_vsync(!profile)
+      Vk.set_offscreen(Authority.must(Env.get_int("STRATA_OFFSCREEN", 0)) > 0)
       Ur.Scene.setup()
-      let demo = Authority.must(Env.get_int("UR_DEMO", 0))
-      let c = if demo == 2 do S.advance(Ur.Scenario.transit_region(), 600)
+      Ur.Scene.setup_citizens(0)
+      let c = if metro do Ur.Scenario.metropolitan_benchmark() else if demo == 2 do S.advance(Ur.Scenario.transit_region(), 600)
         else if demo == 3 do Ur.Scenario.food_town()
         else if demo == 4 do Ur.Scenario.first_expansion()
         else if demo == 5 do Ur.Scenario.civic_town()
@@ -662,7 +762,7 @@ mod Ur do
           let days = S.clamp(Authority.must(Env.get_int("UR_FLOOD_DAYS", 1)), 0, 20)
           Ur.Scenario.advance_freight_days(Ur.Scenario.storm_site(), days)
         else if demo == 27 do Ur.Scenario.religious_city()
-        else if demo > 0 do S.advance(Ur.Scenario.civic_region(Ur.Scenario.connected_region()), 480) else Ur.Sim.unclaimed() end end end end end end end end end end end end end end end end end end end end end end end end
+        else if demo > 0 do S.advance(Ur.Scenario.civic_region(Ur.Scenario.connected_region()), 480) else Ur.Sim.unclaimed() end end end end end end end end end end end end end end end end end end end end end end end end end
       let demo_hour = Authority.must(Env.get_int("UR_CLOCK_HOUR", -1))
       let c = if demo > 0 && demo_hour >= 0 && demo_hour < 24 do
         { c with clock_ms: float_to_int(int_to_float(demo_hour) *. S.day_seconds() *. 1000.0 /. 24.0) }
@@ -671,6 +771,7 @@ mod Ur do
       let landing_z = Authority.must(Env.get_int("UR_LAND_Z", -1))
       let c = if landing_x >= 0 && landing_x < S.width() && landing_z >= 0 && landing_z < S.depth() do S.land(c, S.index(landing_x, landing_z)) else c end
       let stats = S.stats(c)
+      if metro && stats.people != 100000 do Ur.AppError.stop("Metropolitan benchmark requires 100,000 residents") else () end
       let signal_tick = S.signal_tick(clock_phase(c))
       Ur.Scene.sync(c, c, 0, true, false, 0, S.street_hour(clock_phase(c)),
         { before: stats.junctions, after: stats.junctions, before_tick: signal_tick, after_tick: signal_tick }, stats.utilities.electric, stats.utilities.electric)
@@ -704,6 +805,7 @@ mod Ur do
         18 -> (135.0, 148.0, 110.0)
         19 -> (100.0, 140.0, 72.0)
         20 -> (151.0, 139.0, 125.0)
+        28 -> (153.0, 153.0, 165.0)
         _ -> if channel do (180.0, 118.0, 62.0) else if region do (142.0, 105.0, 171.0) else (91.0, 143.0, 76.0) end end
       end
       let fleet_routes = Ur.Fleet.routes_with(c, stats.running_transit, stats.buses)
@@ -713,10 +815,11 @@ mod Ur do
           { person with location: person.work, target: person.work, activity: 1 }
         else person end)
       else citizens end
+      let citizens = Ur.Citizens.index(c, citizens, int_to_float(S.absolute_day(c)) *. S.day_seconds() +. clock_phase(c))
       let religion_site = if demo == 27 do S.index(8, 18) else -1 end
-      run_frames({ flood_drill: demo == 22 && drill == 1, sanitation: Ur.Scene.empty_sanitation(), truck_selected: false, citizen_focus: -1, activity: Nil, fleet: Ur.Fleet.step(c, stats.traffic, Nil, fleet_routes, 0.0, true), fleet_routes: fleet_routes, city: c, stats: stats, food: Ur.Food.producer_traffic(c, stats), citizens: citizens, traffic_time: clock_phase(c), rotor_phases: NativeArray.make_f32(S.count(), 0.0), cloud_offset: (0.0, 0.0), cx: cx, cz: cz, zoom: zoom, yaw: 0.55, tool: if layer > 0 || civic_demo || demo == 2 || demo == 15 || demo == 16 || demo == 17 || demo == 18 || demo == 20 || demo == 22 || demo == 27 do 0 else 1 end, group: if layer > 0 && demo != 14 do 7 else if civic_demo || demo == 8 do 5 else if demo == 2 do 3 else if demo == 14 || demo == 15 do 0 else 1 end end end end, page: if layer == 4 || layer == 29 || layer == 30 || layer == 32 || layer == 33 do 2 else if layer >= 5 && layer <= 8 do 1 else if layer == 23 || layer == 24 || layer == 27 || layer == 28 do 6 else if layer >= 23 && layer != 31 do 5 else if layer >= 20 && layer != 31 do 4 else if layer >= 12 && layer != 31 do 3 else if demo == 7 && layer == 0 do 1 else if demo == 8 && layer == 0 do 2 else 0 end end end end end end end end, layer: layer, sidebar_visible: (demo > 0 && !streets_demo && demo != 11 && demo != 14 && demo != 15 && demo != 16 && demo != 18 && demo != 19 && demo != 20 && demo != 22) || details_tab >= 5, sidebar_tab: details_tab, crime_focus: -1, council_focus: -1, finance_view: { month: 0, lines: finance_lines }, paused: demo == 0 || demo == 13 || demo == 18 || demo == 19 || demo == 20 || demo == 21 || demo == 22 || demo == 27, speed: if demo == 22 && drill == 1 do 3 else 1 end,
+      run_frames({ flood_drill: demo == 22 && drill == 1, sanitation: Ur.Scene.empty_sanitation(), truck_selected: false, citizen_focus: -1, activity: Nil, fleet: Ur.Fleet.step(c, stats.traffic, Nil, fleet_routes, 0.0, true), fleet_routes: fleet_routes, city: c, stats: stats, food: Ur.Food.producer_traffic(c, stats), citizens: citizens, walk_map: Ur.Citizens.walk_map(c), day_plan: None, traffic_time: clock_phase(c), rotor_phases: NativeArray.make_f32(S.count(), 0.0), cloud_offset: (0.0, 0.0), cx: cx, cz: cz, zoom: zoom, yaw: 0.55, tool: if layer > 0 || civic_demo || demo == 2 || demo == 15 || demo == 16 || demo == 17 || demo == 18 || demo == 20 || demo == 22 || demo == 27 do 0 else 1 end, group: if layer > 0 && demo != 14 do 7 else if civic_demo || demo == 8 do 5 else if demo == 2 do 3 else if demo == 14 || demo == 15 do 0 else 1 end end end end, page: if layer == 4 || layer == 29 || layer == 30 || layer == 32 || layer == 33 do 2 else if layer >= 5 && layer <= 8 do 1 else if layer == 23 || layer == 24 || layer == 27 || layer == 28 do 6 else if layer >= 23 && layer != 31 do 5 else if layer >= 20 && layer != 31 do 4 else if layer >= 12 && layer != 31 do 3 else if demo == 7 && layer == 0 do 1 else if demo == 8 && layer == 0 do 2 else 0 end end end end end end end end, layer: layer, sidebar_visible: (demo > 0 && !streets_demo && demo != 11 && demo != 14 && demo != 15 && demo != 16 && demo != 18 && demo != 19 && demo != 20 && demo != 22) || details_tab >= 5, sidebar_tab: details_tab, crime_focus: -1, council_focus: -1, finance_view: { month: 0, lines: finance_lines }, paused: demo == 0 || demo == 13 || demo == 18 || demo == 19 || demo == 20 || demo == 21 || demo == 22 || demo == 27, speed: if metro || (demo == 22 && drill == 1) do 3 else 1 end,
         sidewalk_spot: -1, keys: 0, mouse: false, anchor: -1, stroke: Nil, hovered: -1, parcel_focus: if demo == 17 do S.index(10, 17) else if details_tab == 12 do S.index(9, 19) else -1 end end, popup: if demo == 22 do (if evacuation_demo do Ur.Scenario.evacuation_home() else Ur.Scenario.storm_station() end) else -1 end, religion_site: religion_site, religion_choice: 0, preview: Build.preview(c, 0, -1, -1), undo: Nil, reason: if c.harbour < 0 do "Choose a cyan shoreline parcel to land." else "Select a parcel to inspect development" end,
-        time: Vk.time(), elapsed: clock_phase(c), frame: 0, drawn: 0, limit: Authority.must(Env.get_int("UR_FRAMES", 0)), trace_input: Authority.must(Env.get_int("UR_INPUT_LOG", 0)) > 0, tick_ms: 0.0, fps: { since: Vk.time(), drawn: 0, value: -1 }, menu_open: boot, boot: boot, notice: if saved do "" else "No saved city yet." end, confirm: :nothing, save_path: save_path, saved: saved, quit: false, preview_chunks: 0 })
+        time: Vk.time(), elapsed: clock_phase(c), frame: 0, drawn: 0, limit: Authority.must(Env.get_int("UR_FRAMES", 0)), profile: profile, trace_input: Authority.must(Env.get_int("UR_INPUT_LOG", 0)) > 0, tick_ms: 0.0, fps: { since: Vk.time(), drawn: 0, value: -1 }, menu_open: boot, boot: boot, notice: if saved do "" else "No saved city yet." end, confirm: :nothing, save_path: save_path, saved: saved, quit: false, preview_chunks: 0 })
     else Ur.AppError.stop("Could not open Strata renderer; check Vulkan and GLFW installation") end end end end end end end
   end
 end

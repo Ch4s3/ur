@@ -965,7 +965,7 @@ mod Ur.Save do
       let? game = decode_game(raw_game)
       let? evacuation = match Json.get(json, "evacuation") do
         None -> Ok(Nil)
-        Some(raw) -> items(raw, decode_evacuation, 96)
+        Some(raw) -> items(raw, decode_evacuation, S.population(game.city))
       end
       Ok({ game: game, evacuation: evacuation })
     else Err("Unsupported save version.") end

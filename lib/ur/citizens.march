@@ -4,10 +4,11 @@ mod Ur.Citizens do
   type Parking = { lot : Int, road : Int, kind : Int, bay : Int, edge : Int, steps : Int, site : Int }
   type Citizen = { id : Int, home : Int, work : Int, work_position : Int, work_board : Int, study : Int, qualification : Int, shop : Int, location : Int,
     park : Int, park_trip : Bool, shelter : Int, campus_day : Int, park_route : List(Int), work_route : List(Int), shop_route : List(Int), route : List(Int),
-    target : Int, previous : Int, board : Int, alight : Int, bus_slot : Int, transit_phase : Int, by_car : Bool, car_phase : Int, parking : Int, arrival : Int, activity : Int, wait : Float, progress : Float, queued : Bool, rest_hour : Int }
+    target : Int, previous : Int, board : Int, alight : Int, bus_slot : Int, transit_phase : Int, by_car : Bool, car_phase : Int, parking : Int, arrival : Int, activity : Int, wait : Float, progress : Float, queued : Bool, rest_until : Int }
   type EvacuationTrip = { id : Int, home : Int, shelter : Int, activity : Int, location : Int,
     target : Int, route : List(Int), previous : Int, progress : Float, wait : Float }
-  type Occupied = { lanes : NativeIntArr, parking_keys : List(Int), junctions : NativeIntArr, crossings : NativeIntArr, signal_tick : Int }
+  type WalkMap = { pace : NativeFloatArr, terrain : NativeIntArr }
+  type Occupied = { walk : WalkMap, lanes : NativeIntArr, parking_keys : Map(Int, Int), junctions : NativeIntArr, crossings : NativeIntArr, signal_tick : Int }
   type CitizenCounts = { tracked : Int, walking : Int, waiting : Int, riding : Int, driving : Int, queued : Int, at_work : Int, studying : Int, shopping : Int, visiting_park : Int, home : Int,
     evacuating : Int, sheltered : Int, returning : Int, stranded : Int }
 
@@ -82,39 +83,38 @@ mod Ur.Citizens do
     else if p.kind > 0 do p.lot * 9 + 8
     else p.road * 9 + p.edge * 2 + p.bay end end
   end
-  pfn hold(keys : List(Int), parking : Option(Parking)) : List(Int) do
+  pfn change_reservation(keys : Map(Int, Int), parking : Option(Parking), delta : Int) : Map(Int, Int) do
     match parking do
-      Some(p) -> Cons(parking_key(p), keys)
       None -> keys
+      Some(p) ->
+        let key = parking_key(p)
+        let count = Map.get_or(keys, key, 0, Map.int_cmp) + delta
+        if count <= 0 do Map.remove(keys, key, Map.int_cmp) else Map.insert(keys, key, count, Map.int_cmp) end
     end
   end
-  pfn holds_key(keys : List(Int), key : Int) : Bool do
-    match keys do
-      Nil -> false
-      Cons(i, rest) -> i == key || holds_key(rest, key)
-    end
+  pfn hold(keys : Map(Int, Int), parking : Option(Parking)) : Map(Int, Int) do
+    change_reservation(keys, parking, 1)
   end
-  pfn parkings(people : List(Citizen), ignore : Int, keys : List(Int)) : List(Int) do
-    match people do
-      Nil -> keys
-      Cons(person, rest) ->
-        let keys = if person.id == ignore do keys else
-          hold(if person.car_phase < 2 do hold(keys, parking_at(person.parking)) else keys end, parking_at(person.arrival))
-        end
-        parkings(rest, ignore, keys)
-    end
+  pfn holds_key(keys : Map(Int, Int), key : Int) : Bool do
+    Map.get_or(keys, key, 0, Map.int_cmp) > 0
+  end
+  pfn park_actor(keys : Map(Int, Int), person : Citizen, delta : Int) : Map(Int, Int) do
+    let keys = if person.parking != 0 && person.car_phase < 2 do
+      change_reservation(keys, parking_at(person.parking), delta)
+    else keys end
+    if person.arrival != 0 do change_reservation(keys, parking_at(person.arrival), delta) else keys end
   end
   pfn lane_get(occupied : Occupied, index : Int) : Int do NativeArray.get_int(occupied.lanes, index) end
   pfn lane_set(occupied : Occupied, index : Int, value : Int) : Occupied do
     { occupied with lanes: NativeArray.set_int(occupied.lanes, index, value) }
   end
-  pfn garage_bay(base : Parking, bay : Int, capacity : Int, keys : List(Int)) : Option(Parking) do
+  pfn garage_bay(base : Parking, bay : Int, capacity : Int, keys : Map(Int, Int)) : Option(Parking) do
     if bay == capacity do None else
       let next = { base with bay: bay }
       if holds_key(keys, parking_key(next)) do garage_bay(base, bay + 1, capacity, keys) else Some(next) end
     end
   end
-  pfn parking_facility(c : Ur.Sim.City, lot : Int, road : Int, steps : Int, d : Int, keys : List(Int)) : Option(Parking) do
+  pfn parking_facility(c : Ur.Sim.City, lot : Int, road : Int, steps : Int, d : Int, keys : Map(Int, Int)) : Option(Parking) do
     if d == 4 do None else
       let site = S.neighbour(road, d)
       let kind = S.get(c.public_parking, site)
@@ -137,7 +137,7 @@ mod Ur.Citizens do
       _ -> 0
     end
   end
-  pfn free_parking(c : Ur.Sim.City, lot : Int, road : Int, previous : Int, steps : Int, keys : List(Int), curb_side : Int) : Option(Parking) do
+  pfn free_parking(c : Ur.Sim.City, lot : Int, road : Int, previous : Int, steps : Int, keys : Map(Int, Int), curb_side : Int) : Option(Parking) do
     if !S.valid(lot) || !S.motor_street(c, road) || S.span_distance(previous, road) != 1 do None else
       let kind = if steps == 0 && road == S.fleet_frontage(c, lot, 0) do home_parking(c, lot) else 0 end
       let private_bay = { lot: lot, road: road, kind: kind, bay: 0, edge: S.direction(road, previous), steps: steps, site: lot }
@@ -155,7 +155,7 @@ mod Ur.Citizens do
       else parking_facility(c, lot, road, steps, 0, keys) end end end
     end
   end
-  pfn along_parking(c : Ur.Sim.City, lot : Int, path : List(Int), steps : Int, keys : List(Int), arriving : Bool) : Option(Parking) do
+  pfn along_parking(c : Ur.Sim.City, lot : Int, path : List(Int), steps : Int, keys : Map(Int, Int), arriving : Bool) : Option(Parking) do
     match path do
       Cons(previous, Cons(road, rest)) ->
         let curb_side = match rest do
@@ -174,23 +174,19 @@ mod Ur.Citizens do
       S.get(c.public_parking, p.site) == p.kind - 2 && p.road == S.fleet_frontage(c, p.site, 0)
     else (p.kind == 0 && (p.bay != 0 || S.waste_bin_edge(c, p.road) != p.edge)) || (p.kind > 0 && p.kind == home_parking(c, p.lot) && p.road == S.fleet_frontage(c, p.lot, 0)) end)
   end
-  pfn owned_parking(c : Ur.Sim.City, old : List(Citizen), id : Int) : Option(Parking) do
+  pfn owned_parking(c : Ur.Sim.City, old : Option(Citizen)) : Option(Parking) do
     match old do
-      Nil -> None
-      Cons(person, rest) ->
-        if person.id != id do owned_parking(c, rest, id)
-        else
-          -- An interrupted trip keeps its reserved bay, preferring the destination
-          -- once the car has reached it.
-          let parking = if person.car_phase >= 2 do person.arrival else person.parking end
-          match parking_at(parking) do
-            Some(p) -> if valid_parking(c, p) do Some(p) else None end
-            None -> None
-          end
+      None -> None
+      Some(person) ->
+        -- Keep the destination bay once an interrupted trip has reached it.
+        let parking = if person.car_phase >= 2 do person.arrival else person.parking end
+        match parking_at(parking) do
+          Some(p) -> if valid_parking(c, p) do Some(p) else None end
+          None -> None
         end
     end
   end
-  pfn acquire_parking(c : Ur.Sim.City, lot : Int, route : List(Int), keys : List(Int), wants_car : Bool) : Option(Parking) do
+  pfn acquire_parking(c : Ur.Sim.City, lot : Int, route : List(Int), keys : Map(Int, Int), wants_car : Bool) : Option(Parking) do
     if !wants_car do None else
       match along_parking(c, lot, route, 0, keys, false) do
         Some(p) -> Some(p)
@@ -198,23 +194,21 @@ mod Ur.Citizens do
       end
     end
   end
-  pfn existing(c : Ur.Sim.City, old : List(Citizen), id : Int, study : Int, qualification : Int) : Option(Citizen) do
+  pfn valid_reserved_parking(c : Ur.Sim.City, code : Int) : Bool do
+    match parking_at(code) do
+      Some(p) -> valid_parking(c, p)
+      None -> true
+    end
+  end
+  pfn existing(c : Ur.Sim.City, old : Option(Citizen), work : Int, work_route : List(Int), study : Int, qualification : Int) : Option(Citizen) do
     match old do
-      Nil -> None
-      Cons(person, rest) ->
-        if person.id != id do existing(c, rest, id, study, qualification)
-        else if person.study == study && person.qualification == qualification &&
-          (if study >= 0 do S.active_program_at(c, person.work) == study else job(c, person.work) && qualified(c, person.work, qualification) end) && (person.shop < 0 || S.public_trade(c, person.shop)) &&
-          (match parking_at(person.parking) do
-            Some(p) -> valid_parking(c, p)
-            None -> true
-          end) &&
-          (match parking_at(person.arrival) do
-            Some(p) -> valid_parking(c, p)
-            None -> true
-          end) &&
-          valid_route(c, person.work_route, true) && valid_route(c, person.shop_route, true) do Some(person)
-        else None end end
+      None -> None
+      Some(person) ->
+        if person.work == work && person.work_route == work_route && person.study == study && person.qualification == qualification &&
+          (person.shop < 0 || S.public_trade(c, person.shop)) && valid_reserved_parking(c, person.parking) &&
+          valid_reserved_parking(c, person.arrival) && valid_route(c, person.work_route, true) &&
+          valid_route(c, person.shop_route, true) do Some(person)
+        else None end
     end
   end
   pfn park_stroll(c : Ur.Sim.City, i : Int, previous : Int, d : Int, seed : Int, remaining : Int) : List(Int) do
@@ -253,7 +247,8 @@ mod Ur.Citizens do
     let needed = S.job_requirement(c, lot)
     S.qualified_for(skill, needed)
   end
-  type EducationRoutes = { schools : List(NativeIntArr), population : Int, hires : List(Ur.Sim.JobMatch) }
+  type Hire = { work : Int, route : List(Int), rank : Int, board : Int, left : Int }
+  type EducationRoutes = { schools : List(NativeIntArr), population : Int, hires : Map(Int, List(Hire)) }
   pfn student_stage(c : Ur.Sim.City, stage : Int, draw : Int) : Int do
     if stage == 9 do -1 else
       let group = S.program_enrolled(c, stage)
@@ -283,71 +278,99 @@ mod Ur.Citizens do
     end
   end
   fn education_changed(c : Ur.Sim.City, before : Ur.Sim.City) : Bool do programs_changed(c, before, 0) end
-  pfn home_job(c : Ur.Sim.City, hires : List(Ur.Sim.JobMatch), home : Int, shown : List(Citizen)) : (Int, List(Int), Int, Int) do
-    match hires do
-      Nil -> (-1, Nil, 0, -1)
-      Cons(hire, rest) ->
-        if hire.home != home do home_job(c, rest, home, shown) else
-          let occupied = List.length(List.filter(shown, fn person -> person.work == hire.workplace &&
-            person.home == home && person.study < 0 && person.qualification == hire.rank && person.work_board == hire.board))
-          if occupied >= hire.workers do home_job(c, rest, home, shown) else
-            let (work, route) = destination(c, Ur.Food.destinations(c, fn lot -> lot == hire.workplace), home)
-            if S.valid(work) do (work, route, hire.rank, hire.board) else home_job(c, rest, home, shown) end
-          end
-        end
-    end
+  type JobRoutes = { fields : Map(Int, NativeIntArr), by_home : Map(Int, List(Hire)) }
+  pfn job_routes(c : Ur.Sim.City, hires : List(Ur.Sim.JobMatch)) : Map(Int, List(Hire)) do
+    let routes = List.fold_left(List.reverse(hires), { fields: Map.empty(), by_home: Map.empty() }, fn (planned, hire) ->
+      let (field, fields) = match Map.get(planned.fields, hire.workplace, Map.int_cmp) do
+        Some(field) -> (field, planned.fields)
+        None ->
+          let field = Ur.Food.destinations(c, fn lot -> lot == hire.workplace)
+          (field, Map.insert(planned.fields, hire.workplace, field, Map.int_cmp))
+      end
+      let (work, route) = destination(c, field, hire.home)
+      if !S.valid(work) || hire.workers <= 0 do { planned with fields: fields } else
+        let job = { work: work, route: route, rank: hire.rank, board: hire.board, left: hire.workers }
+        let previous = Map.get_or(planned.by_home, hire.home, Nil, Map.int_cmp)
+        { fields: fields, by_home: Map.insert(planned.by_home, hire.home, Cons(job, previous), Map.int_cmp) }
+      end)
+    routes.by_home
   end
-  pfn roster(c : Ur.Sim.City, old : List(Citizen), stores : NativeIntArr, bars : NativeIntArr, walk : Ur.Sim.ParkWalk, education : EducationRoutes, used : NativeIntArr, homes : List(Int), floor : Int, left : Int, out : List(Citizen)) : List(Citizen) do
+  type RosterBuild = { old : Map(Int, Citizen), positions : NativeIntArr, parking : Map(Int, Int), people : List(Citizen) }
+  -- Keep older save IDs intact for the original residents of a parcel.
+  pfn resident_id(lot : Int, floor : Int) : Int do
+    if floor < 9 do lot * 9 + floor
+    else if floor < 73 do S.count() * 9 + lot * 64 + floor
+    else S.count() * 73 + 9 + (floor - 73) * S.count() + lot end end
+  end
+  pfn residents_on(people : Int, households : Int, seen : Int, homes : Int) : Int do
+    (seen + homes) * people / households - seen * people / households
+  end
+  pfn roster(c : Ur.Sim.City, stores : NativeIntArr, bars : NativeIntArr, walk : Ur.Sim.ParkWalk, education : EducationRoutes,
+    build : RosterBuild, homes : List(Int), households : Int, seen : Int, floor : Int, limit : Int, hires : List(Hire)) : List(Citizen) do
     match homes do
-      Nil -> List.reverse(out)
+      Nil -> List.reverse(build.people)
       Cons(lot, rest) ->
-        if left == 0 do List.reverse(out)
-        else if floor >= (if S.get(c.zones, lot) == 3 do S.resident_homes(c, lot) else (S.resident_homes(c, lot) * 3 + 3) / 4 end) do roster(c, old, stores, bars, walk, education, used, rest, 0, left, out)
+        if floor >= limit do
+          let seen = seen + S.resident_homes(c, lot)
+          match rest do
+            Nil -> List.reverse(build.people)
+            Cons(next, _) ->
+              let limit = residents_on(education.population, households, seen, S.resident_homes(c, next))
+              roster(c, stores, bars, walk, education, build, rest, households, seen, 0, limit, Map.get_or(education.hires, next, Nil, Map.int_cmp))
+          end
         else
-          let id = if floor < 9 do lot * 9 + floor else S.count() * 9 + lot * 64 + floor end
+          let id = resident_id(lot, floor)
           let roll = Strata.Seed.cell(227, 1, id, 0, 0)
           let planned_study = student_stage(c, 0, roll % education.population)
           let (school, school_route) = if planned_study < 0 do (-1, Nil) else route_at(c, education.schools, planned_study, lot) end
           let study = if S.valid(school) do planned_study else -1 end
-          let (work, work_route, qualification, work_board) = if study >= 0 do (school, school_route, 0, -1)
-            else home_job(c, education.hires, lot, out) end
-          let position = if study < 0 && S.valid(work) do S.get(used, work) + 1 else 0 end
-          let used = if position > 0 do NativeArray.set_int(used, work, position) else used end
-          let prior = match existing(c, old, id, study, qualification) do
-            Some(person) -> if person.work == work && person.work_route == work_route do Some({ person with work_position: position, work_board: work_board, rest_hour: -1 }) else None end
-            None -> None
+          let (work, work_route, qualification, work_board, hires) = if study >= 0 do (school, school_route, 0, -1, hires) else
+            match hires do
+              Nil -> (-1, Nil, 0, -1, Nil)
+              Cons(hire, tail) ->
+                let next = if hire.left == 1 do tail else Cons({ hire with left: hire.left - 1 }, tail) end
+                (hire.work, hire.route, hire.rank, hire.board, next)
+            end
           end
+          let position = if study < 0 && S.valid(work) do S.get(build.positions, work) + 1 else 0 end
+          let positions = if position > 0 do NativeArray.set_int(build.positions, work, position) else build.positions end
+          let old = Map.get(build.old, id, Map.int_cmp)
+          let parking_keys = match old do
+            Some(person) -> park_actor(build.parking, person, -1)
+            None -> build.parking
+          end
+          let prior = existing(c, old, work, work_route, study, qualification)
           let wants_car = roll / 19 % 100 < (if S.get(c.buildings, lot) >= 3 do 32 else if S.get(c.buildings, lot) == 2 do 62 else 92 end end)
           let person = match prior do
             Some(person) ->
+              let person = { person with work_position: position, work_board: work_board, rest_until: -1 }
               let person = if person.car_phase != 0 do person else
-                let parking = match owned_parking(c, old, id) do
+                let parking = match owned_parking(c, old) do
                   Some(p) -> Some(p)
-                  None -> if person.location == person.home do acquire_parking(c, lot, work_route, parkings(out, -1, parkings(old, id, Nil)), wants_car) else None end
+                  None -> if person.location == person.home do acquire_parking(c, lot, work_route, parking_keys, wants_car) else None end
                 end
                 { person with parking: parking_value(parking) }
               end
               let (bar, bar_route) = if floor % 3 == 0 && person.location == person.home do destination(c, bars, lot) else (-1, Nil) end
-              if S.valid(bar) do Some({ person with shop: bar, shop_route: bar_route })
-              else if person.shop >= 0 do Some(person) else
+              if S.valid(bar) do { person with shop: bar, shop_route: bar_route }
+              else if person.shop >= 0 do person else
                 let (shop, shop_route) = destination(c, stores, lot)
-                Some({ person with shop: shop, shop_route: shop_route })
+                { person with shop: shop, shop_route: shop_route }
               end end
             None ->
               let (bar, bar_route) = if floor % 3 == 0 do destination(c, bars, lot) else (-1, Nil) end
               let (shop, shop_route) = if S.valid(bar) do (bar, bar_route) else destination(c, stores, lot) end
-              let parking = match owned_parking(c, old, id) do
+              let parking = match owned_parking(c, old) do
                 Some(p) -> Some(p)
-                None -> acquire_parking(c, lot, work_route, parkings(out, -1, parkings(old, id, Nil)), wants_car)
+                None -> acquire_parking(c, lot, work_route, parking_keys, wants_car)
               end
-              Some({ id: id, park: -1, park_trip: false, shelter: -1, campus_day: -1, park_route: Nil, home: lot, work: work, work_position: position, work_board: work_board, study: study, qualification: qualification, shop: shop, location: lot, work_route: work_route, shop_route: shop_route,
-                  route: Nil, target: lot, previous: -1, board: -1, alight: -1, bus_slot: -1, transit_phase: 0, by_car: false, car_phase: 0, parking: parking_value(parking), arrival: 0, activity: 0, wait: if study >= 0 do int_to_float(id % 13) *. 0.02 else 0.2 +. int_to_float(id % 17) *. 0.24 end, progress: 0.0, queued: false, rest_hour: -1 })
+              { id: id, park: -1, park_trip: false, shelter: -1, campus_day: -1, park_route: Nil, home: lot, work: work, work_position: position, work_board: work_board, study: study, qualification: qualification, shop: shop, location: lot, work_route: work_route, shop_route: shop_route,
+                  route: Nil, target: lot, previous: -1, board: -1, alight: -1, bus_slot: -1, transit_phase: 0, by_car: false, car_phase: 0, parking: parking_value(parking), arrival: 0, activity: 0, wait: if study >= 0 do int_to_float(id % 13) *. 0.02 else 0.2 +. int_to_float(id % 17) *. 0.24 end, progress: 0.0, queued: false, rest_until: -1 }
           end
-          match person do
-            Some(person) -> roster(c, old, stores, bars, walk, education, used, homes, floor + 1, left - 1, Cons(plan_park(c, walk, person), out))
-            None -> roster(c, old, stores, bars, walk, education, used, rest, 0, left, out)
-          end
-        end end
+          let person = plan_park(c, walk, person)
+          let build = { build with positions: positions, parking: park_actor(parking_keys, person, 1), people: Cons(person, build.people) }
+          roster(c, stores, bars, walk, education, build, homes, households, seen, floor + 1, limit, hires)
+        end
     end
   end
   pfn emergency_trip(c : Ur.Sim.City, person : Citizen, prior : Citizen, target : Int, activity : Int, shelter : Int) : Citizen do
@@ -369,9 +392,9 @@ mod Ur.Citizens do
         previous: -1, parking: prior.parking, by_car: false, car_phase: 0, arrival: 0, board: -1, alight: -1, bus_slot: -1, transit_phase: 0 }
     end
   end
-  pfn evacuate(c : Ur.Sim.City, orders : NativeIntArr, old : List(Citizen), person : Citizen) : Citizen do
+  pfn evacuate(c : Ur.Sim.City, orders : NativeIntArr, old : Map(Int, Citizen), person : Citizen) : Citizen do
     let displaced = S.displaced_homes(c, person.home) > 0
-    let prior = List.find(old, fn candidate -> candidate.id == person.id)
+    let prior = Map.get(old, person.id, Map.int_cmp)
     if displaced do
       let shelter = S.get(orders, person.home) - 1
       emergency_trip(c, person, Option.unwrap_or(prior, person), shelter, 7, shelter)
@@ -401,34 +424,51 @@ mod Ur.Citizens do
       home_order(c, previous, lot + 1, Cons(lot, priority), normal)
     else home_order(c, previous, lot + 1, priority, Cons(lot, normal)) end end end
   end
-  pfn refresh_roster(c : Ur.Sim.City, old : List(Citizen), roads : NativeIntArr, people : Int, hires : List(Ur.Sim.JobMatch), previous : NativeIntArr) : List(Citizen) do
-    let stores = Ur.Food.destinations(c, fn i -> S.public_trade(c, i))
-    let bars = Ur.Food.destinations(c, fn i -> S.nightlife(c, i))
-    let education = { schools: education_routes(c, roads, 0), population: S.clamp(people, 1, 1000000), hires: hires }
+  pfn citizens_by_id(people : List(Citizen)) : Map(Int, Citizen) do
+    List.fold_left(people, Map.empty(), fn (index, person) -> Map.insert(index, person.id, person, Map.int_cmp))
+  end
+  pfn refresh_roster(c : Ur.Sim.City, old : Map(Int, Citizen), roads : NativeIntArr, people : Int, hires : List(Ur.Sim.JobMatch), previous : NativeIntArr) : List(Citizen) do
     let homes = home_order(c, previous, 0, Nil, Nil)
-    roster(c, old, stores, bars, S.park_walk(c), education, NativeArray.make_int(2640, 0), homes, 0, S.clamp(people, 0, 96), Nil)
+    match homes do
+      Nil -> Nil
+      Cons(lot, _) ->
+        if people <= 0 do Nil else
+          let households = List.fold_left(homes, 0, fn (total, home) -> total + S.resident_homes(c, home))
+          let stores = Ur.Food.destinations(c, fn i -> S.public_trade(c, i))
+          let bars = Ur.Food.destinations(c, fn i -> S.nightlife(c, i))
+          let education = { schools: education_routes(c, roads, 0), population: people, hires: job_routes(c, hires) }
+          let parking = Map.fold(old, Map.empty(), fn (keys, _, person) -> park_actor(keys, person, 1))
+          let build = { old: old, positions: NativeArray.make_int(S.count(), 0), parking: parking, people: Nil }
+          let limit = residents_on(people, households, 0, S.resident_homes(c, lot))
+          roster(c, stores, bars, S.park_walk(c), education, build, homes, households, 0, 0, limit, Map.get_or(education.hires, lot, Nil, Map.int_cmp))
+        end
+    end
   end
   fn refresh_with(c : Ur.Sim.City, old : List(Citizen), roads : NativeIntArr, people : Int, hires : List(Ur.Sim.JobMatch)) : List(Citizen) do
     let previous = List.fold_left(old, NativeArray.make_int(S.count(), 0), fn (field, person) ->
       if emergency_move(person) do NativeArray.set_int(field, person.home, person.shelter + 2) else field end)
-    let people = refresh_roster(c, old, roads, people, hires, previous)
+    let prior = citizens_by_id(old)
+    let people = refresh_roster(c, prior, roads, people, hires, previous)
     if c.flood_active || S.severe_rain(c) || S.curse_god(c) == 3 || List.any(old, emergency_move) || List.any(people, fn person -> S.displaced_homes(c, person.home) > 0) do
       let orders = Ur.Evacuation.plan(c, roads, previous)
-      List.map(people, fn person -> evacuate(c, orders, old, person))
+      List.map(people, fn person -> evacuate(c, orders, prior, person))
     else people end
   end
   fn restore_with(c : Ur.Sim.City, trips : List(EvacuationTrip), roads : NativeIntArr, people : Int, hires : List(Ur.Sim.JobMatch)) : List(Citizen) do
     if List.is_empty(trips) do refresh_with(c, Nil, roads, people, hires) else
       let previous = List.fold_left(trips, NativeArray.make_int(S.count(), 0), fn (field, trip) ->
         NativeArray.set_int(field, trip.home, trip.shelter + 2))
-      let people = refresh_roster(c, Nil, roads, people, hires, previous)
+      let people = refresh_roster(c, Map.empty(), roads, people, hires, previous)
+      let saved = List.fold_left(trips, Map.empty(), fn (index, trip) -> Map.insert(index, trip.id, trip, Map.int_cmp))
       let orders = Ur.Evacuation.plan(c, roads, previous)
       List.map(people, fn person ->
-        match List.find(trips, fn trip -> trip.id == person.id && trip.home == person.home) do
+        match Map.get(saved, person.id, Map.int_cmp) do
           Some(trip) ->
-            { person with shelter: trip.shelter, activity: trip.activity, location: trip.location,
-              target: trip.target, route: trip.route, previous: trip.previous, progress: trip.progress, wait: trip.wait }
-          None -> evacuate(c, orders, Nil, person)
+            if trip.home == person.home do
+              { person with shelter: trip.shelter, activity: trip.activity, location: trip.location,
+                target: trip.target, route: trip.route, previous: trip.previous, progress: trip.progress, wait: trip.wait }
+            else evacuate(c, orders, Map.empty(), person) end
+          None -> evacuate(c, orders, Map.empty(), person)
         end)
     end
   end
@@ -471,11 +511,52 @@ mod Ur.Citizens do
       None -> 0.0
     end
   end
-  fn walk_corners(c : Ur.Sim.City, person : Citizen, a : Int, b : Int) : Option((Int, Int, Int, Int)) do
+  -- Each parcel caches its crossing arms, closure, sidewalk width and curve.
+  pfn cache_walk(c : Ur.Sim.City, temperature : Int, lot : Int, pace : NativeFloatArr, terrain : NativeIntArr) : WalkMap do
+    if lot >= S.count() do { pace: pace, terrain: terrain } else
+      let road = S.get(c.roads, lot)
+      let motor = S.motor_street(c, lot)
+      let arms = if motor do
+        (if S.junction_arm(c, lot, 0) do 1 else 0 end) +
+        (if S.junction_arm(c, lot, 1) do 2 else 0 end) +
+        (if S.junction_arm(c, lot, 2) do 4 else 0 end) +
+        (if S.junction_arm(c, lot, 3) do 8 else 0 end)
+      else 0 end
+      let flags = arms + (if S.ground_closed(c, lot) do 16 else 0 end)
+      let width = if motor do S.road_half_width(road) + 1 else 4 end
+      let (horizontal, vertical) = if road > 0 do S.road_turn(c, lot) else (-1, -1) end
+      let base = lot * 3
+      let terrain = NativeArray.set_int(terrain, base, flags)
+      let terrain = NativeArray.set_int(terrain, base + 1, width)
+      let terrain = NativeArray.set_int(terrain, base + 2, (horizontal + 1) * 5 + vertical + 1)
+      cache_walk(c, temperature, lot + 1, NativeArray.set_float(pace, lot, S.walk_pace_at(c, lot, temperature)), terrain)
+    end
+  end
+  fn walk_map(c : Ur.Sim.City) : WalkMap do
+    cache_walk(c, S.temperature(c), 0, NativeArray.make_float(S.count(), 1.0), NativeArray.make_int(S.count() * 3, 0))
+  end
+  fn walk_arm(map : WalkMap, lot : Int, arm : Int) : Bool do
+    arm >= 0 && arm < 4 && S.valid(lot) && int_and(NativeArray.get_int(map.terrain, lot * 3), int_shl(1, arm)) > 0
+  end
+  fn walk_junction(map : WalkMap, lot : Int) : Bool do
+    S.valid(lot) && int_popcount(int_and(NativeArray.get_int(map.terrain, lot * 3), 15)) >= 3
+  end
+  fn walk_width(map : WalkMap, lot : Int) : Int do
+    if S.valid(lot) do NativeArray.get_int(map.terrain, lot * 3 + 1) else 4 end
+  end
+  fn walk_turn(map : WalkMap, lot : Int) : (Int, Int) do
+    let code = if S.valid(lot) do NativeArray.get_int(map.terrain, lot * 3 + 2) else 0 end
+    (code / 5 - 1, code % 5 - 1)
+  end
+  fn walk_segment_pace(map : WalkMap, a : Int, b : Int) : Float do
+    if !S.valid(a) || (S.valid(b) && int_and(NativeArray.get_int(map.terrain, b * 3), 16) > 0) do 0.0
+    else NativeArray.get_float(map.pace, a) end
+  end
+  fn walk_corners(map : WalkMap, person : Citizen, a : Int, b : Int) : Option((Int, Int, Int, Int)) do
     let from = person.previous
-    if person.transit_phase == 3 || person.car_phase == 2 || !S.valid(from) || !S.surface_junction(c, a) ||
+    if person.transit_phase == 3 || person.car_phase == 2 || !S.valid(from) || !walk_junction(map, a) ||
        S.span_distance(from, a) != 1 || S.span_distance(a, b) != 1 ||
-       !S.junction_arm(c, a, S.direction(a, from)) || !S.junction_arm(c, a, S.direction(a, b)) do None
+       !walk_arm(map, a, S.direction(a, from)) || !walk_arm(map, a, S.direction(a, b)) do None
     else
       let sign = if person.id % 2 == 0 do 1 else -1 end
       let approach = S.direction(a, from)
@@ -501,21 +582,21 @@ mod Ur.Citizens do
     end
   end
   fn crossing_step() : Float do 0.24 end
-  pfn active_crossing(c : Ur.Sim.City, person : Citizen, a : Int, b : Int) : Int do
+  pfn active_crossing(map : WalkMap, person : Citizen, a : Int, b : Int) : Int do
     let step = crossing_step()
     let t = person.progress
     if t <= 0.0 || t >= step *. 2.0 || t == step do -1 else
-      match walk_corners(c, person, a, b) do
+      match walk_corners(map, person, a, b) do
         Some((sx, sz, ex, ez)) ->
           let arm = crossing_arm(sx, sz, ex, ez, if t < step do 0 else 1 end)
-          if arm >= 0 && S.junction_arm(c, a, arm) do arm else -1 end
+          if walk_arm(map, a, arm) do arm else -1 end
         None -> -1
       end
     end
   end
-  pfn mark_crossing(c : Ur.Sim.City, occupied : Occupied, person : Citizen, a : Int, b : Int) : Occupied do
+  pfn mark_crossing(occupied : Occupied, person : Citizen, a : Int, b : Int) : Occupied do
     if S.get(occupied.junctions, a) == 0 do occupied else
-      let arm = active_crossing(c, person, a, b)
+      let arm = active_crossing(occupied.walk, person, a, b)
       if arm < 0 do occupied else
         let mask = int_or(S.get(occupied.crossings, a), int_shl(1, arm))
         { occupied with crossings: NativeArray.set_int(occupied.crossings, a, mask) }
@@ -538,7 +619,7 @@ mod Ur.Citizens do
               Nil -> occupied
             end
           else occupied end end
-          reserve(c, rest, mark_crossing(c, occupied, person, a, b))
+          reserve(c, rest, mark_crossing(occupied, person, a, b))
         _ -> reserve(c, rest, occupied)
       end
     end
@@ -549,7 +630,7 @@ mod Ur.Citizens do
     let activity = if evacuating(person) do 8 else if returning do 0 else person.activity end end
     { person with activity: activity, shelter: if returning do -1 else person.shelter end,
       location: person.target, transit_phase: 0, route: Nil, progress: 0.0, queued: false,
-      by_car: false, car_phase: 0, parking: parking, arrival: 0, wait: 0.16, rest_hour: -1 }
+      by_car: false, car_phase: 0, parking: parking, arrival: 0, wait: 0.16, rest_until: -1 }
   end
   pfn transit_stop_for(c : Ur.Sim.City, running : NativeIntArr, lot : Int, service : Int, d : Int) : Int do
     if d >= 4 do -1 else
@@ -757,7 +838,7 @@ mod Ur.Citizens do
       None -> false
     end
     let occupied = { occupied with parking_keys: hold(occupied.parking_keys, arrival) }
-    let next = { person with activity: activity, park_trip: park_trip, target: target, route: route, progress: 0.0, queued: false, by_car: by_car, car_phase: if by_car do 1 else 0 end, arrival: parking_value(arrival), previous: -1, board: board, alight: alight, bus_slot: -1, transit_phase: if uses_transit do 1 else 0 end, rest_hour: -1 }
+    let next = { person with activity: activity, park_trip: park_trip, target: target, route: route, progress: 0.0, queued: false, by_car: by_car, car_phase: if by_car do 1 else 0 end, arrival: parking_value(arrival), previous: -1, board: board, alight: alight, bus_slot: -1, transit_phase: if uses_transit do 1 else 0 end, rest_until: -1 }
     match route do
       Cons(_, Cons(_, _)) -> ({ next with location: -1 }, occupied)
       _ -> (arrive(next), occupied)
@@ -780,8 +861,16 @@ mod Ur.Citizens do
       else Cons(school, back) end
     end
   end
+  pfn stay_home(c : Ur.Sim.City, person : Citizen) : Bool do
+    person.location == person.home && S.valid(person.home) && !S.valid(person.work) &&
+      !S.valid(person.shop) && !S.valid(person.park) && S.festival_destination(c, person.home) < 0 &&
+      !S.public_trade(c, person.home)
+  end
   pfn depart(c : Ur.Sim.City, running : NativeIntArr, bus : Option(TransitService), person : Citizen, occupied : Occupied, clock_hour : Int) : (Citizen, Occupied) do
     let hour = clock_hour % 24
+    if stay_home(c, person) do
+      ({ person with wait: 0.0, activity: 0, rest_until: clock_hour - hour + 24 }, occupied)
+    else
     let (activity, target) = scheduled_activity(c, person, hour)
     let between_classes = person.study >= 3 && target == person.work && person.location == target &&
       person.campus_day != c.calendar_day && hour >= 10 + person.id % 3 && hour < 16
@@ -790,14 +879,14 @@ mod Ur.Citizens do
       trip(c, running, bus, { person with campus_day: c.calendar_day }, occupied, 1, target, lap, false)
     else if target == person.location do
       let indoors = S.valid(target) && activity != 5
-      ({ person with wait: if indoors do 0.0 else 0.04 end, activity: activity, rest_hour: if indoors do clock_hour else -1 end }, occupied)
+      ({ person with wait: if indoors do 0.0 else 0.04 end, activity: activity, rest_until: if indoors do clock_hour + 1 else -1 end }, occupied)
     else
       let route = route_for(c, person, target)
       if List.is_empty(route) do ({ person with wait: 0.10 }, occupied) else
         trip(c, running, bus, person, occupied, activity, target, route, target == person.park || person.location == person.park ||
           target == S.festival_destination(c, person.home) || (S.temple_tier(c, person.location) > 0 && person.location != person.work))
       end
-    end end
+    end end end
   end
   pfn current_plot(route : List(Int)) : Int do
     match route do
@@ -836,16 +925,16 @@ mod Ur.Citizens do
           lane_room(occupied, cell(b, next, 0.0), position(0.0), 0)
     end
   end
-  pfn walk_through_junction(c : Ur.Sim.City, person : Citizen, occupied : Occupied, a : Int, b : Int, proposed : Float) : Float do
+  pfn walk_through_junction(person : Citizen, occupied : Occupied, a : Int, b : Int, proposed : Float) : Float do
     if S.get(occupied.junctions, a) != 2 do proposed else
-      match walk_corners(c, person, a, b) do
+      match walk_corners(occupied.walk, person, a, b) do
         Some((sx, sz, ex, ez)) ->
           let first = crossing_arm(sx, sz, ex, ez, 0)
           let second = crossing_arm(sx, sz, ex, ez, 1)
           let step = crossing_step()
-          if person.progress == 0.0 && first >= 0 && S.junction_arm(c, a, first) &&
+          if person.progress == 0.0 && walk_arm(occupied.walk, a, first) &&
              !S.crosswalk_open(a, first, occupied.signal_tick) do 0.0
-          else if person.progress <= step && proposed > step && second >= 0 && S.junction_arm(c, a, second) &&
+          else if person.progress <= step && proposed > step && walk_arm(occupied.walk, a, second) &&
              !S.crosswalk_open(a, second, occupied.signal_tick) do step
           else proposed end end
         None -> proposed
@@ -855,9 +944,9 @@ mod Ur.Citizens do
   pfn walk(c : Ur.Sim.City, person : Citizen, occupied : Occupied, dt : Float, b : Int, tail : List(Int)) : (Citizen, Occupied) do
     let speed = if person.study >= 0 && !person.park_trip do 3.6 else 0.32 end
     let a = current_plot(person.route)
-    let pace = if S.ground_closed(c, b) do 0.0 else S.walk_pace(c, a) end
-    let proposed = walk_through_junction(c, person, occupied, a, b, person.progress +. dt *. speed *. pace)
-    let occupied = mark_crossing(c, occupied, { person with progress: proposed }, a, b)
+    let pace = walk_segment_pace(occupied.walk, a, b)
+    let proposed = walk_through_junction(person, occupied, a, b, person.progress +. dt *. speed *. pace)
+    let occupied = mark_crossing(occupied, { person with progress: proposed }, a, b)
     let (progress, occupied) = match tail do
       Cons(next, _) ->
         let merge = departure_merge(c, person, b, next)
@@ -987,8 +1076,8 @@ mod Ur.Citizens do
     if previous == driver && driver < 0 do people else
       List.map(people, fn person ->
         if person.id == driver do
-          if person.activity == 6 do person else { person with activity: 6, rest_hour: -1 } end
-        else if person.activity == 6 do { person with activity: 1, rest_hour: -1 } else person end end)
+          if person.activity == 6 do person else { person with activity: 6, rest_until: -1 } end
+        else if person.activity == 6 do { person with activity: 1, rest_until: -1 } else person end end)
     end
   end
   pfn transit_waiter(c : Ur.Sim.City, running : NativeIntArr, person : Citizen) : Bool do
@@ -1005,8 +1094,7 @@ mod Ur.Citizens do
         queue_boarding(c, active, motion, rest, seats, dt, Cons(next, out))
     end
   end
-  pfn transit_boarding(c : Ur.Sim.City, running : NativeIntArr, active : List(Ur.Fleet.Run), motion : NativeFloatArr, cars : List(Citizen), dt : Float) : List(Citizen) do
-    let waiters = List.filter(cars, fn person -> transit_waiter(c, running, person))
+  pfn transit_boarding(c : Ur.Sim.City, active : List(Ur.Fleet.Run), motion : NativeFloatArr, cars : List(Citizen), waiters : List(Citizen), dt : Float) : List(Citizen) do
     if List.is_empty(waiters) do Nil else
       let seats = List.fold_left(cars, NativeArray.make_int(180, 0), fn (seats, rider) ->
         let slot = rider.bus_slot
@@ -1015,53 +1103,386 @@ mod Ur.Citizens do
           if progress < rider.progress || progress >= rider.wait do seats
           else NativeArray.set_int(seats, slot, NativeArray.get_int(seats, slot) + 1) end
         end)
-      let queue = List.sort_by(waiters, fn (a, b) -> a.wait <= b.wait)
+      let queue = List.sort_by(List.reverse(waiters), fn (a, b) -> a.wait <= b.wait)
       queue_boarding(c, active, motion, queue, seats, dt, Nil)
     end
   end
   pfn resting(person : Citizen, clock_hour : Int) : Bool do
-    person.rest_hour == clock_hour || (emergency_move(person) && person.wait <= 0.0 && List.is_empty(person.route))
+    (person.rest_until > clock_hour && (person.rest_until - 1) / 24 == clock_hour / 24) ||
+      (emergency_move(person) && person.wait <= 0.0 && List.is_empty(person.route))
   end
   fn wake_indoor(people : List(Citizen)) : List(Citizen) do
-    List.map(people, fn person -> if person.rest_hour < 0 do person else { person with rest_hour: -1 } end)
+    List.map(people, fn person -> if person.rest_until < 0 do person else { person with rest_until: -1 } end)
   end
-  pfn advance(c : Ur.Sim.City, running : NativeIntArr, bus : Option(TransitService), cars : List(Citizen), occupied : Occupied, clock_hour : Int, dt : Float, motion : NativeFloatArr, boarding : List(Citizen), out : List(Citizen)) : List(Citizen) do
-    match cars do
-      Nil -> List.reverse(out)
+  pfn advance_person(c : Ur.Sim.City, running : NativeIntArr, bus : Option(TransitService), person : Citizen, occupied : Occupied,
+    clock_hour : Int, dt : Float, motion : NativeFloatArr, boarding : List(Citizen)) : (Citizen, Occupied) do
+    let (next, occupied) = if person.bus_slot >= 0 do
+      (ride_passenger(person, NativeArray.get_float(motion, person.bus_slot)), occupied)
+    else
+      let update = if transit_waiter(c, running, person) do List.find(boarding, fn rider -> rider.id == person.id) else None end
+      match update do
+        Some(next) -> (next, occupied)
+        None -> advance_trip(c, running, bus, person, occupied, clock_hour, dt)
+      end
+    end
+    let at_business = S.valid(next.location) && S.public_trade(c, next.location)
+    let next = if !emergency_move(next) && at_business && !S.business_open(c, next.location, clock_hour % 24) do
+      { next with activity: 0, wait: 0.0 }
+    else next end
+    (next, occupied)
+  end
+  pfn count_person(c : Ur.Sim.City, person : Citizen, n : CitizenCounts, delta : Int) : CitizenCounts do
+    let n = { n with tracked: n.tracked + delta }
+    let n = if evacuating(person) do { n with evacuating: n.evacuating + delta }
+      else if sheltered(person) do { n with sheltered: n.sheltered + delta }
+      else if returning_home(person) do { n with returning: n.returning + delta }
+      else if waiting_for_shelter(person) do { n with stranded: n.stranded + delta }
+      else n end end end end
+    if person.activity == 6 do { n with driving: n.driving + delta }
+    else if person.transit_phase == 2 do { n with waiting: n.waiting + delta }
+    else if person.transit_phase == 3 do { n with riding: n.riding + delta }
+    else if person.location < 0 do
+      match person.route do
+        Cons(a, Cons(b, _)) -> if driving(c, person, a, b) do { n with driving: n.driving + delta, queued: n.queued + (if person.queued do delta else 0 end) }
+          else { n with walking: n.walking + delta } end
+        _ -> n
+      end
+      else if person.location == person.home do { n with home: n.home + delta }
+      else if person.activity == 5 && S.get(c.parks, person.location) > 0 do { n with visiting_park: n.visiting_park + delta }
+      else if person.activity == 3 && person.location == person.shop do { n with shopping: n.shopping + delta }
+      else if person.activity == 1 && person.location == person.work do
+        if person.study >= 0 do { n with studying: n.studying + delta } else { n with at_work: n.at_work + delta } end
+      else n end end end end end end end end
+  end
+  pfn empty_counts() : CitizenCounts do
+    { tracked: 0, walking: 0, waiting: 0, riding: 0, driving: 0, queued: 0, at_work: 0, studying: 0, shopping: 0, visiting_park: 0, home: 0,
+      evacuating: 0, sheltered: 0, returning: 0, stranded: 0 }
+  end
+  fn tally(c : Ur.Sim.City, cars : List(Citizen)) : CitizenCounts do
+    List.fold_left(cars, empty_counts(), fn (n, person) -> count_person(c, person, n, 1))
+  end
+
+  type Actor = { slot : Int, person : Citizen }
+  type WalkEvent = { entry : Actor, started : Float, finish : Float, limit : Float, arm : Int }
+  type WalkStage = { limit : Float, arm : Int, gate : Bool }
+  type Roster = { walk_time : Float, walk_bucket : Int, walk_events : Map(Int, List(WalkEvent)), walk_crossings : Map(Int, Int),
+    walk_count : Int, walk_exits : List(Int), active : List(Actor), sleeping : Map(Int, Actor), wakeups : Map(Int, List(Actor)), clock : Int,
+    parked_actors : Map(Int, Actor), reservations : Map(Int, Int), indoor : CitizenCounts, crew : List(Citizen), parcels : Map(Int, List(Int)) }
+
+  pfn hour_at(time : Float) : Int do
+    float_to_int(Math.floor(time /. S.day_seconds())) * 24 + S.street_hour(time)
+  end
+  pfn wake_at(c : Ur.Sim.City, person : Citizen, hour : Int) : Int do
+    if person.activity == 6 || (emergency_move(person) && person.wait <= 0.0 && List.is_empty(person.route)) do
+      -2
+    else if person.activity == 0 && person.wait <= 0.0 && List.is_empty(person.route) && stay_home(c, person) do
+      -2
+    else if resting(person, hour) do person.rest_until
+    else -1 end end end
+  end
+  pfn sleep_actor(c : Ur.Sim.City, roster : Roster, entry : Actor, wake : Int) : Roster do
+    let sleeping = Map.insert(roster.sleeping, entry.person.id, entry, Map.int_cmp)
+    let wakeups = if wake == -2 do roster.wakeups else
+      Map.insert(roster.wakeups, wake, Cons(entry, Map.get_or(roster.wakeups, wake, Nil, Map.int_cmp)), Map.int_cmp)
+    end
+    let parked = if entry.person.parking != 0 do Map.insert(roster.parked_actors, entry.slot, entry, Map.int_cmp) else roster.parked_actors end
+    let crew = if entry.person.activity == 6 do Cons(entry.person, roster.crew) else roster.crew end
+    { roster with sleeping: sleeping, wakeups: wakeups, parked_actors: parked, crew: crew,
+      reservations: park_actor(roster.reservations, entry.person, 1), indoor: count_person(c, entry.person, roster.indoor, 1) }
+  end
+  pfn register_parcel(parcels : Map(Int, List(Int)), lot : Int, id : Int) : Map(Int, List(Int)) do
+    if !S.valid(lot) do parcels else
+      Map.insert(parcels, lot, Cons(id, Map.get_or(parcels, lot, Nil, Map.int_cmp)), Map.int_cmp)
+    end
+  end
+  pfn index_people(c : Ur.Sim.City, people : List(Citizen), roster : Roster, slot : Int) : Roster do
+    match people do
+      Nil -> { roster with active: List.reverse(roster.active) }
       Cons(person, rest) ->
-        if resting(person, clock_hour) || person.activity == 6 do
-          advance(c, running, bus, rest, occupied, clock_hour, dt, motion, boarding, Cons(person, out))
-        else
-          let (next, occupied) = if person.bus_slot >= 0 do
-            (ride_passenger(person, NativeArray.get_float(motion, person.bus_slot)), occupied)
-          else
-            let update = if transit_waiter(c, running, person) do List.find(boarding, fn rider -> rider.id == person.id) else None end
-            match update do
-              Some(next) -> (next, occupied)
-              None -> advance_trip(c, running, bus, person, occupied, clock_hour, dt)
+        let entry = { slot: slot, person: person }
+        let parcels = register_parcel(roster.parcels, person.home, person.id)
+        let parcels = if person.work == person.home do parcels else register_parcel(parcels, person.work, person.id) end
+        let parcels = if person.shelter == person.home || person.shelter == person.work do parcels else register_parcel(parcels, person.shelter, person.id) end
+        let roster = { roster with parcels: parcels }
+        let wake = wake_at(c, person, roster.clock)
+        let next = if wake == -1 do { roster with active: Cons(entry, roster.active) }
+          else sleep_actor(c, roster, entry, wake) end
+        index_people(c, rest, next, slot + 1)
+    end
+  end
+  fn index(c : Ur.Sim.City, people : List(Citizen), time : Float) : Roster do
+    index_people(c, people, { walk_time: 0.0, walk_bucket: 0, walk_events: Map.empty(), walk_crossings: Map.empty(),
+      walk_count: 0, walk_exits: Nil, active: Nil, sleeping: Map.empty(), wakeups: Map.empty(), clock: hour_at(time),
+      parked_actors: Map.empty(), reservations: Map.empty(), indoor: empty_counts(), crew: Nil, parcels: Map.empty() }, 0)
+  end
+  pfn slot_order(a : Actor, b : Actor) : Bool do a.slot <= b.slot end
+  pfn merge_ordered(a : List(Actor), b : List(Actor), reversed : List(Actor)) : List(Actor) do
+    match (a, b) do
+      (Nil, _) -> List.reverse(List.fold_left(b, reversed, fn (out, entry) -> Cons(entry, out)))
+      (_, Nil) -> List.reverse(List.fold_left(a, reversed, fn (out, entry) -> Cons(entry, out)))
+      (Cons(left, rest_left), Cons(right, rest_right)) ->
+        if left.slot < right.slot do merge_ordered(rest_left, b, Cons(left, reversed))
+        else merge_ordered(a, rest_right, Cons(right, reversed)) end
+    end
+  end
+  pfn merge_actors(a : List(Actor), b : List(Actor)) : List(Actor) do
+    if List.is_empty(a) do b else if List.is_empty(b) do a else merge_ordered(a, b, Nil) end end
+  end
+  fn walker_at(event : WalkEvent, time : Float) : Citizen do
+    let person = event.entry.person
+    if event.limit == person.progress || time <= event.started do person else
+      let t = if time >= event.finish do 1.0 else (time -. event.started) /. (event.finish -. event.started) end
+      { person with progress: person.progress +. (event.limit -. person.progress) *. t }
+    end
+  end
+  fn each_walk(roster : Roster, draw : Int -> Citizen -> Unit) : Unit do
+    Map.fold(roster.walk_events, (), fn (_, _, events) ->
+      List.each(events, fn event -> draw(event.entry.slot, walker_at(event, roster.walk_time))))
+  end
+  fn begin_walk_frame(roster : Roster) : Roster do { roster with walk_exits: Nil } end
+  pfn walk_entries(roster : Roster) : List(Actor) do
+    Map.fold(roster.walk_events, Nil, fn (entries, _, events) ->
+      List.fold_left(events, entries, fn (out, event) ->
+        Cons({ slot: event.entry.slot, person: walker_at(event, roster.walk_time) }, out)))
+  end
+  fn wake_walkers(roster : Roster) : Roster do
+    let due = List.sort_by(walk_entries(roster), slot_order)
+    { roster with active: merge_actors(roster.active, due), walk_events: Map.empty(), walk_crossings: Map.empty(),
+      walk_count: 0, walk_exits: List.map(due, fn entry -> entry.slot) }
+  end
+  fn snapshot(roster : Roster) : List(Citizen) do
+    let entries = List.append(walk_entries(roster), List.append(roster.active, Map.values(roster.sleeping)))
+    List.map(List.sort_by(entries, slot_order), fn entry -> entry.person)
+  end
+  fn find(roster : Roster, id : Int) : Option(Citizen) do
+    match Map.get(roster.sleeping, id, Map.int_cmp) do
+      Some(entry) -> Some(entry.person)
+      None ->
+        match List.find(roster.active, fn entry -> entry.person.id == id) do
+          Some(entry) -> Some(entry.person)
+          None -> Map.fold(roster.walk_events, None, fn (found, _, events) ->
+            if Option.is_some(found) do found else
+              Option.map(List.find(events, fn event -> event.entry.person.id == id), fn event -> walker_at(event, roster.walk_time))
+            end)
+        end
+    end
+  end
+  fn visible_people(roster : Roster) : List(Citizen) do
+    List.map(List.append(walk_entries(roster), visible_actors(roster)), fn entry -> entry.person)
+  end
+  fn at_parcel(roster : Roster, lot : Int) : List(Citizen) do
+    List.fold_left(Map.get_or(roster.parcels, lot, Nil, Map.int_cmp), Nil, fn (people, id) ->
+      match find(roster, id) do
+        Some(person) -> Cons(person, people)
+        None -> people
+      end)
+  end
+  fn visible_actors(roster : Roster) : List(Actor) do
+    merge_actors(roster.active, List.sort_by(Map.values(roster.parked_actors), slot_order))
+  end
+  fn indexed_counts(c : Ur.Sim.City, roster : Roster) : CitizenCounts do
+    let counts = List.fold_left(roster.active, roster.indoor, fn (counts, entry) -> count_person(c, entry.person, counts, 1))
+    { counts with tracked: counts.tracked + roster.walk_count, walking: counts.walking + roster.walk_count }
+  end
+  fn has_evacuation(roster : Roster) : Bool do
+    let n = roster.indoor
+    n.evacuating + n.sheltered + n.returning + n.stranded > 0 ||
+      List.any(roster.active, fn entry -> emergency_move(entry.person))
+  end
+  pfn wake_actor(c : Ur.Sim.City, roster : Roster, entry : Actor) : Roster do
+    let parked = if entry.person.parking != 0 do Map.remove(roster.parked_actors, entry.slot, Map.int_cmp) else roster.parked_actors end
+    let sleeping = Map.remove(roster.sleeping, entry.person.id, Map.int_cmp)
+    { roster with sleeping: sleeping, parked_actors: parked, reservations: park_actor(roster.reservations, entry.person, -1),
+      indoor: count_person(c, entry.person, roster.indoor, -1) }
+  end
+  pfn wake_through(c : Ur.Sim.City, roster : Roster, hour : Int, due : List(Actor)) : Roster do
+    if roster.clock >= hour || Map.is_empty(roster.wakeups) do
+      { roster with clock: hour, active: merge_actors(roster.active, List.sort_by(due, slot_order)) }
+    else
+      let next = roster.clock + 1
+      match Map.get(roster.wakeups, next, Map.int_cmp) do
+        None -> wake_through(c, { roster with clock: next }, hour, due)
+        Some(batch) ->
+          let roster = List.fold_left(batch, roster, fn (r, entry) -> wake_actor(c, r, entry))
+          let roster = { roster with wakeups: Map.remove(roster.wakeups, next, Map.int_cmp), clock: next }
+          wake_through(c, roster, hour, List.append(batch, due))
+      end
+    end
+  end
+  pfn active_parking(cars : List(Citizen), keys : Map(Int, Int)) : Map(Int, Int) do
+    List.fold_left(cars, keys, fn (keys, person) -> park_actor(keys, person, 1))
+  end
+  pfn crossing_reservation(reservations : Map(Int, Int), arm : Int, delta : Int) : Map(Int, Int) do
+    if arm < 0 do reservations else
+      let count = Map.get_or(reservations, arm, 0, Map.int_cmp) + delta
+      if count == 0 do Map.remove(reservations, arm, Map.int_cmp)
+      else Map.insert(reservations, arm, count, Map.int_cmp) end
+    end
+  end
+  pfn reserve_walks(roster : Roster) : NativeIntArr do
+    Map.fold(roster.walk_crossings, NativeArray.make_int(S.count(), 0), fn (field, key, _) ->
+      let lot = key / 4
+      NativeArray.set_int(field, lot, int_or(S.get(field, lot), int_shl(1, key % 4))))
+  end
+  pfn queue_walk(roster : Roster, event : WalkEvent) : Roster do
+    -- Quantize dispatch only. The interpolated pose uses the exact end time.
+    let bucket = float_to_int(Math.ceil(event.finish *. 40.0))
+    let events = Map.get_or(roster.walk_events, bucket, Nil, Map.int_cmp)
+    { roster with walk_events: Map.insert(roster.walk_events, bucket, Cons(event, events), Map.int_cmp),
+      walk_count: roster.walk_count + 1, walk_crossings: crossing_reservation(roster.walk_crossings, event.arm, 1) }
+  end
+  pfn sidewalk_stage(map : WalkMap, person : Citizen, a : Int, b : Int) : WalkStage do
+    let progress = person.progress
+    let step = crossing_step()
+    if progress >= step *. 2.0 do { limit: 1.0, arm: -1, gate: false } else
+      match walk_corners(map, person, a, b) do
+        None -> { limit: 1.0, arm: -1, gate: false }
+        Some((sx, sz, ex, ez)) ->
+          let arm = crossing_arm(sx, sz, ex, ez, if progress < step do 0 else 1 end)
+          { limit: if progress < step do step else step *. 2.0 end,
+            arm: if walk_arm(map, a, arm) do arm else -1 end, gate: progress == 0.0 || progress == step }
+      end
+    end
+  end
+  pfn crosswalk_wakeup(a : Int, arm : Int, tick : Int) : Int do
+    if S.crosswalk_open(a, arm, tick) do tick else crosswalk_wakeup(a, arm, tick + 1) end
+  end
+  pfn ordinary_walk(person : Citizen) : Bool do
+    person.location < 0 && person.car_phase == 0 && person.parking == 0 && !person.park_trip &&
+      person.study < 0 && !emergency_move(person) && person.transit_phase != 2 && person.transit_phase != 3 && person.bus_slot < 0
+  end
+  pfn plan_walk(entry : Actor, occupied : Occupied, tick_time : Float, now : Float, guard : Int -> Citizen -> Citizen -> Citizen) : Option(WalkEvent) do
+    let person = entry.person
+    if !ordinary_walk(person) do None else
+      match person.route do
+        Cons(a, Cons(b, _)) ->
+          let pace = walk_segment_pace(occupied.walk, a, b)
+          let (turn_a, _) = walk_turn(occupied.walk, a)
+          let (turn_b, _) = walk_turn(occupied.walk, b)
+          if pace <= 0.0 || turn_a >= 0 || turn_b >= 0 || S.span_distance(a, b) != 1 || person.progress >= 1.0 do None else
+            let stage = sidewalk_stage(occupied.walk, person, a, b)
+            if stage.gate && stage.arm >= 0 && S.get(occupied.junctions, a) == 2 &&
+              !S.crosswalk_open(a, stage.arm, occupied.signal_tick) do
+              let green = int_to_float(crosswalk_wakeup(a, stage.arm, occupied.signal_tick)) *. 0.5
+              Some({ entry: entry, started: now, finish: now +. (green -. tick_time), limit: person.progress, arm: -1 })
+            else
+              let target = { person with progress: stage.limit }
+              let checked = guard(entry.slot, person, target)
+              if checked.progress != stage.limit do None else
+                let arm = if stage.arm >= 0 && S.get(occupied.junctions, a) != 0 do a * 4 + stage.arm else -1 end
+                Some({ entry: entry, started: now, finish: now +. (stage.limit -. person.progress) /. (0.32 *. pace),
+                  limit: stage.limit, arm: arm })
+              end
             end
           end
-          let at_business = S.valid(next.location) && S.public_trade(c, next.location)
-          let next = if !emergency_move(next) && at_business && !S.business_open(c, next.location, clock_hour % 24) do
+        _ -> None
+      end
+    end
+  end
+  pfn complete_walk(c : Ur.Sim.City, event : WalkEvent, occupied : Occupied, clock : Int) : Citizen do
+    let person = { event.entry.person with progress: event.limit }
+    if event.limit < 1.0 do person else
+      match person.route do
+        Cons(_, Cons(b, tail)) ->
+          let (next, _) = next_leg(c, person, occupied, b, tail)
+          if S.valid(next.location) && S.public_trade(c, next.location) && !S.business_open(c, next.location, clock % 24) do
             { next with activity: 0, wait: 0.0 }
           else next end
-          advance(c, running, bus, rest, occupied, clock_hour, dt, motion, boarding, Cons(next, out))
+        _ -> person
+      end
+    end
+  end
+  pfn finish_walks(c : Ur.Sim.City, events : List(WalkEvent), roster : Roster, occupied : Occupied, tick_time : Float,
+    guard : Int -> Citizen -> Citizen -> Citizen, waking : List(Actor)) : (Roster, List(Actor)) do
+    match events do
+      Nil -> (roster, waking)
+      Cons(event, rest) ->
+        let roster = { roster with walk_count: roster.walk_count - 1,
+          walk_crossings: crossing_reservation(roster.walk_crossings, event.arm, -1) }
+        let person = complete_walk(c, event, occupied, roster.clock)
+        let entry = { slot: event.entry.slot, person: person }
+        match plan_walk(entry, occupied, tick_time, roster.walk_time, guard) do
+          Some(next) -> finish_walks(c, rest, queue_walk(roster, next), occupied, tick_time, guard, waking)
+          None ->
+            let roster = { roster with walk_exits: Cons(entry.slot, roster.walk_exits) }
+            finish_walks(c, rest, roster, occupied, tick_time, guard, Cons(entry, waking))
         end
     end
   end
-  fn step_with_bus(c : Ur.Sim.City, running : NativeIntArr, bus : Option(TransitService), cars : List(Citizen), time : Float, dt : Float, junctions : NativeIntArr, traffic_time : Float) : List(Citizen) do
-    let clock_hour = float_to_int(Math.floor(time /. S.day_seconds())) * 24 + S.street_hour(time)
-    if List.all(cars, fn person -> resting(person, clock_hour) || person.activity == 6) do cars else
-        let occupancy = { lanes: NativeArray.make_int(S.count() * 16, 0), parking_keys: parkings(cars, -1, Nil),
-          junctions: junctions, crossings: NativeArray.make_int(S.count(), 0), signal_tick: S.signal_tick(traffic_time) }
-        let (motion, boarding) = match bus do
-          Some(service) ->
-            let motion = Ur.Fleet.passenger_progress(service.active)
-            (motion, transit_boarding(c, running, service.active, motion, cars, dt))
-          None -> (Ur.Fleet.passenger_progress(Nil), Nil)
-        end
-        advance(c, running, bus, cars, reserve(c, cars, occupancy), clock_hour, dt, motion, boarding, Nil)
+  pfn dispatch_walks(c : Ur.Sim.City, roster : Roster, occupied : Occupied, tick_time : Float, through : Int,
+    guard : Int -> Citizen -> Citizen -> Citizen, waking : List(Actor)) : (Roster, List(Actor)) do
+    if roster.walk_bucket >= through || Map.is_empty(roster.walk_events) do
+      ({ roster with walk_bucket: through }, waking)
+    else
+      let bucket = roster.walk_bucket + 1
+      let roster = { roster with walk_bucket: bucket }
+      match Map.get(roster.walk_events, bucket, Map.int_cmp) do
+        None -> dispatch_walks(c, roster, occupied, tick_time, through, guard, waking)
+        Some(events) ->
+          let roster = { roster with walk_events: Map.remove(roster.walk_events, bucket, Map.int_cmp) }
+          let (roster, waking) = finish_walks(c, events, roster, occupied, tick_time, guard, waking)
+          dispatch_walks(c, roster, occupied, tick_time, through, guard, waking)
+      end
     end
+  end
+  pfn advance_actors(c : Ur.Sim.City, running : NativeIntArr, bus : Option(TransitService), actors : List(Actor),
+    roster : Roster, occupied : Occupied, dt : Float, tick_time : Float, motion : NativeFloatArr, boarding : List(Citizen),
+    guard : Int -> Citizen -> Citizen -> Citizen, schedule : Bool) : Roster do
+    match actors do
+      Nil -> { roster with active: List.reverse(roster.active) }
+      Cons(entry, rest) ->
+        let (person, occupied) = advance_person(c, running, bus, entry.person, occupied, roster.clock, dt, motion, boarding)
+        let person = guard(entry.slot, entry.person, person)
+        let entry = { entry with person: person }
+        let event = if schedule do plan_walk(entry, occupied, tick_time, roster.walk_time, guard) else None end
+        let roster = match event do
+          Some(event) -> queue_walk(roster, event)
+          None ->
+            let wake = wake_at(c, person, roster.clock)
+            if wake == -1 do { roster with active: Cons(entry, roster.active) }
+            else sleep_actor(c, roster, entry, wake) end
+        end
+        advance_actors(c, running, bus, rest, roster, occupied, dt, tick_time, motion, boarding, guard, schedule)
+    end
+  end
+  pfn step_roster(c : Ur.Sim.City, walk : WalkMap, running : NativeIntArr, bus : Option(TransitService), roster : Roster, time : Float,
+    dt : Float, junctions : NativeIntArr, traffic_time : Float, guard : Int -> Citizen -> Citizen -> Citizen, schedule : Bool) : Roster do
+    let hour = hour_at(time)
+    let roster = if hour > roster.clock do wake_through(c, roster, hour, Nil) else roster end
+    let time = roster.walk_time +. dt
+    let roster = { roster with walk_time: time }
+    if List.is_empty(roster.active) && roster.walk_count == 0 do
+      { roster with walk_bucket: float_to_int(Math.floor(time *. 40.0)) }
+    else
+      let occupancy = { walk: walk, lanes: NativeArray.make_int(S.count() * 16, 0), parking_keys: roster.reservations,
+        junctions: junctions, crossings: reserve_walks(roster), signal_tick: S.signal_tick(traffic_time) }
+      let (roster, waking) = dispatch_walks(c, roster, occupancy, traffic_time, float_to_int(Math.floor(time *. 40.0)), guard, Nil)
+      let cars = List.map(roster.active, fn entry -> entry.person)
+      let occupancy = { occupancy with parking_keys: active_parking(cars, roster.reservations), crossings: reserve_walks(roster) }
+      let (motion, boarding) = match bus do
+        Some(service) ->
+          let motion = Ur.Fleet.passenger_progress(service.active)
+          let waiters = List.fold_left(cars, Nil, fn (waiters, person) -> if transit_waiter(c, running, person) do Cons(person, waiters) else waiters end)
+          (motion, transit_boarding(c, service.active, motion, cars, waiters, dt))
+        None -> (Ur.Fleet.passenger_progress(Nil), Nil)
+      end
+      let next = advance_actors(c, running, bus, roster.active, { roster with active: Nil }, reserve(c, cars, occupancy),
+        dt, traffic_time, motion, boarding, guard, schedule)
+      { next with active: merge_actors(next.active, List.sort_by(waking, slot_order)) }
+    end
+  end
+  fn step_guarded(c : Ur.Sim.City, walk : WalkMap, running : NativeIntArr, bus : Option(TransitService), roster : Roster, time : Float,
+    dt : Float, junctions : NativeIntArr, traffic_time : Float, guard : Int -> Citizen -> Citizen -> Citizen) : Roster do
+    step_roster(c, walk, running, bus, roster, time, dt, junctions, traffic_time, guard, true)
+  end
+  fn step_indexed(c : Ur.Sim.City, running : NativeIntArr, bus : Option(TransitService), roster : Roster, time : Float,
+    dt : Float, junctions : NativeIntArr, traffic_time : Float) : Roster do
+    step_guarded(c, walk_map(c), running, bus, roster, time, dt, junctions, traffic_time, fn (_, _, person) -> person)
+  end
+  fn step_with_bus(c : Ur.Sim.City, running : NativeIntArr, bus : Option(TransitService), people : List(Citizen),
+    time : Float, dt : Float, junctions : NativeIntArr, traffic_time : Float) : List(Citizen) do
+    -- One-shot callers do not keep the event queue between updates.
+    snapshot(step_roster(c, walk_map(c), running, bus, index(c, people, time), time, dt, junctions, traffic_time, fn (_, _, person) -> person, false))
   end
   fn step_with(c : Ur.Sim.City, running : NativeIntArr, cars : List(Citizen), time : Float, dt : Float) : List(Citizen) do
     let junctions = S.junction_controls(c, NativeArray.make_int(S.count() * 4, 0), 0, NativeArray.make_int(S.count(), 0))
@@ -1070,36 +1491,5 @@ mod Ur.Citizens do
   fn step(c : Ur.Sim.City, cars : List(Citizen), time : Float, dt : Float) : List(Citizen) do
     step_with(c, S.transit_service(c, S.supply(c, S.access(c))), cars, time, dt)
   end
-  pfn count_go(c : Ur.Sim.City, cars : List(Citizen), n : CitizenCounts) : CitizenCounts do
-    match cars do
-      Nil -> n
-      Cons(person, rest) ->
-        let n = { n with tracked: n.tracked + 1 }
-        let n = if evacuating(person) do { n with evacuating: n.evacuating + 1 }
-          else if sheltered(person) do { n with sheltered: n.sheltered + 1 }
-          else if returning_home(person) do { n with returning: n.returning + 1 }
-          else if waiting_for_shelter(person) do { n with stranded: n.stranded + 1 }
-          else n end end end end
-        let n = if person.activity == 6 do { n with driving: n.driving + 1 }
-        else if person.transit_phase == 2 do { n with waiting: n.waiting + 1 }
-        else if person.transit_phase == 3 do { n with riding: n.riding + 1 }
-        else if person.location < 0 do
-          match person.route do
-            Cons(a, Cons(b, _)) -> if driving(c, person, a, b) do { n with driving: n.driving + 1, queued: n.queued + (if person.queued do 1 else 0 end) }
-              else { n with walking: n.walking + 1 } end
-            _ -> n
-          end
-          else if person.location == person.home do { n with home: n.home + 1 }
-          else if person.activity == 5 && S.get(c.parks, person.location) > 0 do { n with visiting_park: n.visiting_park + 1 }
-          else if person.activity == 3 && person.location == person.shop do { n with shopping: n.shopping + 1 }
-          else if person.activity == 1 && person.location == person.work do
-            if person.study >= 0 do { n with studying: n.studying + 1 } else { n with at_work: n.at_work + 1 } end
-          else n end end end end end end end end
-        count_go(c, rest, n)
-    end
-  end
-  fn tally(c : Ur.Sim.City, cars : List(Citizen)) : CitizenCounts do
-    count_go(c, cars, { tracked: 0, walking: 0, waiting: 0, riding: 0, driving: 0, queued: 0, at_work: 0, studying: 0, shopping: 0, visiting_park: 0, home: 0,
-      evacuating: 0, sheltered: 0, returning: 0, stranded: 0 })
-  end
+
 end

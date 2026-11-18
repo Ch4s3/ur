@@ -618,10 +618,13 @@ mod Ur.Scene do
   -- Each half-leg follows the geometry of its own parcel. Adjacent poses
   -- share the road centre at the edge, including when one side is a curve.
   fn street_pose(c : Ur.Sim.City, a : Int, b : Int, t : Float, lane : Float) : (Float, Float, Float, Float) do
+    street_pose_turn(c, a, b, t, lane, S.road_turn(c, if t < 0.5 do a else b end))
+  end
+  pfn street_pose_turn(c : Ur.Sim.City, a : Int, b : Int, t : Float, lane : Float, curve : (Int, Int)) : (Float, Float, Float, Float) do
     let first = t < 0.5
     let plot = if first do a else b end
     let other = if first do b else a end
-    let (horizontal, vertical) = S.road_turn(c, plot)
+    let (horizontal, vertical) = curve
     let outward = S.direction(plot, other)
     if !S.grade_link(c, a, b) && horizontal >= 0 && (outward == horizontal || outward == vertical) do
       let sample = if first do t *. 2.0 else (1.0 -. t) *. 2.0 end
@@ -1155,13 +1158,14 @@ mod Ur.Scene do
       sanitation_window(c, c.waste_runs, (hour -. 10.0) /. 10.0 *. int_to_float(length) *. S.rain_road_pace(c))
     end
   end
-  fn sanitation_shift(c : Ur.Sim.City, old_phase : Float, prior : SanitationShift, moment : Option(SanitationMoment), people : List(Ur.Citizens.Citizen)) : SanitationShift do
+  pfn sanitation_shift_with(c : Ur.Sim.City, old_phase : Float, prior : SanitationShift, moment : Option(SanitationMoment),
+    drivers : Int -> List(Ur.Citizens.Citizen), prior_crew : List(Ur.Citizens.Citizen)) : SanitationShift do
     let pickup = match moment do
       Some(m) -> m.run.pickup
       None -> -1
     end
     let still_assigned = match moment do
-      Some(m) -> List.any(people, fn person -> person.id == prior.driver && person.work == m.run.depot && person.work_position >= 2)
+      Some(m) -> List.any(prior_crew, fn person -> person.id == prior.driver && person.work == m.run.depot && person.work_position >= 2)
       None -> false
     end
     if prior.pickup == pickup && still_assigned do prior else
@@ -1174,12 +1178,18 @@ mod Ur.Scene do
       let driver = match moment do
         Some(m) ->
           if m.start && !List.any(completed, fn site -> site == m.run.pickup) do
-            Ur.Citizens.sanitation_driver(people, m.run.depot, m.run.pickup)
+            Ur.Citizens.sanitation_driver(drivers(m.run.depot), m.run.depot, m.run.pickup)
           else -1 end
         None -> -1
       end
       { pickup: pickup, driver: driver, completed: completed }
     end
+  end
+  fn sanitation_shift(c : Ur.Sim.City, old_phase : Float, prior : SanitationShift, moment : Option(SanitationMoment), people : List(Ur.Citizens.Citizen)) : SanitationShift do
+    sanitation_shift_with(c, old_phase, prior, moment, fn _ -> people, people)
+  end
+  fn sanitation_shift_indexed(c : Ur.Sim.City, old_phase : Float, prior : SanitationShift, moment : Option(SanitationMoment), roster : Ur.Citizens.Roster) : SanitationShift do
+    sanitation_shift_with(c, old_phase, prior, moment, fn depot -> Ur.Citizens.at_parcel(roster, depot), roster.crew)
   end
   type TruckPose = { x : Float, y : Float, z : Float, dx : Float, dz : Float, visible : Bool }
   pfn sanitation_vehicle(c : Ur.Sim.City, m : SanitationMoment) : TruckPose do
@@ -1405,14 +1415,17 @@ mod Ur.Scene do
       None -> None
     end
   end
-  pfn walker_position(c : Ur.Sim.City, person : Ur.Citizens.Citizen, a : Int, b : Int) : (Int, Int, Int) do
+  pfn sidewalk_pose(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, a : Int, b : Int, t : Float, lane : Float) : (Float, Float, Float, Float) do
+    street_pose_turn(c, a, b, t, lane, Ur.Citizens.walk_turn(map, if t < 0.5 do a else b end))
+  end
+  pfn walker_position(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, person : Ur.Citizens.Citizen, a : Int, b : Int) : (Int, Int, Int) do
     let side = if person.id % 2 == 0 do 3 else 29 end
     let (ax, az, ay) = walking_point(c, a, b, side)
     let (bx, bz, height_b) = walking_point(c, b, a, side)
     let t = person.progress
     let (x, z) = if S.get(c.roads, a) > 0 && S.get(c.roads, b) > 0 do
-      let width_a = if S.motor_street(c, a) do S.road_half_width(S.get(c.roads, a)) + 1 else 4 end
-      let width_b = if S.motor_street(c, b) do S.road_half_width(S.get(c.roads, b)) + 1 else 4 end
+      let width_a = Ur.Citizens.walk_width(map, a)
+      let width_b = Ur.Citizens.walk_width(map, b)
       let offset = int_to_float(width_a) +. int_to_float(width_b - width_a) *. t
       let sign = if person.id % 2 == 0 do 1.0 else -1.0 end
       let next_is_park = match person.route do
@@ -1422,16 +1435,16 @@ mod Ur.Scene do
       let blend = if person.park_trip && S.get(c.parks, person.previous) > 0 && t < 0.5 do t *. 2.0
         else if person.park_trip && next_is_park && t > 0.5 do (1.0 -. t) *. 2.0 else 1.0 end end
       let entry_arm = S.direction(b, a)
-      let enters = person.car_phase != 2 && S.surface_junction(c, b) && S.junction_arm(c, b, entry_arm)
+      let enters = person.car_phase != 2 && Ur.Citizens.walk_junction(map, b) && Ur.Citizens.walk_arm(map, b, entry_arm)
       let (bx, bz) = Ur.Citizens.corner_for(entry_arm, if sign > 0.0 do -1 else 1 end)
       let (bx, bz) = (b % S.width() * 32 + bx, b / S.width() * 32 + bz)
-      let (x, z, _, _) = street_pose(c, a, b, t, offset *. sign *. blend)
+      let (x, z, _, _) = sidewalk_pose(c, map, a, b, t, offset *. sign *. blend)
       let (end_x, end_z) = if enters do (bx, bz) else (float_to_int(x), float_to_int(z)) end
-      match Ur.Citizens.walk_corners(c, person, a, b) do
+      match Ur.Citizens.walk_corners(map, person, a, b) do
         None ->
           if !enters do (end_x, end_z) else
-            let (px, pz, _, _) = street_pose(c, a, b, t *. 0.60, offset *. sign *. blend)
-            let (qx, qz, _, _) = street_pose(c, a, b, 0.60, offset *. sign *. blend)
+            let (px, pz, _, _) = sidewalk_pose(c, map, a, b, t *. 0.60, offset *. sign *. blend)
+            let (qx, qz, _, _) = sidewalk_pose(c, map, a, b, 0.60, offset *. sign *. blend)
             (float_to_int(px +. (int_to_float(bx) -. qx) *. t), float_to_int(pz +. (int_to_float(bz) -. qz) *. t))
           end
         Some((sx, sz, ex, ez)) ->
@@ -1442,9 +1455,9 @@ mod Ur.Scene do
           else if t < step *. 2.0 do walk_lerp(x0 + ex, z0 + sz, x0 + ex, z0 + ez, (t -. step) /. step)
           else
             let tail = (t -. step *. 2.0) /. (1.0 -. step *. 2.0)
-            let (px, pz, _, _) = street_pose(c, a, b, (if enters do 0.40 +. tail *. 0.20 else 0.40 +. tail *. 0.60 end), offset *. sign *. blend)
-            let (ax, az, _, _) = street_pose(c, a, b, 0.40, offset *. sign *. blend)
-            let (qx, qz, _, _) = street_pose(c, a, b, 0.60, offset *. sign *. blend)
+            let (px, pz, _, _) = sidewalk_pose(c, map, a, b, (if enters do 0.40 +. tail *. 0.20 else 0.40 +. tail *. 0.60 end), offset *. sign *. blend)
+            let (ax, az, _, _) = sidewalk_pose(c, map, a, b, 0.40, offset *. sign *. blend)
+            let (qx, qz, _, _) = sidewalk_pose(c, map, a, b, 0.60, offset *. sign *. blend)
             let (end_dx, end_dz) = if enters do (int_to_float(bx) -. qx, int_to_float(bz) -. qz) else (0.0, 0.0) end
             (float_to_int(px +. (int_to_float(x0 + ex) -. ax) *. (1.0 -. tail) +. end_dx *. tail),
              float_to_int(pz +. (int_to_float(z0 + ez) -. az) *. (1.0 -. tail) +. end_dz *. tail))
@@ -1464,17 +1477,16 @@ mod Ur.Scene do
       None -> (x, z, y)
     end
   end
-  pfn citizen_walker(c : Ur.Sim.City, person : Ur.Citizens.Citizen, a : Int, b : Int, slot : Int) : Unit do
-    let (x, z, y) = walker_position(c, person, a, b)
-    let t = person.progress
-    let coat = if Ur.Citizens.emergency_move(person) do 10 else match person.id % 4 do
+  pfn walker_template_base() : Int do 16480 end
+  pfn walker_templates() : Int do 3 * 4 * 3 * 2 * 2 end
+  pfn walker_mesh(kind : Int, coat_index : Int, skin_index : Int, hair : Int, gait : Int) : Mesh do
+    let coat = match coat_index do
       0 -> 6
       1 -> 7
       2 -> 8
       _ -> 10
-    end end
-    let gait = float_to_int(t *. 12.0) % 2
-    let skin = match person.id / 5 % 3 do
+    end
+    let skin = match skin_index do
       0 -> 5
       1 -> 18
       _ -> 1
@@ -1486,14 +1498,33 @@ mod Ur.Scene do
     let m = box(m, 1, 1, 1 - gait, 1, 1, 1, 19)
     let m = box(m, 0, 2, 0, 2, 2, 2, coat)
     let m = box(m, 0, 4, 0, 2, 1, 2, skin)
-    let m = box(m, 0, 5, 0, 2, 1, 2, if person.id % 3 == 0 do 7 else 13 end)
-    let m = if Ur.Citizens.emergency_move(person) do
+    let m = box(m, 0, 5, 0, 2, 1, 2, if hair == 0 do 7 else 13 end)
+    if kind == 2 do
       box(box(m, 0, 2, 2, 2, 2, 1, 7), 1, 3, 3, 1, 1, 1, 5)
-    else if person.study >= 0 do
+    else if kind == 1 do
       box(box(m, 0, 2, 2, 2, 2, 1, 19), 1, 3, 3, 1, 1, 1, 10)
     else m end end
-    if Vk.chunk_begin(slot, x - 1, y, z - 1, 0) && Vk.chunk_part(0, m.words, m.quads) && Vk.chunk_commit() do ()
-    else Ur.AppError.stop("Citizen upload failed") end
+  end
+  fn setup_citizens(i : Int) : Unit do
+    if i >= walker_templates() do () else
+      let m = walker_mesh(i / 48, i / 12 % 4, i / 4 % 3, i / 2 % 2, i % 2)
+      let slot = walker_template_base() + i
+      if Vk.chunk_begin(slot, 0, 0, 0, 0) && Vk.chunk_part(0, m.words, m.quads) && Vk.chunk_commit() do
+        Vk.chunk_show(slot, false)
+        setup_citizens(i + 1)
+      else Ur.AppError.stop("Walker template upload failed") end
+    end
+  end
+  pfn citizen_walker(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, person : Ur.Citizens.Citizen, a : Int, b : Int, slot : Int) : Unit do
+    let (x, z, y) = walker_position(c, map, person, a, b)
+    let kind = if Ur.Citizens.emergency_move(person) do 2 else if person.study >= 0 do 1 else 0 end end
+    let coat = if kind == 2 do 3 else person.id % 4 end
+    let skin = person.id / 5 % 3
+    let hair = if person.id % 3 == 0 do 0 else 1 end
+    let gait = float_to_int(person.progress *. 12.0) % 2
+    let prototype = walker_template_base() + kind * 48 + coat * 12 + skin * 4 + hair * 2 + gait
+    if Vk.chunk_instance(slot, prototype, x - 1, y, z - 1) do ()
+    else Ur.AppError.stop("Walker instance upload failed") end
   end
   type CarPose = { x : Float, y : Float, z : Float, dx : Float, dz : Float }
   pfn parked_pose(c : Ur.Sim.City, p : Ur.Citizens.Parking) : CarPose do
@@ -1656,15 +1687,15 @@ mod Ur.Scene do
       end
     end
   end
-  pfn pedestrian_crossing(c : Ur.Sim.City, before : Ur.Citizens.Citizen, after : Ur.Citizens.Citizen, ignore : Int) : Bool do
+  pfn pedestrian_crossing(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, before : Ur.Citizens.Citizen, after : Ur.Citizens.Citizen, ignore : Int) : Bool do
     match before.route do
       Cons(a, Cons(b, _)) ->
         if !walking_segment(c, before, a, b) do false else
-          let (x0, z0, y0) = walker_position(c, before, a, b)
+          let (x0, z0, y0) = walker_position(c, map, before, a, b)
           let end_point = match after.route do
             Cons(n, Cons(m, _)) ->
-              if walking_segment(c, after, n, m) do Some(walker_position(c, after, n, m)) else None end
-            _ -> if after.location == b do Some(walker_position(c, { before with progress: 1.0 }, a, b)) else None end
+              if walking_segment(c, after, n, m) do Some(walker_position(c, map, after, n, m)) else None end
+            _ -> if after.location == b do Some(walker_position(c, map, { before with progress: 1.0 }, a, b)) else None end
           end
           match end_point do
             Some((x1, z1, y1)) ->
@@ -1676,88 +1707,114 @@ mod Ur.Scene do
       _ -> false
     end
   end
-  fn yield_to_vehicles(c : Ur.Sim.City, before : List(Ur.Citizens.Citizen), after : List(Ur.Citizens.Citizen), index : Int) : List(Ur.Citizens.Citizen) do
-    match (before, after) do
-      (Cons(old, tail), Cons(next, rest)) ->
-        let person = if old.id == next.id && pedestrian_crossing(c, old, next, 16384 + index) do old else next end
-        Cons(person, yield_to_vehicles(c, tail, rest, index + 1))
-      _ -> after
-    end
+  fn citizen_chunk_slots() : Int do walker_template_base() + walker_templates() + 200000 end
+  pfn citizen_walker_slot(slot : Int) : Int do walker_template_base() + walker_templates() + slot * 2 end
+  pfn citizen_car_slot(slot : Int) : Int do citizen_walker_slot(slot) + 1 end
+  fn yield_to_vehicle(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, slot : Int, before : Ur.Citizens.Citizen, after : Ur.Citizens.Citizen) : Ur.Citizens.Citizen do
+    if pedestrian_crossing(c, map, before, after, citizen_car_slot(slot)) do before else after end
   end
   pfn visible_at_stop(c : Ur.Sim.City, person : Ur.Citizens.Citizen) : Bool do
     (person.study >= 0 && person.activity == 1 && person.location == person.work && person.wait > 0.05) ||
       (Ur.Citizens.sheltered(person) && person.wait > 0.05) ||
       (person.activity == 5 && S.get(c.parks, person.location) > 0)
   end
-  pfn walker_projection(c : Ur.Sim.City, view : Projection, person : Ur.Citizens.Citizen, a : Int, b : Int) : (Float, Float) do
-    let (x, z, y) = walker_position(c, person, a, b)
+  pfn walker_projection(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, view : Projection, person : Ur.Citizens.Citizen, a : Int, b : Int) : (Float, Float) do
+    let (x, z, y) = walker_position(c, map, person, a, b)
     world_point(view, int_to_float(x), int_to_float(y + 3), int_to_float(z))
   end
-  pfn citizen_position(c : Ur.Sim.City, view : Projection, person : Ur.Citizens.Citizen) : Option((Float, Float)) do
+  pfn citizen_position(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, view : Projection, person : Ur.Citizens.Citizen) : Option((Float, Float)) do
     match person.route do
       Cons(a, Cons(b, _)) ->
-        if walking_segment(c, person, a, b) do Some(walker_projection(c, view, person, a, b)) else None end
+        if walking_segment(c, person, a, b) do Some(walker_projection(c, map, view, person, a, b)) else None end
       _ ->
         if visible_at_stop(c, person) do
-          Some(walker_projection(c, view, { person with progress: 0.0 }, person.location, person.location))
+          Some(walker_projection(c, map, view, { person with progress: 0.0 }, person.location, person.location))
         else None end
     end
   end
-  pfn citizen_hit(c : Ur.Sim.City, view : Projection, people : List(Ur.Citizens.Citizen), mx : Float, my : Float, best : Int, square : Float) : Int do
+  pfn citizen_hit(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, view : Projection, people : List(Ur.Citizens.Citizen), mx : Float, my : Float, best : Int, square : Float) : Int do
     match people do
       Nil -> best
       Cons(person, rest) ->
-        match citizen_position(c, view, person) do
+        match citizen_position(c, map, view, person) do
           Some((x, y)) ->
             let dx = x -. mx
             let dy = y -. my
             let distance = dx *. dx +. dy *. dy
-            if distance < square do citizen_hit(c, view, rest, mx, my, person.id, distance)
-            else citizen_hit(c, view, rest, mx, my, best, square) end
-          None -> citizen_hit(c, view, rest, mx, my, best, square)
+            if distance < square do citizen_hit(c, map, view, rest, mx, my, person.id, distance)
+            else citizen_hit(c, map, view, rest, mx, my, best, square) end
+          None -> citizen_hit(c, map, view, rest, mx, my, best, square)
         end
     end
   end
-  fn citizen_pick(c : Ur.Sim.City, view : Projection, people : List(Ur.Citizens.Citizen), mx : Float, my : Float) : Int do
-    citizen_hit(c, view, people, mx, my, -1, 144.0)
+  fn citizen_pick(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, view : Projection, people : List(Ur.Citizens.Citizen), mx : Float, my : Float) : Int do
+    citizen_hit(c, map, view, people, mx, my, -1, 144.0)
   end
-  pfn citizen_vehicle(c : Ur.Sim.City, person : Ur.Citizens.Citizen, slot : Int, in_car : Bool) : Unit do
+  pfn citizen_vehicle(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, person : Ur.Citizens.Citizen, slot : Int, in_car : Bool) : Unit do
     match person.route do
       Cons(a, Cons(b, _)) ->
         if in_car || person.transit_phase == 3 do Vk.chunk_free(slot)
-        else citizen_walker(c, person, a, b, slot) end
+        else citizen_walker(c, map, person, a, b, slot) end
       _ ->
         if visible_at_stop(c, person) do
-          citizen_walker(c, { person with progress: 0.0 }, person.location, person.location, slot)
+          citizen_walker(c, map, { person with progress: 0.0 }, person.location, person.location, slot)
         else Vk.chunk_free(slot) end
     end
   end
-  fn citizen_vehicles(c : Ur.Sim.City, citizens : List(Ur.Citizens.Citizen), previous : List(Ur.Citizens.Citizen), night : Bool, reuse_parked : Bool, index : Int) : Unit do
-    let slot = 16120 + index
-    let tail = match previous do
-      Cons(_, rest) -> rest
-      Nil -> Nil
+  pfn draw_citizen(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, entry : Ur.Citizens.Actor, previous : Option(Ur.Citizens.Actor), night : Bool, reuse_parked : Bool) : Unit do
+    let person = entry.person
+    let slot = entry.slot
+    if citizen_car_slot(slot) >= citizen_chunk_slots() do () else
+    let unchanged = reuse_parked && person.car_phase == 0 && (match previous do
+      Some(prior) ->
+        let old = prior.person
+        old.id == person.id && old.car_phase == 0 && old.parking == person.parking
+      None -> false
+    end)
+    let in_car = if unchanged do
+      parked_car(c, person.id, person.parking, citizen_car_slot(slot), true)
+      false
+    else citizen_car(c, person, citizen_car_slot(slot), night) end
+    citizen_vehicle(c, map, person, citizen_walker_slot(slot), in_car)
     end
-    match citizens do
-      Cons(person, rest) ->
-        let unchanged = reuse_parked && person.car_phase == 0 && (match previous do
-          Cons(old, _) -> old.id == person.id && old.car_phase == 0 && old.parking == person.parking
-          Nil -> false
-        end)
-        let in_car = if unchanged do
-          parked_car(c, person.id, person.parking, 16384 + index, true)
-          false
-        else citizen_car(c, person, 16384 + index, night) end
-        citizen_vehicle(c, person, slot, in_car)
-        citizen_vehicles(c, rest, tail, night, reuse_parked, index + 1)
-      Nil -> match previous do
-        Nil -> ()
-        Cons(_, rest) ->
-          Vk.chunk_free(slot)
-          Vk.chunk_free(16384 + index)
-          citizen_vehicles(c, Nil, rest, night, reuse_parked, index + 1)
-      end
+  end
+  pfn clear_citizen(slot : Int) : Unit do
+    Vk.chunk_free(citizen_walker_slot(slot))
+    Vk.chunk_free(citizen_car_slot(slot))
+  end
+  fn citizen_vehicles(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, citizens : List(Ur.Citizens.Actor), previous : List(Ur.Citizens.Actor), night : Bool, reuse_parked : Bool) : Unit do
+    match (citizens, previous) do
+      (Nil, Nil) -> ()
+      (Nil, Cons(old, rest)) ->
+        clear_citizen(old.slot)
+        citizen_vehicles(c, map, Nil, rest, night, reuse_parked)
+      (Cons(entry, rest), Nil) ->
+        draw_citizen(c, map, entry, None, night, reuse_parked)
+        citizen_vehicles(c, map, rest, Nil, night, reuse_parked)
+      (Cons(entry, rest), Cons(old, tail)) ->
+        if entry.slot == old.slot do
+          draw_citizen(c, map, entry, Some(old), night, reuse_parked)
+          citizen_vehicles(c, map, rest, tail, night, reuse_parked)
+        else if entry.slot < old.slot do
+          draw_citizen(c, map, entry, None, night, reuse_parked)
+          citizen_vehicles(c, map, rest, previous, night, reuse_parked)
+        else
+          clear_citizen(old.slot)
+          citizen_vehicles(c, map, citizens, tail, night, reuse_parked)
+        end end
     end
+  end
+  fn clear_scheduled_walks(roster : Ur.Citizens.Roster) : Unit do
+    Ur.Citizens.each_walk(roster, fn (slot, _) -> Vk.chunk_free(citizen_walker_slot(slot)))
+  end
+  fn scheduled_walks(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, roster : Ur.Citizens.Roster) : Unit do
+    Ur.Citizens.each_walk(roster, fn (slot, person) ->
+      if citizen_walker_slot(slot) < citizen_chunk_slots() do
+        citizen_vehicle(c, map, person, citizen_walker_slot(slot), false)
+      else () end)
+  end
+  fn clear_walk_exits(roster : Ur.Citizens.Roster) : Unit do
+    List.each(roster.walk_exits, fn slot -> Vk.chunk_free(citizen_walker_slot(slot)))
   end
   pfn layer_floor(c : Ur.Sim.City, x : Int, z : Int) : Int do
     high_ground(heights(c, x, z, NativeArray.make_int(100, 0), 0), 0, 0) + 3

@@ -687,12 +687,12 @@ mod Ur.Sim do
     let regional = temperature(c)
     regional * 10 - parcel_cooling(c, lot, regional)
   end
-  fn walk_pace(c : City, lot : Int) : Float do
-    let regional = temperature(c)
+  fn walk_pace_at(c : City, lot : Int, regional : Int) : Float do
     -- Shade reduces perceived heat as well as the local air temperature.
     let heat = regional * 10 - 2 * parcel_cooling(c, lot, regional)
     1.0 -. int_to_float(clamp(heat - 280, 0, 90)) *. 0.004
   end
+  fn walk_pace(c : City, lot : Int) : Float do walk_pace_at(c, lot, temperature(c)) end
   fn rain_road_pace(c : City) : Float do
     match current_weather(c) do
       4 -> 0.43

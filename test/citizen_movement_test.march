@@ -9,27 +9,20 @@ mod CitizenMovementTest do
       Nil -> panic("Expected a citizen in the test town")
     end
   end
-  pfn rest_hour(people : List(Ur.Citizens.Citizen)) : Int do
-    let person = first(people)
-    person.rest_hour
-  end
-
   pfn working_hours(c : Ur.Sim.City, base : Ur.Citizens.Citizen, empty : NativeIntArr) : Unit do
     let person = { base with work: -1, study: -1, shop: -1, park: -1, location: base.home,
       route: Nil, activity: 0, wait: 0.0 }
-    let step = fn (people, hour) -> Ur.Citizens.step_with_bus(c, empty, None, people, int_to_float(hour) *. 0.075 +. 0.03, 0.02, empty, 0.0)
-    let people = step([person], 3)
-    Test.assert_eq_int(rest_hour(people), 3, "a settled indoor citizen waits for their next in-game hour")
-    let people = step(people, 3)
-    Test.assert_eq_int(rest_hour(people), 3, "waiting indoors needs no countdown")
-    let people = step(people, 4)
-    Test.assert_eq_int(rest_hour(people), 4, "the citizen checks their schedule again at the next hour")
-    Test.assert_eq_int(rest_hour(Ur.Citizens.wake_indoor(people)), -1, "city changes invalidate a sleeping citizen's schedule immediately")
+    let start = Ur.Citizens.index(c, [person], 0.26)
+    let later = Ur.Citizens.step_indexed(c, empty, None, start, 1.83, 0.02, empty, 0.0)
+    Test.assert_true(List.is_empty(later.active), "a resident without a destination stays indoor across midnight")
+    Test.assert_true(Option.is_some(Ur.Citizens.find(later, person.id)), "a sleeping resident stays inspectable")
+    Test.assert_true(List.map(Ur.Citizens.at_parcel(later, person.home), fn resident -> resident.id) == [person.id],
+      "the parcel inspector can find residents who are asleep")
     let wet = { c with surface_water: NativeArray.set_int(c.surface_water, person.home, 8),
       flood_damage: NativeArray.set_int(c.flood_damage, person.home, 2), flood_active: true }
-    let evacuated = Ur.Citizens.refresh(wet, people)
+    let evacuated = Ur.Citizens.refresh(wet, Ur.Citizens.snapshot(later))
     Test.assert_true(List.any(evacuated, fn evacuee ->
-      evacuee.id == person.id && Ur.Citizens.emergency_move(evacuee) && evacuee.rest_hour < 0),
+      evacuee.id == person.id && Ur.Citizens.emergency_move(evacuee) && evacuee.rest_until < 0),
       "someone waiting indoors is eligible for immediate evacuation")
   end
 
@@ -48,9 +41,14 @@ mod CitizenMovementTest do
     let capacity = S.transit_seats(mode)
     let waiting = List.map(List.range(0, capacity + 1), fn id -> { base with
       id: id, board: board, alight: exit, target: target, location: -1, route: [board, middle, exit, target],
-      wait: 0.0, progress: 0.0, transit_phase: 2, bus_slot: -1, car_phase: 0, rest_hour: -1 })
+      wait: 0.0, progress: 0.0, transit_phase: 2, bus_slot: -1, car_phase: 0, rest_until: -1 })
+    let sleeping = { base with id: capacity + 1, location: target, route: Nil, rest_until: 24,
+      transit_phase: 0, bus_slot: -1 }
+    let waiting = List.append(waiting, [sleeping])
     let step = fn (people, active) -> Ur.Citizens.step_with_bus(c, running, Some({ routes: [trip], active: active }), people, 0.6, 0.02, empty, 0.0)
     let boarded = step(waiting, [run])
+    Test.assert_true(List.map(boarded, fn person -> person.id) == List.map(waiting, fn person -> person.id),
+      "advancing part of the roster preserves its order and sleeping residents")
     Test.assert_eq_int(List.length(List.filter(boarded, fn person -> person.bus_slot == run.slot)), capacity,
       "each vehicle boards a group up to its capacity")
     let passing = step(boarded, [{ run with progress: 1.35 }])
@@ -74,11 +72,94 @@ mod CitizenMovementTest do
     else () end
   end
 
+  pfn indexed_movement(c : Ur.Sim.City, base : Ur.Citizens.Citizen, empty : NativeIntArr) : Unit do
+    let sleeper = { base with work: -1, study: -1, shop: -1, park: -1, location: base.home,
+      parking: 0, activity: 0, route: Nil, wait: 0.0, rest_until: -1 }
+    let due = { sleeper with id: 2, work: base.home, rest_until: 4 }
+    let active = { sleeper with id: 3, wait: 1.0 }
+    let people = [{ sleeper with id: 1 }, due, active]
+    let roster = Ur.Citizens.index(c, people, 0.26)
+    Test.assert_eq_int(List.length(roster.active), 1, "indoor residents stay out of the active index")
+    let roster = Ur.Citizens.step_indexed(c, empty, None, roster, 0.27, 0.02, empty, 0.0)
+    let people = Ur.Citizens.snapshot(roster)
+    Test.assert_true(List.map(people, fn person -> person.id) == [1, 2, 3],
+      "a frame advances only active travelers and preserves roster order")
+    Test.assert_true(List.any(people, fn person -> person.id == 3 && person.wait < 1.0),
+      "an active citizen continues to advance before the next scheduled wakeup")
+    let roster = Ur.Citizens.step_indexed(c, empty, None, roster, 0.31, 0.02, empty, 0.0)
+    let people = Ur.Citizens.snapshot(roster)
+    Test.assert_true(List.any(people, fn person -> person.id == 2 && person.rest_until == 5),
+      "the scheduled citizen wakes and sets the next check")
+    let cached = Ur.Citizens.indexed_counts(c, roster)
+    let total = Ur.Citizens.tally(c, people)
+    Test.assert_eq_int(cached.tracked, total.tracked, "waking does not double-count a resident")
+    Test.assert_eq_int(cached.home, total.home, "cached indoor counts match the complete roster")
+  end
+
+  pfn cached_walk_geometry(c : Ur.Sim.City) : Unit do
+    let a = S.index(12, 22)
+    let b = S.neighbour(a, 1)
+    let cross = List.fold_left([a, b, S.neighbour(a, 0), S.neighbour(a, 2)], NativeArray.make_int(S.count(), 0),
+      fn (roads, lot) -> NativeArray.set_int(roads, lot, 2))
+    let c = { c with roads: cross, heights: NativeArray.make_int(S.count(), 22) }
+    let map = Ur.Citizens.walk_map(c)
+    Test.assert_true(Ur.Citizens.walk_junction(map, a) && Ur.Citizens.walk_arm(map, a, 1),
+      "cached junctions and arms work on parcels beyond the first row of packed records")
+    Test.assert_eq_int(Ur.Citizens.walk_width(map, a), S.road_half_width(2) + 1, "avenue sidewalks use the road width")
+    Test.assert_true(Ur.Citizens.walk_turn(map, a) == S.road_turn(c, a), "cached road geometry matches the road")
+    Test.assert_true(Ur.Citizens.walk_segment_pace(map, a, b) == S.walk_pace(c, a), "cached walking pace matches the city")
+    let wet = { c with surface_water: NativeArray.set_int(c.surface_water, b, 6), flood_active: true }
+    let wet_map = Ur.Citizens.walk_map(wet)
+    Test.assert_true(Ur.Citizens.walk_segment_pace(wet_map, a, b) == 0.0, "a flooded destination closes the walking segment")
+  end
+
+  pfn scheduled_crossing(c : Ur.Sim.City, base : Ur.Citizens.Citizen, empty : NativeIntArr) : Unit do
+    let a = S.index(12, 22)
+    let from = S.neighbour(a, 0)
+    let b = S.neighbour(a, 1)
+    let road = List.fold_left([a, b, from, S.neighbour(a, 2), S.neighbour(a, 3)], empty,
+      fn (roads, lot) -> NativeArray.set_int(roads, lot, 2))
+    let c = { c with roads: road, heights: NativeArray.make_int(S.count(), 22) }
+    let map = Ur.Citizens.walk_map(c)
+    let junctions = NativeArray.set_int(empty, a, 2)
+    let person = { base with id: 2, location: -1, route: [a, b], previous: from, target: b,
+      work: b, study: -1, car_phase: 0, parking: 0, arrival: 0, by_car: false,
+      activity: 1, progress: 0.0, transit_phase: 0, bus_slot: -1, rest_until: -1, park_trip: false }
+    let roster = Ur.Citizens.index(c, [person], 0.25)
+    let red = int_to_float(7 - (a % 3) * 2) *. 0.5
+    let step = fn (roster, dt, traffic) ->
+      Ur.Citizens.step_guarded(c, map, empty, None, roster, 0.25, dt, junctions, traffic, fn (_, _, next) -> next)
+    let waiting = step(roster, 0.1, red)
+    let waiting = step(waiting, 0.5, red +. 0.5)
+    Test.assert_eq_int(waiting.walk_count, 1, "a walker waiting at a signal stays scheduled")
+    Test.assert_true(List.is_empty(waiting.active), "the regular tick has no walker to update")
+    let person = first(Ur.Citizens.snapshot(waiting))
+    Test.assert_true(person.progress == 0.0, "the walker waits at the curb until the signal opens")
+    let crossing = step(waiting, 3.54, red +. 4.04)
+    Test.assert_eq_int(Map.get_or(crossing.walk_crossings, a * 4 + 3, 0, Map.int_cmp), 1,
+      "a scheduled crossing reserves its lane for drivers")
+    let moving = step(crossing, 0.25, red +. 4.29)
+    let person = first(Ur.Citizens.snapshot(moving))
+    Test.assert_true(person.progress > 0.0 && person.progress < 0.24, "walkers interpolate before their next event")
+    let counts = Ur.Citizens.indexed_counts(c, moving)
+    Test.assert_eq_int(counts.walking, 1, "scheduled walkers count on the HUD")
+    let done = step(moving, 0.6, red +. 4.89)
+    Test.assert_eq_int(Map.get_or(done.walk_crossings, a * 4 + 3, 0, Map.int_cmp), 0, "crossing reservation clears")
+    let done = step(done, 0.8, red +. 5.69)
+    let done = step(done, 1.7, red +. 7.39)
+    Test.assert_eq_int(done.walk_count, 0, "arrival removes the walking event")
+    let person = first(Ur.Citizens.snapshot(done))
+    Test.assert_eq_int(person.location, b, "the arrival reaches the original destination")
+  end
+
   fn main(_cap : Cap(IO)) : Unit do
     let city = Ur.Scenario.evacuation_site()
     let resident = first(Ur.Citizens.refresh(city, Nil))
     let empty = NativeArray.make_int(S.count(), 0)
     working_hours(city, resident, empty)
+    indexed_movement(city, resident, empty)
+    cached_walk_geometry(city)
+    scheduled_crossing(city, resident, empty)
     List.each([2, 3, 4], fn mode -> transit_mode(city, resident, empty, mode))
     Authority.must(println("Citizen movement checks passed"))
   end

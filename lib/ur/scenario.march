@@ -25,6 +25,29 @@ mod Ur.Scenario do
     let c = S.act(S.act(c, S.index(16, 15), 7), S.index(16, 15), 25)
     S.act(S.act(c, S.index(18, 15), 7), S.index(18, 15), 23)
   end
+  pfn metro_parcels(c : Ur.Sim.City, lot : Int) : Ur.Sim.City do
+    if lot == S.count() do c else
+      let x = lot % S.width()
+      let z = lot / S.width()
+      let height = S.get(c.heights, lot)
+      let road = x % 4 == 1 || z % 4 == 0
+      let office = (x / 4 + z / 4) % 7 == 2
+      let tower = (if office do 7 else 9 end) + (lot * 31 + x * z) % 3
+      let c = if height < 4 || height > 92 || S.get(c.plants, lot) > 0 || S.get(c.roads, lot) > 0 || lot == c.harbour do c
+        else if road do
+          { c with roads: NativeArray.set_int(c.roads, lot, if x % 8 == 1 || z % 8 == 0 do 2 else 1 end),
+            pipes: NativeArray.set_int(c.pipes, lot, 2), grid: NativeArray.set_int(c.grid, lot, 2) }
+        else
+          { c with zones: NativeArray.set_int(c.zones, lot, if office do 2 else 1 end),
+            buildings: NativeArray.set_int(c.buildings, lot, tower) }
+        end end
+      metro_parcels(c, lot + 1)
+    end
+  end
+  fn metropolitan_benchmark() : Ur.Sim.City do
+    let c = metro_parcels(S.land(S.unclaimed(), S.index(20, 36)), 0)
+    { c with census: Ur.Demography.seed(100000), clock_ms: 600, cash: 120000, founding_map: false }
+  end
   pfn street(c : Ur.Sim.City, x : Int, z : Int) : Ur.Sim.City do
     let i = S.index(x, z)
     if S.get(c.heights, i) == 0 || S.get(c.plants, i) > 0 do c else
