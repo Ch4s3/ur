@@ -1,0 +1,47 @@
+-- The one calendar step shared by play, tests, benchmarks and replays.
+-- `Ur.Sim` owns each day's simulation; this module adds the council and the
+-- between-settlement pollution drift, which `Ur.Sim` cannot reach.
+mod Ur.Clock do
+  alias Ur.Sim as S
+
+  -- `stats` is the snapshot the council read when the month closed, or the
+  -- daily snapshot an interface asked for.
+  type Day = { city : Ur.Sim.City, stats : Option(Ur.Sim.Stats) }
+
+  -- Finish a day `Ur.Sim.advance_day_with_traffic` has already simulated.
+  -- `month` is the calendar month before that day. `live` keeps a statistics
+  -- snapshot every day; otherwise one is taken only when the month closes.
+  fn close_day(month : Int, next : Ur.Sim.City, traffic : NativeIntArr, live : Bool) : Day do
+    let next = Ur.Council.observe_religion(next)
+    let due = next.month != month
+    let next = if due do next else S.drift_pollution(next, traffic) end
+    if due || live do
+      let st = S.stats(next)
+      let city = if due do Ur.Council.advance_reporting(next, st.people, fn _ -> st) else next end
+      { city: city, stats: Some(st) }
+    else { city: next, stats: None } end
+  end
+
+  -- Advance one day under the given road load.
+  fn step(c : Ur.Sim.City, traffic : NativeIntArr, live : Bool) : Day do
+    close_day(c.month, S.advance_day_with_traffic(c, traffic), traffic, live)
+  end
+
+  -- Advance one day under the road load the morning's city produces, which
+  -- is the load the running game passes from its latest statistics.
+  fn day(c : Ur.Sim.City) : Ur.Sim.City do (step(c, S.day_traffic(c), false)).city end
+
+  fn days(c : Ur.Sim.City, count : Int) : Ur.Sim.City do
+    if count <= 0 do c else days(day(c), count - 1) end
+  end
+
+  -- Advance day by day through the next monthly settlement.
+  fn month(c : Ur.Sim.City) : Ur.Sim.City do
+    let next = day(c)
+    if next.month != c.month do next else month(next) end
+  end
+
+  fn advance(c : Ur.Sim.City, months : Int) : Ur.Sim.City do
+    if months <= 0 do c else advance(month(c), months - 1) end
+  end
+end

@@ -71,12 +71,12 @@ mod Ur do
     let runs = List.filter(c.waste_runs, fn run -> List.any(completed, fn site -> site == run.pickup))
     let next = S.advance_day_with_traffic({ c with waste_runs: runs }, traffic)
     let next = if flood_drill do Ur.Scenario.flood_backup_turn(next) else next end
-    let next = Ur.Council.observe_religion(next)
-    let due = next.month != c.month
-    let next = if due do next else S.drift_pollution(next, traffic) end
-    let stats = S.stats(next)
-    let city = if due do Ur.Council.advance_reporting(next, stats.people, fn _ -> stats) else next end
-    { city: city, stats: stats }
+    let day = Ur.Clock.close_day(c.month, next, traffic, true)
+    let stats = match day.stats do
+      Some(st) -> st
+      None -> S.stats(day.city)
+    end
+    { city: day.city, stats: stats }
   end
   pfn start_day_plan(c : Ur.Sim.City, traffic : NativeIntArr, completed : List(Int), flood_drill : Bool) : Option(DayPlan) do
     match Task.async(fn () -> roll_day(c, traffic, completed, flood_drill)) do
@@ -719,7 +719,7 @@ mod Ur do
   pfn corridor_replay(baseline : Ur.Sim.City, upgraded : Ur.Sim.City, remaining : Int) : Unit do
     corridor_report("baseline", baseline)
     corridor_report("upgraded", upgraded)
-    if remaining > 0 do corridor_replay(S.tick(baseline), S.tick(upgraded), remaining - 1) else () end
+    if remaining > 0 do corridor_replay(Ur.Clock.month(baseline), Ur.Clock.month(upgraded), remaining - 1) else () end
   end
   pfn feeder_report(name : String, city : Ur.Sim.City) : Unit do
     let st = S.stats(city)
@@ -736,7 +736,7 @@ mod Ur do
   pfn feeder_replay(base : Ur.Sim.City, upgraded : Ur.Sim.City, months : Int) : Unit do
     feeder_report("baseline", base)
     feeder_report("upgraded", upgraded)
-    if months > 0 do feeder_replay(S.tick(base), S.tick(upgraded), months - 1) else () end
+    if months > 0 do feeder_replay(Ur.Clock.month(base), Ur.Clock.month(upgraded), months - 1) else () end
   end
   pfn freight_report(name : String, city : Ur.Sim.City) : Unit do
     match city.freight do
@@ -760,7 +760,7 @@ mod Ur do
   pfn freight_replay(delayed : Ur.Sim.City, backup : Ur.Sim.City, days : Int) : Unit do
     freight_report("delayed", delayed)
     freight_report("backup", backup)
-    if days > 0 do freight_replay(S.advance_day(delayed), S.advance_day(backup), days - 1) else () end
+    if days > 0 do freight_replay(Ur.Clock.day(delayed), Ur.Clock.day(backup), days - 1) else () end
   end
   pfn council_replay(label : String, city : Ur.Sim.City) : Unit do
     let st = S.stats(city)
@@ -777,7 +777,7 @@ mod Ur do
       " rain=" ++ int_to_string(S.current_weather(c)) ++ " gas=" ++ int_to_string(st.generation.gas) ++
       " solar=" ++ int_to_string(st.generation.solar) ++ " subway=" ++ int_to_string(S.get(c.subway_water, Ur.Scenario.storm_station())) ++
       " charge=$" ++ int_to_string(c.pumping_cost)))
-    if remaining > 0 do flood_backup_report(Ur.Scenario.flood_backup_turn(S.advance_day(c)), remaining - 1) else () end
+    if remaining > 0 do flood_backup_report(Ur.Scenario.flood_backup_turn(Ur.Clock.day(c)), remaining - 1) else () end
   end
   fn main(_cap : Cap(IO)) : Unit do
     let c = S.new()
@@ -828,7 +828,7 @@ mod Ur do
         (if trip.arrived do "yes" else "no" end) ++ " peak_bus_occupancy=" ++ int_to_string(trip.fullest_bus)))
     else if bench > 0 do
       let start = unix_time_ms()
-      let after = S.advance(c, bench)
+      let after = Ur.Clock.advance(c, bench)
       Authority.must(println("months=" ++ int_to_string(bench) ++ " elapsed_ms=" ++ int_to_string(unix_time_ms() - start) ++ " population=" ++ int_to_string(S.population(after)) ++ " cash=" ++ int_to_string(after.cash)))
     else if Vk.open_slots(1440, 900, false, quad_capacity, Ur.Scene.citizen_chunk_slots()) do
       Vk.set_vsync(!profile)
@@ -837,7 +837,7 @@ mod Ur do
       Ur.Scene.setup_citizens(0)
       let road_fixture = if road_demo do Some(Ur.Scenario.road_planning(
         Authority.must(Env.get_int("UR_ROAD_DEMO", 1)), Authority.must(Env.get_int("UR_ROAD_BUILT", 0)) > 0)) else None end
-      let c = if metro do Ur.Scenario.metropolitan_benchmark() else if demo == 2 do S.advance(Ur.Scenario.transit_region(), 600)
+      let c = if metro do Ur.Scenario.metropolitan_benchmark() else if demo == 2 do Ur.Clock.advance(Ur.Scenario.transit_region(), 600)
         else if demo == 3 do Ur.Scenario.food_town()
         else if demo == 4 do Ur.Scenario.first_expansion()
         else if demo == 5 do Ur.Scenario.civic_town()
@@ -857,7 +857,7 @@ mod Ur do
         else if demo == 18 do Ur.Scenario.employment_corridor()
         else if demo == 19 do
           let base = Ur.Scenario.feeder_demo()
-          if Authority.must(Env.get_int("UR_UTILITY_UPGRADED", 0)) > 0 do S.advance(S.act(base, Ur.Scenario.feeder_demo_link(), 97), 4) else base end
+          if Authority.must(Env.get_int("UR_UTILITY_UPGRADED", 0)) > 0 do Ur.Clock.advance(S.act(base, Ur.Scenario.feeder_demo_link(), 97), 4) else base end
         else if demo == 20 do Ur.Scenario.advance_freight_days(Ur.Scenario.freight_demo(), 7)
         else if demo == 21 do Ur.Scenario.council_outcome_demo()
         else if demo == 22 && drill == 1 do
@@ -866,7 +866,7 @@ mod Ur do
           let days = S.clamp(Authority.must(Env.get_int("UR_FLOOD_DAYS", 1)), 0, 20)
           Ur.Scenario.advance_freight_days(Ur.Scenario.storm_site(), days)
         else if demo == 27 do Ur.Scenario.religious_city()
-        else if demo > 0 && !road_demo do S.advance(Ur.Scenario.civic_region(Ur.Scenario.connected_region()), 480) else Ur.Sim.unclaimed() end end end end end end end end end end end end end end end end end end end end end end end end end
+        else if demo > 0 && !road_demo do Ur.Clock.advance(Ur.Scenario.civic_region(Ur.Scenario.connected_region()), 480) else Ur.Sim.unclaimed() end end end end end end end end end end end end end end end end end end end end end end end end end
       let c = match road_fixture do Some(setup) -> setup.city | None -> c end
       let demo_hour = Authority.must(Env.get_int("UR_CLOCK_HOUR", -1))
       let c = if demo > 0 && demo_hour >= 0 && demo_hour < 24 do

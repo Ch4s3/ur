@@ -13,10 +13,15 @@ mod Ur.Scenario do
       corridor(jobs, x + 1)
     end
   end
+  -- Technicians trained before play began: the trade-school unlock and a small
+  -- trade-qualified workforce, so specialist plants can be built and staffed.
+  -- The progression chain itself is covered by `test/progression_test.march`.
+  pfn trained(c : Ur.Sim.City, technicians : Int) : Ur.Sim.City do
+    { c with milestones: NativeArray.set_int(c.milestones, 27, 1), education: NativeArray.set_int(c.education, 2, technicians) }
+  end
   fn connected_region() : Ur.Sim.City do
     let c = corridor(S.new(), 10)
     let c = S.act(S.act(c, S.index(12, 17), 7), S.index(12, 17), 4)
-    let c = S.act(S.act(c, S.index(27, 15), 7), S.index(27, 15), 8)
     let c = S.act(c, S.index(8, 17), 9)
     let c = S.act(c, S.index(8, 18), 9)
     let c = S.act(c, S.index(8, 19), 13)
@@ -56,14 +61,20 @@ mod Ur.Scenario do
     end
   end
   fn civic_region(c : Ur.Sim.City) : Ur.Sim.City do
-    let c = S.advance(c, 120)
+    let c = Ur.Clock.advance(c, 120)
     let gateway = S.index(14, 17)
     let c = street(S.act(c, gateway, 7), 14, 17)
     let c = street(street(c, 14, 18), 14, 19)
     let c = S.act(c, S.index(13, 18), 44)
     let c = S.act(c, S.index(15, 18), 45)
     let c = S.act(c, S.index(13, 19), 46)
-    S.act(c, S.index(15, 19), 47)
+    let c = S.act(c, S.index(15, 19), 47)
+    -- A second gas station carries the growing town while technicians train
+    -- for the eastern geothermal field.
+    let c = S.act(c, S.index(18, 15), 4)
+    let c = S.act(c, S.index(9, 15), 79)
+    let c = S.act(c, S.index(24, 15), 80)
+    S.act(S.act(c, S.index(28, 15), 7), S.index(28, 15), 8)
   end
   pfn cross_street(c : Ur.Sim.City, x : Int, z : Int) : Ur.Sim.City do
     if x > 17 do c else cross_street(street(c, x, z), x + 1, z) end
@@ -86,7 +97,7 @@ mod Ur.Scenario do
     let c = S.act(S.act(c, S.index(9, 22), 7), S.index(9, 22), 1)
     let c = S.act(c, S.index(9, 23), 12)
     let c = S.act(c, S.index(10, 19), 28)
-    S.advance(c, 160)
+    Ur.Clock.advance(c, 160)
   end
 
   pfn export_street(c : Ur.Sim.City, x : Int) : Ur.Sim.City do
@@ -106,11 +117,11 @@ mod Ur.Scenario do
     let c = S.act(c, S.index(36, 21), 14)
     let c = S.act(c, S.index(35, 21), 7)
     let c = S.act(c, S.index(35, 21), 21)
-    let c = S.advance(c, 12)
+    let c = Ur.Clock.advance(c, 12)
     let c = S.act(S.act(c, harbour, 37), terminal, 37)
     let c = S.act(c, S.index(51, 23), 12)
     let c = S.act(S.act(c, terminal, 39), terminal, 39)
-    S.tick(c)
+    Ur.Clock.month(c)
   end
 
   pfn civic_workplaces(c : Ur.Sim.City, x : Int) : Ur.Sim.City do
@@ -129,7 +140,7 @@ mod Ur.Scenario do
     let c = S.act(c, S.index(29, 23), 47)
     let c = S.act(c, S.index(28, 21), 14)
     let c = S.act(c, S.index(28, 23), 21)
-    S.advance(civic_workplaces(c, 27), 42)
+    Ur.Clock.advance(civic_workplaces(c, 27), 42)
   end
 
   pfn avenue_row(c : Ur.Sim.City, x : Int) : Ur.Sim.City do
@@ -328,6 +339,7 @@ mod Ur.Scenario do
   fn corridor_home() : Int do S.index(10, 17) end
   fn corridor_project() : Int do S.index(10, 19) end
   fn corridor_workplace() : Int do S.index(25, 19) end
+  fn corridor_depot() : Int do S.index(8, 18) end
   pfn corridor_lot(c : Ur.Sim.City, lot : Int, zone : Int, floors : Int) : Ur.Sim.City do
     let c = { c with heights: NativeArray.set_int(c.heights, lot, 8) }
     let c = S.act(c, lot, if zone == 1 do 2 else 3 end)
@@ -357,9 +369,10 @@ mod Ur.Scenario do
     let c = corridor_lot(c, corridor_workplace(), 2, 3)
     -- Keep ground-floor jobs out of the residential end for this comparison.
     let c = S.act(S.act(S.act(c, corridor_home(), 64), S.index(11, 17), 64), corridor_project(), 64)
-    let depot = S.index(8, 18)
+    let depot = corridor_depot()
     let c = S.act({ c with heights: NativeArray.set_int(c.heights, depot, 8) }, depot, 76)
-    { c with message: "West housing has limited access to the east jobs. Inspect the west bus stop and increase service." }
+    -- Let the depot hire its drivers before the comparison starts.
+    { (S.update_facility_staff(c)) with message: "West housing has limited access to the east jobs. Inspect the west bus stop and increase service." }
   end
   fn upgrade_corridor(c : Ur.Sim.City) : Ur.Sim.City do
     S.act(S.act(c, corridor_stop(), 39), corridor_stop(), 39)
@@ -498,7 +511,7 @@ mod Ur.Scenario do
     { c with message: "Inspect the freight dock at 18, 16. Suspend sailings or enable backup imports and watch the local food price." }
   end
   fn advance_freight_days(c : Ur.Sim.City, days : Int) : Ur.Sim.City do
-    if days <= 0 do c else advance_freight_days(S.advance_day(c), days - 1) end
+    if days <= 0 do c else advance_freight_days(Ur.Clock.day(c), days - 1) end
   end
 
   fn diagnosis_district() : Ur.Sim.City do
@@ -520,7 +533,7 @@ mod Ur.Scenario do
     let c = S.act(S.act(S.new(), depot, 24), landfill, 25)
     let c = S.act(S.act(c, S.index(9, 19), 91), road, 92)
     let stock = NativeArray.set_int(NativeArray.set_int(c.waste_stock, home, 66), S.index(10, 19), 18)
-    let c = S.advance_day({ c with waste_stock: stock, trash: 84 })
+    let c = Ur.Clock.day({ c with waste_stock: stock, trash: 84 })
     { c with clock_ms: 750 }
   end
   fn parking_district() : Ur.Sim.City do
@@ -562,7 +575,7 @@ mod Ur.Scenario do
   end
 
   fn storm_site() : Ur.Sim.City do
-    let c = S.new()
+    let c = trained(S.new(), 6)
     let station = storm_station()
     let inland = S.index(9, 19)
     let date = first_weather(0, 4, 360)
@@ -670,7 +683,7 @@ mod Ur.Scenario do
 
   fn transit_region() : Ur.Sim.City do
     let c = connected_region()
-    let c = S.advance(c, 120)
+    let c = Ur.Clock.advance(c, 120)
     let c = cross_street(c, 9, 20)
     let c = avenue(avenue(c, 13, 16), 17, 16)
     let c = infill(c, 10)

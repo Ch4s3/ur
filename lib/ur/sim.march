@@ -3655,9 +3655,17 @@ mod Ur.Sim do
     let street = seed_jobs(c, running, NativeArray.set_int(blank, job, 0), job, 0)
     commute_queue(c, traffic, running, street, blank, start_commute_search(c, street, job, 0, Nil), Nil)
   end
+  -- Commutes measure access to the job market. A facility's own operating
+  -- staff are hired through matching, but a depot or plant does not make every
+  -- nearby home look job-rich.
+  pfn commute_destination(c : City, i : Int) : Bool do
+    let kind = get(c.plants, i)
+    let staff_only = (facility_jobs(kind) > 0 && kind != 16) || get(c.stops, i) == 3 || get(c.stops, i) == 4
+    !staff_only && job_slots(c, i) > 0
+  end
   pfn sources(c : City, running : NativeIntArr, costs : NativeIntArr, i : Int) : NativeIntArr do
     if i >= count() do costs else
-      sources(c, running, if job_slots(c, i) > 0 do seed_jobs(c, running, NativeArray.set_int(costs, i, 0), i, 0) else costs end, i + 1)
+      sources(c, running, if commute_destination(c, i) do seed_jobs(c, running, NativeArray.set_int(costs, i, 0), i, 0) else costs end, i + 1)
     end
   end
   fn job_access(c : City) : NativeIntArr do
@@ -6678,44 +6686,11 @@ mod Ur.Sim do
       open_religion_day({ next with calendar_day: 0, street_day: weekday, clock_ms: 0 })
     end
   end
-  fn advance_day(c : City) : City do
-    let traffic = if Option.is_some(c.freight) do road_traffic(c, access(c)) else NativeArray.make_int(count() * 4, 0) end
-    advance_day_with_traffic(c, traffic)
+  -- The road load a day runs under: the commute and freight traffic of the
+  -- morning's city, as reported by `stats`.
+  fn day_traffic(c : City) : NativeIntArr do
+    let routes = access(c)
+    let running = transit_service(c, power_total(generation(c, routes)))
+    (transport_report_with(c, routes, running, population(c), jobs(c))).traffic
   end
-  pfn play_month(c : City, traffic : NativeIntArr, day : Int, sites : List(Int), haul : Bool) : City do
-    let c = open_religion_day({ c with calendar_day: day })
-    let c = weather_day(c, sites)
-    let day_number = waste_date(c)
-    let c = if haul do freight_day(sanitation_day(c, traffic, day_number), traffic, day_number) else c end
-    if day + 1 == days_per_month() do c else
-      let c = if valid(c.harbour) && (day + 1) % utility_sample_days() == 0 do
-        let roads = access(c)
-        record_service(c, utility_report(c, roads, generation(c, roads), population(c)))
-      else c end
-      let next = { c with street_day: (c.street_day + 1) % 7 }
-      play_month(next, traffic, day + 1, sites, haul)
-    end
-  end
-  fn tick(c : City) : City do
-    let haul = patron(c) > 0 || Option.is_some(c.freight) || (c.waste_live && valid(c.harbour) &&
-      (c.calendar_day > 0 || valid(waste_depot(c, 0)) || !List.is_empty(c.waste_runs)))
-    let zero = NativeArray.make_int(10560, 0)
-    let traffic = if haul do road_traffic(c, access(c)) else zero end
-    let sites = weather_sites(c, 0, Nil)
-    let snapshot_day = c.calendar_day
-    let snapshot_weekday = c.street_day
-    let c = play_month(c, traffic, c.calendar_day, sites, haul)
-    let c = if !haul && c.waste_live && valid(c.harbour) do
-      let (stock, generated) = waste_add_stock(c, 0, -1, c.waste_stock, 0)
-      { c with trash: c.trash + generated, waste_stock: stock,
-        waste_log: waste_increment(NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(c.waste_log, 7, 0), 8, 0), 9, 0), 0, generated) }
-    else c end
-    -- Bulk advances settle from the starting day's economic snapshot. The
-    -- weather, cargo, and sanitation state still advances through every day.
-    let month_end = if patron(c) > 0 do c.calendar_day else snapshot_day end
-    let c = if valid(c.harbour) do update_facility_staff(c) else c end
-    let monthly = settle_month({ c with calendar_day: month_end, street_day: snapshot_weekday })
-    open_religion_day({ monthly with calendar_day: 0, clock_ms: 0, street_day: snapshot_weekday })
-  end
-  fn advance(c : City, months : Int) : City do if months <= 0 do c else advance(tick(c), months - 1) end end
 end

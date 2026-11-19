@@ -56,7 +56,7 @@ mod NewRegionTest do
     Test.assert_true(initial.work == 0 && S.housing_demand(initial) > 0 &&
       S.reason_with(city, homes, initial) == "Eligible for development. Waiting for private investment.",
       "Founding households create housing demand before jobs exist")
-    let finished = S.advance(city, 8)
+    let finished = Ur.Clock.advance(city, 8)
     Test.assert_true(S.get(finished.buildings, homes) > 0 && finished.founders < city.founders,
       "Serviced housing is built and founding households move in")
   end

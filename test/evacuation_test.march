@@ -44,7 +44,7 @@ mod EvacuationTest do
     let crowded = { wet with buildings: NativeArray.set_int(wet.buildings, home, 7) }
     let no_room = Ur.Evacuation.plan(crowded, S.access(crowded), NativeArray.make_int(S.count(), 0))
     Test.assert_eq_int(S.get(no_room, home), 0, "a school cannot accept more households than its available space")
-    let drill = S.advance_day(Ur.Scenario.evacuation_site())
+    let drill = Ur.Clock.day(Ur.Scenario.evacuation_site())
     let orders = Ur.Evacuation.plan(drill, S.access(drill), NativeArray.make_int(S.count(), 0))
     let demo_home = Ur.Scenario.evacuation_home()
     let demo_school = S.index(10, 18)

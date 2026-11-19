@@ -4,7 +4,7 @@ mod UtilityDisruptionTest do
   alias Ur.Sim as S
 
   pfn days(city : Ur.Sim.City, remaining : Int) : Ur.Sim.City do
-    if remaining == 0 do city else days(S.advance_day(city), remaining - 1) end
+    if remaining == 0 do city else days(Ur.Clock.day(city), remaining - 1) end
   end
 
   pfn reload(city : Ur.Sim.City) : Ur.Sim.City do
@@ -56,21 +56,21 @@ mod UtilityDisruptionTest do
     Test.assert_eq_int(S.utility_disruption(saved, business), 10, "a save retains the partial outage streak")
     let restored = days({ saved with grid: healthy.grid }, S.utility_sample_days())
     Test.assert_eq_int(S.utility_disruption(restored, home), 0, "restoring service clears the outage streak")
-    let first_month = S.tick(saved)
+    let first_month = Ur.Clock.month(saved)
     Test.assert_false(S.business_closed(first_month, business), "the firm survives below the sustained failure threshold")
-    let failed = S.tick(first_month)
+    let failed = Ur.Clock.month(first_month)
     Test.assert_true(S.business_closed(failed, business), "a sustained local outage makes a business fail at settlement")
     Test.assert_true(S.get(failed.home_arrivals, vacant) > 0, "households find a working utility connection they can afford")
     Test.assert_true(List.any(S.households_at(failed, vacant), fn key -> List.any(keys, fn original -> key == original)),
       "an outage relocation keeps household identities")
-    let repaired = S.tick({ failed with grid: healthy.grid })
+    let repaired = Ur.Clock.month({ failed with grid: healthy.grid })
     Test.assert_eq_int(S.utility_disruption(repaired, business), 0, "repairs clear the barrier to reopening")
     let blocked = { healthy with buildings: NativeArray.set_int(healthy.buildings, vacant, 0),
       zones: NativeArray.set_int(healthy.zones, vacant, 0), grid: cut.grid }
-    let waiting = S.tick(S.tick(blocked))
+    let waiting = Ur.Clock.month(Ur.Clock.month(blocked))
     Test.assert_true(S.occupied_homes(waiting, home) > 0 && S.get(waiting.housing_search, home) > 0,
       "families stay and search when a serviced home is unavailable")
-    let gone = S.advance(waiting, S.housing_grace())
+    let gone = Ur.Clock.advance(waiting, S.housing_grace())
     Test.assert_eq_int(S.occupied_homes(gone, home), 0, "families leave after the search window expires")
   end
 
