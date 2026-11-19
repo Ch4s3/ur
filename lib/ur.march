@@ -844,7 +844,8 @@ mod Ur do
         else if demo == 6 do Ur.Scenario.street_district()
         else if demo == 7 do Ur.Scenario.parks_and_crossings()
         else if demo == 8 do Ur.Scenario.green_district()
-        else if demo == 9 do Ur.Scenario.emergency_district()
+        else if demo == 9 do
+          if Authority.must(Env.get_int("UR_COMMUNITY_DEMO", 0)) > 0 do Ur.Scenario.community_demo() else if Authority.must(Env.get_int("UR_EMERGENCY_BAYS", 0)) > 0 do Ur.Scenario.emergency_bay_demo() else Ur.Scenario.emergency_district() end end
         else if fire_demo do Ur.Scenario.fire_recovery_district()
         else if demo == 11 do Ur.Scenario.traffic_district()
         else if demo == 12 do Ur.Scenario.council_district()

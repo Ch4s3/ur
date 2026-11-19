@@ -50,10 +50,11 @@ mod Ur.Toolbar do
           4 -> [82, 83, 84, 85, 107]
           5 -> [103, 104, 105, 106]
           6 -> [108]
-          7 -> [109, 110]
+          7 -> [109, 110, 112, 113, 115]
+          8 -> [114, 116]
           _ -> Cons(44, Cons(45, Cons(62, Cons(46, Cons(47, Cons(78, Nil))))))
         end
-        { span: 6, pages: ["Services", "Parks", "Street planting", "Education", "Faculties", "Worship", "Disaster", "Expansions"], items: items }
+        { span: 6, pages: ["Services", "Parks", "Street planting", "Education", "Faculties", "Worship", "Disaster", "Expansions", "Community"], items: items }
       6 -> { span: 2, pages: Nil, items: Cons(6, Cons(7, Nil)) }
       7 ->
         let items = match page do
@@ -142,6 +143,10 @@ mod Ur.Toolbar do
       108 | 110 -> "clinic"
       109 -> "school"
       111 -> "plant"
+      112 -> "fire"
+      113 -> "police"
+      115 -> "clinic"
+      114 | 116 -> "school"
       75 | 63 | 67 -> "clear"
       64 | 70 -> "housing"
       71 | 72 | 73 | 74 -> "promenade"

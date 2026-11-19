@@ -209,6 +209,27 @@ mod Ur.Scenario do
     c
   end
 
+  pfn show_emergency_bays(c : Ur.Sim.City, lot : Int) : Ur.Sim.City do
+    if lot == S.count() do c else
+      let kind = S.get(c.plants, lot)
+      let expansion = if kind == 20 || kind == 25 do 4 else if kind == 21 do 5 else 0 end end
+      let c = if expansion == 0 do c else { c with facility_expansion: NativeArray.set_int(c.facility_expansion, lot, expansion) } end
+      show_emergency_bays(c, lot + 1)
+    end
+  end
+  fn emergency_bay_demo() : Ur.Sim.City do show_emergency_bays(emergency_district(), 0) end
+  fn community_demo() : Ur.Sim.City do
+    let c = emergency_bay_demo()
+    let center = S.index(31, 21)
+    let library = S.index(32, 21)
+    { c with founding_map: false,
+      facility_expansion: NativeArray.set_int(c.facility_expansion, S.index(34, 23), 6),
+      buildings: NativeArray.set_int(NativeArray.set_int(c.buildings, center, 0), library, 0),
+      construction: NativeArray.set_int(NativeArray.set_int(c.construction, center, 0), library, 0),
+      plants: NativeArray.set_int(NativeArray.set_int(c.plants, center, 43), library, 44),
+      facility_staff: NativeArray.set_int(NativeArray.set_int(c.facility_staff, center, 3), library, 3) }
+  end
+
   fn emergency_district() : Ur.Sim.City do
     let hospital = S.index(34, 23)
     let c = S.act(green_district(), hospital, 7)

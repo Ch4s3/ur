@@ -50,7 +50,9 @@ mod Ur.Hud do
       "Civic  | " ++ (if S.has_civic(mask, 1) do " School" else "" end) ++
       (if S.has_civic(mask, 2) do " Clinic" else "" end) ++
       (if S.has_civic(mask, 4) do " Fire" else "" end) ++
-      (if S.has_civic(mask, 8) do " Police" else "" end)
+      (if S.has_civic(mask, 8) do " Police" else "" end) ++
+      (if S.has_civic(mask, 16) do " Community" else "" end) ++
+      (if S.has_civic(mask, 32) do " Library" else "" end)
     end
   end
   pfn expansion_panel(a : Strata.Ui.Ui, c : Ur.Sim.City, x : Float, top : Float) : Strata.Ui.Ui do

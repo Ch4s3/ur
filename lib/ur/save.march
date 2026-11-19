@@ -372,7 +372,7 @@ mod Ur.Save do
         let? outcome = integer(o)
         let? r = field(j, "route")
         let? route = items(r, parcel, 2640)
-        let admitted = S.valid(facility) && bed >= 0 && bed < 4 && transport >= 2 && transport <= 121 &&
+        let admitted = S.valid(facility) && bed >= 0 && bed < 8 && transport >= 2 && transport <= 121 &&
           wait >= 0 && wait <= 120 && stay >= 1 && stay <= 133 && (outcome == 1 || outcome == 2) && !List.is_empty(route)
         let unadmitted = facility == -1 && bed == -1 && transport == 0 && wait == 0 && stay == 0 && outcome == 3 && List.is_empty(route)
         if admitted || unadmitted do Ok(Some({ facility: facility, bed: bed, transport: transport, wait: wait, stay: stay, outcome: outcome, route: route }))
@@ -862,7 +862,7 @@ mod Ur.Save do
     let? construction = array(raw_construction, 2640, 4)
     let? paused_facilities = optional_array(j, "paused_facilities", 1)
     let? raw_plants = field(j, "plants")
-    let? plants = array(raw_plants, 2640, 42)
+    let? plants = array(raw_plants, 2640, 44)
     let? raw_pipes = field(j, "pipes")
     let? pipes = array(raw_pipes, 2640, 2)
     let? raw_grid = field(j, "grid")
@@ -874,7 +874,7 @@ mod Ur.Save do
       None -> Ok(NativeArray.make_int(64, 0))
       Some(value) -> array(value, 64, 1)
     end
-    let? facility_expansion = optional_array(j, "facility_expansion", 3)
+    let? facility_expansion = optional_array(j, "facility_expansion", 6)
     let? facility_staff = match Json.get(j, "facility_staff") do
       None -> Ok(NativeArray.make_int(2640, 0))
       Some(value) -> array(value, 2640, 1000000)

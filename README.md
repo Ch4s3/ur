@@ -211,6 +211,19 @@ Select **Layers → Civic services** to see coverage. Hover over a housing or
 mixed-use parcel to see which of the four services reach it. Try a serviced
 district with `UR_DEMO=5 ./run.sh`.
 
+The **Civic → Community** menu offers a community center and a library.
+Staffed centers improve nearby civic-service access. A staffed, road-connected
+library improves local access and makes further education more attractive;
+course capacity, job opportunities, and tuition still influence enrollment.
+Use **Civic → Expansions** to add classrooms, clinic or hospital beds, and
+additional fire or police vehicle bays. These additions cost money to build
+and operate. The vehicle bays need an additional worker and allow a second
+crew to respond while the first is busy. **Civic → Disaster** includes a
+staffed emergency shelter for displaced households.
+
+A civic visual review scene is available with
+`UR_DEMO=9 UR_COMMUNITY_DEMO=1 ./run.sh`.
+
 ## Public religion
 
 Open **Details → Services → Religion** to compare five patrons and their
@@ -301,7 +314,7 @@ the evacuation.
 The **Fires** and **Medical calls** layers also filter the Safety chart.
 Ambulances pick patients up and deliver them to the clinic or hospital that
 can start treatment soonest. Clinics have one treatment bed and hospitals
-have four. Pickup, traffic, and bed waits can cause complications. Medical
+have four; a clinic wing adds one, and a hospital ward adds two when fully staffed. Pickup, traffic, and bed waits can cause complications. Medical
 charts show admissions, time to treatment, and stabilized patients.
 Try the dispatch showcase with `UR_DEMO=9 ./run.sh` or the planted district
 with `UR_DEMO=8 ./run.sh`.

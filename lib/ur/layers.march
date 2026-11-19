@@ -140,9 +140,9 @@ mod Ur.Layers do
       10 ->
         let mask = S.get(st.civic, i)
         let zone = S.get(c.zones, i)
-        if mask == 15 do 11
+        if mask % 16 == 15 do 11
         else if mask % 4 > 0 do 20
-        else if mask > 0 do 10
+        else if mask % 16 > 0 do 10
         else if zone == 1 || zone == 3 do 6 else -1 end end end end
       30 ->
         let stock = S.get(c.waste_stock, i)

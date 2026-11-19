@@ -1,0 +1,48 @@
+mod CommunityCentreTest do
+  needs IO
+  needs IO.Console
+  needs IO.Clock
+  needs IO.Process
+  needs IO.FileRead
+  needs IO.FileWrite
+  alias Ur.Sim as S
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let c = S.new()
+    let center = S.index(10, 19)
+    let home = S.index(10, 18)
+    let roads = NativeArray.set_int(c.roads, S.index(9, 19), 1)
+    let base = { c with heights: NativeArray.make_int(S.count(), 16), roads: roads,
+      plants: NativeArray.set_int(c.plants, center, 0), buildings: NativeArray.set_int(c.buildings, center, 0), cash: 10000 }
+    let placed = S.act(base, center, 114)
+    Test.assert_eq_int(S.get(placed.plants, center), 43, "Community center can be built beside connected roads")
+    let staffed = { placed with facility_staff: NativeArray.set_int(placed.facility_staff, center, 3) }
+    let coverage = S.civic_access(staffed)
+    Test.assert_true(S.has_civic(S.get(coverage, home), 16), "Reachable residents have community access")
+    let residential = { staffed with zones: NativeArray.set_int(staffed.zones, home, 1) }
+    let complete = NativeArray.set_int(coverage, home, 15)
+    let with_community = NativeArray.set_int(coverage, home, 31)
+    Test.assert_eq_int(S.civic_density(residential, complete, home, 3), S.civic_density(residential, with_community, home, 3),
+      "Community coverage preserves existing civic density eligibility")
+    let stopped = { staffed with facility_staff: NativeArray.set_int(staffed.facility_staff, center, 1) }
+    Test.assert_false(S.has_civic(S.get(S.civic_access(stopped), home), 16), "Unstaffed community centers do not supply service")
+    let library = S.act({ base with plants: NativeArray.set_int(base.plants, center, 0) }, center, 116)
+    Test.assert_eq_int(S.get(library.plants, center), 44, "Library can be built")
+    let library = { library with facility_staff: NativeArray.set_int(library.facility_staff, center, 3) }
+    Test.assert_true(S.has_civic(S.get(S.civic_access(library), home), 32), "Staffed library provides local learning access")
+    let labor = { workforce: 20, employed: 10, unemployed: 10, vacancies: 0, wages: 0, local_income: None, fares: None }
+    let positions = NativeArray.make_int(9, 0)
+    Test.assert_true(S.study_appeal(library, labor, positions, 2, true) > S.study_appeal(library, labor, positions, 2, false),
+      "Library improves the appeal of further education")
+    let library_game = { city: library, cx: 78.0, cz: 151.0, zoom: 52.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(library_game)) do
+      Ok(loaded) -> Test.assert_eq_int(S.get(loaded.city.plants, center), 44, "Library survives save and load")
+      Err(error) -> panic(error)
+    end
+    let game = { city: staffed, cx: 78.0, cz: 151.0, zoom: 52.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(game)) do
+      Ok(loaded) -> Test.assert_eq_int(S.get(loaded.city.plants, center), 43, "Community center survives save and load")
+      Err(error) -> panic(error)
+    end
+  end
+end
