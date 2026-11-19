@@ -823,7 +823,8 @@ mod Ur.Scene do
     if tram do box(m, 7, 8, 2, 3, 1, 1, 19)
     else paired_trim(m, 7, 4, 2, 2, 5, 19) end
   end
-  pfn pose_vehicle(slot : Int, mesh : Mesh, x : Float, y : Float, z : Float, dx : Float, dz : Float, length : Float, width : Float, lights : Bool) : Unit do
+  -- [blocks]: whether walkers yield to it. Only a vehicle in traffic does; a parked car is street furniture.
+  pfn pose_vehicle(slot : Int, mesh : Mesh, x : Float, y : Float, z : Float, dx : Float, dz : Float, length : Float, width : Float, lights : Bool, blocks : Bool) : Unit do
     let yaw = Math.atan2(0.0 -. dz, dx)
     let cosine = Math.cos(yaw)
     let sine = Math.sin(yaw)
@@ -836,11 +837,11 @@ mod Ur.Scene do
     else mesh end
     if Vk.body_begin(slot) && Vk.chunk_part(0, mesh.words, mesh.quads) && Vk.chunk_commit() do
       Vk.slot_pose(slot, low_x *. 0.25, y *. 0.25, low_z *. 0.25, 0.0, Math.sin(yaw *. 0.5), 0.0, Math.cos(yaw *. 0.5))
-      Vk.footprint(slot, x, y, z, cosine, 0.0 -. sine, length, width)
+      if blocks do Vk.footprint(slot, x, y, z, cosine, 0.0 -. sine, length, width) else () end
     else Ur.AppError.stop("Vehicle pose upload failed") end
   end
   pfn posed_vehicle(slot : Int, mesh : Mesh, x : Float, y : Float, z : Float, dx : Float, dz : Float, length : Float, width : Float) : Unit do
-    pose_vehicle(slot, mesh, x, y, z, dx, dz, length, width, true)
+    pose_vehicle(slot, mesh, x, y, z, dx, dz, length, width, true, true)
   end
   fn begin_vehicle_lights(hour : Int) : Unit do
     Vk.footprints_begin()
@@ -1595,7 +1596,7 @@ mod Ur.Scene do
       Some(m) ->
         if driver < 0 do Vk.chunk_free(slot) else
           let p = sanitation_vehicle(c, m, section)
-          if p.visible do pose_vehicle(slot, trash_truck_mesh(), p.x, p.y, p.z, p.dx, p.dz, 11.0, 6.0, night)
+          if p.visible do pose_vehicle(slot, trash_truck_mesh(), p.x, p.y, p.z, p.dx, p.dz, 11.0, 6.0, night, true)
           else Vk.chunk_free(slot) end
         end
       None -> Vk.chunk_free(slot)
@@ -2063,15 +2064,14 @@ mod Ur.Scene do
     let m = box(m, 2, 4, 0, 2, 1, 3, colour)
     let m = box(m, 6, 1, 1, 1, 1, 1, 17)
     let m = paired_trim(m, 0, 1, 1, 1, 3, if moving && night do 30 else 6 end)
-    pose_vehicle(slot, m, pose.x, pose.y, pose.z, pose.dx, pose.dz, 7.0, 3.0, moving)
+    pose_vehicle(slot, m, pose.x, pose.y, pose.z, pose.dx, pose.dz, 7.0, 3.0, moving, moving)
   end
   pfn parked_car(c : Ur.Sim.City, id : Int, parking : Int, slot : Int, reuse : Bool) : Unit do
     match Ur.Citizens.parking_at(parking) do
       Some(p) ->
         if p.kind < 4 && S.motor_street(c, p.road) do
           let pose = parked_pose(c, p)
-          if reuse do Vk.footprint(slot, pose.x, pose.y, pose.z, pose.dx, pose.dz, 7.0, 3.0)
-          else draw_car(id, pose, slot, false, false) end
+          if reuse do () else draw_car(id, pose, slot, false, false) end
         else if reuse do () else Vk.chunk_free(slot) end end
       None -> if reuse do () else Vk.chunk_free(slot) end
     end
@@ -2241,11 +2241,52 @@ mod Ur.Scene do
   fn clear_scheduled_walks(roster : Ur.Citizens.Roster) : Unit do
     Ur.Citizens.each_walk(roster, fn (slot, _) -> Vk.chunk_free(citizen_walker_slot(slot)))
   end
-  fn scheduled_walks(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, roster : Ur.Citizens.Roster) : Unit do
+  -- Whether a walker on the leg from lot [a] to lot [b] can be on screen: either end within the view,
+  -- widened by a lot and a walker's height. A walk leg spans one lot, so a walker that leaves this test
+  -- is already a lot beyond the edge.
+  -- world_point's projection with its rotation worked out once, for testing many lots in one frame.
+  type ScreenTest = { view : Projection, sy : Float, cy : Float, scale : Float, margin : Float }
+  pfn screen_test(view : Projection) : ScreenTest do
+    let scale = view.w /. (2.0 *. view.zoom)
+    { view: view, sy: Math.sin(view.yaw), cy: Math.cos(view.yaw), scale: scale, margin: 8.0 *. scale *. 1.5 +. 40.0 }
+  end
+  pfn lot_on_screen(c : Ur.Sim.City, t : ScreenTest, lot : Int) : Bool do
+    if !S.valid(lot) do false else
+      let x = int_to_float(lot % S.width() * 8 + 4) -. t.view.cx
+      let z = int_to_float(lot / S.width() * 8 + 4) -. t.view.cz
+      let y = int_to_float(walking_height(c, lot)) *. 0.25 -. 3.0
+      let sx = t.view.w *. 0.5 +. (x *. t.cy -. z *. t.sy) *. t.scale
+      let sy = t.view.h *. 0.5 -. (y *. 0.795 -. (x *. t.sy +. z *. t.cy) *. 0.607) *. t.scale
+      sx >= 0.0 -. t.margin && sx <= t.view.w +. t.margin && sy >= 0.0 -. t.margin && sy <= t.view.h +. t.margin
+    end
+  end
+  -- Whether a walker on the leg from lot [a] to lot [b] can be on screen: either end within the view,
+  -- widened by a lot and a walker's height. A walk leg spans one lot, so a walker that leaves this test
+  -- is already a lot beyond the edge.
+  pfn walk_on_screen(c : Ur.Sim.City, t : ScreenTest, a : Int, b : Int) : Bool do
+    lot_on_screen(c, t, a) || lot_on_screen(c, t, b)
+  end
+  -- Pose the scheduled walkers in view; hide the rest without posing them. A hidden walker is posed
+  -- again in the first frame it can be seen, so a stale pose is never drawn. When a voxel covers less
+  -- than 1.5 pixels, half of them are posed each frame, alternating, since a step of a voxel then
+  -- moves a walker about a pixel.
+  fn scheduled_walks(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, roster : Ur.Citizens.Roster, view : Projection, frame : Int) : Unit do
+    let test = screen_test(view)
+    let stagger = test.scale *. 0.25 < 1.5
     Ur.Citizens.each_walk_progress(roster, fn (slot, person, progress) ->
-      if citizen_walker_slot(slot) < citizen_chunk_slots() do
-        citizen_vehicle(c, map, person, progress, citizen_walker_slot(slot), false)
-      else () end)
+      let chunk = citizen_walker_slot(slot)
+      if chunk >= citizen_chunk_slots() do () else
+        let seen = match person.route do
+          Cons(a, Cons(b, _)) -> walk_on_screen(c, test, a, b)
+          _ -> true
+        end
+        if !seen do Vk.chunk_show(chunk, false)
+        else if stagger && (slot + frame) % 2 != 0 do ()
+        else
+          citizen_vehicle(c, map, person, progress, chunk, false)
+          Vk.chunk_show(chunk, true)
+        end end
+      end)
   end
   fn clear_walk_exits(roster : Ur.Citizens.Roster) : Unit do
     List.each(roster.walk_exits, fn slot -> Vk.chunk_free(citizen_walker_slot(slot)))

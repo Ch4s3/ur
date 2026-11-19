@@ -33,7 +33,7 @@ mod Ur.Build do
   fn footprint(tool : Int, anchor : Int, target : Int) : List(Int) do
     if !S.valid(target) do Nil else
       let anchor = if S.valid(anchor) do anchor else target end
-      if S.area_policy_tool(tool) || tool == 2 || tool == 3 || tool == 28 || (tool >= 29 && tool <= 32) do
+      if S.area_policy_tool(tool) || tool == 2 || tool == 3 || tool == 28 || tool == 117 || (tool >= 29 && tool <= 32) do
         let ax = anchor % S.width()
         let az = anchor / S.width()
         let bx = target % S.width()

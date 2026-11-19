@@ -189,10 +189,22 @@ height limit** to preserve low-rise parcels.
 Paint a maximum nuisance level with the four nuisance tools. Quiet parcels
 permit housing. Neighbourhood parcels also allow mixed-use buildings and low
 impact facilities. Commercial parcels admit employment zones and depots.
-Industrial parcels also permit gas plants, nuclear stations, landfills, and
-outfalls. The limits are cumulative. Lowering a limit leaves existing uses in
+Neighborhood parcels permit industrial zoning for workshops; commercial
+limits also allow processors. Industrial limits admit manufacturers, gas plants,
+nuclear stations, landfills, and outfalls. The limits are cumulative. Lowering a limit leaves existing uses in
 place and prevents incompatible new construction or expansion. Mixed-use
 buildings add both households and jobs.
+
+Use **Zoning → Land use → Industrial zone** to reserve land for private
+industry. Buildings grow when connected roads, workers, utilities, and market
+conditions support them. Industrial buildings consume more electricity and
+water than ordinary workplaces, and active sites release air and land pollution
+and neighborhood noise. Workshops, food processors and manufacturers emerge
+from local food production and the availability of trade graduates, with
+different power needs and emissions. Their revenue and emissions scale with
+the number of workers actually assigned to the site. Their businesses pay wages and operating costs and can close during prolonged
+losses or utility outages. Industrial goods and dedicated production deliveries
+are not yet modeled.
 
 ## Civic services
 

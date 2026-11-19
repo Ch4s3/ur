@@ -229,6 +229,17 @@ mod Ur.Scenario do
     end
   end
   fn emergency_bay_demo() : Ur.Sim.City do show_emergency_bays(emergency_district(), 0) end
+  fn industry_demo() : Ur.Sim.City do
+    let c = emergency_bay_demo()
+    let first = S.index(31, 21)
+    let second = S.index(32, 21)
+    { c with founding_map: false,
+      plants: NativeArray.set_int(NativeArray.set_int(c.plants, first, 0), second, 0),
+      zones: NativeArray.set_int(NativeArray.set_int(c.zones, first, 4), second, 4),
+      business_sector: NativeArray.set_int(NativeArray.set_int(c.business_sector, first, 1), second, 2),
+      buildings: NativeArray.set_int(NativeArray.set_int(c.buildings, first, 1), second, 2),
+      storefronts: NativeArray.set_int(NativeArray.set_int(c.storefronts, first, 0), second, 0) }
+  end
   fn community_demo() : Ur.Sim.City do
     let c = emergency_bay_demo()
     let center = S.index(31, 21)

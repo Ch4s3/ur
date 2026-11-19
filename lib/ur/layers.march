@@ -56,7 +56,7 @@ mod Ur.Layers do
       29 -> "Arrows point downwind. Gray: light / blue: moderate / amber: strong."
       28 -> "Amber: sponsor ward   Red: target parcel   Cyan/green: represented"
       27 -> "Cyan: closed to cars   Amber: scheduled   Gray: eligible street"
-      26 -> "Noise from bars and turbines · Amber audible / red loud."
+      26 -> "Noise from industry, bars and turbines · Amber audible / red loud."
       22 -> "Orange: closed for repairs. Red: rebuilding after a fire."
       21 -> "Latest month · Cyan stabilized / amber complications / red no admission."
       19 -> "Latest month · Red unanswered / amber response / orange fire."

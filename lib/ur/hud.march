@@ -241,7 +241,7 @@ mod Ur.Hud do
           label(a, x +. 279.0, top +. 349.0, 11.0, "Rent pressure from move-ins  +$" ++ int_to_string(S.neighborhood_rent(c, hover)), false)
         else a end
       else a end
-      let a = if S.get(c.buildings, hover) > 0 && (zone == 2 || S.shop_space(c, hover)) do
+      let a = if S.get(c.buildings, hover) > 0 && (zone == 2 || zone == 4 || S.shop_space(c, hover)) do
         let a = account_line(a, x, top +. 404.0, "Business net", S.business_accounts(c, st.routes, st.labor, st.people, st.work, hover))
         label(a, x, top +. 438.0, 11.0, S.shop_market_reason(c, st, hover), S.business_closed(c, hover) || S.storefront(c, hover) == 3)
       else a end
@@ -1303,6 +1303,7 @@ mod Ur.Hud do
     match S.get(c.zones, lot) do
       1 -> "Housing zone"
       2 -> "Employment zone"
+      4 -> "Industrial zone"
       _ -> "Mixed-use zone"
     end
   end

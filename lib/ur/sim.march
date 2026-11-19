@@ -85,10 +85,10 @@ mod Ur.Sim do
   fn building_use(c : City, i : Int) : BuildingUse do
     let zone = get(c.zones, i)
     let business = storefront(c, i)
-    let homes = zone != 2 && get(c.buildings, i) > 1
+    let homes = (zone == 1 || zone == 3) && get(c.buildings, i) > 1
     if get(c.buildings, i) == 0 do Vacant
     else if ground_at(c, i) == 1 do
-      if zone == 2 do Workplace else if zone > 0 do Apartments else Vacant end end
+      if zone == 2 || zone == 4 do Workplace else if zone > 0 do Apartments else Vacant end end
     else if business == 1 do (if homes do GroceryHomes else Grocery end)
     else if business == 2 do (if homes do BarHomes else Bar end)
     else if business == 3 do EmptyShop
@@ -101,6 +101,7 @@ mod Ur.Sim do
           _ -> Workplace
         end
         3 -> if i % 2 == 0 do GroceryHomes else RestaurantHomes end
+        4 -> Workplace
         _ -> Vacant
       end
     end end end end end
@@ -122,7 +123,13 @@ mod Ur.Sim do
   fn building_name(c : City, i : Int) : String do
     match building_use(c, i) do
       Apartments -> "Apartments"
-      Workplace -> "Workplace"
+      Workplace -> if get(c.zones, i) == 4 do
+        match get(c.business_sector, i) do
+          1 -> "Food processor"
+          2 -> "Manufacturer"
+          _ -> "Workshop"
+        end
+      else "Workplace" end
       Grocery -> "Grocery store"
       Restaurant -> "Restaurant"
       GroceryHomes -> if get(c.buildings, i) == 1 do "Grocery store" else "Grocery + apartments" end
@@ -1821,8 +1828,15 @@ mod Ur.Sim do
   pfn job_capacity(c : City, i : Int) : Int do
     let floors = get(c.buildings, i)
     let zone = get(c.zones, i)
-    if zone == 2 do (if storefront(c, i) == 3 do clamp(floors - 1, 0, floors) * 12 else floors * 12 end)
-    else if commercial_ground(c, i) && storefront(c, i) != 3 && floors > 0 do 6 else 0 end end
+    if zone == 4 do floors * 8
+    else if zone == 2 do (if storefront(c, i) == 3 do clamp(floors - 1, 0, floors) * 12 else floors * 12 end)
+    else if commercial_ground(c, i) && storefront(c, i) != 3 && floors > 0 do 6 else 0 end end end
+  end
+  fn industrial_staffing(c : City, lot : Int) : Int do
+    let positions = job_capacity(c, lot)
+    let recorded = get(c.facility_staff, lot)
+    if get(c.zones, lot) != 4 || positions <= 0 || recorded == 0 do 100
+    else clamp((recorded - 1) * 100 / positions, 0, 100) end
   end
   fn facility_jobs(kind : Int) : Int do
     match kind do
@@ -2187,7 +2201,7 @@ mod Ur.Sim do
       1 -> 1
       2 | 3 -> 3
       4 -> 8
-      _ -> if get(c.zones, i) == 2 do get(c.business_sector, i) else 0 end
+      _ -> if get(c.zones, i) == 4 do (if get(c.business_sector, i) == 2 do 2 else 0 end) else if get(c.zones, i) == 2 do get(c.business_sector, i) else 0 end end
     end
     end end end end end end
   end
@@ -2379,14 +2393,14 @@ mod Ur.Sim do
       let trade = graduates(c, 2)
       let secondary = graduates(c, 1) + degree + trade
       let specialist = 4 + (i % 13 + i / width()) % 4
-      let sector = if !eligible do 0
+      let sector = if get(c.zones, i) == 4 do get(sectors, i) else if !eligible do 0
         else if get(sectors, i) > 0 && !business_closed(c, i) do get(sectors, i)
         else if building_access(c, routes, i) < 0 || building_offline(c, i) || (get(c.business_age, i) > 2 && !business_closed(c, i)) do 0
         else if roll < 3 && specialist_graduates(c, specialist) >= 2 do specialist
         else if roll < 3 && degree >= 6 && degree * 100 >= 8 * workers do 3
         else if roll < 6 && trade >= 6 && trade * 100 >= 8 * workers do 2
         else if roll < 8 && secondary >= 8 && secondary * 100 >= 14 * workers do 1
-        else 0 end end end end end end end
+        else 0 end end end end end end end end
       let next = if get(sectors, i) == sector do sectors else NativeArray.set_int(sectors, i, sector) end
       open_specialists(c, routes, people, i + 1, next)
     end
@@ -2603,7 +2617,7 @@ mod Ur.Sim do
     if i >= count() do a else
       let kind = get(c.plants, i)
       let active = building_access(c, roads, i) >= 0
-      let industry = if get(c.zones, i) == 2 do get(c.buildings, i) else 0 end
+      let industry = if get(c.zones, i) == 4 && active && !business_closed(c, i) && !building_offline(c, i) do get(c.buildings, i) * (3 + 2 * get(c.business_sector, i)) * industrial_staffing(c, i) / 100 else if get(c.zones, i) == 2 do get(c.buildings, i) else 0 end end
       let litter = if c.waste_live do clamp(waste_overflow(c, i) / 3, 0, 25)
         else if get(c.buildings, i) > 0 && backlog > 0 do clamp(backlog / 32 + 1, 1, 10) else 0 end end
       let emissions = (if kind == 17 && active && (!c.waste_live || get(c.waste_sites, i) > 0) do 7 else 0 end) +
@@ -2619,7 +2633,8 @@ mod Ur.Sim do
     if i == count() do out else
       let gas = get(c.plants, i) == 1 && generator_online(c, i) && c.cash >= 16 && distance(grid, i) >= 0 && building_access(c, roads, i) >= 0
       let exhaust = if motor_street(c, i) do clamp((road_load(traffic, i) - 14) / 3, 0, 20) else 0 end
-      let level = clamp(get(c.air_pollution, i) - 5, 0, 100) + exhaust + (if gas do (if get(c.facility_expansion, i) == 3 do 16 else 32 end) else 0 end)
+      let industry = if get(c.zones, i) == 4 && !business_closed(c, i) && !building_offline(c, i) && building_access(c, roads, i) >= 0 do get(c.buildings, i) * (4 + 4 * get(c.business_sector, i)) * industrial_staffing(c, i) / 100 else 0 end
+      let level = clamp(get(c.air_pollution, i) - 5, 0, 100) + exhaust + industry + (if gas do (if get(c.facility_expansion, i) == 3 do 16 else 32 end) else 0 end)
       air_sources(c, roads, grid, traffic, i + 1, NativeArray.set_int(out, i, level))
     end
   end
@@ -2731,6 +2746,7 @@ mod Ur.Sim do
   pfn record_service(c : City, report : UtilityReport) : City do
     { c with utility_service: service_history(c, report, 0, c.utility_service) }
   end
+  fn industrial_power(c : City, lot : Int) : Int do 8 + 4 * clamp(get(c.business_sector, lot), 0, 2) end
   pfn utility_loads(c : City, people : Int, housing : Int, lot : Int, seen : Int, watered : Int, cooling : Int, loads : UtilityLoads) : UtilityLoads do
     if lot == count() do loads else
       let homes = occupied_homes(c, lot) * 4
@@ -2743,11 +2759,11 @@ mod Ur.Sim do
       let floors = if building_offline(c, lot) do 0 else get(c.buildings, lot) end
       -- Keep a service allowance for business premises, including a vacant
       -- shop that needs working utilities before another tenant can open.
-      let commercial = if job_capacity(c, lot) > 0 do floors * 2 else 0 end
+      let commercial = if job_capacity(c, lot) > 0 do floors * (if get(c.zones, lot) == 4 do 6 else 2 end) else 0 end
       let water = clamp(residents - away, 0, residents) + guests + commercial
       let sewer = (watered + water) * 3 / 4 - watered * 3 / 4
       let loads = if floors == 0 && water == 0 do loads else
-        let power = floors * (4 + cooling_load(c, lot, cooling)) + (guests + 3) / 4
+        let power = floors * ((if get(c.zones, lot) == 4 do industrial_power(c, lot) else 4 end) + cooling_load(c, lot, cooling)) + (guests + 3) / 4
         { electric: NativeArray.set_int(loads.electric, lot, power),
           water: NativeArray.set_int(loads.water, lot, water), sewer: NativeArray.set_int(loads.sewer, lot, sewer) }
       end
@@ -2968,7 +2984,7 @@ mod Ur.Sim do
       let zone = get(c.zones, i)
       let served = zone > 0 && building_access(c, roads, i) >= 0 && distance(grid, i) >= 0 && distance(pipes, i) >= 0
       startup_zones(c, roads, grid, pipes, i + 1, homes || (served && (zone == 1 || zone == 3)),
-        jobs || (served && (zone == 2 || zone == 3)))
+        jobs || (served && (zone == 2 || zone == 3 || zone == 4)))
     end end
   end
   pfn startup_step(c : City, roads : NativeIntArr, water : Services, power : Int, used : Int, people : Int, work : Int) : Int do
@@ -3114,6 +3130,7 @@ mod Ur.Sim do
       111 -> "Install gas exhaust filter"
       109 -> "Add classrooms"
       110 -> "Add clinic wing"
+      117 -> "Industrial zone"
       99 -> "Upgrade storm drainage"
       100 -> "Build seawall"
       101 -> "Toggle emergency pumping"
@@ -3185,6 +3202,7 @@ mod Ur.Sim do
   end
   fn cost(c : City, i : Int, tool : Int) : Int do
     match tool do
+      117 -> 20
       99 -> 180
       100 -> 4200
       87 -> 260
@@ -3288,7 +3306,7 @@ mod Ur.Sim do
     end
   end
   pfn use_nuisance(zone : Int) : Int do
-    if zone == 2 do 2 else if zone == 3 do 1 else 0 end end
+    if zone == 4 do 1 else if zone == 2 do 2 else if zone == 3 do 1 else 0 end end end
   end
   fn frequency(c : City, i : Int) : Int do clamp(get(c.service, i), 1, 3) end
   pfn local_trips(c : City, i : Int, d : Int, total : Int) : Int do
@@ -3814,7 +3832,7 @@ mod Ur.Sim do
       let flow = if zone > 0 || get(running, i) == 2 do walk_footfall(c, running, riders, i, -1, 3, 0, stop_footfall(c, running, riders, i)) else 0 end
       let previous = get(c.storefronts, i)
       let bar_threshold = if quiet_at(c, i) == 1 do 20 else 27 end
-      let shop = if zone == 0 || rule == 1 do 0
+      let shop = if zone == 0 || zone == 4 || rule == 1 do 0
         else if building_offline(c, i) do previous
         else if floors == 0 do 0
         else if (zone != 1 || floors > 1 || rule == 3) && flow >= (if previous == 1 || previous == 2 do 8 else 12 end) do
@@ -3853,8 +3871,16 @@ mod Ur.Sim do
   fn wind_noise(c : City, lot : Int) : Int do
     if !valid(lot) do 0 else turbine_noise(c, lot % width(), lot / width(), (regional_wind(c)).heading, 0, 0) end
   end
+  pfn industry_noise(c : City, i : Int, d : Int, total : Int) : Int do
+    if d == 5 do total else
+      let lot = if d == 4 do i else neighbour(i, d) end
+      let level = if valid(lot) && get(c.zones, lot) == 4 && !business_closed(c, lot) && !building_offline(c, lot) do
+        get(c.buildings, lot) * (if d == 4 do 4 + get(c.business_sector, lot) * 2 else 2 + get(c.business_sector, lot) end) * industrial_staffing(c, lot) / 100 else 0 end
+      industry_noise(c, i, d + 1, total + level)
+    end
+  end
   fn street_noise(c : City, i : Int) : Int do
-    wind_noise(c, i) + nightlife_neighbors(c, i, 0, if nightlife(c, i) do (if quiet_at(c, i) == 1 do 20 else 7 end) else 0 end)
+    industry_noise(c, i, 0, wind_noise(c, i) + nightlife_neighbors(c, i, 0, if nightlife(c, i) do (if quiet_at(c, i) == 1 do 20 else 7 end) else 0 end))
   end
   fn commute(costs : NativeIntArr, i : Int) : Int do
     near_cost_at(costs, i, 0, if valid(i) do get(costs, i) else 999 end)
@@ -3961,7 +3987,7 @@ mod Ur.Sim do
   end
   pfn apply_tool(c : City, i : Int, tool : Int) : City do
     if c.harbour < 0 do land(c, i)
-    else if !valid(i) || tool < 1 || (tool > 86 && (tool < 93 || tool > 95) && !utility_upgrade(tool) && (tool < 103 || tool > 108) && tool != 114 && tool != 116) do c
+    else if !valid(i) || tool < 1 || (tool > 86 && (tool < 93 || tool > 95) && !utility_upgrade(tool) && (tool < 103 || tool > 108) && tool != 114 && tool != 116 && tool != 117) do c
     else if get(c.property_status, i) > 0 do { c with message: "Manage this condemned property in the Parcel inspector." }
     else if tool == 78 do
       let price = cost(c, i, tool)
@@ -4050,10 +4076,10 @@ mod Ur.Sim do
     else
       let h = get(c.heights, i)
       let occupied = building_offline(c, i) || get(c.parks, i) > 0 || get(c.ferries, i) > 0 || get(c.buildings, i) > 0 || get(c.construction, i) > 0 || get(c.plants, i) > 0 || get(c.roads, i) > 0
-      let target_zone = if tool == 28 do 3 else if tool == 2 || tool == 3 do tool - 1 else 0 end end
+      let target_zone = if tool == 117 do 4 else if tool == 28 do 3 else if tool == 2 || tool == 3 do tool - 1 else 0 end end end
       let existing_zone = get(c.zones, i)
       let same = target_zone > 0 && target_zone == existing_zone
-      let rezone = target_zone > 0 && existing_zone > 0 && get(c.buildings, i) > 0 && !building_offline(c, i)
+      let rezone = target_zone > 0 && existing_zone > 0 && get(c.buildings, i) > 0 && !building_offline(c, i) && tool != 117 && existing_zone != 4
       let kind = facility_kind(tool)
       let prerequisite = construction_requirement(c, tool)
       let rejection = if prerequisite == "" do unsuitable(c, i, kind) else prerequisite ++ "." end
@@ -4066,11 +4092,11 @@ mod Ur.Sim do
       else if kind > 0 && faculty_rank(kind) < 4 && !utility_can_be_off_road(kind) && building_access(c, access(c), i) < 0 do
         { c with message: "Build next to a street connected to the harbour road network." }
       else if (kind > 0 && facility_nuisance(kind) > get(c.nuisance, i)) ||
-        (tool == 28 && get(c.nuisance, i) < 1) || (tool == 3 && get(c.nuisance, i) < 2) do
+        (tool == 28 && get(c.nuisance, i) < 1) || (tool == 3 && get(c.nuisance, i) < 2) || (tool == 117 && get(c.nuisance, i) < 1) do
         { c with message: "This use exceeds the parcel nuisance limit." }
       else if valid(grade_peer(c, i)) && tool == 7 do { c with message: "Remove the crossing before clearing its portal." }
       else if get(c.ferries, i) > 0 && tool == 7 do { c with message: "Use Remove transport to close the ferry route." }
-      else if (tool == 2 || tool == 3 || tool == 28 || kind > 0) && grade_kind(c, grade_source(c, i)) == 1 do { c with message: "Keep the area beneath this overpass clear." }
+      else if (tool == 2 || tool == 3 || tool == 28 || tool == 117 || kind > 0) && grade_kind(c, grade_source(c, i)) == 1 do { c with message: "Keep the area beneath this overpass clear." }
       else if occupied && !rezone && tool != 7 && tool != 5 do { c with message: "Occupied parcel. Clear it before changing its use." }
       else if h > 28 && tool != 6 && tool != 7 do { c with message: "Too steep for construction. Grade the land first." }
       else if tool == 6 && h <= 4 do { c with message: "Coastal land cannot be lowered further." }
@@ -4080,11 +4106,11 @@ mod Ur.Sim do
         let paid = { c with cash: c.cash - price, message: tool_name(tool) ++ " approved." }
         match tool do
 
-      2 | 3 | 28 ->
+      2 | 3 | 28 | 117 ->
         { paid with zones: NativeArray.set_int(c.zones, i, target_zone),
-          utility_service: if target_zone == 2 || existing_zone == 2 do NativeArray.set_int(c.utility_service, i, 0) else c.utility_service end,
+          utility_service: if target_zone == 2 || target_zone == 4 || existing_zone == 2 || existing_zone == 4 do NativeArray.set_int(c.utility_service, i, 0) else c.utility_service end,
           storefronts: NativeArray.set_int(c.storefronts, i, 0),
-          households: if target_zone == 2 do retire_households(c, i) else c.households end, business_sector: NativeArray.set_int(c.business_sector, i, 0), empty_homes: NativeArray.set_int(c.empty_homes, i, 0), home_arrivals: NativeArray.set_int(c.home_arrivals, i, 0), housing_search: NativeArray.set_int(c.housing_search, i, 0), newcomer_grace: NativeArray.set_int(c.newcomer_grace, i, 0),
+          households: if target_zone == 2 || target_zone == 4 do retire_households(c, i) else c.households end, business_sector: NativeArray.set_int(c.business_sector, i, 0), empty_homes: NativeArray.set_int(c.empty_homes, i, 0), home_arrivals: NativeArray.set_int(c.home_arrivals, i, 0), housing_search: NativeArray.set_int(c.housing_search, i, 0), newcomer_grace: NativeArray.set_int(c.newcomer_grace, i, 0),
           housing_losses: NativeArray.set_int(c.housing_losses, i, 0), business_losses: NativeArray.set_int(c.business_losses, i, 0), business_age: NativeArray.set_int(c.business_age, i, 0) }
 
       4 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 20 | 21 | 22 | 23 | 24 | 25 | 44 | 45 | 46 | 47 | 62 | 76 | 77 | 79 | 80 | 81 | 82 | 83 | 84 | 85 | 86 | 93 | 94 | 95 | 103 | 104 | 105 | 106 | 107 | 108 | 114 | 116 -> { paid with plants: NativeArray.set_int(c.plants, i, kind), paused_facilities: NativeArray.set_int(c.paused_facilities, i, 0), zones: NativeArray.set_int(c.zones, i, 0) }
@@ -4368,7 +4394,7 @@ mod Ur.Sim do
       else if c.harbour >= 0 && valid(i) && (tool == 91 || tool == 92 || tool == 96) do build_waste_bins(c, i, tool)
       else if c.harbour >= 0 && valid(i) && tool >= 87 && tool <= 90 do build_parking(c, i, tool)
       else if surface_parking(c, i) && tool == 7 do build_parking(c, i, 90)
-      else if surface_parking(c, i) && (road_tool(tool) || facility_kind(tool) > 0 || tool == 2 || tool == 3 || tool == 28 || tool == 53 || tool == 6 || (tool >= 33 && tool <= 36)) do
+      else if surface_parking(c, i) && (road_tool(tool) || facility_kind(tool) > 0 || tool == 2 || tool == 3 || tool == 28 || tool == 117 || tool == 53 || tool == 6 || (tool >= 33 && tool <= 36)) do
         { c with message: "Remove the parking facility to build on the surface." }
       else if get(c.public_parking, i) == 3 && tool == 36 do { c with message: "The underground garage occupies this parcel." }
       else campus_action(c, i, tool) end end end end end end end end end
@@ -4561,7 +4587,9 @@ mod Ur.Sim do
     let vacant = business_closed(c, i) || storefront(c, i) == 3
     let weak_trade = if shop && (storefront(c, i) > 0) do clamp(12 - flow, 0, 12) else 0 end
     let spending = if shop do clamp((wage_rate(labor) - 18) * 2 - c.tax / 8, -8, 8) else 0 end
-    let potential_sales = if road < 0 do 0 else flow / 2 + 37 + 2 * credential_premium(job_requirement(c, i)) + customer_base + 2 * premium - competition + spending - weak_trade + (if retail > 0 do 2 else 0 end) end
+    let potential_sales = if road < 0 do 0 else if get(c.zones, i) == 4 do
+      42 + customer_base + 2 * credential_premium(job_requirement(c, i)) - competition - clamp(road / 8, 0, 12)
+    else flow / 2 + 37 + 2 * credential_premium(job_requirement(c, i)) + customer_base + 2 * premium - competition + spending - weak_trade + (if retail > 0 do 2 else 0 end) end end
     let managed = match c.freight do
       Some(route) -> if route.market == i && retail > 0 && storefront(c, i) != 3 do Some(route) else None end
       None -> None
@@ -4571,12 +4599,14 @@ mod Ur.Sim do
       None -> if retail > 0 && storefront(c, i) == 0 && !vacant do potential_sales * get(c.shop_sales, i) / 8 else potential_sales end
     end
     let sales = sales * (100 - clamp((utility_disruption(c, i) - 5) * 2, 0, 80)) / 100
+    let sales = if get(c.zones, i) == 4 && get(c.buildings, i) > 0 && !business_closed(c, i) do
+      sales * industrial_staffing(c, i) / 100 else sales end
     let payroll = wage_rate(labor) + credential_premium(job_requirement(c, i))
     let inputs = match managed do
       Some(route) -> if route.month_days > 0 do route.month_cost / route.month_days else route.cost_sold end
       None -> c.import_rate / 12
     end
-    let costs = payroll + 3 + c.energy + inputs + clamp(road / 9, 0, 6)
+    let costs = payroll + 3 + c.energy * (if get(c.zones, i) == 4 do 2 + get(c.business_sector, i) else 1 end) + inputs + clamp(road / 9, 0, 6)
     let rent = asking_rent(4 + premium + get(c.buildings, i) + (if shop do flow / 16 else 0 end), get(c.business_losses, i))
     let taxable = clamp(sales - costs - rent, 0, 1000)
     { earnings: sales, rent: rent, tax: taxable * c.business_rate / 100, costs: costs }
@@ -5517,15 +5547,16 @@ mod Ur.Sim do
     let zone = get(c.zones, lot)
     if zone == 1 do 16
     else if zone == 2 do 2
+    else if zone == 4 do 6
     else if zone == 3 do (if get(c.buildings, lot) > 0 do 14 else 2 end)
-    else 0 end end end
+    else 0 end end end end
   end
   pfn save_flow(delivery : UtilityDelivery, flow : Ur.UtilitiesNetwork.Network) : UtilityDelivery do { delivery with flow: flow } end
   pfn hold_utilities(c : City, roads : NativeIntArr, lot : Int, capacity : UtilityReservation) : UtilityReservation do
     if lot == count() do capacity else
       let capacity = if get(c.construction, lot) > 0 && building_access(c, roads, lot) >= 0 do
         let demand = project_water(c, lot)
-        let (electric, _) = Net.draw(capacity.electric.flow, lot, 4)
+        let (electric, _) = Net.draw(capacity.electric.flow, lot, if get(c.zones, lot) == 4 do industrial_power(c, lot) else 4 end)
         let (water, _) = Net.draw(capacity.water.flow, lot, demand)
         let (sewer, _) = Net.draw(capacity.sewer.flow, lot, demand * 3 / 4)
         { electric: save_flow(capacity.electric, electric), water: save_flow(capacity.water, water), sewer: save_flow(capacity.sewer, sewer) }
@@ -5550,7 +5581,7 @@ mod Ur.Sim do
   end
   pfn utility_block(c : City, capacity : UtilityReservation, lot : Int) : Development do
     let demand = project_water(c, lot)
-    match delivery_limit(capacity.electric, lot, 4) do
+    match delivery_limit(capacity.electric, lot, if get(c.zones, lot) == 4 do industrial_power(c, lot) else 4 end) do
       1 -> NoPowerLine
       2 -> NoPower
       3 -> PowerBottleneck
@@ -5573,10 +5604,10 @@ mod Ur.Sim do
     let dist = building_access(c, a, i)
     let trip = commute(commutes, i)
     let mask = get(civic, i)
-    let appeal = if zone != 2 && zone > 0 && dist >= 0 do clamp((environment_score(c, i) + walkable_park_score(c, walk, i)) / 2 - 35, 0, 65) / 5 else 0 end
+    let appeal = if (zone == 1 || zone == 3) && zone > 0 && dist >= 0 do clamp((environment_score(c, i) + walkable_park_score(c, walk, i)) / 2 - 35, 0, 65) / 5 else 0 end
     let market_visitors = if ground_at(c, i) != 1 do get(c.footfall, i) * 2 else 0 end
     let base = market_density(c, a, i, pop + appeal * 6 + market_visitors, work)
-    let civic_demand = if zone != 2 && mask % 4 > 0 && pop + work >= 60 && trip <= 30 do 2 else 1 end
+    let civic_demand = if (zone == 1 || zone == 3) && mask % 4 > 0 && pop + work >= 60 && trip <= 30 do 2 else 1 end
     let potential = if pop + work >= 170 && trip <= 14 do get(c.density, i)
       else if civic_demand > base do clamp(civic_demand, 1, get(c.density, i))
       else if trip <= 42 do base
@@ -5586,24 +5617,24 @@ mod Ur.Sim do
     else if ground_closed(c, i) do Flooded
     else if dist < 0 do NoRoad
     else if get(c.buildings, i) >= get(c.density, i) do Full
-    else if use_nuisance(zone) > get(c.nuisance, i) do Restricted
+    else if (if zone == 4 do 1 + clamp(get(c.business_sector, i), 0, 2) else use_nuisance(zone) end) > get(c.nuisance, i) do Restricted
     else if get(c.buildings, i) >= potential do Market
     else if !founding_home && get(c.buildings, i) >= civic_density(c, civic, i, potential) do
       if get(civic, i) % 4 == 0 do NeedsSchoolOrClinic else NeedsCivicServices end
-    else if zone != 2 && land_pollution_at(c, i) >= 65 do Dirty
+    else if (zone == 1 || zone == 3) && land_pollution_at(c, i) >= 65 do Dirty
     else
     let utilities = utility_block(c, capacity, i)
     if !is_ready(utilities) do utilities
-    else if zone != 2 && (!food_ok || local_food_shortage(c, i)) do NoFood
-    else if (zone == 1 && c.tax >= 20) || (zone == 2 && c.business_rate >= 20) || (zone == 3 && (c.tax >= 20 || c.business_rate >= 20)) do HighTax
+    else if (zone == 1 || zone == 3) && (!food_ok || local_food_shortage(c, i)) do NoFood
+    else if (zone == 1 && c.tax >= 20) || ((zone == 2 || zone == 4) && c.business_rate >= 20) || (zone == 3 && (c.tax >= 20 || c.business_rate >= 20)) do HighTax
     else if c.energy >= 9 do HighEnergy
     else if !c.founding_map && dist > 45 && trip > 32 do Remote
-    else if zone != 2 && work > 0 && trip > commute_limit() do PoorJobAccess
+    else if (zone == 1 || zone == 3) && work > 0 && trip > commute_limit() do PoorJobAccess
     else if zone == 1 && !founding_home && pop >= work * 2 + 32 do NoJobs
-    else if (zone == 2 || (zone == 3 && get(c.buildings, i) == 0)) && work >= pop + 24 do NoWorkers
+    else if (zone == 2 || zone == 4 || (zone == 3 && get(c.buildings, i) == 0)) && work >= pop + 24 do NoWorkers
     else if !founding_home && (zone == 1 || (zone == 3 && get(c.buildings, i) > 0)) &&
       margin(household_accounts(c, a, commutes, labor, i)) < 0 do Unaffordable
-    else if (zone == 2 || (zone == 3 && get(c.buildings, i) == 0)) &&
+    else if (zone == 2 || zone == 4 || (zone == 3 && get(c.buildings, i) == 0)) &&
       margin(business_accounts(c, a, labor, pop, work, i)) < 0 do Unprofitable
     else Ready end end end end end end end end end end end end end end end end end end
   end
@@ -5696,17 +5727,34 @@ mod Ur.Sim do
     let next = services_with(c, a, people + 16, gen, utilities)
     next.farms + next.fish + next.imports >= next.food_used
   end
+  pfn nearby_industrial_food(c : City, roads : NativeIntArr, lot : Int, n : Int) : Bool do
+    if n >= 121 do false else
+      let x = lot % width() + n % 11 - 5
+      let z = lot / width() + n / 11 - 5
+      let site = index(x, z)
+      let kind = get(c.plants, site)
+      (x >= 0 && x < width() && z >= 0 && z < depth() && (kind == 5 || kind == 6) &&
+        !building_offline(c, site) && building_access(c, roads, site) >= 0) || nearby_industrial_food(c, roads, lot, n + 1)
+    end
+  end
+  fn choose_industry(c : City, roads : NativeIntArr, lot : Int) : Int do
+    if get(c.nuisance, lot) >= 3 && lot % 3 == 0 && graduates(c, 2) >= 6 do 2
+    else if get(c.nuisance, lot) >= 2 && lot % 3 != 0 && nearby_industrial_food(c, roads, lot, 0) do 1 else 0 end end
+  end
   pfn develop(c : City, a : NativeIntArr, commutes : NativeIntArr, civic : NativeIntArr, walk : ParkWalk, capacity : UtilityReservation, offset : Int, period : Int, tries : Int, pop : Int, work : Int, labor : Labor, food_ok : Bool) : City do
     if tries >= count() do c else
       let i = (offset + tries) % count()
       if get(c.zones, i) > 0 && get(c.construction, i) == 0 && !building_offline(c, i) && !housing_vacant(c, i) && !business_closed(c, i) && is_ready(blocked(c, a, commutes, civic, walk, i, pop, work, labor, capacity, food_ok)) do
         -- Taxes, energy and remoteness slow investment even before its hard limit.
         let zone = get(c.zones, i)
-        let civic_bonus = if zone != 2 && get(civic, i) > 0 do 1 else 0 end
+        let civic_bonus = if (zone == 1 || zone == 3) && get(civic, i) > 0 do 1 else 0 end
         let delay = 1 + c.tax / 5 + c.energy / 3 + clamp(commute(commutes, i), 0, 72) / 12
-        let first = c.founding_map && ((zone != 2 && (pop == 0 || c.founders > 0)) || (zone != 1 && work == 0))
+        let first = c.founding_map && (((zone == 1 || zone == 3) && (pop == 0 || c.founders > 0)) || (zone != 1 && work == 0))
         if first || (period + i) % clamp(delay - civic_bonus, 1, delay) == 0 do
-          { c with construction: NativeArray.set_int(c.construction, i, 1) }
+          let candidate = if zone == 4 && get(c.buildings, i) == 0 do choose_industry(c, a, i) else 0 end
+          let sector = if candidate > 0 && delivery_limit(capacity.electric, i, 8 + 4 * candidate) != 0 do 0 else candidate end
+          { c with construction: NativeArray.set_int(c.construction, i, 1),
+            business_sector: if zone == 4 && get(c.buildings, i) == 0 do NativeArray.set_int(c.business_sector, i, sector) else c.business_sector end }
         else develop(c, a, commutes, civic, walk, capacity, offset, period, tries + 1, pop, work, labor, food_ok) end
       else develop(c, a, commutes, civic, walk, capacity, offset, period, tries + 1, pop, work, labor, food_ok) end
     end
@@ -5716,7 +5764,7 @@ mod Ur.Sim do
       let stage = get(c.construction, i)
       let level = get(c.buildings, i)
       let next = if stage == 0 do c
-      else if level >= get(c.density, i) || use_nuisance(get(c.zones, i)) > get(c.nuisance, i) do
+      else if level >= get(c.density, i) || (if get(c.zones, i) == 4 do 1 + clamp(get(c.business_sector, i), 0, 2) else use_nuisance(get(c.zones, i)) end) > get(c.nuisance, i) do
         { c with construction: NativeArray.set_int(c.construction, i, 0) }
       else if ground_closed(c, i) || building_offline(c, i) || building_access(c, roads, i) < 0 do c
       else if stage + (if favor_god(c) == 3 do 1 else 0 end) > level do
@@ -5726,6 +5774,7 @@ mod Ur.Sim do
           else c.empty_homes end
         let service = if level == 0 do NativeArray.set_int(c.utility_service, i, 1) else c.utility_service end
         { c with construction: NativeArray.set_int(c.construction, i, 0), utility_service: service,
+          facility_staff: if level == 0 && get(c.zones, i) == 4 do NativeArray.set_int(c.facility_staff, i, 1) else c.facility_staff end,
           buildings: NativeArray.set_int(c.buildings, i, level + 1), empty_homes: empty }
       else { c with construction: NativeArray.set_int(c.construction, i, stage + 1) } end end end end
       advance_construction(next, roads, i + 1)
@@ -5737,7 +5786,7 @@ mod Ur.Sim do
       else
         let zone = get(c.zones, i)
         let residents = if zone == 1 do 16 else if zone == 3 && get(c.buildings, i) > 0 do 12 else 0 end end
-        construction_demand(c, roads, i + 1, people + residents, power + 4)
+        construction_demand(c, roads, i + 1, people + residents, power + (if zone == 4 do industrial_power(c, i) else 4 end))
       end
     end
   end
@@ -6642,7 +6691,7 @@ mod Ur.Sim do
 
   pfn store_facility_staff(c : City, hires : NativeIntArr, leads : NativeIntArr, lot : Int, out : NativeIntArr) : NativeIntArr do
     if lot == count() do out else
-      let staff = if facility_jobs(get(c.plants, lot)) > 0 || get(c.stops, lot) == 3 || get(c.stops, lot) == 4 do
+      let staff = if facility_jobs(get(c.plants, lot)) > 0 || get(c.stops, lot) == 3 || get(c.stops, lot) == 4 || (get(c.zones, lot) == 4 && get(c.buildings, lot) > 0) do
         NativeArray.set_int(out, lot, get(hires, lot) + 1 + 100 * get(leads, lot)) else NativeArray.set_int(out, lot, 0) end
       store_facility_staff(c, hires, leads, lot + 1, staff)
     end
