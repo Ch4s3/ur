@@ -19,9 +19,9 @@ mod Ur.Toolbar do
           2 -> Cons(64, Cons(65, Cons(66, Cons(63, Nil))))
           3 -> Cons(68, Cons(69, Cons(70, Cons(67, Nil))))
           1 -> Cons(29, Cons(30, Cons(31, Cons(32, Nil))))
-          _ -> Cons(2, Cons(3, Cons(28, Cons(5, Nil))))
+          _ -> [2, 3, 28, 117, 5]
         end
-        { span: 4, pages: Cons("Land use", Cons("Nuisance", Cons("Ground floors", Cons("Quiet hours", Nil)))), items: items }
+        { span: 5, pages: Cons("Land use", Cons("Nuisance", Cons("Ground floors", Cons("Quiet hours", Nil)))), items: items }
       3 ->
         let items = match page do
           1 -> Cons(35, Cons(42, Nil))
@@ -99,6 +99,7 @@ mod Ur.Toolbar do
       61 -> "clear"
       33 -> "path"
       40 -> "toll"
+      117 -> "plant"
       2 | 29 -> "homes"
       3 | 31 -> "jobs"
       28 | 30 -> "mixed"

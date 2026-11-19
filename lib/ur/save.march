@@ -795,7 +795,7 @@ mod Ur.Save do
     let? raw_service = field(j, "service")
     let? service = array(raw_service, 2640, 3)
     let? raw_zones = field(j, "zones")
-    let? zones = array(raw_zones, 2640, 3)
+    let? zones = array(raw_zones, 2640, 4)
     let? raw_density = field(j, "density")
     let? density = array(raw_density, 2640, 3)
     let? raw_nuisance = field(j, "nuisance")

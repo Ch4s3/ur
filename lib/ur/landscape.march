@@ -720,6 +720,19 @@ mod Ur.Landscape do
       A.piece(18, 20, 5, 10, 1, 11, 8)], body)
     else List.append([A.piece(5, 12, 6, 6, 5, 6, 6), A.piece(4, 17, 5, 8, 1, 8, 8)], body) end end
   end
+  pfn industrial_building(floors : Int, seed : Int, sector : Int) : List(Ur.Architecture.Piece) do
+    let wall = if sector == 1 do 8 else if sector == 2 do 17 else 5 end end
+    let tall = 8 + floors * 4
+    let body = [A.piece(2, 0, 2, 28, 1, 28, 17), A.piece(4, 1, 4, 24, tall, 19, wall),
+      A.piece(3, tall + 1, 3, 26, 2, 21, 19), A.piece(6, 1, 23, 9, 7, 1, 19),
+      A.piece(18, 3, 23, 6, 4, 1, 9), A.piece(5, 8, 23, 11, 1, 4, 7),
+      A.piece(4, 1, 24, 12, 1, 6, 4), A.piece(4, 2, 27, 1, 3, 1, 10),
+      A.piece(15, 2, 27, 1, 3, 1, 10), A.piece(21, tall + 3, 7, 4, 6, 4, 17),
+      A.piece(20, tall + 9, 6, 6, 1, 6, 19)]
+    if sector == 1 || (sector == 0 && seed % 2 == 0) do List.append([A.piece(6, tall + 3, 7, 11, 2, 10, 9),
+      A.piece(5, tall + 5, 6, 13, 1, 12, 8)], body) else
+      List.append([A.piece(6, tall + 3, 7, 5, 3, 5, 7), A.piece(12, tall + 3, 7, 5, 3, 5, 7)], body) end
+  end
   pfn buildings_and_land(c : Ur.Sim.City, i : Int, lighting : Int) : List(Ur.Architecture.Piece) do
     let h = S.get(c.heights, i)
     let b = S.get(c.buildings, i)
@@ -769,7 +782,7 @@ mod Ur.Landscape do
       let retail = S.retail_kind(c, i)
       let bar = S.storefront(c, i) == 2
       let closed = S.building_offline(c, i) || S.business_closed(c, i)
-      let parts = if b > 0 do A.building(b, zone != 2, seed, stage == 0 && !S.building_offline(c, i), retail > 0 || bar, lighting % 2 == 1) else Nil end
+      let parts = if b > 0 do (if zone == 4 do industrial_building(b, seed, S.get(c.business_sector, i)) else A.building(b, zone != 2, seed, stage == 0 && !S.building_offline(c, i), retail > 0 || bar, lighting % 2 == 1) end) else Nil end
       let parts = if stage > 0 do A.worksite(b, stage, parts) else parts end
       let parts = if bar do
         let front = A.storefront(false, closed, lighting / 2 % 2 == 1, parts)
@@ -791,7 +804,7 @@ mod Ur.Landscape do
       let parts = if parking > 0 do A.parking_pad(parking, parts) else parts end
       let side = if parking > 0 do S.direction(i, S.fleet_frontage(c, i, 0)) else frontage(c, i, 0) end
       shift(A.orient(parts, side), h)
-    else if zone > 0 do zone_edge(c, i, 0, if zone == 1 do 11 else 12 end, Nil)
+    else if zone > 0 do zone_edge(c, i, 0, if zone == 1 do 11 else if zone == 4 do 10 else 12 end end, Nil)
     else if !c.founding_map && i % S.width() == 9 && i / S.width() >= 22 && i / S.width() <= 25 do harbour_piece(i / S.width(), h)
     else vegetation(c, i, 0, Nil) end end end end end end end end end end
   end
