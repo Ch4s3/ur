@@ -823,7 +823,8 @@ mod Ur.Scene do
     if tram do box(m, 7, 8, 2, 3, 1, 1, 19)
     else paired_trim(m, 7, 4, 2, 2, 5, 19) end
   end
-  pfn pose_vehicle(slot : Int, mesh : Mesh, x : Float, y : Float, z : Float, dx : Float, dz : Float, length : Float, width : Float, lights : Bool) : Unit do
+  -- [blocks]: whether walkers yield to it. Only a vehicle in traffic does; a parked car is street furniture.
+  pfn pose_vehicle(slot : Int, mesh : Mesh, x : Float, y : Float, z : Float, dx : Float, dz : Float, length : Float, width : Float, lights : Bool, blocks : Bool) : Unit do
     let yaw = Math.atan2(0.0 -. dz, dx)
     let cosine = Math.cos(yaw)
     let sine = Math.sin(yaw)
@@ -836,11 +837,11 @@ mod Ur.Scene do
     else mesh end
     if Vk.body_begin(slot) && Vk.chunk_part(0, mesh.words, mesh.quads) && Vk.chunk_commit() do
       Vk.slot_pose(slot, low_x *. 0.25, y *. 0.25, low_z *. 0.25, 0.0, Math.sin(yaw *. 0.5), 0.0, Math.cos(yaw *. 0.5))
-      Vk.footprint(slot, x, y, z, cosine, 0.0 -. sine, length, width)
+      if blocks do Vk.footprint(slot, x, y, z, cosine, 0.0 -. sine, length, width) else () end
     else Ur.AppError.stop("Vehicle pose upload failed") end
   end
   pfn posed_vehicle(slot : Int, mesh : Mesh, x : Float, y : Float, z : Float, dx : Float, dz : Float, length : Float, width : Float) : Unit do
-    pose_vehicle(slot, mesh, x, y, z, dx, dz, length, width, true)
+    pose_vehicle(slot, mesh, x, y, z, dx, dz, length, width, true, true)
   end
   fn begin_vehicle_lights(hour : Int) : Unit do
     Vk.footprints_begin()
@@ -1595,7 +1596,7 @@ mod Ur.Scene do
       Some(m) ->
         if driver < 0 do Vk.chunk_free(slot) else
           let p = sanitation_vehicle(c, m, section)
-          if p.visible do pose_vehicle(slot, trash_truck_mesh(), p.x, p.y, p.z, p.dx, p.dz, 11.0, 6.0, night)
+          if p.visible do pose_vehicle(slot, trash_truck_mesh(), p.x, p.y, p.z, p.dx, p.dz, 11.0, 6.0, night, true)
           else Vk.chunk_free(slot) end
         end
       None -> Vk.chunk_free(slot)
@@ -2063,15 +2064,14 @@ mod Ur.Scene do
     let m = box(m, 2, 4, 0, 2, 1, 3, colour)
     let m = box(m, 6, 1, 1, 1, 1, 1, 17)
     let m = paired_trim(m, 0, 1, 1, 1, 3, if moving && night do 30 else 6 end)
-    pose_vehicle(slot, m, pose.x, pose.y, pose.z, pose.dx, pose.dz, 7.0, 3.0, moving)
+    pose_vehicle(slot, m, pose.x, pose.y, pose.z, pose.dx, pose.dz, 7.0, 3.0, moving, moving)
   end
   pfn parked_car(c : Ur.Sim.City, id : Int, parking : Int, slot : Int, reuse : Bool) : Unit do
     match Ur.Citizens.parking_at(parking) do
       Some(p) ->
         if p.kind < 4 && S.motor_street(c, p.road) do
           let pose = parked_pose(c, p)
-          if reuse do Vk.footprint(slot, pose.x, pose.y, pose.z, pose.dx, pose.dz, 7.0, 3.0)
-          else draw_car(id, pose, slot, false, false) end
+          if reuse do () else draw_car(id, pose, slot, false, false) end
         else if reuse do () else Vk.chunk_free(slot) end end
       None -> if reuse do () else Vk.chunk_free(slot) end
     end
