@@ -22,7 +22,8 @@ mod IndustrialZoneTest do
       heights: NativeArray.make_int(S.count(), 10), plants: NativeArray.set_int(zoned.plants, S.index(8, 18), 11),
       buildings: NativeArray.set_int(zoned.buildings, S.index(8, 20), 0),
       zones: NativeArray.set_int(zoned.zones, S.index(8, 20), 0) }
-    let grown = S.advance(equipped, 12)
+    -- One parcel wins investment each month and housing claims the early turns.
+    let grown = Ur.Clock.advance(equipped, 16)
     Test.assert_true(S.get(grown.buildings, lot) > 0 || S.get(grown.construction, lot) > 0, "A serviced industrial parcel attracts construction")
     let food_site = S.index(8, 18)
     let food_city = { zoned with plants: NativeArray.set_int(zoned.plants, food_site, 5) }
