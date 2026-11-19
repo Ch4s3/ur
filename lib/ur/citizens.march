@@ -1495,6 +1495,18 @@ mod Ur.Citizens do
     person.location < 0 && person.car_phase == 0 && person.parking == 0 && !person.park_trip &&
       person.study < 0 && !emergency_move(person) && person.transit_phase != 2 && person.transit_phase != 3 && person.bus_slot < 0
   end
+  -- How far toward [limit] the guard lets a walker go, asked a piece at a time. A walker's path bends
+  -- (round a corner, into a junction), so the straight line across a whole stage can cross a vehicle
+  -- that the path itself goes round; pieces this short follow the path as a tick's step does.
+  pfn guarded_reach(slot : Int, person : Citizen, limit : Float, guard : Int -> Citizen -> Citizen -> Citizen) : Float do
+    let piece = person.progress +. 0.125
+    let next = if piece >= limit do limit else piece end
+    let target = { person with progress: next }
+    let checked = guard(slot, person, target)
+    if checked.progress != next do person.progress
+    else if next >= limit do limit
+    else guarded_reach(slot, target, limit, guard) end end
+  end
   pfn plan_walk(entry : Actor, occupied : Occupied, tick_time : Float, now : Float, guard : Int -> Citizen -> Citizen -> Citizen) : Option(WalkEvent) do
     let person = entry.person
     if !ordinary_walk(person) do None else
@@ -1512,10 +1524,14 @@ mod Ur.Citizens do
             else
               let target = { person with progress: stage.limit }
               let checked = guard(entry.slot, person, target)
-              if checked.progress != stage.limit do None else
+              let limit = if checked.progress == stage.limit do stage.limit else guarded_reach(entry.slot, person, stage.limit, guard) end
+              if limit <= person.progress do
+                -- Blocked where it stands: hold and ask again in a second, as at a red light, instead of every tick.
+                Some({ entry: entry, started: now, finish: now +. 1.0, limit: person.progress, arm: -1 })
+              else
                 let arm = if stage.arm >= 0 && S.get(occupied.junctions, a) != 0 do a * 4 + stage.arm else -1 end
-                Some({ entry: entry, started: now, finish: now +. (stage.limit -. person.progress) /. (0.32 *. pace),
-                  limit: stage.limit, arm: arm })
+                Some({ entry: entry, started: now, finish: now +. (limit -. person.progress) /. (0.32 *. pace),
+                  limit: limit, arm: arm })
               end
             end
           end
