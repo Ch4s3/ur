@@ -1296,9 +1296,10 @@ mod Ur.Citizens do
   type Actor = { slot : Int, person : Citizen }
   type WalkEvent = { entry : Actor, started : Float, finish : Float, limit : Float, arm : Int }
   type WalkStage = { limit : Float, arm : Int, gate : Bool }
-  type Roster = { walk_time : Float, walk_bucket : Int, walk_events : Map(Int, List(WalkEvent)), walk_pending : List(WalkEvent), walk_crossings : Map(Int, Int),
+  type Roster = { walk_time : Float, walk_bucket : Int, walk_events : Map(Int, List(WalkEvent)), walk_pending : List((Int, WalkEvent)), walk_crossings : Map(Int, Int),
     walk_count : Int, walk_exits : List(Int), active : List(Actor), sleeping : Map(Int, Actor), wakeups : Map(Int, List(Actor)), clock : Int,
-    parked_actors : Map(Int, Actor), reservations : Map(Int, Int), indoor : CitizenCounts, crew : List(Citizen), parcels : Map(Int, List(Int)) }
+    parked_actors : Map(Int, Actor), reservations : Map(Int, Int), indoor : CitizenCounts, crew : List(Citizen), parcels : Map(Int, List(Int)),
+    parked_sorted : List(Actor), parked_fresh : Bool }
 
   pfn hour_at(time : Float) : Int do
     float_to_int(Math.floor(time /. S.day_seconds())) * 24 + S.street_hour(time)
@@ -1319,6 +1320,7 @@ mod Ur.Citizens do
     let parked = if entry.person.parking != 0 do Map.insert(roster.parked_actors, entry.slot, entry, Map.int_cmp) else roster.parked_actors end
     let crew = if entry.person.activity == 6 do Cons(entry.person, roster.crew) else roster.crew end
     { roster with sleeping: sleeping, wakeups: wakeups, parked_actors: parked, crew: crew,
+      parked_fresh: roster.parked_fresh && entry.person.parking == 0,
       reservations: park_actor(roster.reservations, entry.person, 1), indoor: count_person(c, entry.person, roster.indoor, 1) }
   end
   pfn register_parcel(parcels : Map(Int, List(Int)), lot : Int, id : Int) : Map(Int, List(Int)) do
@@ -1344,7 +1346,8 @@ mod Ur.Citizens do
   fn index(c : Ur.Sim.City, people : List(Citizen), time : Float) : Roster do
     index_people(c, people, { walk_time: 0.0, walk_bucket: 0, walk_events: Map.empty(), walk_pending: Nil, walk_crossings: Map.empty(),
       walk_count: 0, walk_exits: Nil, active: Nil, sleeping: Map.empty(), wakeups: Map.empty(), clock: hour_at(time),
-      parked_actors: Map.empty(), reservations: Map.empty(), indoor: empty_counts(), crew: Nil, parcels: Map.empty() }, 0)
+      parked_actors: Map.empty(), reservations: Map.empty(), indoor: empty_counts(), crew: Nil, parcels: Map.empty(),
+      parked_sorted: Nil, parked_fresh: false }, 0)
   end
   pfn slot_order(a : Actor, b : Actor) : Bool do a.slot <= b.slot end
   pfn merge_ordered(a : List(Actor), b : List(Actor), reversed : List(Actor)) : List(Actor) do
@@ -1421,8 +1424,16 @@ mod Ur.Citizens do
         None -> people
       end)
   end
+  pfn parked_order(roster : Roster) : List(Actor) do
+    if roster.parked_fresh do roster.parked_sorted else List.sort_by(Map.values(roster.parked_actors), slot_order) end
+  end
   fn visible_actors(roster : Roster) : List(Actor) do
-    merge_actors(roster.active, List.sort_by(Map.values(roster.parked_actors), slot_order))
+    merge_actors(roster.active, parked_order(roster))
+  end
+  -- Sort the parked actors once, after one was added or removed, instead of on every
+  -- visible_actors call (twice a frame).
+  fn sort_parked(roster : Roster) : Roster do
+    if roster.parked_fresh do roster else { roster with parked_sorted: parked_order(roster), parked_fresh: true } end
   end
   fn indexed_counts(c : Ur.Sim.City, roster : Roster) : CitizenCounts do
     let counts = List.fold_left(roster.active, roster.indoor, fn (counts, entry) -> count_person(c, entry.person, counts, 1))
@@ -1436,7 +1447,8 @@ mod Ur.Citizens do
   pfn wake_actor(c : Ur.Sim.City, roster : Roster, entry : Actor) : Roster do
     let parked = if entry.person.parking != 0 do Map.remove(roster.parked_actors, entry.slot, Map.int_cmp) else roster.parked_actors end
     let sleeping = Map.remove(roster.sleeping, entry.person.id, Map.int_cmp)
-    { roster with sleeping: sleeping, parked_actors: parked, reservations: park_actor(roster.reservations, entry.person, -1),
+    { roster with sleeping: sleeping, parked_actors: parked, parked_fresh: roster.parked_fresh && entry.person.parking == 0,
+      reservations: park_actor(roster.reservations, entry.person, -1),
       indoor: count_person(c, entry.person, roster.indoor, -1) }
   end
   pfn wake_through(c : Ur.Sim.City, roster : Roster, hour : Int, due : List(Actor)) : Roster do
@@ -1473,7 +1485,7 @@ mod Ur.Citizens do
   -- A new event waits in [walk_pending] until flush_walks files it: thousands are queued a frame,
   -- and filing each into [walk_events] alone copied the Map's path every time.
   pfn queue_walk(roster : Roster, event : WalkEvent) : Roster do
-    { roster with walk_pending: Cons(event, roster.walk_pending),
+    { roster with walk_pending: Cons((walk_bucket_of(event), event), roster.walk_pending),
       walk_count: roster.walk_count + 1, walk_crossings: crossing_reservation(roster.walk_crossings, event.arm, 1) }
   end
   -- Files [group] (one bucket's events, newest first) ahead of what the bucket already holds,
@@ -1481,11 +1493,10 @@ mod Ur.Citizens do
   pfn file_walks(events : Map(Int, List(WalkEvent)), bucket : Int, group : List(WalkEvent)) : Map(Int, List(WalkEvent)) do
     Map.insert(events, bucket, List.append(List.reverse(group), Map.get_or(events, bucket, Nil, Map.int_cmp)), Map.int_cmp)
   end
-  pfn file_groups(events : Map(Int, List(WalkEvent)), sorted : List(WalkEvent), bucket : Int, group : List(WalkEvent)) : Map(Int, List(WalkEvent)) do
+  pfn file_groups(events : Map(Int, List(WalkEvent)), sorted : List((Int, WalkEvent)), bucket : Int, group : List(WalkEvent)) : Map(Int, List(WalkEvent)) do
     match sorted do
       Nil -> if List.is_empty(group) do events else file_walks(events, bucket, group) end
-      Cons(event, rest) ->
-        let b = walk_bucket_of(event)
+      Cons((b, event), rest) ->
         if b == bucket do file_groups(events, rest, bucket, Cons(event, group))
         else
           let filed = if List.is_empty(group) do events else file_walks(events, bucket, group) end
@@ -1493,11 +1504,12 @@ mod Ur.Citizens do
         end
     end
   end
-  -- One Map insert per bucket instead of per event. The sort is stable, so each bucket keeps
-  -- its events newest first.
+  -- One Map insert per bucket instead of per event. Each event carries the bucket queue_walk
+  -- computed, so the sort compares plain Ints. The sort is stable, so each bucket keeps its
+  -- events newest first.
   pfn flush_walks(roster : Roster) : Roster do
     if List.is_empty(roster.walk_pending) do roster else
-      let sorted = List.sort_by(roster.walk_pending, fn (a, b) -> walk_bucket_of(a) <= walk_bucket_of(b))
+      let sorted = List.sort_by(roster.walk_pending, fn (a, b) -> Tuple.first(a) <= Tuple.first(b))
       { roster with walk_events: file_groups(roster.walk_events, sorted, -1, Nil), walk_pending: Nil }
     end
   end
