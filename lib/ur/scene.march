@@ -2241,55 +2241,79 @@ mod Ur.Scene do
   fn clear_scheduled_walks(roster : Ur.Citizens.Roster) : Unit do
     Ur.Citizens.each_walk(roster, fn (slot, _) -> Vk.chunk_free(citizen_walker_slot(slot)))
   end
-  -- Whether a walker on the leg from lot [a] to lot [b] can be on screen: either end within the view,
-  -- widened by a lot and a walker's height. A walk leg spans one lot, so a walker that leaves this test
-  -- is already a lot beyond the edge.
-  -- world_point's projection with its rotation worked out once, for testing many lots in one frame.
-  type ScreenTest = { view : Projection, sy : Float, cy : Float, scale : Float, margin : Float }
-  pfn screen_test(view : Projection) : ScreenTest do
-    let scale = view.w /. (2.0 *. view.zoom)
-    { view: view, sy: Math.sin(view.yaw), cy: Math.cos(view.yaw), scale: scale, margin: 8.0 *. scale *. 1.5 +. 40.0 }
-  end
-  pfn lot_on_screen(c : Ur.Sim.City, t : ScreenTest, lot : Int) : Bool do
-    if !S.valid(lot) do false else
-      let x = int_to_float(lot % S.width() * 8 + 4) -. t.view.cx
-      let z = int_to_float(lot / S.width() * 8 + 4) -. t.view.cz
-      let y = int_to_float(walking_height(c, lot)) *. 0.25 -. 3.0
-      let sx = t.view.w *. 0.5 +. (x *. t.cy -. z *. t.sy) *. t.scale
-      let sy = t.view.h *. 0.5 -. (y *. 0.795 -. (x *. t.sy +. z *. t.cy) *. 0.607) *. t.scale
-      sx >= 0.0 -. t.margin && sx <= t.view.w +. t.margin && sy >= 0.0 -. t.margin && sy <= t.view.h +. t.margin
-    end
-  end
-  -- Whether a walker on the leg from lot [a] to lot [b] can be on screen: either end within the view,
-  -- widened by a lot and a walker's height. A walk leg spans one lot, so a walker that leaves this test
-  -- is already a lot beyond the edge.
-  pfn walk_on_screen(c : Ur.Sim.City, t : ScreenTest, a : Int, b : Int) : Bool do
-    lot_on_screen(c, t, a) || lot_on_screen(c, t, b)
-  end
-  -- Pose the scheduled walkers in view; hide the rest without posing them. A hidden walker is posed
-  -- again in the first frame it can be seen, so a stale pose is never drawn. When a voxel covers less
-  -- than 1.5 pixels, half of them are posed each frame, alternating, since a step of a voxel then
-  -- moves a walker about a pixel.
-  fn scheduled_walks(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, roster : Ur.Citizens.Roster, view : Projection, frame : Int) : Unit do
-    let test = screen_test(view)
-    let stagger = test.scale *. 0.25 < 1.5
-    Ur.Citizens.each_walk_progress(roster, fn (slot, person, progress) ->
-      let chunk = citizen_walker_slot(slot)
-      if chunk >= citizen_chunk_slots() do () else
-        let seen = match person.route do
-          Cons(a, Cons(b, _)) -> walk_on_screen(c, test, a, b)
-          _ -> true
-        end
-        if !seen do Vk.chunk_show(chunk, false)
-        else if stagger && (slot + frame) % 2 != 0 do ()
-        else
-          citizen_vehicle(c, map, person, progress, chunk, false)
-          Vk.chunk_show(chunk, true)
-        end end
-      end)
-  end
   fn clear_walk_exits(roster : Ur.Citizens.Roster) : Unit do
     List.each(roster.walk_exits, fn slot -> Vk.chunk_free(citizen_walker_slot(slot)))
+  end
+  -- Walkers move on the GPU: each walk is handed to Strata once, as keys along its leg, and the
+  -- shader places the walker from the walk clock. A key is a walker_position_at sample at an
+  -- eighth of the way through the walk; between the two ends, midpoints are added only where the
+  -- path strays more than a voxel from a straight line, so a straight walk takes two keys.
+  type MotionKey = { k : Int, x : Int, y : Int, z : Int }
+  pfn motion_key(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, person : Ur.Citizens.Citizen, p0 : Float, p1 : Float, a : Int, b : Int, k : Int) : MotionKey do
+    let (x, z, y) = walker_position_at(c, map, person, p0 +. (p1 -. p0) *. int_to_float(k) /. 8.0, a, b)
+    { k: k, x: x - 1, y: y, z: z - 1 }
+  end
+  pfn motion_off(a : Int, b : Int, at : Int, f : Float) : Float do
+    Math.abs(int_to_float(at) -. (int_to_float(a) +. int_to_float(b - a) *. f))
+  end
+  -- The keys strictly between [lo] and [hi], in order, ahead of [after].
+  pfn motion_between(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, person : Ur.Citizens.Citizen, p0 : Float, p1 : Float, a : Int, b : Int,
+    lo : MotionKey, hi : MotionKey, after : List(MotionKey)) : List(MotionKey) do
+    if hi.k - lo.k < 2 do after else
+      let mid = motion_key(c, map, person, p0, p1, a, b, (lo.k + hi.k) / 2)
+      let f = int_to_float(mid.k - lo.k) /. int_to_float(hi.k - lo.k)
+      let off = Math.max_float(motion_off(lo.x, hi.x, mid.x, f), Math.max_float(motion_off(lo.y, hi.y, mid.y, f), motion_off(lo.z, hi.z, mid.z, f)))
+      if off <= 1.0 do after
+      else motion_between(c, map, person, p0, p1, a, b, lo, mid, Cons(mid, motion_between(c, map, person, p0, p1, a, b, mid, hi, after))) end
+    end
+  end
+  pfn motion_words(keys : List(MotionKey), words : NativeI32Arr, i : Int) : NativeI32Arr do
+    match keys do
+      Nil -> words
+      Cons(key, rest) ->
+        let words = NativeArray.set_i32(NativeArray.set_i32(words, i * 4, key.x), i * 4 + 1, key.y)
+        motion_words(rest, NativeArray.set_i32(NativeArray.set_i32(words, i * 4 + 2, key.z), i * 4 + 3, key.k), i + 1)
+    end
+  end
+  pfn walker_prototype(person : Ur.Citizens.Citizen) : Int do
+    let kind = if Ur.Citizens.emergency_move(person) do 2 else if person.study >= 0 do 1 else 0 end end
+    let coat = if kind == 2 do 3 else person.id % 4 end
+    walker_template_base() + kind * 48 + coat * 12 + person.id / 5 % 3 * 4 + (if person.id % 3 == 0 do 0 else 1 end) * 2
+  end
+  pfn walk_motion(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, event : Ur.Citizens.WalkEvent) : Unit do
+    let person = event.entry.person
+    let chunk = citizen_walker_slot(event.entry.slot)
+    if chunk >= citizen_chunk_slots() do () else
+      match person.route do
+        Cons(a, Cons(b, _)) ->
+          if person.transit_phase == 3 do Vk.chunk_free(chunk) else
+            let p0 = person.progress
+            let p1 = event.limit
+            let first = motion_key(c, map, person, p0, p1, a, b, 0)
+            let keys = if p1 == p0 do Cons(first, Nil) else
+              let last = motion_key(c, map, person, p0, p1, a, b, 8)
+              Cons(first, motion_between(c, map, person, p0, p1, a, b, first, last, Cons(last, Nil)))
+            end
+            let n = List.length(keys)
+            if !Vk.chunk_motion(chunk, walker_prototype(person), event.started, event.finish, p0, p1, motion_words(keys, NativeArray.make_i32(n * 4, 0), 0), n, true) do
+              citizen_walker(c, map, person, p0, a, b, chunk)
+              Vk.chunk_show(chunk, true)
+            else () end
+          end
+        _ -> citizen_vehicle(c, map, person, person.progress, chunk, false)
+      end
+    end
+  end
+  -- Replay this frame's walks and departures in order: a walk queued hands its motion to Strata,
+  -- a walker that stopped walking frees its slot (the stop or the car draws it from here on).
+  -- Called before citizen_vehicles, in place of clear_walk_exits.
+  fn walk_motions(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, roster : Ur.Citizens.Roster) : Unit do
+    Vk.motion_clock(roster.walk_time)
+    List.each(Ur.Citizens.walk_log(roster), fn note ->
+      match note do
+        WalkQueued(event) -> walk_motion(c, map, event)
+        WalkLeft(slot) -> Vk.chunk_free(citizen_walker_slot(slot))
+      end)
   end
   pfn layer_floor(c : Ur.Sim.City, x : Int, z : Int) : Int do
     high_ground(heights(c, x, z, NativeArray.make_int(100, 0), 0), 0, 0) + 3
