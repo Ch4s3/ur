@@ -10,9 +10,13 @@ mod Ur.Scene do
   alias Ur.Landscape as L
   type Mesh = { words : NativeI32Arr, quads : Int }
   pfn empty() : Mesh do { words: NativeArray.make_i32(8192, 0), quads: 0 } end
+  -- The fields are read out before the sets, so a Mesh handed over whole leaves [words] one
+  -- reference and the sets write in place instead of copying the mesh per quad.
   pfn face(m : Mesh, x : Int, y : Int, z : Int, w : Int, h : Int, direction : Int, tex : Int) : Mesh do
-    let n = m.quads * 2
-    { words: NativeArray.set_i32(NativeArray.set_i32(m.words, n, Q.pack0(x, y, z, w, h, direction)), n + 1, Q.pack1(tex, 255, tex + 1)), quads: m.quads + 1 }
+    let quads = m.quads
+    let words = m.words
+    let n = quads * 2
+    { words: NativeArray.set_i32(NativeArray.set_i32(words, n, Q.pack0(x, y, z, w, h, direction)), n + 1, Q.pack1(tex, 255, tex + 1)), quads: quads + 1 }
   end
   pfn box(m : Mesh, x : Int, y : Int, z : Int, w : Int, h : Int, d : Int, tex : Int) : Mesh do
     let a = face(m, x, y + h - 1, z, w, d, 0, tex)
@@ -181,9 +185,11 @@ mod Ur.Scene do
     end
   end
   pfn cloud_face(m : Mesh, x : Int, y : Int, z : Int, direction : Int) : Mesh do
-    let n = m.quads * 2
-    let words = NativeArray.set_i32(m.words, n, Q.pack0(x, y, z, 1, 1, direction))
-    { words: NativeArray.set_i32(words, n + 1, Q.pack1(8, 255, 250)), quads: m.quads + 1 }
+    let quads = m.quads
+    let words = m.words
+    let n = quads * 2
+    let words = NativeArray.set_i32(words, n, Q.pack0(x, y, z, 1, 1, direction))
+    { words: NativeArray.set_i32(words, n + 1, Q.pack1(8, 255, 250)), quads: quads + 1 }
   end
   pfn cloud_mesh(shape : Int, i : Int, m : Mesh) : Mesh do
     if i == 32 * 12 * 20 do m else

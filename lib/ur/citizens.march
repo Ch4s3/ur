@@ -140,8 +140,17 @@ mod Ur.Citizens do
     if person.arrival != 0 do change_reservation(keys, parking_at(person.arrival), delta) else keys end
   end
   pfn lane_get(occupied : Occupied, index : Int) : Int do NativeArray.get_int(occupied.lanes, index) end
+  -- Every field is read out before the set, so an Occupied handed over whole leaves [lanes] one
+  -- reference and the set writes in place ({ occupied with lanes: .. } copied the whole array).
   pfn lane_set(occupied : Occupied, index : Int, value : Int) : Occupied do
-    { occupied with lanes: NativeArray.set_int(occupied.lanes, index, value) }
+    let lanes = occupied.lanes
+    let walk = occupied.walk
+    let keys = occupied.parking_keys
+    let junctions = occupied.junctions
+    let crossings = occupied.crossings
+    let tick = occupied.signal_tick
+    { walk: walk, lanes: NativeArray.set_int(lanes, index, value), parking_keys: keys, junctions: junctions,
+      crossings: crossings, signal_tick: tick }
   end
   pfn garage_bay(base : Parking, bay : Int, capacity : Int, keys : Map(Int, Int)) : Option(Parking) do
     if bay == capacity do None else
@@ -689,7 +698,14 @@ mod Ur.Citizens do
       let arm = active_crossing(occupied.walk, person, a, b)
       if arm < 0 do occupied else
         let mask = int_or(S.get(occupied.crossings, a), int_shl(1, arm))
-        { occupied with crossings: NativeArray.set_int(occupied.crossings, a, mask) }
+        let crossings = occupied.crossings
+        let walk = occupied.walk
+        let lanes = occupied.lanes
+        let keys = occupied.parking_keys
+        let junctions = occupied.junctions
+        let tick = occupied.signal_tick
+        { walk: walk, lanes: lanes, parking_keys: keys, junctions: junctions,
+          crossings: NativeArray.set_int(crossings, a, mask), signal_tick: tick }
       end
     end
   end

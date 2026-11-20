@@ -5,8 +5,13 @@ mod Ur.Food do
 
   fn walkable(c : Ur.Sim.City, i : Int) : Bool do S.pedestrian_tile(c, i) end
 
+  -- The fields are read out before the sets, so a Routes handed over whole leaves each array
+  -- one reference and the sets write in place instead of copying the arrays.
   pfn enqueue(r : Routes, i : Int, next : Int) : Routes do
-    { next: NativeArray.set_int(r.next, i, next), queue: NativeArray.set_int(r.queue, r.tail, i), tail: r.tail + 1 }
+    let links = r.next
+    let queue = r.queue
+    let tail = r.tail
+    { next: NativeArray.set_int(links, i, next), queue: NativeArray.set_int(queue, tail, i), tail: tail + 1 }
   end
 
   pfn visit(c : Ur.Sim.City, r : Routes, i : Int, d : Int, mode : Int) : Routes do
