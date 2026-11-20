@@ -45,7 +45,7 @@ mod Ur.Sim do
     housing_search : NativeIntArr, newcomer_grace : NativeIntArr,
     market_history : List(NativeIntArr), rent_pressure : NativeIntArr, business_age : NativeIntArr,
     property_status : NativeIntArr, property_arrears : NativeIntArr, property_sales : Int,
-    finance_history : List(FinanceMonth), construction_spend : Int,
+    finance_history : List(FinanceMonth), construction_spend : Int, economy : Economy,
     expansion : Expansion, island_spend : NativeIntArr, island_exports : Int, island_crops : Int, island_catch : Int,
     freight : Option(Ur.FreightNetwork.Route), shop_stock : NativeIntArr, shop_sales : NativeIntArr, shop_delivered : NativeIntArr, shop_imports : Int, shipments : List(Shipment),
     harbour : Int, founding_map : Bool, heights : NativeIntArr, roads : NativeIntArr, tolls : NativeIntArr, public_parking : NativeIntArr, transit : NativeIntArr, stops : NativeIntArr, ferries : NativeIntArr, ferry_start : Int, service : NativeIntArr, bus_headways : NativeIntArr, bus_fare : Int, zones : NativeIntArr,
@@ -55,6 +55,32 @@ mod Ur.Sim do
     waste_last : NativeIntArr, waste_log : NativeIntArr, waste_runs : List(WasteRun),
     cash : Int, month : Int, tax : Int, business_rate : Int, import_rate : Int, export_rate : Int, energy : Int, income : Int, message : String
   }
+  -- Borrowing: kind 0 loan, 1 bond, 2 emergency overdraft. `rate` is tenths of a
+  -- percent a year, `months` the instalments left, `resident` the part of a bond
+  -- residents hold.
+  type Debt = { id : Int, kind : Int, principal : Int, rate : Int, months : Int, resident : Int }
+  -- A listed company. Prices are in cents and `history` is newest first.
+  type Stock = { id : Int, lot : Int, sector : Int, shares : Int, price : Int, earnings : Int, dividend : Int, history : List(Int), listed : Int, delisted : Int }
+  -- The index is scaled by 100; sentiment and volatility are tenths of a percent.
+  type MarketState = { index : Int, sentiment : Int, volatility : Int, history : List(Int), base : Int, next_id : Int }
+  type Economy = {
+    land_value : NativeIntArr, property_rate : Int,
+    savings : NativeIntArr, wealth_history : List(Int),
+    funding : NativeIntArr,
+    debts : List(Debt), next_debt : Int, arrears : Int, missed : List(Int), administrator : Int, insolvent : Bool,
+    debt_history : List(NativeIntArr), bond_size : Int,
+    stocks : List(Stock), market : MarketState, listing_incentive : Bool, listed_tax_break : Int, profit_streak : NativeIntArr
+  }
+  fn default_property_rate() : Int do 10 end
+  fn new_market() : MarketState do { index: 10000, sentiment: 0, volatility: 40, history: Nil, base: 0, next_id: 1 } end
+  fn new_economy() : Economy do
+    { land_value: NativeArray.make_int(2640, 0), property_rate: default_property_rate(),
+      savings: NativeArray.make_int(2640, 0), wealth_history: Nil,
+      funding: NativeArray.make_int(6, 100),
+      debts: Nil, next_debt: 1, arrears: 0, missed: Nil, administrator: -1, insolvent: false,
+      debt_history: Nil, bond_size: 50000,
+      stocks: Nil, market: new_market(), listing_incentive: false, listed_tax_break: 0, profit_streak: NativeArray.make_int(2640, 0) }
+  end
   type Waste = { generated : Int, collected : Int, digested : Int, buried : Int, exported : Int, dumped : Int, burned : Int, pending : Int }
   type Power = { gas : Int, geothermal : Int, wind : Int, solar : Int, nuclear : Int, biogas : Int, cost : Int }
   type Services = { rain : Int, recycled : Int, imported_water : Int, wastewater : Int, discharged : Int, untreated : Int, fish_revenue : Int, treatment_power : Int, operating_farms : Int, island_farms : Int, geothermal : Int, wells : Int, desal : Int, farms : Int, fish : Int, imports : Int, farm_exports : Int, water_used : Int, food_used : Int }
@@ -409,7 +435,7 @@ mod Ur.Sim do
   end
   pfn unclaimed_with_heights(heights : NativeIntArr) : City do
     let zero = NativeArray.make_int(2640, 0)
-    { households: new_households(), utility_service: zero, milestones: NativeArray.make_int(64, 0), facility_staff: NativeArray.make_int(2640, 0), facility_expansion: NativeArray.make_int(2640, 0), shelter_demand: None, census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(2640, 0), religion: new_religion(), climate_seed: 0, world_seed: -1, setup: default_setup(), founders: 0, storm_drains: zero, seawalls: zero, pump_orders: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, soil_moisture: 70, pumping_cost: 0, grades: NativeArray.make_int(2640, 0), grade_cover: NativeArray.make_int(2640, 0), parks: NativeArray.make_int(2640, 0), park_tiers: NativeArray.make_int(2640, 0), streetscape: NativeArray.make_int(2640, 0), sidewalk_items: NativeArray.make_int(2640, 0), campus: NativeArray.make_int(2640, 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(2640, 0), empty_homes: NativeArray.make_int(2640, 0), home_arrivals: NativeArray.make_int(2640, 0), housing_search: zero, newcomer_grace: zero, neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(2640, 0), property_status: NativeArray.make_int(2640, 0), property_arrears: NativeArray.make_int(2640, 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(2640, 0), calendar_day: 0, clock_ms: 675, street_day: 0, car_free_days: NativeArray.make_int(2640, 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(2640, 0), quiet_areas: NativeArray.make_int(2640, 0), storefronts: NativeArray.make_int(2640, 0), footfall: NativeArray.make_int(2640, 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, freight: None, shop_stock: zero, shop_sales: zero, shop_delivered: zero, shop_imports: 0, shipments: Nil, harbour: -1, founding_map: true, heights: heights, roads: zero, tolls: zero, public_parking: zero,
+    { households: new_households(), economy: new_economy(), utility_service: zero, milestones: NativeArray.make_int(64, 0), facility_staff: NativeArray.make_int(2640, 0), facility_expansion: NativeArray.make_int(2640, 0), shelter_demand: None, census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(2640, 0), religion: new_religion(), climate_seed: 0, world_seed: -1, setup: default_setup(), founders: 0, storm_drains: zero, seawalls: zero, pump_orders: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, soil_moisture: 70, pumping_cost: 0, grades: NativeArray.make_int(2640, 0), grade_cover: NativeArray.make_int(2640, 0), parks: NativeArray.make_int(2640, 0), park_tiers: NativeArray.make_int(2640, 0), streetscape: NativeArray.make_int(2640, 0), sidewalk_items: NativeArray.make_int(2640, 0), campus: NativeArray.make_int(2640, 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(2640, 0), empty_homes: NativeArray.make_int(2640, 0), home_arrivals: NativeArray.make_int(2640, 0), housing_search: zero, newcomer_grace: zero, neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(2640, 0), property_status: NativeArray.make_int(2640, 0), property_arrears: NativeArray.make_int(2640, 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(2640, 0), calendar_day: 0, clock_ms: 675, street_day: 0, car_free_days: NativeArray.make_int(2640, 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(2640, 0), quiet_areas: NativeArray.make_int(2640, 0), storefronts: NativeArray.make_int(2640, 0), footfall: NativeArray.make_int(2640, 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, freight: None, shop_stock: zero, shop_sales: zero, shop_delivered: zero, shop_imports: 0, shipments: Nil, harbour: -1, founding_map: true, heights: heights, roads: zero, tolls: zero, public_parking: zero,
       transit: zero, stops: zero, ferries: zero, ferry_start: -1, service: NativeArray.make_int(2640, 1), bus_headways: NativeArray.make_int(2640, 0), bus_fare: 1,
       zones: zero, density: NativeArray.make_int(2640, 3), nuisance: NativeArray.make_int(2640, 3),
       buildings: zero, housing_losses: zero, business_losses: zero, construction: zero, plants: zero, paused_facilities: zero, pipes: zero, grid: zero, pollution: zero, land_pollution: zero, air_pollution: zero,
@@ -443,7 +469,7 @@ mod Ur.Sim do
   end
   fn new() : City do
     let zero = NativeArray.make_int(2640, 0)
-    seed({ households: new_households(), utility_service: zero, milestones: NativeArray.make_int(64, 0), facility_staff: NativeArray.make_int(2640, 0), facility_expansion: NativeArray.make_int(2640, 0), shelter_demand: None, census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(2640, 0), religion: new_religion(), climate_seed: 0, world_seed: -1, setup: default_setup(), founders: 0, storm_drains: zero, seawalls: zero, pump_orders: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, soil_moisture: 70, pumping_cost: 0, grades: NativeArray.make_int(2640, 0), grade_cover: NativeArray.make_int(2640, 0), parks: NativeArray.make_int(2640, 0), park_tiers: NativeArray.make_int(2640, 0), streetscape: NativeArray.make_int(2640, 0), sidewalk_items: NativeArray.make_int(2640, 0), campus: NativeArray.make_int(2640, 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(2640, 0), empty_homes: NativeArray.make_int(2640, 0), home_arrivals: NativeArray.make_int(2640, 0), housing_search: zero, newcomer_grace: zero, neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(2640, 0), property_status: NativeArray.make_int(2640, 0), property_arrears: NativeArray.make_int(2640, 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(2640, 0), calendar_day: 0, clock_ms: 0, street_day: 0, car_free_days: NativeArray.make_int(2640, 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(2640, 0), quiet_areas: NativeArray.make_int(2640, 0), storefronts: NativeArray.make_int(2640, 0), footfall: NativeArray.make_int(2640, 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, freight: None, shop_stock: NativeArray.make_int(2640, 0), shop_sales: NativeArray.set_int(NativeArray.make_int(2640, 0), index(8, 20), 8), shop_delivered: NativeArray.make_int(2640, 0), shop_imports: 0, shipments: Nil, harbour: index(9, 21), founding_map: false, heights: terrain_fill(NativeArray.make_int(2640, 0), 0), roads: NativeArray.make_int(2640, 0), tolls: NativeArray.make_int(2640, 0), public_parking: NativeArray.make_int(2640, 0), transit: NativeArray.make_int(2640, 0), stops: NativeArray.make_int(2640, 0), ferries: NativeArray.make_int(2640, 0), ferry_start: -1, service: NativeArray.make_int(2640, 1), bus_headways: NativeArray.make_int(2640, 0), bus_fare: 1,
+    seed({ households: new_households(), economy: new_economy(), utility_service: zero, milestones: NativeArray.make_int(64, 0), facility_staff: NativeArray.make_int(2640, 0), facility_expansion: NativeArray.make_int(2640, 0), shelter_demand: None, census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(2640, 0), religion: new_religion(), climate_seed: 0, world_seed: -1, setup: default_setup(), founders: 0, storm_drains: zero, seawalls: zero, pump_orders: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, soil_moisture: 70, pumping_cost: 0, grades: NativeArray.make_int(2640, 0), grade_cover: NativeArray.make_int(2640, 0), parks: NativeArray.make_int(2640, 0), park_tiers: NativeArray.make_int(2640, 0), streetscape: NativeArray.make_int(2640, 0), sidewalk_items: NativeArray.make_int(2640, 0), campus: NativeArray.make_int(2640, 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(2640, 0), empty_homes: NativeArray.make_int(2640, 0), home_arrivals: NativeArray.make_int(2640, 0), housing_search: zero, newcomer_grace: zero, neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(2640, 0), property_status: NativeArray.make_int(2640, 0), property_arrears: NativeArray.make_int(2640, 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(2640, 0), calendar_day: 0, clock_ms: 0, street_day: 0, car_free_days: NativeArray.make_int(2640, 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(2640, 0), quiet_areas: NativeArray.make_int(2640, 0), storefronts: NativeArray.make_int(2640, 0), footfall: NativeArray.make_int(2640, 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, freight: None, shop_stock: NativeArray.make_int(2640, 0), shop_sales: NativeArray.set_int(NativeArray.make_int(2640, 0), index(8, 20), 8), shop_delivered: NativeArray.make_int(2640, 0), shop_imports: 0, shipments: Nil, harbour: index(9, 21), founding_map: false, heights: terrain_fill(NativeArray.make_int(2640, 0), 0), roads: NativeArray.make_int(2640, 0), tolls: NativeArray.make_int(2640, 0), public_parking: NativeArray.make_int(2640, 0), transit: NativeArray.make_int(2640, 0), stops: NativeArray.make_int(2640, 0), ferries: NativeArray.make_int(2640, 0), ferry_start: -1, service: NativeArray.make_int(2640, 1), bus_headways: NativeArray.make_int(2640, 0), bus_fare: 1,
       zones: NativeArray.make_int(2640, 0), density: NativeArray.make_int(2640, 3), nuisance: NativeArray.make_int(2640, 3), buildings: NativeArray.make_int(2640, 0), housing_losses: NativeArray.make_int(2640, 0), business_losses: NativeArray.make_int(2640, 0), construction: NativeArray.make_int(2640, 0),
       plants: NativeArray.set_int(NativeArray.set_int(NativeArray.make_int(2640, 0), index(8, 21), 1), index(9, 22), 3),
       paused_facilities: NativeArray.make_int(2640, 0), pipes: NativeArray.set_int(NativeArray.make_int(2640, 0), index(9, 21), 1), grid: NativeArray.make_int(2640, 0), pollution: NativeArray.make_int(2640, 0), land_pollution: NativeArray.make_int(2640, 0), air_pollution: NativeArray.make_int(2640, 0), trash: 0, waste_live: false, waste_bins: NativeArray.make_int(count(), 0), waste_stock: NativeArray.make_int(count(), 0), waste_sites: NativeArray.make_int(count(), 0), waste_last: NativeArray.make_int(count(), 0), waste_log: NativeArray.make_int(count(), 0), waste_runs: Nil,
@@ -1653,10 +1679,55 @@ mod Ur.Sim do
       _ -> environment_score(c, i)
     end
   end
-  pfn metric_sum(c : City, routes : NativeIntArr, commutes : NativeIntArr, civic : NativeIntArr, walk : ParkWalk, i : Int, metric : Int, sum : Int) : Int do
+  fn metric_sum(c : City, routes : NativeIntArr, commutes : NativeIntArr, civic : NativeIntArr, walk : ParkWalk, i : Int, metric : Int, sum : Int) : Int do
     if metric == 7 do sum else
       metric_sum(c, routes, commutes, civic, walk, i, metric + 1, sum + metric_value(c, routes, commutes, civic, walk, i, metric))
     end
+  end
+  -- What a parcel would sell for: livability, road access and the coast. The
+  -- neighbours' wealth joins in once households carry savings.
+  fn land_target(c : City, routes : NativeIntArr, commutes : NativeIntArr, civic : NativeIntArr, walk : ParkWalk, i : Int) : Int do
+    if !valid(i) || get(c.heights, i) == 0 do 0 else
+      let livability = metric_sum(c, routes, commutes, civic, walk, i, 1, 0) / 6
+      let coast = if coastal(c, i) do 200 else 0 end
+      clamp(150 + 14 * livability + 80 * location_premium(c, routes, i) + coast + neighbour_wealth_value(c, i), 50, 4000)
+    end
+  end
+  fn neighbour_wealth_value(c : City, i : Int) : Int do clamp(nearby_savings(c, i) / 4, 0, 600) end
+  -- Before the first valuation (a new city or an older save) land counts at a
+  -- typical value so rents and taxes start sensibly.
+  fn land_value(c : City, i : Int) : Int do
+    let stored = get(c.economy.land_value, i)
+    if stored > 0 do stored else if valid(i) && get(c.heights, i) > 0 do 900 else 0 end end
+  end
+  -- Values move a quarter of the way to their target each month; a parcel with
+  -- no value yet (a new city or an older save) takes its target at once.
+  pfn update_land_values(c : City, routes : NativeIntArr, commutes : NativeIntArr, civic : NativeIntArr, walk : ParkWalk, i : Int, out : NativeIntArr) : NativeIntArr do
+    if i >= count() do out else
+      let target = land_target(c, routes, commutes, civic, walk, i)
+      let current = get(out, i)
+      let next = if current == 0 do target else current + (target - current) / 4 end
+      update_land_values(c, routes, commutes, civic, walk, i + 1, if next == current do out else NativeArray.set_int(out, i, next) end)
+    end
+  end
+  fn settle_land(c : City, routes : NativeIntArr, commutes : NativeIntArr, civic : NativeIntArr, walk : ParkWalk) : City do
+    { c with economy: { c.economy with land_value: update_land_values(c, routes, commutes, civic, walk, 0, c.economy.land_value) } }
+  end
+  -- Monthly property tax on a built, occupied parcel: its land value for each
+  -- storey at the city's rate. Landlords pass it on in rent.
+  fn property_scale() : Int do 2300 end
+  fn property_tax_at(c : City, i : Int) : Int do
+    let floors = get(c.buildings, i)
+    if floors == 0 || building_offline(c, i) || (occupied_homes(c, i) == 0 && job_slots(c, i) == 0) do 0
+    else (land_value(c, i) * floors * c.economy.property_rate + property_scale() / 2) / property_scale() end
+  end
+  -- The part of the tax each dwelling or business premises carries in its rent.
+  fn property_tax_share(c : City, i : Int) : Int do
+    let units = homes_at(c, i) + (if job_capacity(c, i) > 0 do 1 else 0 end)
+    if units == 0 do 0 else (property_tax_at(c, i) + units - 1) / units end
+  end
+  pfn property_tax_total(c : City, i : Int, total : Int) : Int do
+    if i >= count() do total else property_tax_total(c, i + 1, total + property_tax_at(c, i)) end
   end
   fn base_happiness(c : City, st : Stats, i : Int) : Int do
     if !valid(i) || get(c.heights, i) == 0 do 0 else metric_sum(c, st.routes, st.commutes, st.civic, st.park_walk, i, 1, 0) / 6 end
@@ -1858,6 +1929,58 @@ mod Ur.Sim do
       _ -> 0
     end
   end
+  -- Service groups for funding: 0 education, 1 health, 2 safety, 3 utilities,
+  -- 4 transit, 5 parks and community. Farms, depots and temples sit outside.
+  fn service_group(kind : Int) : Int do
+    match kind do
+      18 | 26 | 27 | 28 | 29 | 30 | 31 | 32 | 41 | 44 -> 0
+      19 | 22 -> 1
+      20 | 21 | 25 | 42 -> 2
+      1 | 2 | 3 | 4 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 33 | 34 | 35 | 36 -> 3
+      23 -> 4
+      43 -> 5
+      _ -> -1
+    end
+  end
+  fn service_group_name(group : Int) : String do
+    match group do
+      0 -> "Education"
+      1 -> "Health"
+      2 -> "Safety"
+      3 -> "Utilities"
+      4 -> "Transit"
+      _ -> "Parks and community"
+    end
+  end
+  -- A group's funding in percent. An administrator caps every group at 70%.
+  fn funding_level(c : City, group : Int) : Int do
+    if group < 0 || group > 5 do 100 else
+      let level = clamp(get(c.economy.funding, group), 50, 150)
+      if c.economy.administrator >= 0 && level > 70 do 70 else level end
+    end
+  end
+  fn funded(c : City, group : Int, amount : Int) : Int do amount * funding_level(c, group) / 100 end
+  fn adjust_funding(c : City, group : Int, delta : Int) : City do
+    if group < 0 || group > 5 do c else
+      let level = clamp(get(c.economy.funding, group) + delta * 10, 50, 150)
+      { c with economy: { c.economy with funding: NativeArray.set_int(c.economy.funding, group, level) },
+        message: service_group_name(group) ++ " funded at " ++ int_to_string(level) ++ "%." }
+    end
+  end
+  -- Monthly spending on a group at its current level.
+  pfn group_facility_spending(c : City, group : Int, i : Int, total : Int) : Int do
+    if i >= count() do total else
+      let here = if service_group(get(c.plants, i)) == group do parcel_facility_upkeep(c, i) else 0 end
+      let parks = if group == 5 && get(c.parks, i) > 0 do funded(c, 5, 1 + get(c.park_tiers, i)) else 0 end
+      let network = if group == 3 do funded(c, 3, utility_upkeep(get(c.pipes, i)) + utility_upkeep(get(c.grid, i))) else 0 end
+      group_facility_spending(c, group, i + 1, total + here + parks + network)
+    end
+  end
+  fn service_spending(c : City, st : Stats, group : Int) : Int do
+    let base = group_facility_spending(c, group, 0, 0)
+    if group == 4 do base + st.budget.bus_operations + funded(c, 4, transit_upkeep(c, 0, 0))
+    else if group == 3 do base + st.budget.sanitation_cost else base end end
+  end
   fn facility_staffed(c : City, lot : Int) : Int do
     let building_positions = facility_jobs(get(c.plants, lot))
     let positions = if building_positions > 0 do building_positions
@@ -1866,10 +1989,13 @@ mod Ur.Sim do
     let positions = positions + (if expansion == 4 || expansion == 5 do 1 else if expansion == 6 do 2 else 0 end end)
     let recorded = get(c.facility_staff, lot)
     let kind = get(c.plants, lot)
-    if positions == 0 do 100
-    else if recorded == 0 do 100
-    else if (kind == 14 || kind == 22) && recorded / 100 == 0 do 0
-    else clamp((recorded % 100 - 1) * 100 / positions, 0, 100) end end end
+    let staffed = if positions == 0 do 100
+      else if recorded == 0 do 100
+      else if (kind == 14 || kind == 22) && recorded / 100 == 0 do 0
+      else clamp((recorded % 100 - 1) * 100 / positions, 0, 100) end end end
+    -- Underfunding leaves posts empty, so output falls with the budget.
+    let group = if positions > 0 && building_positions > 0 do service_group(kind) else if positions > 0 do 4 else -1 end end
+    if group >= 0 && funding_level(c, group) < staffed do funding_level(c, group) else staffed end
   end
   fn job_slots(c : City, i : Int) : Int do
     if building_offline(c, i) || business_closed(c, i) do 0
@@ -2250,7 +2376,7 @@ mod Ur.Sim do
       let kind = get(c.plants, i)
       let stage = school_stage(kind)
       let seats = if stage >= 0 && !building_offline(c, i) && building_access(c, routes, i) >= 0 do
-        NativeArray.set_int(seats, stage, get(seats, stage) + (school_capacity(kind) + (if get(c.facility_expansion, i) == 1 do 48 else 0 end)) * facility_staffed(c, i) / 100)
+        NativeArray.set_int(seats, stage, get(seats, stage) + (school_capacity(kind) + (if get(c.facility_expansion, i) == 1 do 48 else 0 end)) * facility_staffed(c, i) / 100 * (500 + clamp(funding_level(c, 0) - 100, 0, 50)) / 500)
       else seats end
       school_seats(c, routes, i + 1, seats)
     end
@@ -2397,6 +2523,11 @@ mod Ur.Sim do
     let empty = get(c.buildings, i) > 0 && (business_closed(c, i) || (current == 0 && get(c.storefronts, i) == 3))
     if empty do (if workshop_allowed(c, i) do 1 else 0 end) else current end
   end
+  -- A rising index over the year draws more qualified firms; a falling one fewer.
+  fn market_boost(c : City) : Int do
+    let mood = market_change(c, 12)
+    if mood > 100 do 1 else if mood < -100 do -1 else 0 end end
+  end
   pfn open_specialists(c : City, routes : NativeIntArr, people : Int, i : Int, sectors : NativeIntArr) : NativeIntArr do
     if i >= count() do sectors else
       let eligible = get(c.zones, i) == 2 && get(c.buildings, i) > 0 && retail_kind(c, i) == 0 &&
@@ -2412,10 +2543,10 @@ mod Ur.Sim do
         else if !eligible do 0
         else if get(sectors, i) > 0 && !business_closed(c, i) do get(sectors, i)
         else if building_access(c, routes, i) < 0 || building_offline(c, i) || (get(c.business_age, i) > 2 && !business_closed(c, i)) do 0
-        else if roll < 3 && specialist_graduates(c, specialist) >= 2 do specialist
-        else if roll < 3 && degree >= 6 && degree * 100 >= 8 * workers do 3
-        else if roll < 6 && trade >= 6 && trade * 100 >= 8 * workers do 2
-        else if roll < 8 && secondary >= 8 && secondary * 100 >= 14 * workers do 1
+        else if roll < 3 + market_boost(c) && specialist_graduates(c, specialist) >= 2 do specialist
+        else if roll < 3 + market_boost(c) && degree >= 6 && degree * 100 >= 8 * workers do 3
+        else if roll < 6 + market_boost(c) && trade >= 6 && trade * 100 >= 8 * workers do 2
+        else if roll < 8 + market_boost(c) && secondary >= 8 && secondary * 100 >= 14 * workers do 1
         else 0 end end end end end end end end end
       let next = if get(sectors, i) == sector do sectors else NativeArray.set_int(sectors, i, sector) end
       open_specialists(c, routes, people, i + 1, next)
@@ -2447,7 +2578,7 @@ mod Ur.Sim do
   fn parcel_facility_upkeep(c : City, lot : Int) : Int do
     let kind = get(c.plants, lot)
     if kind == 0 do 0 else
-      let upkeep = facility_upkeep(kind) + (if get(c.facility_expansion, lot) > 0 do 5 else 0 end)
+      let upkeep = funded(c, service_group(kind), facility_upkeep(kind) + (if get(c.facility_expansion, lot) > 0 do 5 else 0 end))
       if facility_paused(c, lot) do upkeep / 4 else upkeep end
     end
   end
@@ -2457,7 +2588,7 @@ mod Ur.Sim do
       let v = if kind == 0 do resident_homes(c, i) * 4
         else if kind == 1 do job_slots(c, i)
         else if kind == 2 do (if building_offline(c, i) do 0 else b * 4 end)
-        else parking_upkeep(get(c.public_parking, i)) + road_upkeep(get(c.roads, i)) + flood_upkeep(c, i) + (if get(c.parks, i) > 0 do 1 + get(c.park_tiers, i) else 0 end) + (if get(c.grade_cover, i) > 0 do crossing_upkeep() else 0 end) + utility_upkeep(get(c.pipes, i)) + utility_upkeep(get(c.grid, i)) + parcel_facility_upkeep(c, i) end end end
+        else parking_upkeep(get(c.public_parking, i)) + road_upkeep(get(c.roads, i)) + flood_upkeep(c, i) + (if get(c.parks, i) > 0 do funded(c, 5, 1 + get(c.park_tiers, i)) else 0 end) + (if get(c.grade_cover, i) > 0 do crossing_upkeep() else 0 end) + funded(c, 3, utility_upkeep(get(c.pipes, i)) + utility_upkeep(get(c.grid, i))) + parcel_facility_upkeep(c, i) end end end
       sum(c, i + 1, kind, total + v)
     end
   end
@@ -3164,6 +3295,7 @@ mod Ur.Sim do
       0 -> policy(c, delta, 0)
       1 -> { c with business_rate: clamp(c.business_rate + delta, 0, 25) }
       2 -> { c with import_rate: clamp(c.import_rate + delta * 5, 0, 50) }
+      10 -> { c with economy: { c.economy with property_rate: clamp(c.economy.property_rate + delta, 0, 40) } }
       3 -> { c with export_rate: clamp(c.export_rate + delta * 5, 0, 50) }
       5 -> { c with ground_rule: clamp(c.ground_rule + delta, 1, 3) }
       7 | 8 | 9 -> { c with immigration: row - 7 }
@@ -4560,7 +4692,8 @@ mod Ur.Sim do
     end
   end
   fn act(c : City, i : Int, tool : Int) : City do
-    let next = draft_act(c, i, tool)
+    let frozen = c.economy.administrator >= 0 && tool != 7 && valid(i) && cost(c, i, tool) > 0
+    let next = if frozen do { c with message: "The administrator has frozen city construction. Demolition is still allowed." } else draft_act(c, i, tool) end
     if get(c.parks, i) != get(next.parks, i) do resize_parks(next) else next end
   end
   pfn location_premium(c : City, routes : NativeIntArr, i : Int) : Int do
@@ -4632,7 +4765,76 @@ mod Ur.Sim do
   pfn commute_expense(minutes : Int) : Int do clamp(minutes / 16, 0, 8) end
   pfn housing_rent(c : City, routes : NativeIntArr, i : Int) : Int do
     let base = base_home_rent(c, routes, i)
-    base + rent_adjustment(c, rent_tier(base)) + neighborhood_rent(c, i)
+    base + rent_adjustment(c, rent_tier(base)) + neighborhood_rent(c, i) + property_tax_share(c, i)
+  end
+  fn savings_per_home(c : City, i : Int) : Int do
+    let homes = occupied_homes(c, i)
+    if homes <= 0 do 0 else get(c.economy.savings, i) / homes end
+  end
+  -- Average savings per household on a parcel and its four neighbours.
+  fn nearby_savings(c : City, i : Int) : Int do
+    let total = get(c.economy.savings, i) + neighbour_savings(c, i, 0, 0)
+    let homes = occupied_homes(c, i) + neighbour_homes(c, i, 0, 0)
+    if homes <= 0 do 0 else total / homes end
+  end
+  pfn neighbour_savings(c : City, i : Int, d : Int, total : Int) : Int do
+    if d == 4 do total else
+      let j = neighbour(i, d)
+      neighbour_savings(c, i, d + 1, total + (if valid(j) do get(c.economy.savings, j) else 0 end))
+    end
+  end
+  pfn neighbour_homes(c : City, i : Int, d : Int, total : Int) : Int do
+    if d == 4 do total else
+      let j = neighbour(i, d)
+      neighbour_homes(c, i, d + 1, total + (if valid(j) do occupied_homes(c, j) else 0 end))
+    end
+  end
+  -- Three months of a household's rent, tax and costs.
+  fn savings_cushion(a : Accounts) : Int do clamp(3 * (a.rent + a.tax + a.costs), 30, 100000) end
+  -- Percent of savings above the cushion a household keeps in the share index.
+  fn invested_share(per_home : Int, cushion : Int) : Int do
+    if per_home <= cushion do 0 else clamp(20 + (per_home - cushion) * 40 / (cushion * 4), 0, 60) end
+  end
+  -- Savings a newly arrived household brings, more after a strong market year.
+  fn newcomer_savings(c : City) : Int do clamp(60 + market_change(c, 12) / 10, 20, 200) end
+  -- Index change over the last `months` months, in tenths of a percent.
+  fn market_change(c : City, months : Int) : Int do
+    let market = c.economy.market
+    match List.nth_opt(market.history, months) do
+      Some(earlier) -> if earlier <= 0 do 0 else (market.index - earlier) * 1000 / earlier end
+      None -> 0
+    end
+  end
+  -- Each household adds its monthly margin, holds part of its savings in the
+  -- index at `index_return` (tenths of a percent), and spends a little of what
+  -- it has above its cushion. Savings never fall below zero.
+  pfn settle_lot_savings(c : City, routes : NativeIntArr, commutes : NativeIntArr, labor : Labor, index_return : Int, i : Int, out : NativeIntArr) : NativeIntArr do
+    if i >= count() do out else
+      let homes = occupied_homes(c, i)
+      let total = get(out, i)
+      let next = if homes <= 0 do 0 else
+        let accounts = household_accounts(c, routes, commutes, labor, i)
+        let per_home = total / homes
+        let cushion = savings_cushion(accounts)
+        let invested = (per_home - cushion) * invested_share(per_home, cushion) / 100
+        let returns = if invested > 0 do invested * index_return / 1000 else 0 end
+        let spent = if per_home > cushion do (per_home - cushion) / 50 else 0 end
+        clamp(total + (margin(accounts) + returns - spent) * homes, 0, 1000000000)
+      end
+      settle_lot_savings(c, routes, commutes, labor, index_return, i + 1, if next == total do out else NativeArray.set_int(out, i, next) end)
+    end
+  end
+  pfn savings_total(c : City, i : Int, total : Int, homes : Int) : (Int, Int) do
+    if i >= count() do (total, homes) else savings_total(c, i + 1, total + get(c.economy.savings, i), homes + occupied_homes(c, i)) end
+  end
+  fn average_savings(c : City) : Int do
+    let (total, homes) = savings_total(c, 0, 0, 0)
+    if homes <= 0 do 0 else total / homes end
+  end
+  fn settle_wealth(c : City, routes : NativeIntArr, commutes : NativeIntArr, labor : Labor, index_return : Int) : City do
+    let savings = settle_lot_savings(c, routes, commutes, labor, index_return, 0, c.economy.savings)
+    let next = { c with economy: { c.economy with savings: savings } }
+    { next with economy: { next.economy with wealth_history: Cons(average_savings(next), List.take(c.economy.wealth_history, 23)) } }
   end
   fn household_financial_strain(c : City, st : Stats, i : Int) : Int do
     let balance = margin(household_accounts(c, st.routes, st.commutes, st.labor, i))
@@ -4674,6 +4876,12 @@ mod Ur.Sim do
     let travel = (if wage > 0 do commute_expense(trip) else 0 end) + fares
     { earnings: wage + 5, rent: asking_rent(rent, get(c.housing_losses, i)), tax: wage * c.tax / 100, costs: food + c.energy / 2 + travel }
   end
+  -- A company trading on the market from this parcel.
+  fn listed(c : City, lot : Int) : Bool do List.any(c.economy.stocks, fn s -> s.lot == lot && s.delisted < 0) end
+  -- Percent of the business tax a firm pays after the break for listed firms.
+  fn listed_tax_weight(c : City, lot : Int) : Int do
+    if c.economy.listed_tax_break > 0 && listed(c, lot) do 100 - c.economy.listed_tax_break else 100 end
+  end
   fn business_accounts(c : City, routes : NativeIntArr, labor : Labor, people : Int, jobs : Int, i : Int) : Accounts do
     let road = building_access(c, routes, i)
     let premium = location_premium(c, routes, i)
@@ -4684,7 +4892,7 @@ mod Ur.Sim do
     let shop = shop_space(c, i)
     let vacant = business_closed(c, i) || storefront(c, i) == 3
     let weak_trade = if shop && (storefront(c, i) > 0) do clamp(12 - flow, 0, 12) else 0 end
-    let spending = if shop do clamp((wage_rate(labor) - 18) * 2 - c.tax / 8, -8, 8) else 0 end
+    let spending = if shop do clamp((wage_rate(labor) - 18) * 2 - c.tax / 8, -8, 8) + clamp(nearby_savings(c, i) / 400, 0, 8) else 0 end
     let potential_sales = if road < 0 do 0 else if get(c.zones, i) == 4 || live_work(c, i) do
       42 + customer_base + 2 * credential_premium(job_requirement(c, i)) - competition - clamp(road / 8, 0, 12)
     else flow / 2 + 37 + 2 * credential_premium(job_requirement(c, i)) + customer_base + 2 * premium - competition + spending - weak_trade + (if retail > 0 do 2 else 0 end) end end
@@ -4705,9 +4913,9 @@ mod Ur.Sim do
       None -> c.import_rate / 12
     end
     let costs = payroll + 3 + c.energy * (if get(c.zones, i) == 4 do 2 + get(c.business_sector, i) else if live_work(c, i) do 2 else 1 end end) + inputs + clamp(road / 9, 0, 6)
-    let rent = asking_rent(4 + premium + get(c.buildings, i) + (if shop do flow / 16 else 0 end), get(c.business_losses, i))
+    let rent = asking_rent(4 + premium + get(c.buildings, i) + (if shop do flow / 16 else 0 end), get(c.business_losses, i)) + property_tax_share(c, i)
     let taxable = clamp(sales - costs - rent, 0, 1000)
-    { earnings: sales, rent: rent, tax: taxable * c.business_rate / 100, costs: costs }
+    { earnings: sales, rent: rent, tax: taxable * c.business_rate / 100 * listed_tax_weight(c, i) / 100, costs: costs }
   end
   pfn home_offer(c : City, routes : NativeIntArr, commutes : NativeIntArr, labor : Labor, i : Int) : Int do
     if building_access(c, routes, i) < 0 && commute(commutes, i) >= 999 do -99
@@ -4731,7 +4939,7 @@ mod Ur.Sim do
   pfn aged_vacancy(previous : Int) : Int do clamp(previous + 1, 4, 120) end
   type HomeListing = { lot : Int, free : Int, rent : Int, minutes : Int }
   type HomeMoves = { losses : NativeIntArr, empty : NativeIntArr, arrivals : NativeIntArr, by_neighborhood : NativeIntArr,
-    search : NativeIntArr, departures : Int, book : Households, capacity : Option(UtilityReservation) }
+    search : NativeIntArr, departures : Int, book : Households, capacity : Option(UtilityReservation), savings : NativeIntArr }
   type HousingSettlement = { city : City, departures : Int }
   fn housing_grace() : Int do 3 end
   pfn home_listings(c : City, routes : NativeIntArr, commutes : NativeIntArr, labor : Labor, i : Int, out : List(HomeListing)) : List(HomeListing) do
@@ -4802,7 +5010,9 @@ mod Ur.Sim do
           let staying = List.append(List.take(source, remaining - arrived), List.drop(source, remaining))
           let destination = List.append(registered_at(c, moves.book, home.lot), leaving)
           let book = record_households(record_households(moves.book, origin, staying), home.lot, destination)
-          let moves = { moves with book: book, capacity: capacity, arrivals: NativeArray.set_int(moves.arrivals, home.lot, previous + arrived),
+          let carried = clamp(arrived * savings_per_home(c, origin), 0, get(moves.savings, origin))
+          let savings = NativeArray.set_int(NativeArray.set_int(moves.savings, origin, get(moves.savings, origin) - carried), home.lot, get(moves.savings, home.lot) + carried)
+          let moves = { moves with savings: savings, book: book, capacity: capacity, arrivals: NativeArray.set_int(moves.arrivals, home.lot, previous + arrived),
             by_neighborhood: NativeArray.set_int(moves.by_neighborhood, district, get(moves.by_neighborhood, district) + arrived) }
           place_households(c, listings, origin, remaining - arrived, account, minutes, moves, outage)
         end
@@ -4816,9 +5026,12 @@ mod Ur.Sim do
         let deadline = get(c.newcomer_grace, i)
         let overdue = deadline > 0 && deadline == c.month
         let outage = utility_disruption(c, i) >= utility_failure_days()
-        let streak = if deadline <= c.month && home_offer(c, routes, commutes, labor, i) < 0 do
+        let standing = home_offer(c, routes, commutes, labor, i)
+        -- Savings that cover the shortfall carry a household through the month.
+        let covered = standing < 0 && !overdue && savings_per_home(c, i) >= 0 - standing
+        let streak = if deadline <= c.month && standing < 0 && !covered do
           if overdue do 4 else get(c.housing_losses, i) + 1 end
-        else 0 end
+        else if covered do get(c.housing_losses, i) else 0 end end
         if streak < 4 && !outage do
           { moves with losses: NativeArray.set_int(moves.losses, i, streak), search: NativeArray.set_int(moves.search, i, 0) }
         else
@@ -4831,7 +5044,8 @@ mod Ur.Sim do
             let keys = registered_at(c, moves.book, i)
             record_households(moves.book, i, List.append(List.take(keys, left), List.drop(keys, waiting)))
           end
-          { moves with book: book, losses: NativeArray.set_int(moves.losses, i, if left > 0 do 3 else 4 end),
+          let gone = clamp(departures * savings_per_home(c, i), 0, get(moves.savings, i))
+          { moves with savings: NativeArray.set_int(moves.savings, i, get(moves.savings, i) - gone), book: book, losses: NativeArray.set_int(moves.losses, i, if left > 0 do 3 else 4 end),
             empty: NativeArray.set_int(moves.empty, i, homes_at(c, i) - left),
             search: NativeArray.set_int(moves.search, i, if left > 0 do months else 0 end),
             departures: moves.departures + departures }
@@ -4871,9 +5085,9 @@ mod Ur.Sim do
     let empty = NativeArray.make_int(count(), 0)
     let moves = move_from_homes(c, routes, commutes, labor, listings, 0,
       { losses: c.housing_losses, empty: c.empty_homes, arrivals: empty, search: c.housing_search, departures: 0, book: c.households, capacity: capacity,
-        by_neighborhood: NativeArray.make_int(80, 0) })
+        by_neighborhood: NativeArray.make_int(80, 0), savings: c.economy.savings })
     let moves = fill_homes(c, 0, moves)
-    let city = { c with households: moves.book, housing_losses: moves.losses, empty_homes: moves.empty, home_arrivals: moves.arrivals,
+    let city = { c with economy: { c.economy with savings: moves.savings }, households: moves.book, housing_losses: moves.losses, empty_homes: moves.empty, home_arrivals: moves.arrivals,
       housing_search: moves.search, neighborhood_rents: update_neighborhood_rents(c.neighborhood_rents, moves.by_neighborhood, 0, c.neighborhood_rents) }
     { city: city, departures: moves.departures }
   end
@@ -4925,7 +5139,9 @@ mod Ur.Sim do
         let book = c.households
         let keys = List.append(households_at(c, home.lot), household_keys(book.next, added))
         let book = record_households({ book with next: book.next + added }, home.lot, keys)
-        let c = { c with households: book, empty_homes: NativeArray.set_int(c.empty_homes, home.lot, empty),
+        let brought = added * newcomer_savings(c)
+        let c = { c with economy: { c.economy with savings: NativeArray.set_int(c.economy.savings, home.lot, get(c.economy.savings, home.lot) + brought) },
+          households: book, empty_homes: NativeArray.set_int(c.empty_homes, home.lot, empty),
           housing_losses: NativeArray.set_int(c.housing_losses, home.lot, 0),
           newcomer_grace: NativeArray.set_int(c.newcomer_grace, home.lot, c.month + housing_grace()) }
         settle_immigrant_homes(c, rest, people - placed)
@@ -4969,7 +5185,7 @@ mod Ur.Sim do
         end
         let staffed_days = staffed * days_per_month() * 100
         let production = clamp(staffed_days - get(lost, i), 0, staffed_days)
-        taxable_business(c, routes, hiring, people, jobs, lost, i + 1, taxable_profit + profit * production / staffed_days)
+        taxable_business(c, routes, hiring, people, jobs, lost, i + 1, taxable_profit + profit * production / staffed_days * listed_tax_weight(c, i) / 100)
       else taxable_business(c, routes, hiring, people, jobs, lost, i + 1, taxable_profit) end
     end
   end
@@ -5099,7 +5315,11 @@ mod Ur.Sim do
     else if shop_offer(c, st.routes, st.labor, st.people, st.work, i) < 3 do "Sales cannot cover rent, payroll and costs"
     else "Viable now. Waiting for a new tenant." end end end end end end
   end
-  pfn property_bill(c : City, i : Int) : Int do get(c.buildings, i) * 4 end
+  -- A vacant building's owner owes the tax its land would carry if let.
+  pfn property_bill(c : City, i : Int) : Int do
+    let floors = get(c.buildings, i)
+    if floors == 0 do 0 else clamp((land_value(c, i) * floors * c.economy.property_rate + property_scale() / 2) / property_scale(), 1, 1000000) end
+  end
   fn property_vacant(c : City, i : Int) : Bool do
     get(c.zones, i) > 0 && get(c.buildings, i) > 0 && get(c.construction, i) == 0 &&
       !building_offline(c, i) && occupied_homes(c, i) == 0 && job_slots(c, i) == 0
@@ -5819,7 +6039,8 @@ mod Ur.Sim do
         Ready -> if undeveloped_zone(c, i) do
           let wait = investment_delay(c, st.commutes, st.civic, i)
           "Eligible for development. Investors look again every " ++ int_to_string(wait.turns * investment_turn_days(c)) ++ " days" ++
-            (if wait.tax + wait.energy + wait.commute == 0 do "." else " (tax +" ++ int_to_string(wait.tax) ++ ", energy +" ++ int_to_string(wait.energy) ++ ", commute +" ++ int_to_string(wait.commute) ++ " turns)." end)
+            (if wait.tax + wait.energy + wait.commute == 0 && wait.market == 0 do "." else " (tax +" ++ int_to_string(wait.tax) ++ ", energy +" ++ int_to_string(wait.energy) ++ ", commute +" ++ int_to_string(wait.commute) ++
+              (if wait.market > 0 do ", market slump +1" else if wait.market < 0 do ", market boom −1" else "" end end) ++ " turns)." end)
         else status_text(status) end
         _ -> status_text(status)
       end
@@ -5845,7 +6066,7 @@ mod Ur.Sim do
   end
   -- Turns a ready parcel waits between investors: taxes, energy prices and a
   -- long commute each add to it, and nearby civic services take one off.
-  type InvestmentDelay = { turns : Int, tax : Int, energy : Int, commute : Int }
+  type InvestmentDelay = { turns : Int, tax : Int, energy : Int, commute : Int, market : Int }
   fn investment_delay(c : City, commutes : NativeIntArr, civic : NativeIntArr, i : Int) : InvestmentDelay do
     let zone = get(c.zones, i)
     let business = if zone == 1 do 0 else clamp(c.business_rate - 10, 0, 15) / 3 end
@@ -5853,8 +6074,11 @@ mod Ur.Sim do
     let energy = c.energy / 3
     let travel = clamp(commute(commutes, i), 0, 72) / 12
     let civic_bonus = if (zone == 1 || zone == 3) && get(civic, i) > 0 do 1 else 0 end
-    let delay = 1 + tax + energy + travel
-    { turns: clamp(delay - civic_bonus, 1, delay), tax: tax, energy: energy, commute: travel }
+    -- Firms hold back in a market slump and hurry in a boom.
+    let mood = market_change(c, 12)
+    let market = if zone == 1 do 0 else if mood < -100 do 1 else if mood > 100 do -1 else 0 end end end
+    let delay = 1 + tax + energy + travel + market
+    { turns: clamp(delay - civic_bonus, 1, 1 + tax + energy + travel + 1), tax: tax, energy: energy, commute: travel, market: market }
   end
   -- A larger city has more investors, so more ready parcels can start at once.
   fn investment_starts(people : Int) : Int do clamp(1 + people / 160, 1, 4) end
@@ -5942,8 +6166,8 @@ mod Ur.Sim do
       parking_receipts(c, traffic, roads, i + 1, total + visits * parking_fee(kind))
     end
   end
-  pfn budget(c : City, traffic : NativeIntArr, people : Int, labor : Labor, profit_tax : Int, used : Int, power : Int, r : Services, trash : Waste, fuel : Int, buses : List(BusLine)) : Budget do
-    let property_tax = people * 2 / 3
+  pfn budget(c : City, traffic : NativeIntArr, _people : Int, labor : Labor, profit_tax : Int, used : Int, power : Int, r : Services, trash : Waste, fuel : Int, buses : List(BusLine)) : Budget do
+    let property_tax = property_tax_total(c, 0, 0)
     let income_tax = labor.wages * c.tax / 100
     let business_tax = profit_tax
     let trade_income = r.fish_revenue + r.farm_exports / 4 + export_receipts(c.island_exports)
@@ -5959,15 +6183,15 @@ mod Ur.Sim do
     let power_cost = power / 10 + fuel + c.pumping_cost
     let food_cost = (imports + 3) / 4
     let water_cost = r.imported_water + r.desal / 24
-    let sanitation_cost = r.untreated / 8 + trash.collected / 8 + clamp(trash.exported - managed_waste, 0, trash.exported) * 3 + trash.burned / 2
+    let sanitation_cost = funded(c, 3, r.untreated / 8 + trash.collected / 8 + clamp(trash.exported - managed_waste, 0, trash.exported) * 3 + trash.burned / 2)
     let bus_fares = List.fold_left(buses, 0, fn (total, line) -> total + line.boarded * c.bus_fare)
-    let bus_operations = List.fold_left(buses, 0, fn (total, line) -> total + bus_operating_cost(line))
+    let bus_operations = funded(c, 4, List.fold_left(buses, 0, fn (total, line) -> total + bus_operating_cost(line)))
     { revenue: property_tax + income_tax + business_tax + energy_income + trade_income + tariffs + toll_income + parking_income + bus_fares,
       bus_fares: bus_fares, bus_operations: bus_operations, freight_operations: freight_expense,
       energy_income: energy_income, power_cost: power_cost, food_cost: food_cost, water_cost: water_cost, sanitation_cost: sanitation_cost,
       tariffs: tariffs, toll_income: toll_income, parking_income: parking_income,
       property_tax: property_tax, income_tax: income_tax, business_tax: business_tax, trade_income: trade_income,
-      infrastructure: sum(c, 0, 3, 0) + transit_upkeep(c, 0, 0) + reserve,
+      infrastructure: sum(c, 0, 3, 0) + funded(c, 4, transit_upkeep(c, 0, 0)) + reserve,
       operations: power_cost + food_cost + water_cost + sanitation_cost + bus_operations + freight_expense }
   end
   fn balance(b : Budget) : Int do b.revenue - b.infrastructure - b.operations end
@@ -6550,7 +6774,7 @@ mod Ur.Sim do
     let departing = if housing.departures == 0 do 0 else
       housing.departures * pop / clamp(sum(market_city, 0, 0, 0) / 4, 1, 1000000)
     end
-    let market_city = housing.city
+    let market_city = settle_wealth(housing.city, a, housing_commutes, housing_labor, market_change(housing.city, 0))
     let next = { market_city with pumping_cost: 0, waste_log: if c.waste_live do reset_waste_log(c) else c.waste_log end, property_sales: 0, construction_spend: 0, trash: trash.pending, land_pollution: backed_up_sewage(networks.sewer, update_land(c, a, trash.pending, c.land_pollution, 0), 0), air_pollution: update_air(c, a, traffic), pollution: update_pollution(c, networks.outlets, c.pollution, 0), month: c.month + 1, cash: c.cash + net, income: net }
     let (reserved_people, _) = construction_demand(c, a, 0, pop, 0)
     let civic = civic_access_with(c, a)
@@ -6570,6 +6794,7 @@ mod Ur.Sim do
       let sample = average_measures(sums, residents, 1, NativeArray.set_int(NativeArray.make_int(8, 0), 7, next.month), 0)
       { next with livability_history: Cons(sample, List.take(c.livability_history, 23)) }
     else next end
+    let next = settle_land(next, a, commutes, civic, walk)
     let next = develop(next, a, commutes, civic, walk, reservations, (c.month * 37) % count(), c.month, 0, pop, work, labor, food_room(next, a, reserved_people, networks, gen), investment_starts(pop))
     let next = advance_population(next, census, labor, a, departing)
     let residents = population(next)

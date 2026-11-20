@@ -256,6 +256,15 @@ mod Ur.Council do
     end
   end
 
+  pfn ward_wealth(c : Ur.Sim.City, ward : Int, offset : Int, total : Int, homes : Int) : Int do
+    if offset == 180 do (if homes > 0 do total / homes else 0 end) else
+      let lot = ward_lot(ward, offset)
+      let here = S.valid(lot) && ward_at(c, lot) == ward
+      ward_wealth(c, ward, offset + 1, total + (if here do S.get(c.economy.savings, lot) else 0 end), homes + (if here do S.occupied_homes(c, lot) else 0 end))
+    end
+  end
+  -- Average savings per household in a ward.
+  fn ward_savings(c : Ur.Sim.City, ward : Int) : Int do ward_wealth(c, ward, 0, 0, 0) end
   pfn ward_lot(ward : Int, offset : Int) : Int do
     let cell = offset / 36
     let x = ward % 10 * 6 + offset % 6 + (if cell == 1 do -6 else if cell == 2 do 6 else 0 end end)
@@ -534,7 +543,9 @@ mod Ur.Council do
     let labor = st.labor
     let unemployment = if labor.workforce == 0 do 0 else S.clamp(labor.unemployed * 8 / labor.workforce, 0, 8) end
     let displacement = if S.displaced_homes(c, lot) > 0 do 32 else 0 end
-    S.clamp(S.base_happiness(c, st, lot) - financial - unemployment - displacement - S.utility_strain(c, lot), 0, 100)
+    -- Savings soften hard months; a slump that drains them is felt here.
+    let cushion = S.clamp(S.savings_per_home(c, lot) / 200, 0, 6) - (if c.economy.administrator >= 0 do 8 else 0 end)
+    S.clamp(S.base_happiness(c, st, lot) - financial - unemployment - displacement - S.utility_strain(c, lot) + cushion, 0, 100)
   end
   pfn sentiment(c : Ur.Sim.City, st : Ur.Sim.Stats, ward : Int, festival_days : Int, offset : Int, total : Int, residents : Int) : Int do
     if offset == 180 do (if residents > 0 do total / residents else if festival_days >= 0 do 0 else 40 end end) else
@@ -588,8 +599,10 @@ mod Ur.Council do
   -- Percentage chance the ward's incumbent keeps the seat if it voted today.
   fn retention_odds(c : Ur.Sim.City, st : Ur.Sim.Stats, ward : Int) : Int do
     let happiness = S.clamp(sentiment(c, st, ward, -1, 0, 0, 0) + campaign_average(c, ward), 0, 100)
-    vote_support(happiness, endorsement(c, ward))
+    S.clamp(vote_support(happiness, endorsement(c, ward)) + market_vote(c), 8, 92)
   end
+  -- Voters credit or blame incumbents for the share index over the term.
+  fn market_vote(c : Ur.Sim.City) : Int do S.clamp(S.market_change(c, 47) / 50, -8, 8) end
   pfn elect(c : Ur.Sim.City, st : Ur.Sim.Stats, ward : Int) : Ur.Sim.City do
     if ward == 80 do c else if !seated(c, ward) do elect(c, st, ward + 1) else
       let side = endorsement(c, ward)

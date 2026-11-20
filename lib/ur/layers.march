@@ -31,6 +31,8 @@ mod Ur.Layers do
       32 -> "Heat"
       33 -> "Floodplain"
       34 -> "Religion"
+      36 -> "Land value"
+      37 -> "Household savings"
       12 | 13 | 14 | 15 | 16 | 17 | 18 -> S.metric_name(layer - 12)
       _ -> "Off"
     end
@@ -51,6 +53,8 @@ mod Ur.Layers do
       25 -> "Transit foot traffic · Green low / amber medium / cyan high."
       30 -> "Green: contained / amber: piling up / red: overflowing / blue: disposal facility."
       34 -> "Green covered · Gray uncovered · Cyan open · Red needs staff · Amber closed"
+      36 -> "Land value · Red under $600 / amber to $1,000 / green to $1,600 / cyan above"
+      37 -> "Savings a household · Red under $100 / amber to $400 / green to $1,200 / cyan above"
       33 -> "Amber: storm risk · Blue: flooded now · Green: protection"
       32 -> "Blue <25 °C · Green 25–27.9 · Amber 28–32.9 · Red 33+ °C"
       29 -> "Arrows point downwind. Gray: light / blue: moderate / amber: strong."
@@ -118,6 +122,12 @@ mod Ur.Layers do
         else if S.resident_homes(c, i) > 0 do (if S.worship_access(c, st, i) do 11 else 17 end)
         else -1 end end end
       32 -> if S.get(c.heights, i) == 0 do -1 else heat_color(S.local_temperature(c, i)) end
+      36 ->
+        let value = S.land_value(c, i)
+        if !land do -1 else if value < 600 do 6 else if value < 1000 do 10 else if value < 1600 do 11 else 20 end end end end
+      37 ->
+        let saved = S.savings_per_home(c, i)
+        if S.occupied_homes(c, i) == 0 do -1 else if saved < 100 do 6 else if saved < 400 do 10 else if saved < 1200 do 11 else 20 end end end end
       1 | 2 | 31 ->
         let report = utility_layer(st, layer)
         let capacity = N.capacity(report.flow, i)

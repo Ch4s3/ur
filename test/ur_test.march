@@ -1465,7 +1465,7 @@ mod UrTest do
     end
     Test.assert_eq_int(settled.construction_spend, 0, "construction purchases are settled once per month")
     let two_months = Ur.Clock.month(settled)
-    let selected = Ur.Hud.finance_click(two_months, 445.0, 410.0, 1440.0, 900.0, { month: 0, lines: false })
+    let selected = Ur.Hud.finance_click(two_months, 445.0, 410.0, 1440.0, 900.0, { month: 0, lines: false, stock: -1 })
     Test.assert_eq_int(selected.month, settled.month, "clicking the first chart column selects the older month")
     let switched = Ur.Hud.finance_click(two_months, 1020.0, 321.0, 1440.0, 900.0, selected)
     Test.assert_true(switched.lines && switched.month == selected.month, "changing chart style keeps the selected month")
@@ -1785,8 +1785,11 @@ mod UrTest do
     Test.assert_eq_int(S.market_density(c, S.access(c), S.index(10, 20), 32, 24), 1, "low demand supports one storey")
     let town = Ur.Clock.advance(Ur.Scenario.civic_region(region), 1080)
     let st = S.stats(town)
-    -- The remote station's crew varies with who lives within commuting range.
-    Test.assert_true(st.services.geothermal > 0, "the eastern field supplies clean power")
+    -- The remote station's crew varies with who lives within commuting range,
+    -- so check the field itself with the station staffed.
+    let field = S.index(28, 15)
+    Test.assert_eq_int(S.get(town.plants, field), 2, "the eastern geothermal station still stands")
+    Test.assert_true((S.stats(with_staff(town, field))).services.geothermal > 0, "the eastern field supplies clean power")
     Test.assert_true(st.services.wells >= st.people, "connected western wells supply the expanded network")
     let trade_demand = S.clamp(st.people, 0, 500)
     let trade_service = S.services(town, st.routes, trade_demand)

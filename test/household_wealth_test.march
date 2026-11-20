@@ -1,0 +1,53 @@
+mod HouseholdWealthTest do
+  needs IO
+  needs IO.Console
+  needs IO.Clock
+  needs IO.Process
+  needs IO.FileRead
+  needs IO.FileWrite
+  alias Ur.Sim as S
+
+  pfn total(c : Ur.Sim.City, i : Int, sum : Int) : Int do
+    if i >= S.count() do sum else total(c, i + 1, sum + S.get(c.economy.savings, i)) end
+  end
+  fn main(_cap : Cap(IO)) : Unit do
+    let c = S.new()
+    let home = S.index(10, 20)
+    let st = S.stats(c)
+    let accounts = S.household_accounts(c, st.routes, st.commutes, st.labor, home)
+    let homes = S.occupied_homes(c, home)
+    Test.assert_true(homes > 0, "The test parcel is occupied")
+    let after = S.settle_wealth(c, st.routes, st.commutes, st.labor, 0)
+    Test.assert_eq_int(S.get(after.economy.savings, home), S.clamp(S.margin(accounts) * homes, 0, 1000000000), "A month's margin is saved")
+    Test.assert_eq_int(List.length(after.economy.wealth_history), 1, "Average savings are recorded monthly")
+
+    let rich = { c with economy: { c.economy with savings: NativeArray.set_int(c.economy.savings, home, 4000 * homes) } }
+    let squeezed = { rich with tax: 25, energy: 12 }
+    let sst = S.stats(squeezed)
+    let squeezed_after = S.settle_wealth(squeezed, sst.routes, sst.commutes, sst.labor, 0)
+    Test.assert_true(S.get(squeezed_after.economy.savings, home) < S.get(rich.economy.savings, home), "Savings above the cushion are spent down")
+    let broke = { squeezed with economy: { squeezed.economy with savings: NativeArray.make_int(S.count(), 0) } }
+    let bst = S.stats(broke)
+    Test.assert_true(S.get((S.settle_wealth(broke, bst.routes, bst.commutes, bst.labor, 0)).economy.savings, home) >= 0, "Savings never fall below zero")
+
+    Test.assert_eq_int(S.invested_share(50, 90), 0, "Savings under the cushion stay out of the market")
+    Test.assert_true(S.invested_share(2000, 90) > S.invested_share(200, 90), "Wealthier households invest a larger share")
+    let rst = S.stats(rich)
+    let boom = S.settle_wealth(rich, rst.routes, rst.commutes, rst.labor, 50)
+    let bust = S.settle_wealth(rich, rst.routes, rst.commutes, rst.labor, -50)
+    Test.assert_true(S.get(boom.economy.savings, home) > S.get(bust.economy.savings, home), "Index gains and losses reach invested savings")
+
+    Test.assert_true(S.nearby_savings(rich, home) > S.nearby_savings(c, home), "Neighbourhood wealth is measured around a parcel")
+    Test.assert_true(S.land_target(rich, rst.routes, rst.commutes, rst.civic, rst.park_walk, home) > S.land_target(c, rst.routes, rst.commutes, rst.civic, rst.park_walk, home), "Wealthy neighbours raise land value")
+
+    let grown = Ur.Clock.advance(c, 12)
+    Test.assert_true(total(grown, 0, 0) > 0, "A working town accumulates savings")
+    Test.assert_true(S.average_savings(grown) > 0, "Average savings are reported")
+
+    let game = { city: rich, cx: 78.0, cz: 151.0, zoom: 52.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(game)) do
+      Ok(loaded) -> Test.assert_eq_int(S.get(loaded.city.economy.savings, home), S.get(rich.economy.savings, home), "Savings survive save and load")
+      Err(error) -> panic(error)
+    end
+  end
+end

@@ -440,14 +440,62 @@ wait. A larger city has more investors, so more projects start per turn; the
 extra ones avoid housing while a tenth of workers are without a job.
 
 During a campaign the Council panel shows each incumbent's odds, which follow
-how residents of that ward feel and whom you endorse.
+how residents of that ward feel, whom you endorse, and how the share index did
+over the term.
+
+## Land, wealth and the treasury
+
+**Land value.** Every parcel has a value set by its livability, road access,
+the coast and its neighbours' wealth. Values drift a quarter of the way to
+their target each month. Property tax is a rate on land value for each storey
+of an occupied building; set it under **Details → Policy**. Landlords pass it
+on in rent, so raising it costs tenants. A vacant building's owner still owes
+the tax its land would carry. The **Land value** layer is under Neighborhoods.
+
+**Household savings.** Each household saves what is left of its income after
+rent, tax and costs, and carries its savings when it moves. Savings above
+three months of costs go partly into the share index. A household whose
+savings cover a bad month does not count it toward leaving. Wealthy
+neighbourhoods spend more in shops and raise land values, and savings soften
+how wards feel about hard times. The **Household savings** layer and the
+Population and Council panels show it.
+
+**Funding.** **Details → Finance → Funding** sets education, health, safety,
+utilities, transit, and parks and community between 50% and 150%. Costs follow
+the level. Below 100% posts go unfilled and output falls; above 100% schools
+add seats.
+
+**Borrowing.** **Details → Finance → Debt** takes loans of $5,000 or $20,000
+over three years, issues bonds over ten years, and repays a loan early. Bonds
+sell to residents first, from savings above a cushion, and pay them interest;
+outside buyers take the rest at a higher rate. The credit rating, from AAA to
+D, follows debt against revenue, debt service, deficits and missed payments,
+and sets new rates. Below BB the bond market closes. If a month would end with
+negative cash, the bank covers it with an emergency overdraft. A month whose
+debt service cannot be paid counts as one missed payment and the shortfall
+becomes arrears. There is no new borrowing while in arrears. Three missed
+months in a year bring an administrator, who caps every service at 70%,
+freezes paid construction except demolition and angers voters; clearing the
+arrears and paying three months ends it. If arrears are still higher after a
+year under administration, the city is insolvent and the game ends.
+
+**Stock market.** A business with twelve profitable months and at least
+twelve jobs lists on the market; the **listing incentive** halves that for
+$200 a month. Prices move toward earnings times a valuation multiple with
+seeded shocks that come in calm and turbulent spells. The multiple rises with
+market sentiment and falls with interest rates. Sentiment follows a regional
+business cycle, growth in city spending, momentum, and falls with city debt.
+Listed firms pay dividends to households, and a firm that closes or is
+demolished delists near zero. A **tax break** for listed firms raises their
+value at the cost of business tax. A rising index draws better firms and
+speeds commercial investment; a falling one slows it. **Details → Finance →
+Stocks** charts the index and any company's price.
 
 This is the first gameplay slice, with procedural voxel architecture and landscaping. It does not
 simulate the eventual tens of thousands of individual residents. Households and
-employment are aggregates; wages, area income, land markets, differentiated
+employment are aggregates; differentiated
 industries, trade chains, ferries and full-region streaming
-are future work. Existing buildings do not yet abandon when conditions worsen;
-those conditions restrict new investment. Power currently follows the harbour
+are future work. Power currently follows the harbour
 road network. Terrain grading is a parcel operation, not a voxel brush.
 
 Start a new city or load your saved city from the title menu. During play,

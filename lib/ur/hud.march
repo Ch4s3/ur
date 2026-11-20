@@ -76,17 +76,21 @@ mod Ur.Hud do
       (7 + float_to_int((right -. 18.0) /. 96.0), 1)
     else if visible && tab == 3 && w >= 620.0 && y >= 222.0 && y < 282.0 && right >= 470.0 && right < 538.0 do
       (5 + float_to_int((y -. 222.0) /. 30.0), if right < 504.0 do -1 else 1 end)
-    else if !visible || tab != 3 || y < 222.0 || y >= 372.0 || right < 186.0 || right >= 254.0 do (-1, 0)
-    else (float_to_int((y -. 222.0) /. 30.0), if right < 220.0 do -1 else 1 end) end end end
+    else if !visible || tab != 3 || y < 222.0 || y >= 397.0 || right < 186.0 || right >= 254.0 do (-1, 0)
+    else
+      let row = float_to_int((y -. 222.0) /. 30.0)
+      (if row == 5 do 10 else row end, if right < 220.0 do -1 else 1 end)
+    end end end
   end
   pfn policy_rows(a : Strata.Ui.Ui, c : Ur.Sim.City, x : Float, top : Float, row : Int) : Strata.Ui.Ui do
-    if row >= 5 do a else
+    if row >= 6 do a else
       let y = top +. 222.0 +. int_to_float(row) *. 30.0
       let value = match row do
         0 -> "Income tax   " ++ int_to_string(c.tax) ++ "%"
         1 -> "Business tax   " ++ int_to_string(c.business_rate) ++ "%"
         2 -> "Import tariff   " ++ int_to_string(c.import_rate) ++ "%"
         3 -> "Export tariff   " ++ int_to_string(c.export_rate) ++ "%"
+        5 -> "Property tax   " ++ int_to_string(c.economy.property_rate / 10) ++ "." ++ int_to_string(c.economy.property_rate % 10) ++ "%"
         _ -> "Energy price   $" ++ int_to_string(c.energy)
       end
       let a = label(a, x +. 18.0, y +. 3.0, 13.0, value, true)
@@ -120,7 +124,7 @@ mod Ur.Hud do
         _ -> "Market"
       end
       let selected = i == active || (i == 2 && (active == 10 || active == 14)) ||
-        (i == 0 && (active == 11 || active == 13)) || (i == 8 && active == 16)
+        (i == 0 && (active == 11 || active == 13)) || (i == 8 && active == 16) || (i == 4 && active >= 17 && active <= 19)
       let a = U.rect(a, 0, x, y, width -. 3.0, 35.0,
         if selected do (0.18, 0.36, 0.39, 1.0) else (0.09, 0.17, 0.20, 1.0) end)
       let (text_width, _, _) = T.measure(T.default_font(), 13.0, name, 0.0)
@@ -217,7 +221,7 @@ mod Ur.Hud do
         "   ·   " ++ int_to_string(S.get(c.heights, hover) / 4) ++ " m elevation", false)
       let a = prose(a, x, top +. 235.0, 13.0, reason)
       let zone = S.get(c.zones, hover)
-      let a = label(a, x, top +. 282.0, 11.0, "Pollution " ++ int_to_string(S.land_pollution_at(c, hover)) ++ "%   ·   " ++ S.nuisance_name(S.get(c.nuisance, hover)) ++ " nuisance limit" ++
+      let a = label(a, x, top +. 282.0, 11.0, "Pollution " ++ int_to_string(S.land_pollution_at(c, hover)) ++ "%   ·   " ++ S.nuisance_name(S.get(c.nuisance, hover)) ++ " nuisance limit   ·   Land $" ++ int_to_string(S.land_value(c, hover)) ++
         (if zone == 3 && !S.live_work(c, hover) && S.workshop_allowed(c, hover) do " · workshop allowed" else "" end), false)
       let trip = S.commute(st.commutes, hover)
       let travel = if S.get(c.ferries, hover) > 0 || S.get(c.transit, hover) >= 2 do
@@ -271,6 +275,188 @@ mod Ur.Hud do
       if S.get(c.heights, hover) > 0 && U.width(a) >= 560.0 do
         parcel_measures(a, c, st, hover, x +. 279.0, top +. 188.0, 0)
       else a end
+    end
+  end
+  -- Finance tab buttons open the Funding (17), Debt (18) and Stocks (19)
+  -- pages; each page's corner button returns to Finance.
+  fn economy_page_at(mx : Float, my : Float, w : Float, h : Float, tab : Int) : Int do
+    let right = mx -. menu_x(w)
+    let width = menu_width(w)
+    let y = my -. menu_y(h)
+    if tab == 4 && y >= 57.0 && y < 84.0 do
+      let left = 18.0 +. width -. 446.0
+      if right >= left && right < left +. 84.0 do 17
+      else if right >= left +. 90.0 && right < left +. 174.0 do 18
+      else if right >= left +. 180.0 && right < left +. 264.0 do 19 else -1 end end end
+    else if tab >= 17 && tab <= 19 && detail_button_at(mx, my, w, h) do 4
+    else -1 end end
+  end
+  -- Minus and plus buttons on the economy pages, as (row, delta) for Ur.Treasury.adjust.
+  fn economy_at(mx : Float, my : Float, w : Float, h : Float, tab : Int) : (Int, Int) do
+    let right = mx -. menu_x(w)
+    let width = menu_width(w)
+    let y = my -. menu_y(h)
+    let minus = 18.0 +. width -. 118.0
+    let row = float_to_int((y -. 100.0) /. 36.0)
+    let along = right -. 18.0
+    if tab == 17 && y >= 100.0 && row <= 5 && float_to_int(y -. 100.0) % 36 < 25 && right >= minus && right < minus +. 66.0 do
+      (row, if right < minus +. 33.0 do -1 else 1 end)
+    else if tab == 18 && y >= 330.0 && y < 355.0 do
+      if along >= 0.0 && along < 110.0 do (10, 1)
+      else if along >= 116.0 && along < 226.0 do (11, 1)
+      else if along >= 232.0 && along < 342.0 do (12, 1)
+      else if along >= 346.0 && along < 378.0 do (14, -1)
+      else if along >= 380.0 && along < 412.0 do (14, 1)
+      else if along >= 420.0 && along < 530.0 do (13, 1) else (-1, 0) end end end end end end
+    else if tab == 19 && y >= 84.0 && y < 109.0 do
+      if along >= 0.0 && along < 170.0 do (20, 1)
+      else if along >= 330.0 && along < 362.0 do (21, -1)
+      else if along >= 364.0 && along < 396.0 do (21, 1) else (-1, 0) end end end
+    else (-1, 0) end end end
+  end
+  pfn plus_minus(a : Strata.Ui.Ui, x : Float, y : Float) : Strata.Ui.Ui do
+    let a = U.rect(a, 0, x, y, 32.0, 25.0, (0.15, 0.26, 0.29, 1.0))
+    let a = U.rect(a, 0, x +. 34.0, y, 32.0, 25.0, (0.15, 0.26, 0.29, 1.0))
+    label(label(a, x +. 11.0, y +. 2.0, 13.0, "-", true), x +. 45.0, y +. 2.0, 13.0, "+", true)
+  end
+  pfn funding_rows(a : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, x : Float, y : Float, width : Float, group : Int) : Strata.Ui.Ui do
+    if group > 5 do a else
+      let top = y +. 100.0 +. int_to_float(group) *. 36.0
+      let level = S.funding_level(c, group)
+      let a = label(a, x, top +. 3.0, 13.0, S.service_group_name(group), true)
+      let a = label(a, x +. 200.0, top +. 3.0, 13.0, int_to_string(level) ++ "%", level == 100)
+      let a = label(a, x +. 260.0, top +. 3.0, 12.0, "$" ++ int_to_string(S.service_spending(c, st, group)) ++ " a month", false)
+      funding_rows(plus_minus(a, x +. width -. 118.0, top), c, st, x, y, width, group + 1)
+    end
+  end
+  pfn funding_panel(a : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, x : Float, y : Float, width : Float) : Strata.Ui.Ui do
+    let a = label(a, x, y +. 58.0, 20.0, "Service funding", true)
+    let a = funding_rows(a, c, st, x, y, width, 0)
+    let note = if c.economy.administrator >= 0 do "An administrator caps every service at 70% until the city's debts are back in order."
+      else "Below 100% posts go unfilled and output falls; above 100% schools add seats. Costs follow the level." end
+    prose(a, x, y +. 326.0, 12.0, note)
+  end
+  pfn debt_rows(a : Strata.Ui.Ui, debts : List(Ur.Sim.Debt), x : Float, y : Float, left : Int) : Strata.Ui.Ui do
+    match debts do
+      Nil -> a
+      Cons(d, rest) ->
+        if left <= 0 do label(a, x, y, 11.0, "and " ++ int_to_string(List.length(debts)) ++ " more", false) else
+          let line = Ur.Debt.kind_name(d.kind) ++ "   $" ++ int_to_string(d.principal) ++ "   " ++ int_to_string(d.rate / 10) ++ "." ++ int_to_string(d.rate % 10) ++
+            "%   " ++ int_to_string(d.months) ++ " months   $" ++ int_to_string(Ur.Debt.payment(d)) ++ " a month" ++
+            (if d.resident > 0 do "   · $" ++ int_to_string(d.resident) ++ " held by residents" else "" end)
+          debt_rows(label(a, x, y, 11.0, line, d.kind == 2), rest, x, y +. 18.0, left - 1)
+        end
+    end
+  end
+  pfn debt_panel(a : Strata.Ui.Ui, c : Ur.Sim.City, x : Float, y : Float) : Strata.Ui.Ui do
+    let a = label(a, x, y +. 58.0, 20.0, "Borrowing", true)
+    let rating = Ur.Debt.rating(c)
+    let a = label(a, x, y +. 92.0, 14.0, "Credit rating " ++ Ur.Debt.rating_name(rating) ++ "   ·   " ++ Ur.Debt.rating_reason(c), rating <= 3)
+    let a = label(a, x, y +. 116.0, 12.0, "Debt $" ++ int_to_string(Ur.Debt.total_debt(c)) ++ "   ·   Service $" ++ int_to_string(Ur.Debt.debt_service(c)) ++
+      " a month   ·   Arrears $" ++ int_to_string(c.economy.arrears), c.economy.arrears == 0)
+    let a = label(a, x, y +. 136.0, 12.0, "New loans " ++ int_to_string(Ur.Debt.rate_for(rating, 0) / 10) ++ "." ++ int_to_string(Ur.Debt.rate_for(rating, 0) % 10) ++
+      "%   ·   New bonds " ++ (if rating > 4 do "closed" else int_to_string(Ur.Debt.rate_for(rating, 1) / 10) ++ "." ++ int_to_string(Ur.Debt.rate_for(rating, 1) % 10) ++ "%" end), false)
+    let a = prose(a, x, y +. 158.0, 12.0, Ur.Debt.next_trigger(c))
+    let a = if List.is_empty(c.economy.debts) do label(a, x, y +. 200.0, 12.0, "No outstanding loans or bonds.", false)
+      else debt_rows(a, c.economy.debts, x, y +. 200.0, 6) end
+    let a = finance_button(a, x, y +. 330.0, 110.0, "Loan $5,000", true)
+    let a = finance_button(a, x +. 116.0, y +. 330.0, 110.0, "Loan $20,000", true)
+    let a = finance_button(a, x +. 232.0, y +. 330.0, 110.0, "Bond $" ++ int_to_string(c.economy.bond_size / 1000) ++ "k", rating <= 4)
+    let a = plus_minus(a, x +. 346.0, y +. 330.0)
+    finance_button(a, x +. 420.0, y +. 330.0, 110.0, "Repay a loan", false)
+  end
+  -- Clicking a company row on the Stocks page selects it for the chart.
+  fn stock_click(c : Ur.Sim.City, mx : Float, my : Float, w : Float, h : Float, view : FinanceView) : FinanceView do
+    let y = my -. menu_y(h)
+    let along = mx -. menu_x(w) -. 18.0
+    if y < 196.0 || y >= 196.0 +. 16.0 *. 6.0 || along < 0.0 || along >= menu_width(w) -. 54.0 do view else
+      let row = float_to_int((y -. 196.0) /. 16.0)
+      match List.nth_opt(stock_order(c), row) do
+        Some(s) -> { view with stock: s.id }
+        None -> view
+      end
+    end
+  end
+  -- Companies by market value, largest first.
+  fn stock_order(c : Ur.Sim.City) : List(Ur.Sim.Stock) do
+    List.sort_by(Ur.Market.active(c), fn (a, b) -> Ur.Market.market_value(a) > Ur.Market.market_value(b))
+  end
+  pfn series_peak(values : List(Int), peak : Int) : Int do
+    match values do
+      Nil -> peak
+      Cons(v, rest) -> series_peak(rest, if v > peak do v else peak end)
+    end
+  end
+  pfn series_floor(values : List(Int), low : Int) : Int do
+    match values do
+      Nil -> low
+      Cons(v, rest) -> series_floor(rest, if v < low do v else low end)
+    end
+  end
+  pfn plot_series(a : Strata.Ui.Ui, values : List(Int), x : Float, y : Float, step : Float, h : Float, low : Int, span : Int, ink : (Float, Float, Float, Float)) : Strata.Ui.Ui do
+    match values do
+      Nil -> a
+      Cons(v, rest) ->
+        let here = y +. h -. h *. int_to_float(v - low) /. int_to_float(span)
+        let a = match rest do
+          Cons(next, _) -> segment(a, x, here, step, (y +. h -. h *. int_to_float(next - low) /. int_to_float(span)) -. here, ink, 0.0)
+          Nil -> U.rect(a, 0, x -. 2.0, here -. 2.0, 4.0, 4.0, ink)
+        end
+        plot_series(a, rest, x +. step, y, step, h, low, span, ink)
+    end
+  end
+  -- A line chart of `newest_first` values (oldest drawn on the left).
+  pfn price_chart(a : Strata.Ui.Ui, newest_first : List(Int), x : Float, y : Float, width : Float, h : Float, ink : (Float, Float, Float, Float)) : Strata.Ui.Ui do
+    let values = List.reverse(newest_first)
+    let a = U.rect(a, 0, x, y +. h, width, 1.0, (0.32, 0.45, 0.48, 0.45))
+    match values do
+      Nil -> label(a, x, y +. h /. 2.0 -. 6.0, 11.0, "No history yet.", false)
+      Cons(_, Nil) -> label(a, x, y +. h /. 2.0 -. 6.0, 11.0, "History builds month by month.", false)
+      _ ->
+        let peak = series_peak(values, 0)
+        let low = series_floor(values, peak)
+        let span = if peak - low < 1 do 1 else peak - low end
+        plot_series(a, values, x, y, width /. int_to_float(List.length(values) - 1), h, low, span, ink)
+    end
+  end
+  pfn money(cents : Int) : String do "$" ++ int_to_string(cents / 100) ++ "." ++ (if cents % 100 < 10 do "0" else "" end) ++ int_to_string(cents % 100) end
+  pfn signed_percent(tenths : Int) : String do
+    (if tenths >= 0 do "+" else "−" end) ++ int_to_string(int_abs(tenths) / 10) ++ "." ++ int_to_string(int_abs(tenths) % 10) ++ "%"
+  end
+  pfn stock_rows(a : Strata.Ui.Ui, c : Ur.Sim.City, stocks : List(Ur.Sim.Stock), x : Float, y : Float, width : Float, chosen : Int, left : Int) : Strata.Ui.Ui do
+    match stocks do
+      Nil -> a
+      Cons(s, rest) ->
+        if left <= 0 do a else
+          let a = if s.id == chosen do U.rect(a, 0, x -. 4.0, y -. 2.0, width, 16.0, (0.31, 0.55, 0.55, 0.26)) else a end
+          let a = label(a, x, y, 11.0, Ur.Market.company_name(c, s), s.id == chosen)
+          let a = label(a, x +. width *. 0.45, y, 11.0, money(s.price), true)
+          let a = label(a, x +. width *. 0.60, y, 11.0, signed_percent(Ur.Market.change(s, 12)), Ur.Market.change(s, 12) >= 0)
+          let a = label(a, x +. width *. 0.78, y, 11.0, "$" ++ int_to_string(Ur.Market.market_value(s)), false)
+          stock_rows(a, c, rest, x, y +. 16.0, width, chosen, left - 1)
+        end
+    end
+  end
+  pfn stocks_panel(a : Strata.Ui.Ui, c : Ur.Sim.City, x : Float, y : Float, width : Float, view : FinanceView) : Strata.Ui.Ui do
+    let market = c.economy.market
+    let year = S.market_change(c, 12)
+    let a = label(a, x, y +. 58.0, 20.0, "Stock market", true)
+    let a = label(a, x +. 170.0, y +. 62.0, 13.0, "Index " ++ int_to_string(market.index / 100) ++ "." ++ int_to_string(market.index % 100 / 10) ++ "   " ++ signed_percent(year) ++ " this year", year >= 0)
+    let a = finance_button(a, x, y +. 84.0, 170.0, if c.economy.listing_incentive do "Listing incentive: on" else "Listing incentive: off" end, c.economy.listing_incentive)
+    let a = label(a, x +. 186.0, y +. 88.0, 12.0, "Tax break " ++ int_to_string(c.economy.listed_tax_break) ++ "%", c.economy.listed_tax_break > 0)
+    let a = plus_minus(a, x +. 330.0, y +. 84.0)
+    let a = price_chart(a, Cons(market.index, market.history), x, y +. 116.0, width -. 8.0, 54.0, (0.38, 0.78, 0.72, 1.0))
+    let ordered = stock_order(c)
+    let a = if List.is_empty(ordered) do
+      prose(a, x, y +. 196.0, 12.0, "No company has listed yet. Firms list after " ++ int_to_string(Ur.Market.listing_months(c)) ++ " profitable months with " ++ int_to_string(Ur.Market.listing_jobs(c)) ++ " or more jobs.")
+    else stock_rows(a, c, ordered, x, y +. 196.0, width -. 8.0, view.stock, 6) end
+    let a = label(a, x, y +. 180.0, 10.0, "Company · price · year · value   (" ++ int_to_string(List.length(ordered)) ++ " listed)", false)
+    match Ur.Market.stock_at(c, view.stock) do
+      None -> label(a, x, y +. 300.0, 11.0, "Select a company to chart its price.", false)
+      Some(s) ->
+        let a = label(a, x, y +. 298.0, 11.0, Ur.Market.company_name(c, s) ++ "   " ++ money(s.price) ++ "   earnings $" ++ int_to_string(s.earnings) ++
+          "   dividend $" ++ int_to_string(s.dividend) ++ (if s.delisted >= 0 do "   · delisted" else "" end), true)
+        price_chart(a, s.history, x, y +. 316.0, width -. 8.0, 50.0, if s.delisted >= 0 do (0.98, 0.45, 0.42, 1.0) else (0.95, 0.78, 0.40, 1.0) end)
     end
   end
   fn detail_button_at(mx : Float, my : Float, w : Float, h : Float) : Bool do
@@ -369,7 +555,7 @@ mod Ur.Hud do
   end
   pfn income_colour() : (Float, Float, Float, Float) do (0.33, 0.78, 0.69, 1.0) end
   pfn spending_colour() : (Float, Float, Float, Float) do (0.98, 0.61, 0.44, 1.0) end
-  type FinanceView = { month : Int, lines : Bool }
+  type FinanceView = { month : Int, lines : Bool, stock : Int }
   type FinancePlot = { x : Float, bottom : Float, step : Float, count : Int }
   pfn finance_plot(w : Float, h : Float, count : Int) : FinancePlot do
     { x: menu_x(w) +. 70.0, bottom: menu_y(h) +. 212.0,
@@ -468,6 +654,9 @@ mod Ur.Hud do
         end
         let chosen = month_or_latest(c.finance_history, view.month, latest)
         let b = chosen.budget
+        let a = finance_button(a, x +. width -. 446.0, y +. 57.0, 84.0, "Funding", true)
+        let a = finance_button(a, x +. width -. 356.0, y +. 57.0, 84.0, "Debt", true)
+        let a = finance_button(a, x +. width -. 266.0, y +. 57.0, 84.0, "Stocks", true)
         let a = finance_button(a, x +. width -. 164.0, y +. 57.0, 64.0, "Bars", !view.lines)
         let a = finance_button(a, x +. width -. 100.0, y +. 57.0, 64.0, "Lines", view.lines)
         let a = if chosen.month != latest.month do label(a, x +. width -. 126.0, y +. 91.0, 11.0, "Show latest", true) else a end
@@ -775,7 +964,7 @@ mod Ur.Hud do
       else if homes == 0 do "No households in this ward."
       else if priority == 0 do "No pressing issue across " ++ int_to_string(homes) ++ " households."
       else Ur.Council.issue_name(priority) ++ " · " ++ int_to_string(Ur.Council.share(report, priority)) ++ "% of " ++ int_to_string(homes) ++ " households" end end end
-      let a = label(a, x, y +. 347.0, 11.0, conditions, true)
+      let a = label(a, x, y +. 347.0, 11.0, conditions ++ "   ·   Savings $" ++ int_to_string(Ur.Council.ward_savings(c, ward)) ++ " a household", true)
       let hold = Ur.Council.offering_hold_status(c)
       let help = if campaign do "Endorsements can change until election day." else "Endorsements open four months before each election." end
       label(a, x, y +. 367.0, 11.0, if Ur.Council.offering_hold(c) do hold else help end, Ur.Council.offering_hold(c))
@@ -936,7 +1125,12 @@ mod Ur.Hud do
     let a = finance_button(a, x, y +. 292.0, 96.0, S.immigration_name(0), c.immigration == 0)
     let a = finance_button(a, x +. 96.0, y +. 292.0, 96.0, S.immigration_name(1), c.immigration == 1)
     let a = finance_button(a, x +. 192.0, y +. 292.0, 96.0, S.immigration_name(2), c.immigration == 2)
-    label(a, x, y +. 329.0, 11.0, "Newcomers need an affordable home and have three months to find work.", false)
+    let a = label(a, x, y +. 329.0, 11.0, "Newcomers need an affordable home and have three months to find work.", false)
+    let trend = match List.nth_opt(c.economy.wealth_history, 12) do
+      Some(earlier) -> "   ·   " ++ (if S.average_savings(c) >= earlier do "+$" else "−$" end) ++ int_to_string(int_abs(S.average_savings(c) - earlier)) ++ " over a year"
+      None -> ""
+    end
+    label(a, x, y +. 350.0, 12.0, "Household savings   $" ++ int_to_string(S.average_savings(c)) ++ " on average" ++ trend, true)
   end
   fn diagnosis_row_at(mx : Float, my : Float, w : Float, h : Float) : Int do
     let right = menu_x(w) +. menu_width(w) -. 17.0
@@ -1065,6 +1259,9 @@ mod Ur.Hud do
           let a = label(a, inset, y +. 82.0, 11.0, if List.is_empty(activity) do "Recent changes will appear as the city develops." else "Select an event to go to its street." end, false)
           activity_rows(a, activity, inset, y +. 105.0, width)
         4 -> finance(a, c, st.budget, inset, y, width, view)
+        17 -> finance_button(funding_panel(a, c, st, inset, y, width -. 36.0), right_button, y +. 51.0, 128.0, "Back to finance", false)
+        18 -> finance_button(debt_panel(a, c, inset, y), right_button, y +. 51.0, 128.0, "Back to finance", false)
+        19 -> finance_button(stocks_panel(a, c, inset, y, width -. 36.0, view), right_button, y +. 51.0, 128.0, "Back to finance", false)
         5 -> livability_trends(a, c, inset, y, width)
         6 -> safety_trends(a, c, crime_focus, layer, inset, y, width)
         _ ->

@@ -12,8 +12,9 @@ mod Ur.Clock do
   -- `month` is the calendar month before that day. `live` keeps a statistics
   -- snapshot every day; otherwise one is taken only when the month closes.
   fn close_day(month : Int, next : Ur.Sim.City, traffic : NativeIntArr, live : Bool) : Day do
-    let next = Ur.Council.observe_religion(next)
     let due = next.month != month
+    let next = if due do Ur.Treasury.close_month(next) else next end
+    let next = Ur.Council.observe_religion(next)
     let next = if due do next else S.drift_pollution(next, traffic) end
     if due || live do
       let st = S.stats(next)

@@ -1,0 +1,53 @@
+mod FundingTest do
+  needs IO
+  needs IO.Console
+  needs IO.Clock
+  needs IO.Process
+  needs IO.FileRead
+  needs IO.FileWrite
+  alias Ur.Sim as S
+
+  pfn set_level(c : Ur.Sim.City, group : Int, level : Int) : Ur.Sim.City do
+    { c with economy: { c.economy with funding: NativeArray.set_int(c.economy.funding, group, level) } }
+  end
+  pfn all_at(c : Ur.Sim.City, level : Int, group : Int) : Ur.Sim.City do
+    if group > 5 do c else all_at(set_level(c, group, level), level, group + 1) end
+  end
+  fn main(_cap : Cap(IO)) : Unit do
+    let c = S.new()
+    Test.assert_eq_int(S.funding_level(c, 0), 100, "Services start fully funded")
+    Test.assert_eq_int(S.funding_level(Ur.Treasury.adjust(c, 0, -1), 0), 90, "Funding moves in steps of ten")
+    Test.assert_eq_int(S.funding_level(Ur.Treasury.adjust(set_level(c, 0, 50), 0, -1), 0), 50, "Funding stops at half")
+    Test.assert_eq_int(S.funding_level(Ur.Treasury.adjust(set_level(c, 0, 150), 0, 1), 0), 150, "Funding stops at one and a half")
+
+    let school = S.index(8, 19)
+    let built = S.act({ c with cash: 20000, buildings: NativeArray.set_int(c.buildings, school, 0), zones: NativeArray.set_int(c.zones, school, 0) }, school, 44)
+    Test.assert_eq_int(S.get(built.plants, school), 18, "An elementary school is built")
+    let staffed = { built with facility_staff: NativeArray.set_int(built.facility_staff, school, S.facility_jobs(18) + 1) }
+    Test.assert_eq_int(S.facility_staffed(staffed, school), 100, "A fully staffed school runs at full strength")
+    let lean = set_level(staffed, 0, 50)
+    Test.assert_eq_int(S.facility_staffed(lean, school), 50, "Half funding leaves half the posts empty")
+    Test.assert_eq_int(S.parcel_facility_upkeep(lean, school), S.parcel_facility_upkeep(staffed, school) / 2, "Half funding halves the school's upkeep")
+    Test.assert_true(S.service_spending(lean, S.stats(lean), 0) < S.service_spending(staffed, S.stats(staffed), 0), "Education spending follows its level")
+
+    let corridor = Ur.Scenario.employment_corridor()
+    let base = (S.stats(corridor)).budget.bus_operations
+    let rich = (S.stats(set_level(corridor, 4, 150))).budget.bus_operations
+    Test.assert_true(base > 0, "The corridor runs buses")
+    Test.assert_eq_int(rich, base * 150 / 100, "Transit at 150% costs half as much again")
+
+    let austere = all_at(c, 50, 0)
+    let st = S.stats(austere)
+    Test.assert_true(S.power_total(st.generation) > 0, "Cutting every service to half keeps some power on")
+    Test.assert_true(st.budget.infrastructure <= (S.stats(c)).budget.infrastructure, "Austerity does not raise upkeep")
+
+    let administered = { lean with economy: { lean.economy with administrator: 3, funding: NativeArray.make_int(6, 150) } }
+    Test.assert_eq_int(S.funding_level(administered, 2), 70, "An administrator caps funding at 70%")
+
+    let game = { city: set_level(c, 3, 120), cx: 78.0, cz: 151.0, zoom: 52.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(game)) do
+      Ok(loaded) -> Test.assert_eq_int(S.funding_level(loaded.city, 3), 120, "Funding levels survive save and load")
+      Err(error) -> panic(error)
+    end
+  end
+end

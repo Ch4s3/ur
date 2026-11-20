@@ -1,0 +1,192 @@
+-- The city's stock market. Established local firms list; each month their
+-- prices move toward earnings times a valuation multiple, plus seeded shocks
+-- whose size clusters into calm and turbulent spells. Sentiment follows a
+-- regional business cycle, city spending, city debt and momentum. Everything
+-- is derived from the city's seed, so a city replays the same way.
+mod Ur.Market do
+  alias Ur.Sim as S
+
+  fn shares() : Int do 1000 end
+  fn history_months() : Int do 120 end
+  fn incentive_cost() : Int do 200 end
+
+  fn sector_name(sector : Int) : String do
+    match sector do
+      1 -> "Office"
+      2 -> "Specialist office"
+      3 -> "Workshop"
+      4 -> "Food processor"
+      5 -> "Manufacturer"
+      _ -> "Retail"
+    end
+  end
+  fn sector_of(c : Ur.Sim.City, lot : Int) : Int do
+    let zone = S.get(c.zones, lot)
+    if zone == 4 do 3 + S.clamp(S.get(c.business_sector, lot), 0, 2)
+    else if S.live_work(c, lot) do 3
+    else if S.retail(c, lot) > 0 do 0
+    else if S.get(c.business_sector, lot) > 0 do 2 else 1 end end end end
+  end
+  fn company_name(_c : Ur.Sim.City, s : Ur.Sim.Stock) : String do
+    let place = int_to_string(s.lot % S.width()) ++ "/" ++ int_to_string(s.lot / S.width())
+    sector_name(s.sector) ++ " " ++ place
+  end
+
+  -- A deterministic hash in 0..999,999.
+  -- Each step stays below 2^31 before multiplying, so nothing overflows.
+  pfn mix(h : Int, v : Int) : Int do
+    let m = int_mod_euclid(h + int_mod_euclid(v, 2147483647), 2147483647)
+    int_mod_euclid(int_xor(m * 48271, m / 65536) + 12345, 2147483647)
+  end
+  fn hash(seed : Int, a : Int, b : Int) : Int do
+    int_mod_euclid(mix(mix(mix(mix(int_mod_euclid(seed, 2147483647), a), b), a + 7), b + 13), 1000000)
+  end
+  -- A seeded shock in -1000..1000, peaked near zero (the sum of two draws).
+  fn noise(c : Ur.Sim.City, month : Int, id : Int) : Int do
+    (hash(c.climate_seed, month, id * 2 + 1) + hash(c.climate_seed + 7, month, id * 2 + 2)) / 1000 - 1000
+  end
+  -- The regional business cycle in -100..100: a slow wave whose length and
+  -- phase come from the seed, roughened by a shorter one.
+  fn cycle(c : Ur.Sim.City, month : Int) : Int do
+    let period = 60 + int_mod_euclid(c.climate_seed, 61)
+    let phase = int_to_float(int_mod_euclid(c.climate_seed / 61, 360)) *. 0.0175
+    let t = int_to_float(month) *. 6.2832 /. int_to_float(period)
+    float_to_int(80.0 *. Math.sin(t +. phase) +. 20.0 *. Math.sin(t *. 2.7 +. phase *. 1.3))
+  end
+  -- Debt against a year's revenue, in percent.
+  fn debt_ratio(c : Ur.Sim.City) : Int do Ur.Debt.total_debt(c) * 100 / Ur.Debt.yearly_revenue(c) end
+  -- Change in city spending over a year, in percent.
+  fn spending_growth(c : Ur.Sim.City) : Int do
+    match (List.nth_opt(c.finance_history, 0), List.nth_opt(c.finance_history, 12)) do
+      (Some(now), Some(then_month)) -> if then_month.expenditures <= 0 do 0 else (now.expenditures - then_month.expenditures) * 100 / then_month.expenditures end
+      _ -> 0
+    end
+  end
+  -- Where sentiment is heading, in tenths of a percent.
+  fn sentiment_target(c : Ur.Sim.City) : Int do
+    let cycle_term = cycle(c, c.month) * 3
+    let spending = S.clamp(spending_growth(c) * 3, -100, 150)
+    let debt = S.clamp(debt_ratio(c) * 2, 0, 400)
+    let momentum = S.clamp(S.market_change(c, 3) * 2, -300, 300)
+    S.clamp(cycle_term + spending - debt + momentum, -1000, 1000)
+  end
+  -- Price to yearly earnings, in tenths: cheaper money and good spirits raise it.
+  fn multiple(c : Ur.Sim.City) : Int do
+    let regional = 40 + cycle(c, c.month) / 5
+    let city = Ur.Debt.rate_for(Ur.Debt.rating(c), 1)
+    let rate = (regional + city) / 2
+    S.clamp(120 + c.economy.market.sentiment / 5 - (rate - 40) * 3 / 2, 40, 300)
+  end
+  -- Fair price per share in cents from a month's after-tax profit.
+  fn fair_value(earnings : Int, multiple : Int) : Int do
+    S.clamp(earnings * 12 * multiple * 10 / shares(), 1, 100000000)
+  end
+
+  fn trading(c : Ur.Sim.City, lot : Int) : Bool do
+    let zone = S.get(c.zones, lot)
+    (zone == 2 || zone == 4 || S.live_work(c, lot)) && S.get(c.buildings, lot) > 0 && !S.business_closed(c, lot) && !S.building_offline(c, lot)
+  end
+  fn listing_months(c : Ur.Sim.City) : Int do if c.economy.listing_incentive do 6 else 12 end end
+  fn listing_jobs(c : Ur.Sim.City) : Int do if c.economy.listing_incentive do 8 else 12 end end
+
+  type Books = { routes : NativeIntArr, labor : Ur.Sim.Labor, people : Int, jobs : Int }
+  fn profit(c : Ur.Sim.City, books : Books, lot : Int) : Int do
+    S.margin(S.business_accounts(c, books.routes, books.labor, books.people, books.jobs, lot))
+  end
+
+  pfn update_streaks(c : Ur.Sim.City, books : Books, i : Int, out : NativeIntArr) : NativeIntArr do
+    if i >= S.count() do out else
+      let next = if trading(c, i) && profit(c, books, i) > 0 do S.clamp(S.get(out, i) + 1, 0, 1000) else 0 end
+      update_streaks(c, books, i + 1, if next == S.get(out, i) do out else NativeArray.set_int(out, i, next) end)
+    end
+  end
+
+  type Moves = { stocks : List(Ur.Sim.Stock), old_value : Int, new_value : Int, dividends : Int }
+  -- One month for every company already listed: delist failures near zero,
+  -- move prices toward value with a shock, and pay dividends from profit.
+  pfn move_prices(c : Ur.Sim.City, books : Books, stocks : List(Ur.Sim.Stock), mult : Int, vol : Int, out : Moves) : Moves do
+    match stocks do
+      Nil -> { out with stocks: List.reverse(out.stocks) }
+      Cons(s, rest) ->
+        if s.delisted >= 0 do
+          let keep = c.month - s.delisted < 24
+          move_prices(c, books, rest, mult, vol, if keep do { out with stocks: Cons(s, out.stocks) } else out end)
+        else if !trading(c, s.lot) || sector_of(c, s.lot) != s.sector do
+          let crashed = S.clamp(s.price / 20, 1, s.price)
+          let gone = { s with price: crashed, earnings: 0, dividend: 0, delisted: c.month, history: Cons(crashed, List.take(s.history, history_months() - 1)) }
+          move_prices(c, books, rest, mult, vol, { out with stocks: Cons(gone, out.stocks), old_value: out.old_value + s.price, new_value: out.new_value + crashed })
+        else
+          let earnings = profit(c, books, s.lot)
+          let fair = fair_value(earnings, mult)
+          let shock = s.price * noise(c, c.month, s.id) / 1000 * vol / 1000
+          let price = S.clamp(s.price + (fair - s.price) * 15 / 100 + shock, 1, 100000000)
+          let dividend = if earnings > 0 do earnings * 40 / 100 else 0 end
+          let moved = { s with price: price, earnings: earnings, dividend: dividend, history: Cons(price, List.take(s.history, history_months() - 1)) }
+          move_prices(c, books, rest, mult, vol, { out with stocks: Cons(moved, out.stocks), old_value: out.old_value + s.price, new_value: out.new_value + price, dividends: out.dividends + dividend })
+        end end
+    end
+  end
+  pfn new_listings(c : Ur.Sim.City, books : Books, streaks : NativeIntArr, mult : Int, i : Int, next_id : Int, out : List(Ur.Sim.Stock)) : (List(Ur.Sim.Stock), Int) do
+    if i >= S.count() do (List.reverse(out), next_id) else
+      let eligible = S.get(streaks, i) >= listing_months(c) && S.job_slots(c, i) >= listing_jobs(c) && trading(c, i) && !S.listed(c, i)
+      if eligible do
+        let price = fair_value(profit(c, books, i), mult)
+        let s = { id: next_id, lot: i, sector: sector_of(c, i), shares: shares(), price: price, earnings: 0, dividend: 0, history: Cons(price, Nil), listed: c.month, delisted: -1 }
+        new_listings(c, books, streaks, mult, i + 1, next_id + 1, Cons(s, out))
+      else new_listings(c, books, streaks, mult, i + 1, next_id, out) end
+    end
+  end
+
+  -- Month end, after debts are settled.
+  fn settle(c : Ur.Sim.City) : Ur.Sim.City do
+    let c = if c.economy.listing_incentive do { c with cash: c.cash - incentive_cost() } else c end
+    let st = S.stats(c)
+    let books = { routes: st.routes, labor: st.labor, people: st.people, jobs: st.work }
+    let market = c.economy.market
+    let sentiment = market.sentiment + (sentiment_target(c) - market.sentiment) / 4
+    let falling = S.market_change(c, 3) < -100
+    let calm = cycle(c, c.month) > -30 && !falling
+    let volatility = market.volatility + ((if calm do 40 else 120 end) - market.volatility) / 3
+    let c = { c with economy: { c.economy with market: { market with sentiment: sentiment, volatility: volatility } } }
+    let mult = multiple(c)
+    let streaks = update_streaks(c, books, 0, c.economy.profit_streak)
+    let moved = move_prices(c, books, c.economy.stocks, mult, volatility, { stocks: Nil, old_value: 0, new_value: 0, dividends: 0 })
+    let (fresh, next_id) = new_listings({ c with economy: { c.economy with stocks: moved.stocks } }, books, streaks, mult, 0, market.next_id, Nil)
+    let index = if moved.old_value > 0 do S.clamp(market.index * S.clamp(moved.new_value * 10000 / moved.old_value, 0, 1000000) / 10000, 1, 100000000) else market.index end
+    let first = market.base == 0 && !List.is_empty(fresh)
+    let market = { market with sentiment: sentiment, volatility: volatility, index: index, next_id: next_id,
+      base: if first do c.month else market.base end, history: Cons(market.index, List.take(market.history, history_months() - 1)) }
+    let c = { c with economy: { c.economy with stocks: List.append(moved.stocks, fresh), market: market, profit_streak: streaks } }
+    let c = Ur.Debt.pay_residents(c, moved.dividends)
+    if List.is_empty(fresh) do c else
+      { c with message: (match fresh do
+        Cons(s, _) -> company_name(c, s) ++ " listed on the market"
+        Nil -> c.message
+      end) }
+    end
+  end
+
+  fn stock_at(c : Ur.Sim.City, id : Int) : Option(Ur.Sim.Stock) do List.find(c.economy.stocks, fn s -> s.id == id) end
+  fn active(c : Ur.Sim.City) : List(Ur.Sim.Stock) do List.filter(c.economy.stocks, fn s -> s.delisted < 0) end
+  fn market_value(s : Ur.Sim.Stock) : Int do s.price * s.shares / 100 end
+  -- Price change over `months` months, in tenths of a percent.
+  fn change(s : Ur.Sim.Stock, months : Int) : Int do
+    let back = S.clamp(months, 0, List.length(s.history) - 1)
+    match List.nth_opt(s.history, back) do
+      Some(earlier) -> if earlier <= 0 do 0 else (s.price - earlier) * 1000 / earlier end
+      None -> 0
+    end
+  end
+
+  -- Rows 20 and 21 of the Stocks page.
+  fn act(c : Ur.Sim.City, row : Int, delta : Int) : Ur.Sim.City do
+    if row == 20 do
+      let enabled = !c.economy.listing_incentive
+      { c with economy: { c.economy with listing_incentive: enabled },
+        message: if enabled do "Listing incentive on: firms list sooner for $" ++ int_to_string(incentive_cost()) ++ " a month." else "Listing incentive off." end }
+    else if row == 21 do
+      let pct = S.clamp(c.economy.listed_tax_break + delta * 5, 0, 50)
+      { c with economy: { c.economy with listed_tax_break: pct }, message: "Listed firms pay " ++ int_to_string(100 - pct) ++ "% of business tax." }
+    else c end end
+  end
+end

@@ -1,0 +1,16 @@
+-- Player decisions about the city's money: service funding now, and borrowing
+-- and the stock market as they arrive. Rows match the HUD's economy pages.
+mod Ur.Treasury do
+  alias Ur.Sim as S
+
+  -- Rows 0-5 set funding for each service group; rows 10-14 borrow and repay.
+  fn adjust(c : Ur.Sim.City, row : Int, delta : Int) : Ur.Sim.City do
+    if delta == 0 do c
+    else if row >= 0 && row <= 5 do S.adjust_funding(c, row, delta)
+    else if row >= 10 && row <= 14 do Ur.Debt.act(c, row, delta)
+    else if row >= 20 && row <= 21 do Ur.Market.act(c, row, delta)
+    else c end end end end
+  end
+  -- Runs once the month's books are settled: debts first, then the market.
+  fn close_month(c : Ur.Sim.City) : Ur.Sim.City do Ur.Market.settle(Ur.Debt.settle(c)) end
+end
