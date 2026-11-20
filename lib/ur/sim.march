@@ -2452,15 +2452,41 @@ mod Ur.Sim do
   fn immigration_name(level : Int) : String do
     if level == 0 do "Restrict" else if level == 2 do "Encourage" else "Balanced" end end
   end
+  -- The latest resident survey: the city's average livability out of 100.
+  fn city_mood(c : City) : Int do
+    match c.livability_history do
+      Cons(sample, _) -> get(sample, 0)
+      Nil -> 55
+    end
+  end
+  -- A well-liked city draws more newcomers; a disliked one loses residents.
+  fn mood_pull(mood : Int) : Int do clamp(100 + (mood - 55) * 2, 60, 160) end
+  fn mood_strain(mood : Int) : Int do clamp((45 - mood) / 5, 0, 6) end
+  -- Share of arriving workers, in percent, who come to fill an open skilled post.
+  fn skilled_arrival_share(mood : Int) : Int do clamp(mood - 30, 0, 40) end
+  -- Newcomers bring secondary and trade credentials when posts are open for
+  -- them. University study and specialisms are only earned in the city.
+  pfn recruit_skilled(data : NativeIntArr, positions : NativeIntArr, workers : Int, mood : Int) : NativeIntArr do
+    let trade_open = clamp(get(positions, 2) - get(data, 2), 0, 100000)
+    let secondary_open = clamp(get(positions, 1) - get(data, 1), 0, 100000)
+    if trade_open + secondary_open == 0 do NativeArray.set_int(data, 21, 0) else
+      let credit = get(data, 21) + workers * skilled_arrival_share(mood)
+      let recruits = clamp(credit / 100, 0, trade_open + secondary_open)
+      let trade = clamp(recruits, 0, trade_open)
+      let data = NativeArray.set_int(data, 21, credit % 100)
+      NativeArray.set_int(NativeArray.set_int(data, 2, get(data, 2) + trade), 1, get(data, 1) + recruits - trade)
+    end
+  end
   fn advance_population(c : City, census : NativeIntArr, labor : Labor, routes : NativeIntArr, departures : Int) : City do
     let homes = sum(c, 0, 0, 0) / 4
     let positions = skill_jobs(c, routes, 0, NativeArray.make_int(9, 0))
     let connected_jobs = get(positions, 0) + get(positions, 1) + get(positions, 2) + get(positions, 3) + specialization_total(positions)
     let unemployment = if labor.workforce == 0 do 0 else labor.unemployed * 12 / labor.workforce end
     let cost_pressure = clamp(c.tax - 17, 0, 8) + clamp(c.energy - 7, 0, 5) * 2
+    let mood = city_mood(c)
     let listings = immigrant_homes(c, routes, 0, Nil)
     let vacant = List.fold_left(listings, 0, fn (total, listing) -> total + listing.free * 4)
-    let change = D.advance_market(census, homes, connected_jobs, unemployment + cost_pressure, c.immigration, vacant, departures)
+    let change = D.advance_market(census, homes, connected_jobs, unemployment + cost_pressure + mood_strain(mood), c.immigration, vacant, departures, mood_pull(mood))
     let sample = NativeArray.set_int(NativeArray.make_int(6, 0), 0, c.month)
     let sample = NativeArray.set_int(NativeArray.set_int(sample, 1, change.births), 2, change.deaths)
     let sample = NativeArray.set_int(NativeArray.set_int(sample, 3, change.arrived), 4, change.left)
@@ -2468,6 +2494,7 @@ mod Ur.Sim do
     let old_workers = workforce({ c with census: census }, D.total(census))
     let new_workers = workforce({ c with census: change.census }, D.total(change.census))
     let education = lose_qualifications(c.education, old_workers, new_workers, change.workers_lost, 3)
+    let education = recruit_skilled(education, positions, (change.arrived * 3 + 2) / 5, mood)
     let specializations = lose_specialists(c.specializations, old_workers, change.workers_lost, 4)
     let next = { c with census: change.census, education: education, specializations: specializations, population_history: Cons(sample, List.take(c.population_history, 23)) }
     settle_immigrant_homes(next, listings, change.arrived)
@@ -2738,7 +2765,8 @@ mod Ur.Sim do
         else if severe_shortfall(report.electric, lot) || severe_shortfall(report.water, lot) || severe_shortfall(report.sewer, lot) do
           -- Zero marks parcels that have yet to receive service.
           if previous == 0 do 0 else clamp(previous + utility_sample_days(), 1, 121) end
-        else 1 end end
+        -- One good sample halves the count, so supply that keeps failing still adds up.
+        else clamp(previous / 2, 1, 121) end end
       let history = if current == previous do history else NativeArray.set_int(history, lot, current) end
       service_history(c, report, lot + 1, history)
     end
@@ -3378,18 +3406,43 @@ mod Ur.Sim do
     let trips = if get(c.zones, i) == 3 do homes else (homes * 3 + 3) / 4 end
     if valid(festival_destination(c, i)) do trips - trips * festival_household_share(c, i) / 200 else trips end
   end
-  pfn assign_traffic(c : City, routes : NativeIntArr, riders : NativeIntArr, reference : NativeIntArr, traffic : NativeIntArr, induce : Bool, i : Int) : NativeIntArr do
+  pfn job_seeds(c : City, i : Int, d : Int, dist : NativeIntArr, queue : NativeIntArr, tail : Int) : (NativeIntArr, NativeIntArr, Int) do
+    if i >= count() do (dist, queue, tail)
+    else if d == 4 || !commute_destination(c, i) do job_seeds(c, i + 1, 0, dist, queue, tail)
+    else
+      let j = neighbour(i, d)
+      if valid(j) && motor_road(c, j) && get(dist, j) < 0 do
+        job_seeds(c, i, d + 1, NativeArray.set_int(dist, j, 0), NativeArray.set_int(queue, tail, j), tail + 1)
+      else job_seeds(c, i, d + 1, dist, queue, tail) end
+    end end
+  end
+  -- Road steps from each street to the nearest workplace kerb, for routing commutes.
+  fn job_field(c : City) : NativeIntArr do
+    let (dist, queue, tail) = job_seeds(c, 0, 0, NativeArray.make_int(2640, -1), NativeArray.make_int(2640, 0), 0)
+    if tail == 0 do dist else flood(c, if pedestrian_streets(c, 0) do 3 else 0 end, dist, queue, 0, tail) end
+  end
+  pfn route_trips(c : City, field : NativeIntArr, reference : NativeIntArr, traffic : NativeIntArr, induce : Bool, entry : Int, trips : Int, leaving : Bool) : NativeIntArr do
+    let savings = if induce do driving_savings(c, field, reference, entry, 6, 0) else 0 end
+    let trips = trips + (trips * savings + 7) / 8
+    let inbound = if leaving do (trips * 2 + 2) / 3 else trips / 3 end
+    add_road_trips(c, field, traffic, entry, inbound, trips - inbound)
+  end
+  -- Households drive to the nearest workplace; goods and customers move
+  -- between each business and the harbour.
+  pfn assign_traffic(c : City, routes : NativeIntArr, jobs : NativeIntArr, riders : NativeIntArr, reference : NativeIntArr, traffic : NativeIntArr, induce : Bool, i : Int) : NativeIntArr do
     if i >= count() do traffic else
-      let regular_trips = home_trips(c, i) + (job_slots(c, i) + 11) / 12 * 3
       let kind = get(c.plants, i)
-      let trips = regular_trips + (if kind == 5 || kind == 6 do 6 else 0 end) + (if retail(c, i) > 0 do 3 else 0 end)
-      if trips == 0 do assign_traffic(c, routes, riders, reference, traffic, induce, i + 1) else
-        let entry = nearer_road(c, routes, i, 0, -1, count())
-        let trips = clamp(trips - get(riders, i), 0, trips)
-        let savings = if induce && regular_trips > 0 do driving_savings(c, routes, reference, entry, 6, 0) else 0 end
-        let trips = trips + (trips * savings + 7) / 8
-        let inbound = if kind == 5 || kind == 6 || get(c.zones, i) == 1 do (trips * 2 + 2) / 3 else trips / 3 end
-        assign_traffic(c, routes, riders, reference, add_road_trips(c, routes, traffic, entry, inbound, trips - inbound), induce, i + 1)
+      let farm = kind == 5 || kind == 6
+      let commuting = clamp(home_trips(c, i) - get(riders, i), 0, 100000)
+      let goods = (job_slots(c, i) + 11) / 12 + (if farm do 6 else 0 end) + (if retail(c, i) > 0 do 3 else 0 end)
+      if commuting + goods == 0 do assign_traffic(c, routes, jobs, riders, reference, traffic, induce, i + 1) else
+        let harbour_entry = nearer_road(c, routes, i, 0, -1, count())
+        let work_entry = nearer_road(c, jobs, i, 0, -1, count())
+        let traffic = if commuting == 0 do traffic
+          else if valid(work_entry) do route_trips(c, jobs, reference, traffic, induce, work_entry, commuting, get(c.zones, i) == 1)
+          else route_trips(c, routes, reference, traffic, induce, harbour_entry, commuting, get(c.zones, i) == 1) end end
+        let traffic = if goods == 0 do traffic else route_trips(c, routes, reference, traffic, induce, harbour_entry, goods, farm) end
+        assign_traffic(c, routes, jobs, riders, reference, traffic, induce, i + 1)
       end
     end
   end
@@ -3410,8 +3463,9 @@ mod Ur.Sim do
     let routes = driving_access(c, routes)
     let zero = NativeArray.make_int(10560, 0)
     let riders = NativeArray.make_int(2640, 0)
-    let base = assign_traffic(c, routes, riders, zero, zero, false, 0)
-    if has_avenue(c, 0) do assign_traffic(c, routes, riders, base, zero, true, 0) else base end
+    let jobs = job_field(c)
+    let base = assign_traffic(c, routes, jobs, riders, zero, zero, false, 0)
+    if has_avenue(c, 0) do assign_traffic(c, routes, jobs, riders, base, zero, true, 0) else base end
   end
   pfn stop_customer_trips(c : City, i : Int, d : Int, trips : Int) : Int do
     if d == 4 do trips else
@@ -3777,22 +3831,34 @@ mod Ur.Sim do
     end
   end
   type Transport = { traffic : NativeIntArr, riders : NativeIntArr, buses : BusNetwork, hiring : Employment }
-  pfn transport_report_with(c : City, roads : NativeIntArr, running : NativeIntArr, people : Int, work : Int) : Transport do
-    let baseline = road_traffic(c, roads)
+  pfn bus_jam(c : City, traffic : NativeIntArr, i : Int) : Bool do
+    if i >= count() do false
+    else if get(c.transit, i) == 2 && road_load(traffic, i) > road_capacity(c, i) do true
+    else bus_jam(c, traffic, i + 1) end end
+  end
+  -- Timetables, hiring and ridership as they settle against `reference` road loads.
+  pfn transport_pass(c : City, roads : NativeIntArr, running : NativeIntArr, reference : NativeIntArr, people : Int, work : Int) : Transport do
     let zero = NativeArray.make_int(2640, 0)
-    let buses = bus_network_with(c, roads, baseline, running)
+    let buses = bus_network_with(c, roads, reference, running)
     let c = operating_city(c, buses)
-    let hiring = employment_with(c, roads, { traffic: baseline, running: running, buses: buses }, people, work)
-    if !any_service(running, 0) do { traffic: baseline, riders: zero, buses: buses, hiring: hiring } else
-      let (driving, _) = travel_costs(c, baseline, zero)
-      let (_, riding) = travel_costs(c, baseline, running)
+    let hiring = employment_with(c, roads, { traffic: reference, running: running, buses: buses }, people, work)
+    if !any_service(running, 0) do { traffic: reference, riders: zero, buses: buses, hiring: hiring } else
+      let (driving, _) = travel_costs(c, reference, zero)
+      let (_, riding) = travel_costs(c, reference, running)
       let reserved = reserve_commutes(c, hiring.matches, buses, { riders: zero, fares: zero, requested: zero, boarded: zero })
-      let tally = choose_riders(c, baseline, running, buses, driving, riding, 0, reserved)
+      let tally = choose_riders(c, reference, running, buses, driving, riding, 0, reserved)
       let buses = { buses with fares: tally.fares, lines: List.map(buses.lines, fn line ->
         { line with demand: get(tally.requested, line.id), boarded: get(tally.boarded, line.id) }) }
-      let traffic = assign_traffic(c, driving_access(c, roads), tally.riders, baseline, NativeArray.make_int(10560, 0), has_avenue(c, 0), 0)
+      let traffic = assign_traffic(c, driving_access(c, roads), job_field(c), tally.riders, reference, NativeArray.make_int(10560, 0), has_avenue(c, 0), 0)
       { traffic: traffic, riders: tally.riders, buses: buses, hiring: hiring }
     end
+  end
+  pfn transport_report_with(c : City, roads : NativeIntArr, running : NativeIntArr, people : Int, work : Int) : Transport do
+    let baseline = road_traffic(c, roads)
+    let first = transport_pass(c, roads, running, baseline, people, work)
+    -- A bus stuck behind the very drivers it would carry is judged again with
+    -- its riders off the road.
+    if any_service(running, 0) && bus_jam(c, baseline, 0) do transport_pass(c, roads, running, first.traffic, people, work) else first end
   end
   fn transport_report(c : City, roads : NativeIntArr, running : NativeIntArr) : Transport do
     transport_report_with(c, roads, running, population(c), jobs(c))
@@ -5718,7 +5784,11 @@ mod Ur.Sim do
         st.project_capacity, food_room(c, st.routes, st.people, st.utilities, st.generation))
       match status do
         NoFood -> if local_food_shortage(c, i) do "Local food shortage · Restore sailings or fund backup imports" else status_text(status) end
-        Ready -> if undeveloped_zone(c, i) do "Eligible for development. Waiting for private investment." else status_text(status) end
+        Ready -> if undeveloped_zone(c, i) do
+          let wait = investment_delay(c, st.commutes, st.civic, i)
+          "Eligible for development. Investors look again every " ++ int_to_string(wait.turns * investment_turn_days(c)) ++ " days" ++
+            (if wait.tax + wait.energy + wait.commute == 0 do "." else " (tax +" ++ int_to_string(wait.tax) ++ ", energy +" ++ int_to_string(wait.energy) ++ ", commute +" ++ int_to_string(wait.commute) ++ " turns)." end)
+        else status_text(status) end
         _ -> status_text(status)
       end
     end end end end end end end end end end end end end end end end end end end end end end
@@ -5741,22 +5811,41 @@ mod Ur.Sim do
     if get(c.nuisance, lot) >= 3 && lot % 3 == 0 && graduates(c, 2) >= 6 do 2
     else if get(c.nuisance, lot) >= 2 && lot % 3 != 0 && nearby_industrial_food(c, roads, lot, 0) do 1 else 0 end end
   end
-  pfn develop(c : City, a : NativeIntArr, commutes : NativeIntArr, civic : NativeIntArr, walk : ParkWalk, capacity : UtilityReservation, offset : Int, period : Int, tries : Int, pop : Int, work : Int, labor : Labor, food_ok : Bool) : City do
-    if tries >= count() do c else
+  -- Turns a ready parcel waits between investors: taxes, energy prices and a
+  -- long commute each add to it, and nearby civic services take one off.
+  type InvestmentDelay = { turns : Int, tax : Int, energy : Int, commute : Int }
+  fn investment_delay(c : City, commutes : NativeIntArr, civic : NativeIntArr, i : Int) : InvestmentDelay do
+    let zone = get(c.zones, i)
+    let business = if zone == 1 do 0 else clamp(c.business_rate - 10, 0, 15) / 3 end
+    let tax = c.tax / 5 + business
+    let energy = c.energy / 3
+    let travel = clamp(commute(commutes, i), 0, 72) / 12
+    let civic_bonus = if (zone == 1 || zone == 3) && get(civic, i) > 0 do 1 else 0 end
+    let delay = 1 + tax + energy + travel
+    { turns: clamp(delay - civic_bonus, 1, delay), tax: tax, energy: energy, commute: travel }
+  end
+  -- A larger city has more investors, so more ready parcels can start at once.
+  fn investment_starts(people : Int) : Int do clamp(1 + people / 160, 1, 4) end
+  -- Days between investor turns: every fifth day on a founded map, monthly otherwise.
+  fn investment_turn_days(c : City) : Int do if c.founding_map do 5 else days_per_month() end end
+  pfn develop(c : City, a : NativeIntArr, commutes : NativeIntArr, civic : NativeIntArr, walk : ParkWalk, capacity : UtilityReservation, offset : Int, period : Int, tries : Int, pop : Int, work : Int, labor : Labor, food_ok : Bool, starts : Int) : City do
+    if tries >= count() || starts <= 0 do c else
       let i = (offset + tries) % count()
       if get(c.zones, i) > 0 && get(c.construction, i) == 0 && !building_offline(c, i) && !housing_vacant(c, i) && !business_closed(c, i) && is_ready(blocked(c, a, commutes, civic, walk, i, pop, work, labor, capacity, food_ok)) do
         -- Taxes, energy and remoteness slow investment even before its hard limit.
         let zone = get(c.zones, i)
-        let civic_bonus = if (zone == 1 || zone == 3) && get(civic, i) > 0 do 1 else 0 end
-        let delay = 1 + c.tax / 5 + c.energy / 3 + clamp(commute(commutes, i), 0, 72) / 12
         let first = c.founding_map && (((zone == 1 || zone == 3) && (pop == 0 || c.founders > 0)) || (zone != 1 && work == 0))
-        if first || (period + i) % clamp(delay - civic_bonus, 1, delay) == 0 do
+        -- Beyond the turn's first project, investors skip housing while a tenth of workers lack jobs.
+        let glut = starts < investment_starts(pop) && (zone == 1 || zone == 3) && labor.unemployed * 10 > labor.workforce
+        if first || (!glut && (period + i) % (investment_delay(c, commutes, civic, i)).turns == 0) do
           let candidate = if zone == 4 && get(c.buildings, i) == 0 do choose_industry(c, a, i) else 0 end
           let sector = if candidate > 0 && delivery_limit(capacity.electric, i, 8 + 4 * candidate) != 0 do 0 else candidate end
-          { c with construction: NativeArray.set_int(c.construction, i, 1),
+          let started = { c with construction: NativeArray.set_int(c.construction, i, 1),
             business_sector: if zone == 4 && get(c.buildings, i) == 0 do NativeArray.set_int(c.business_sector, i, sector) else c.business_sector end }
-        else develop(c, a, commutes, civic, walk, capacity, offset, period, tries + 1, pop, work, labor, food_ok) end
-      else develop(c, a, commutes, civic, walk, capacity, offset, period, tries + 1, pop, work, labor, food_ok) end
+          -- A founding start stays alone so the first households settle before the next.
+          develop(started, a, commutes, civic, walk, capacity, offset, period, tries + 1, pop, work, labor, food_ok, if first do 0 else starts - 1 end)
+        else develop(c, a, commutes, civic, walk, capacity, offset, period, tries + 1, pop, work, labor, food_ok, starts) end
+      else develop(c, a, commutes, civic, walk, capacity, offset, period, tries + 1, pop, work, labor, food_ok, starts) end
     end
   end
   pfn advance_construction(c : City, roads : NativeIntArr, i : Int) : City do
@@ -6100,6 +6189,10 @@ mod Ur.Sim do
         end
     end
   end
+  -- Cargo units the two quays can move in a day; street traffic at either slows them.
+  fn dock_handling(route : Ur.FreightNetwork.Route, traffic : NativeIntArr) : Int do
+    clamp(28 - (road_load(traffic, route.port) + road_load(traffic, route.island)) / 4, 8, 28)
+  end
   fn freight_market_at(c : City, lot : Int) : Option(Ur.FreightNetwork.Route) do
     match c.freight do
       Some(route) -> if span_distance(lot, route.market) <= 5 do Some(route) else None end
@@ -6145,7 +6238,7 @@ mod Ur.Sim do
           valid(freight_entrance(c, island, route.waste_site, 0))
         let houses = freight_homes(c, route, 0, 0)
         let demand = clamp(4 + houses / 3, 4, 22)
-        let handling = clamp(28 - (road_load(traffic, route.port) + road_load(traffic, route.island)) / 4, 8, 28)
+        let handling = dock_handling(route, traffic)
         let waste = if waste_connected do clamp(get(c.waste_sites, route.waste_site), 0, clamp(64 - route.dock_waste, 0, handling)) else 0 end
         let production = if !producing do 0 else if kind == 6 do catch_yield(c, route.producer) / 10 else crop_yield(c, route.producer) / 8 end end
         let conditions = { day: day, open: harbour, mainland: market && get(access, route.port) >= 0, production: production, plant: plant, waste: waste,
@@ -6368,6 +6461,18 @@ mod Ur.Sim do
     let log = NativeArray.make_int(count(), 0)
     NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(log, 7, get(c.waste_log, 7)), 8, get(c.waste_log, 8)), 9, get(c.waste_log, 9))
   end
+  -- Power sold, generated and fuelled over the month: the mean of today and
+  -- each earlier fifth day's weather, so one day's sky cannot decide the bill.
+  type MonthEnergy = { used : Int, power : Int, fuel : Int, samples : Int }
+  pfn month_energy(c : City, roads : NativeIntArr, people : Int, day : Int, sum : MonthEnergy) : MonthEnergy do
+    if day >= c.calendar_day do { used: sum.used / sum.samples, power: sum.power / sum.samples, fuel: sum.fuel / sum.samples, samples: sum.samples } else
+      let sampled = { c with calendar_day: day }
+      let gen = generation(sampled, roads)
+      let report = utility_report(sampled, roads, gen, people)
+      month_energy(c, roads, people, day + utility_sample_days(),
+        { used: sum.used + report.electric.total, power: sum.power + power_total(gen), fuel: sum.fuel + gen.cost, samples: sum.samples + 1 })
+    end
+  end
   pfn settle_month(c : City) : City do
     let census = if D.initialized(c.census) do c.census else D.seed(population(c)) end
     let a = access(c)
@@ -6391,7 +6496,8 @@ mod Ur.Sim do
     let hiring = transport.hiring
     let labor = labor_with_fares(hiring.labor, transport.buses.fares)
     let profit_tax = business_receipts(c, a, hiring, pop, work)
-    let monthly = budget(c, traffic, pop, labor, profit_tax, networks.electric.total, power, r, trash, gen.cost, transport.buses.lines)
+    let energy = month_energy(c, a, pop, utility_sample_days() - 1, { used: networks.electric.total, power: power, fuel: gen.cost, samples: 1 })
+    let monthly = budget(c, traffic, pop, labor, profit_tax, energy.used, energy.power, r, trash, energy.fuel, transport.buses.lines)
     let net = balance(monthly)
     let commutes = economic_commutes(operating, traffic, running, transport.buses)
     let market_city = grow_storefronts(c, running, riders)
@@ -6430,7 +6536,7 @@ mod Ur.Sim do
       let sample = average_measures(sums, residents, 1, NativeArray.set_int(NativeArray.make_int(8, 0), 7, next.month), 0)
       { next with livability_history: Cons(sample, List.take(c.livability_history, 23)) }
     else next end
-    let next = develop(next, a, commutes, civic, walk, reservations, (c.month * 37) % count(), c.month, 0, pop, work, labor, food_room(next, a, reserved_people, networks, gen))
+    let next = develop(next, a, commutes, civic, walk, reservations, (c.month * 37) % count(), c.month, 0, pop, work, labor, food_room(next, a, reserved_people, networks, gen), investment_starts(pop))
     let next = advance_population(next, census, labor, a, departing)
     let residents = population(next)
     let next = advance_education(next, a, labor, residents)
@@ -6474,7 +6580,7 @@ mod Ur.Sim do
       let period = c.month * 6 + c.calendar_day / 5
       develop(c, roads, commutes, civic_access_with(c, roads), park_walk(c), reserve_utilities(c, roads, networks),
         (period * 37) % count(), period, 0, people, work, labor_with_fares(transport.hiring.labor, transport.buses.fares),
-        food_room(c, roads, reserved_people, networks, gen))
+        food_room(c, roads, reserved_people, networks, gen), investment_starts(people))
     end
   end
   fn rain_tank_capacity() : Int do 2400 end

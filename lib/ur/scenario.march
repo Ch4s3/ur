@@ -71,10 +71,20 @@ mod Ur.Scenario do
     let c = S.act(c, S.index(15, 19), 47)
     -- A second gas station carries the growing town while technicians train
     -- for the eastern geothermal field.
-    let c = S.act(c, S.index(18, 15), 4)
-    let c = S.act(c, S.index(9, 15), 79)
-    let c = S.act(c, S.index(24, 15), 80)
-    S.act(S.act(c, S.index(28, 15), 7), S.index(28, 15), 8)
+    let c = cleared_site(c, S.index(18, 15), 4)
+    let c = cleared_site(c, S.index(9, 15), 79)
+    let c = S.act(cleared_blocks(c, 24, 15, 0), S.index(24, 15), 80)
+    cleared_site(c, S.index(28, 15), 8)
+  end
+  -- Clear whatever a decade of growth put on the lot, then build there.
+  pfn cleared_site(c : Ur.Sim.City, lot : Int, tool : Int) : Ur.Sim.City do S.act(S.act(c, lot, 7), lot, tool) end
+  -- A campus needs open blocks around its gate: clear the buildings within two
+  -- parcels of it and leave the streets.
+  pfn cleared_blocks(c : Ur.Sim.City, x : Int, z : Int, n : Int) : Ur.Sim.City do
+    if n == 25 do c else
+      let lot = S.index(x - 2 + n % 5, z - 2 + n / 5)
+      cleared_blocks(if S.get(c.roads, lot) > 0 do c else S.act(c, lot, 7) end, x, z, n + 1)
+    end
   end
   pfn cross_street(c : Ur.Sim.City, x : Int, z : Int) : Ur.Sim.City do
     if x > 17 do c else cross_street(street(c, x, z), x + 1, z) end

@@ -149,7 +149,10 @@ Power, water, and sewage have limits on individual segments. New homes must
 reserve utility capacity and have access to food before construction starts.
 Water and sewage use the same pipe assets and have separate flow limits.
 Homes and businesses can ride out brief interruptions. The city checks for
-severe shortfalls every five days. After 30 days of disruption, the next
+severe shortfalls every five days. A check with adequate service halves the
+running count, so supply that keeps failing still builds toward the limit.
+Energy income and fuel are averaged over the month's checks, so the bill
+reflects the whole month's weather. After 30 days of disruption, the next
 monthly settlement closes affected businesses and sends affected households
 looking for an affordable home with enough utility capacity. Families who
 cannot find one have three months to search before leaving the region.
@@ -270,8 +273,10 @@ reach the approaching election, or select a temple to inspect offerings.
 Choose **Local street**, **Avenue**, or **Pedestrian street** in **Roads**.
 Paint over an existing street to change its type at the retrofit price.
 Avenues cost more to maintain and have twice the traffic capacity of local
-streets. Faster driving attracts some extra trips from nearby development,
-so a new avenue can fill up. Pedestrian streets keep walking access and
+streets. Households drive to the nearest workplace, while goods and shop
+trips run between each business and the harbour. Faster driving attracts some
+extra trips from nearby development, so a new avenue can fill up. Traffic at
+the freight quays slows cargo handling. Pedestrian streets keep walking access and
 building frontage. Remove any bus route or toll before converting a street
 to pedestrian use.
 
@@ -411,6 +416,23 @@ pointer state for diagnosing native input.
 - Strata gains absolute cursor-coordinate bindings in window points. The changes
   are applied in the adjacent checkout and recorded in
   `docs/engine/strata-cursor.patch` for reproducibility.
+
+## People and investment
+
+The monthly resident survey sets how the city is regarded. A well-liked city
+draws more newcomers than ordinary demand; a disliked one draws fewer and
+loses residents. Some arriving workers come to fill open posts that need a
+secondary or trade qualification, and more of them come to a better-liked
+city. University degrees and specialisms are only earned in the city.
+
+Ready parcels wait for investors, who look at each parcel every few turns.
+Income tax, business tax above 10%, energy prices, and a long commute each
+add turns; civic services take one off homes. Hover a ready parcel to see its
+wait. A larger city has more investors, so more projects start per turn; the
+extra ones avoid housing while a tenth of workers are without a job.
+
+During a campaign the Council panel shows each incumbent's odds, which follow
+how residents of that ward feel and whom you endorse.
 
 This is the first gameplay slice, with procedural voxel architecture and landscaping. It does not
 simulate the eventual tens of thousands of individual residents. Households and

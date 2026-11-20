@@ -753,7 +753,8 @@ mod Ur.Hud do
         int_to_string(Ur.Council.relationship(c, ward)) ++ modifier, true)
       let a = if campaign do
         let a = label(a, x, y +. 283.0, 11.0, "Challenger · " ++ Ur.Council.challenger(c, ward) ++
-          " · Favors " ++ S.god_name(Ur.Council.challenger_favorite(c, ward)), false)
+          " · Favors " ++ S.god_name(Ur.Council.challenger_favorite(c, ward)) ++
+          " · Incumbent odds " ++ int_to_string(Ur.Council.retention_odds(c, st, ward)) ++ "%", false)
         let side = Ur.Council.endorsement(c, ward)
         let a = finance_button(a, x, y +. 310.0, 129.0, "Endorse incumbent", side == 1)
         let a = finance_button(a, x +. 135.0, y +. 310.0, 143.0, "Endorse challenger", side == 2)
@@ -1345,7 +1346,7 @@ mod Ur.Hud do
   pfn freight_button(box : Strata.Ui.Ui, x : Float, y : Float, width : Float, title : String) : Strata.Ui.Ui do
     label(U.rect(box, 0, x, y, width, 22.0, (0.20, 0.33, 0.37, 1.0)), x +. 6.0, y +. 4.0, 10.0, title, true)
   end
-  pfn freight_popup(box : Strata.Ui.Ui, c : Ur.Sim.City, x : Float, y : Float, width : Float) : Strata.Ui.Ui do
+  pfn freight_popup(box : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, x : Float, y : Float, width : Float) : Strata.Ui.Ui do
     match c.freight do
       None ->
         let box = label(box, x, y +. 56.0, 12.0, "Connect an island producer and a mainland market.", true)
@@ -1358,7 +1359,10 @@ mod Ur.Hud do
         end
         let state = if route.suspended do "Suspended" else if S.get(c.ferries, route.port) != route.island + 1 do "Link severed" else
           match route.voyage do
-            Some(ship) -> if ship.left > 0 do int_to_string(ship.left) ++ " days to berth" else "At berth · unloading by road" end
+            Some(ship) -> if ship.left > 0 do int_to_string(ship.left) ++ " days to berth" else
+              let handling = S.dock_handling(route, st.traffic)
+              if handling < 28 do "At berth · traffic slows the quay " ++ int_to_string(handling) ++ "/28" else "At berth · unloading by road" end
+            end
             None -> "Awaiting departure"
           end end end
         let box = label(box, x, y +. 52.0, 11.0, line, true)
@@ -1433,7 +1437,7 @@ mod Ur.Hud do
         let box = label(box, x, y +. 82.0, 11.0, int_to_string(shelter) ++ " households of capacity", false)
         label(box, x, y +. 105.0, 11.0, int_to_string(here) ++ " sheltered · " ++ int_to_string(coming) ++ " arriving (shown)", false)
       else if S.undeveloped_zone(c, lot) do zone_reason(box, x, y +. 57.0, width, reason)
-      else if S.freight_port(c, lot) || (S.get(c.ferries, lot) > 0 && Option.is_none(c.freight)) do freight_popup(box, c, x, y, width)
+      else if S.freight_port(c, lot) || (S.get(c.ferries, lot) > 0 && Option.is_none(c.freight)) do freight_popup(box, c, st, x, y, width)
       else if S.get(c.stops, lot) == 2 do bus_popup(box, c, st.buses, lot, x, y, width)
       else if S.get(c.stops, lot) == 4 do
         let water = S.get(c.subway_water, lot)

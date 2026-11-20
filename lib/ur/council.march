@@ -585,11 +585,15 @@ mod Ur.Council do
       (S.get(c.council, 1050 + ward) + days / 2) / days
     end
   end
+  -- Percentage chance the ward's incumbent keeps the seat if it voted today.
+  fn retention_odds(c : Ur.Sim.City, st : Ur.Sim.Stats, ward : Int) : Int do
+    let happiness = S.clamp(sentiment(c, st, ward, -1, 0, 0, 0) + campaign_average(c, ward), 0, 100)
+    vote_support(happiness, endorsement(c, ward))
+  end
   pfn elect(c : Ur.Sim.City, st : Ur.Sim.Stats, ward : Int) : Ur.Sim.City do
     if ward == 80 do c else if !seated(c, ward) do elect(c, st, ward + 1) else
       let side = endorsement(c, ward)
-      let happiness = S.clamp(sentiment(c, st, ward, -1, 0, 0, 0) + campaign_average(c, ward), 0, 100)
-      let support = vote_support(happiness, side)
+      let support = retention_odds(c, st, ward)
       let stays = roll(c, ward, incumbent(c, ward) + 89) < support
       let backs_winner = (stays && side == 1) || (!stays && side == 2)
       let backs_loser = side > 0 && !backs_winner
