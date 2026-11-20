@@ -182,7 +182,7 @@ mod CitizenMovementTest do
     let roster = Ur.Citizens.index(c, [person], 0.25)
     let red = int_to_float(7 - (a % 3) * 2) *. 0.5
     let step = fn (roster, dt, traffic) ->
-      Ur.Citizens.step_guarded(c, map, empty, None, roster, 0.25, dt, junctions, traffic, fn (_, _, next) -> next)
+      Ur.Citizens.step_guarded(c, map, empty, None, roster, 0.25, dt, junctions, traffic, fn (_, _, next) -> Ur.Citizens.unguarded(next))
     let waiting = step(roster, 0.1, red)
     let waiting = step(waiting, 0.5, red +. 0.5)
     Test.assert_eq_int(waiting.walk_count, 1, "a walker waiting at a signal stays scheduled")

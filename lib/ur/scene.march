@@ -2176,10 +2176,16 @@ mod Ur.Scene do
     !parked && S.valid(a) && S.valid(b) && S.valid(n) && S.valid(m) && x1 - x0 <= 2 && z1 - z0 <= 2 &&
       lots_clear(vehicle_lots, x0, x1, z0, z0, z1)
   end
-  pfn pedestrian_crossing(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, vehicle_lots : NativeIntArr, before : Ur.Citizens.Citizen, after : Ur.Citizens.Citizen, ignore : Int) : Bool do
+  -- A pose (x, z, y) packed in one Int, or -1 when a coordinate is outside 0..4095.
+  pfn pack_pose(x : Int, z : Int, y : Int) : Int do
+    if x < 0 || z < 0 || y < 0 || x >= 4096 || z >= 4096 || y >= 4096 do -1 else (x * 4096 + z) * 4096 + y end
+  end
+  -- Lets the walker go from [before] to [after] unless the step crosses a vehicle, and hands back
+  -- the poses it took of the step's ends for walk_motion to reuse.
+  pfn pedestrian_crossing(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, vehicle_lots : NativeIntArr, before : Ur.Citizens.Citizen, after : Ur.Citizens.Citizen, ignore : Int) : Ur.Citizens.WalkCheck do
     match before.route do
       Cons(a, Cons(b, _)) ->
-        if !walking_segment(c, before, a, b) || clear_of_vehicles(vehicle_lots, before, after, a, b) do false else
+        if !walking_segment(c, before, a, b) || clear_of_vehicles(vehicle_lots, before, after, a, b) do Ur.Citizens.unguarded(after) else
           let (x0, z0, y0) = walker_position(c, map, before, a, b)
           let end_point = match after.route do
             Cons(n, Cons(m, _)) ->
@@ -2188,19 +2194,20 @@ mod Ur.Scene do
           end
           match end_point do
             Some((x1, z1, y1)) ->
-              (x0 != x1 || z0 != z1) && Vk.footprint_blocked(int_to_float(x0), int_to_float(y0), int_to_float(z0),
+              let blocked = (x0 != x1 || z0 != z1) && Vk.footprint_blocked(int_to_float(x0), int_to_float(y0), int_to_float(z0),
                 int_to_float(x1), int_to_float(y1), int_to_float(z1), ignore)
-            None -> false
+              { person: if blocked do before else after end, from: pack_pose(x0, z0, y0), to: pack_pose(x1, z1, y1) }
+            None -> { person: after, from: pack_pose(x0, z0, y0), to: -1 }
           end
         end
-      _ -> false
+      _ -> Ur.Citizens.unguarded(after)
     end
   end
   fn citizen_chunk_slots() : Int do walker_template_base() + walker_templates() + 200000 end
   pfn citizen_walker_slot(slot : Int) : Int do walker_template_base() + walker_templates() + slot * 2 end
   pfn citizen_car_slot(slot : Int) : Int do citizen_walker_slot(slot) + 1 end
-  fn yield_to_vehicle(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, vehicle_lots : NativeIntArr, slot : Int, before : Ur.Citizens.Citizen, after : Ur.Citizens.Citizen) : Ur.Citizens.Citizen do
-    if pedestrian_crossing(c, map, vehicle_lots, before, after, citizen_car_slot(slot)) do before else after end
+  fn yield_to_vehicle(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, vehicle_lots : NativeIntArr, slot : Int, before : Ur.Citizens.Citizen, after : Ur.Citizens.Citizen) : Ur.Citizens.WalkCheck do
+    pedestrian_crossing(c, map, vehicle_lots, before, after, citizen_car_slot(slot))
   end
   pfn visible_at_stop(c : Ur.Sim.City, person : Ur.Citizens.Citizen) : Bool do
     (person.study >= 0 && person.activity == 1 && person.location == person.work && person.wait > 0.05) ||
@@ -2309,6 +2316,10 @@ mod Ur.Scene do
     let (x, z, y) = walker_position_at(c, map, person, p0 +. (p1 -. p0) *. int_to_float(k) /. 8.0, a, b)
     { k: k, x: x - 1, y: y, z: z - 1 }
   end
+  -- The key motion_key gives for a pose pack_pose packed.
+  pfn packed_key(pose : Int, k : Int) : MotionKey do
+    { k: k, x: pose / 16777216 - 1, y: pose % 4096, z: pose / 4096 % 4096 - 1 }
+  end
   pfn motion_off(a : Int, b : Int, at : Int, f : Float) : Float do
     Math.abs(int_to_float(at) -. (int_to_float(a) +. int_to_float(b - a) *. f))
   end
@@ -2345,9 +2356,10 @@ mod Ur.Scene do
           if person.transit_phase == 3 do Vk.chunk_free(chunk) else
             let p0 = person.progress
             let p1 = event.limit
-            let first = motion_key(c, map, person, p0, p1, a, b, 0)
+            -- The guard posed the walk's ends while planning it, unless no vehicle was near.
+            let first = if event.from >= 0 do packed_key(event.from, 0) else motion_key(c, map, person, p0, p1, a, b, 0) end
             let keys = if p1 == p0 do Cons(first, Nil) else
-              let last = motion_key(c, map, person, p0, p1, a, b, 8)
+              let last = if event.to >= 0 do packed_key(event.to, 8) else motion_key(c, map, person, p0, p1, a, b, 8) end
               Cons(first, motion_between(c, map, person, p0, p1, a, b, first, last, Cons(last, Nil)))
             end
             let n = List.length(keys)

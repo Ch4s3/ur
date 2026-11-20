@@ -1310,7 +1310,12 @@ mod Ur.Citizens do
   end
 
   type Actor = { slot : Int, person : Citizen }
-  type WalkEvent = { entry : Actor, started : Float, finish : Float, limit : Float, arm : Int }
+  -- [from] and [to]: the scene's poses of the walk's two ends, packed, when the guard took them while
+  -- planning it (-1 when it did not), so the scene need not pose them again.
+  type WalkEvent = { entry : Actor, started : Float, finish : Float, limit : Float, arm : Int, from : Int, to : Int }
+  -- What the walk guard let a citizen do, and the packed poses it took of the step's two ends
+  -- (-1 for an end it did not pose).
+  type WalkCheck = { person : Citizen, from : Int, to : Int }
   -- What happened to the walkers this frame, in order, for the scene: a walk queued, or a walker
   -- that stopped walking.
   type WalkNote = WalkQueued(WalkEvent) | WalkLeft(Int)
@@ -1320,6 +1325,8 @@ mod Ur.Citizens do
     reservations : Map(Int, Int), indoor : CitizenCounts, crew : List(Citizen), parcels : Map(Int, List(Int)),
     parked_sorted : List(Actor), parked_new : List(Actor), parked_fresh : Bool, walk_log : List(WalkNote) }
 
+  doc "A guard's answer that lets [person] go and posed nothing."
+  fn unguarded(person : Citizen) : WalkCheck do { person: person, from: -1, to: -1 } end
   pfn hour_at(time : Float) : Int do
     float_to_int(Math.floor(time /. S.day_seconds())) * 24 + S.street_hour(time)
   end
@@ -1616,16 +1623,17 @@ mod Ur.Citizens do
   -- How far toward [limit] the guard lets a walker go, asked a piece at a time. A walker's path bends
   -- (round a corner, into a junction), so the straight line across a whole stage can cross a vehicle
   -- that the path itself goes round; pieces this short follow the path as a tick's step does.
-  pfn guarded_reach(slot : Int, person : Citizen, limit : Float, guard : Int -> Citizen -> Citizen -> Citizen) : Float do
+  pfn guarded_reach(slot : Int, person : Citizen, limit : Float, guard : Int -> Citizen -> Citizen -> WalkCheck) : Float do
     let piece = person.progress +. 0.125
     let next = if piece >= limit do limit else piece end
     let target = { person with progress: next }
-    let checked = guard(slot, person, target)
+    let answer = guard(slot, person, target)
+    let checked = answer.person
     if checked.progress != next do person.progress
     else if next >= limit do limit
     else guarded_reach(slot, target, limit, guard) end end
   end
-  pfn plan_walk(entry : Actor, occupied : Occupied, tick_time : Float, now : Float, guard : Int -> Citizen -> Citizen -> Citizen) : Option(WalkEvent) do
+  pfn plan_walk(entry : Actor, occupied : Occupied, tick_time : Float, now : Float, guard : Int -> Citizen -> Citizen -> WalkCheck) : Option(WalkEvent) do
     let person = entry.person
     if !ordinary_walk(person) do None else
       match person.route do
@@ -1638,18 +1646,19 @@ mod Ur.Citizens do
             if stage.gate && stage.arm >= 0 && S.get(occupied.junctions, a) == 2 &&
               !S.crosswalk_open(a, stage.arm, occupied.signal_tick) do
               let green = int_to_float(crosswalk_wakeup(a, stage.arm, occupied.signal_tick)) *. 0.5
-              Some({ entry: entry, started: now, finish: now +. (green -. tick_time), limit: person.progress, arm: -1 })
+              Some({ entry: entry, started: now, finish: now +. (green -. tick_time), limit: person.progress, arm: -1, from: -1, to: -1 })
             else
               let target = { person with progress: stage.limit }
               let checked = guard(entry.slot, person, target)
-              let limit = if checked.progress == stage.limit do stage.limit else guarded_reach(entry.slot, person, stage.limit, guard) end
+              let whole = checked.person.progress == stage.limit
+              let limit = if whole do stage.limit else guarded_reach(entry.slot, person, stage.limit, guard) end
               if limit <= person.progress do
                 -- Blocked where it stands: hold and ask again in a second, as at a red light, instead of every tick.
-                Some({ entry: entry, started: now, finish: now +. 1.0, limit: person.progress, arm: -1 })
+                Some({ entry: entry, started: now, finish: now +. 1.0, limit: person.progress, arm: -1, from: checked.from, to: -1 })
               else
                 let arm = if stage.arm >= 0 && S.get(occupied.junctions, a) != 0 do a * 4 + stage.arm else -1 end
                 Some({ entry: entry, started: now, finish: now +. (limit -. person.progress) /. (0.32 *. pace),
-                  limit: limit, arm: arm })
+                  limit: limit, arm: arm, from: checked.from, to: if whole do checked.to else -1 end })
               end
             end
           end
@@ -1671,7 +1680,7 @@ mod Ur.Citizens do
     end
   end
   pfn finish_walks(c : Ur.Sim.City, events : List(WalkEvent), roster : Roster, occupied : Occupied, tick_time : Float,
-    guard : Int -> Citizen -> Citizen -> Citizen, waking : List(Actor)) : (Roster, List(Actor)) do
+    guard : Int -> Citizen -> Citizen -> WalkCheck, waking : List(Actor)) : (Roster, List(Actor)) do
     match events do
       Nil -> (roster, waking)
       Cons(event, rest) ->
@@ -1688,7 +1697,7 @@ mod Ur.Citizens do
     end
   end
   pfn dispatch_walks(c : Ur.Sim.City, roster : Roster, occupied : Occupied, tick_time : Float, through : Int,
-    guard : Int -> Citizen -> Citizen -> Citizen, waking : List(Actor)) : (Roster, List(Actor)) do
+    guard : Int -> Citizen -> Citizen -> WalkCheck, waking : List(Actor)) : (Roster, List(Actor)) do
     let roster = flush_walks(roster)
     if roster.walk_bucket >= through || Map.is_empty(roster.walk_events) do
       ({ roster with walk_bucket: through }, waking)
@@ -1707,12 +1716,13 @@ mod Ur.Citizens do
   -- [active] collects, newest first, the actors that stay active.
   pfn advance_actors(c : Ur.Sim.City, running : NativeIntArr, bus : Option(TransitService), actors : List(Actor),
     roster : Roster, active : List(Actor), occupied : Occupied, dt : Float, tick_time : Float, motion : NativeFloatArr, boarding : List(Citizen),
-    guard : Int -> Citizen -> Citizen -> Citizen, schedule : Bool) : Roster do
+    guard : Int -> Citizen -> Citizen -> WalkCheck, schedule : Bool) : Roster do
     match actors do
       Nil -> { roster with active: List.reverse(active) }
       Cons(entry, rest) ->
         let (person, occupied) = advance_person(c, running, bus, entry.person, occupied, roster.clock, dt, motion, boarding)
-        let person = guard(entry.slot, entry.person, person)
+        let answer = guard(entry.slot, entry.person, person)
+        let person = answer.person
         let entry = { entry with person: person }
         let event = if schedule do plan_walk(entry, occupied, tick_time, roster.walk_time, guard) else None end
         match event do
@@ -1725,7 +1735,7 @@ mod Ur.Citizens do
     end
   end
   pfn step_roster(c : Ur.Sim.City, walk : WalkMap, running : NativeIntArr, bus : Option(TransitService), roster : Roster, time : Float,
-    dt : Float, junctions : NativeIntArr, traffic_time : Float, guard : Int -> Citizen -> Citizen -> Citizen, schedule : Bool) : Roster do
+    dt : Float, junctions : NativeIntArr, traffic_time : Float, guard : Int -> Citizen -> Citizen -> WalkCheck, schedule : Bool) : Roster do
     let hour = hour_at(time)
     let roster = if hour > roster.clock || roster.wake_from <= roster.clock do
       wake_through(c, roster, if hour > roster.clock do hour else roster.clock end, wake_budget(dt), Nil)
@@ -1755,17 +1765,17 @@ mod Ur.Citizens do
     end
   end
   fn step_guarded(c : Ur.Sim.City, walk : WalkMap, running : NativeIntArr, bus : Option(TransitService), roster : Roster, time : Float,
-    dt : Float, junctions : NativeIntArr, traffic_time : Float, guard : Int -> Citizen -> Citizen -> Citizen) : Roster do
+    dt : Float, junctions : NativeIntArr, traffic_time : Float, guard : Int -> Citizen -> Citizen -> WalkCheck) : Roster do
     step_roster(c, walk, running, bus, roster, time, dt, junctions, traffic_time, guard, true)
   end
   fn step_indexed(c : Ur.Sim.City, running : NativeIntArr, bus : Option(TransitService), roster : Roster, time : Float,
     dt : Float, junctions : NativeIntArr, traffic_time : Float) : Roster do
-    step_guarded(c, walk_map(c), running, bus, roster, time, dt, junctions, traffic_time, fn (_, _, person) -> person)
+    step_guarded(c, walk_map(c), running, bus, roster, time, dt, junctions, traffic_time, fn (_, _, person) -> unguarded(person))
   end
   fn step_with_bus(c : Ur.Sim.City, running : NativeIntArr, bus : Option(TransitService), people : List(Citizen),
     time : Float, dt : Float, junctions : NativeIntArr, traffic_time : Float) : List(Citizen) do
     -- One-shot callers do not keep the event queue between updates.
-    snapshot(step_roster(c, walk_map(c), running, bus, index(c, people, time), time, dt, junctions, traffic_time, fn (_, _, person) -> person, false))
+    snapshot(step_roster(c, walk_map(c), running, bus, index(c, people, time), time, dt, junctions, traffic_time, fn (_, _, person) -> unguarded(person), false))
   end
   fn step_with(c : Ur.Sim.City, running : NativeIntArr, cars : List(Citizen), time : Float, dt : Float) : List(Citizen) do
     let junctions = S.junction_controls(c, NativeArray.make_int(S.count() * 4, 0), 0, NativeArray.make_int(S.count(), 0))
