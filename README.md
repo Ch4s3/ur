@@ -198,6 +198,14 @@ nuclear stations, landfills, and outfalls. The limits are cumulative. Lowering a
 place and prevents incompatible new construction or expansion. Mixed-use
 buildings add both households and jobs.
 
+New mixed-use zoning starts at the Commercial limit, with a shop on the ground
+floor. Raise a mixed-use parcel to the Industrial limit to allow a light
+industrial workshop there instead: it takes over the ground floor on the next
+construction, or when the ground-floor business is empty or closed. A workshop
+employs more people than a shop and needs more power and water, but its noise
+and pollution fall on the flats above and next door. Lowering the limit stops
+a workshop building from growing until the limit is raised again.
+
 Use **Zoning → Land use → Industrial zone** to reserve land for private
 industry. Buildings grow when connected roads, workers, utilities, and market
 conditions support them. Industrial buildings consume more electricity and

@@ -1,0 +1,55 @@
+mod LiveWorkTest do
+  needs IO
+  needs IO.Console
+  needs IO.Clock
+  needs IO.Process
+  needs IO.FileRead
+  needs IO.FileWrite
+  alias Ur.Sim as S
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let base = S.new()
+    let lot = S.index(10, 19)
+    let clear = { base with buildings: NativeArray.set_int(base.buildings, lot, 0),
+      zones: NativeArray.set_int(base.zones, lot, 0), cash: 10000 }
+    let zoned = S.act(clear, lot, 28)
+    Test.assert_eq_int(S.get(zoned.zones, lot), 3, "Mixed use is zoned")
+    Test.assert_eq_int(S.get(zoned.nuisance, lot), 2, "New mixed use starts at the Commercial limit")
+    Test.assert_false(S.workshop_allowed(zoned, lot), "A Commercial limit keeps a shop on the ground floor")
+    let opted = S.act(zoned, lot, 32)
+    Test.assert_eq_int(S.get(opted.nuisance, lot), 3, "The Industrial limit can be painted on mixed use")
+    Test.assert_true(S.workshop_allowed(opted, lot), "The Industrial limit allows a workshop")
+
+    let shop = { zoned with buildings: NativeArray.set_int(zoned.buildings, lot, 2) }
+    let workshop = { opted with buildings: NativeArray.set_int(opted.buildings, lot, 2),
+      business_sector: NativeArray.set_int(opted.business_sector, lot, 1) }
+    Test.assert_false(S.live_work(shop, lot), "A shop-fronted building is not a workshop")
+    Test.assert_true(S.live_work(workshop, lot), "A workshop ground floor is recorded")
+    Test.assert_eq_str(S.building_name(workshop, lot), "Workshop + apartments", "The inspector names the workshop")
+    Test.assert_eq_int(S.storefront(workshop, lot), 0, "A workshop has no shop front")
+    Test.assert_false(S.shop_space(workshop, lot), "A workshop is not retail space")
+    Test.assert_eq_int(S.homes_at(workshop, lot), S.homes_at(shop, lot), "Homes above are unchanged")
+    Test.assert_true(S.job_slots(workshop, lot) > S.job_slots(shop, lot), "A workshop employs more than a shop")
+    Test.assert_true(S.street_noise(workshop, lot) > S.street_noise(shop, lot), "A workshop is noisier for the flats above")
+    let shop_stats = S.stats(shop)
+    let workshop_stats = S.stats(workshop)
+    Test.assert_true(S.get(workshop_stats.utilities.electric.demand, lot) > S.get(shop_stats.utilities.electric.demand, lot), "A workshop draws more power")
+    let traffic = NativeArray.make_int(S.count() * 4, 0)
+    Test.assert_true(S.get((S.drift_pollution(workshop, traffic)).air_pollution, lot) > S.get((S.drift_pollution(shop, traffic)).air_pollution, lot), "A workshop emits air pollution")
+
+    let lowered = { workshop with nuisance: NativeArray.set_int(workshop.nuisance, lot, 2) }
+    Test.assert_eq_int(S.lot_nuisance(lowered, lot), 3, "A workshop needs the Industrial limit")
+    Test.assert_true(S.live_work(lowered, lot), "Lowering the limit leaves the workshop in place")
+
+    let grown = Ur.Clock.advance({ opted with cash: 100000 }, 24)
+    Test.assert_true(S.get(grown.buildings, lot) > 0 && S.live_work(grown, lot), "Mixed use built under the Industrial limit opens a workshop")
+    let ordinary = Ur.Clock.advance({ zoned with cash: 100000 }, 24)
+    Test.assert_true(S.get(ordinary.buildings, lot) > 0 && !S.live_work(ordinary, lot), "Mixed use built under the Commercial limit opens a shop")
+
+    let game = { city: workshop, cx: 78.0, cz: 151.0, zoom: 52.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(game)) do
+      Ok(loaded) -> Test.assert_true(S.live_work(loaded.city, lot), "A workshop survives save and load")
+      Err(error) -> panic(error)
+    end
+  end
+end

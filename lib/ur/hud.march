@@ -217,7 +217,8 @@ mod Ur.Hud do
         "   ·   " ++ int_to_string(S.get(c.heights, hover) / 4) ++ " m elevation", false)
       let a = prose(a, x, top +. 235.0, 13.0, reason)
       let zone = S.get(c.zones, hover)
-      let a = label(a, x, top +. 282.0, 11.0, "Pollution " ++ int_to_string(S.land_pollution_at(c, hover)) ++ "%   ·   " ++ S.nuisance_name(S.get(c.nuisance, hover)) ++ " nuisance limit", false)
+      let a = label(a, x, top +. 282.0, 11.0, "Pollution " ++ int_to_string(S.land_pollution_at(c, hover)) ++ "%   ·   " ++ S.nuisance_name(S.get(c.nuisance, hover)) ++ " nuisance limit" ++
+        (if zone == 3 && !S.live_work(c, hover) && S.workshop_allowed(c, hover) do " · workshop allowed" else "" end), false)
       let trip = S.commute(st.commutes, hover)
       let travel = if S.get(c.ferries, hover) > 0 || S.get(c.transit, hover) >= 2 do
         let running = S.get(c.ferries, hover) > 0 || S.get(st.running_transit, hover) > 0
