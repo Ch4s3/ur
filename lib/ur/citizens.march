@@ -1295,11 +1295,14 @@ mod Ur.Citizens do
 
   type Actor = { slot : Int, person : Citizen }
   type WalkEvent = { entry : Actor, started : Float, finish : Float, limit : Float, arm : Int }
+  -- What happened to the walkers this frame, in order, for the scene: a walk queued, or a walker
+  -- that stopped walking.
+  type WalkNote = WalkQueued(WalkEvent) | WalkLeft(Int)
   type WalkStage = { limit : Float, arm : Int, gate : Bool }
   type Roster = { walk_time : Float, walk_bucket : Int, walk_events : Map(Int, List(WalkEvent)), walk_pending : List((Int, WalkEvent)), walk_crossings : Map(Int, Int),
     walk_count : Int, walk_exits : List(Int), active : List(Actor), sleeping : Map(Int, Actor), wakeups : Map(Int, List(Actor)), clock : Int,
     parked_actors : Map(Int, Actor), reservations : Map(Int, Int), indoor : CitizenCounts, crew : List(Citizen), parcels : Map(Int, List(Int)),
-    parked_sorted : List(Actor), parked_fresh : Bool }
+    parked_sorted : List(Actor), parked_fresh : Bool, walk_log : List(WalkNote) }
 
   pfn hour_at(time : Float) : Int do
     float_to_int(Math.floor(time /. S.day_seconds())) * 24 + S.street_hour(time)
@@ -1347,7 +1350,7 @@ mod Ur.Citizens do
     index_people(c, people, { walk_time: 0.0, walk_bucket: 0, walk_events: Map.empty(), walk_pending: Nil, walk_crossings: Map.empty(),
       walk_count: 0, walk_exits: Nil, active: Nil, sleeping: Map.empty(), wakeups: Map.empty(), clock: hour_at(time),
       parked_actors: Map.empty(), reservations: Map.empty(), indoor: empty_counts(), crew: Nil, parcels: Map.empty(),
-      parked_sorted: Nil, parked_fresh: false }, 0)
+      parked_sorted: Nil, parked_fresh: false, walk_log: Nil }, 0)
   end
   pfn slot_order(a : Actor, b : Actor) : Bool do a.slot <= b.slot end
   pfn merge_ordered(a : List(Actor), b : List(Actor), reversed : List(Actor)) : List(Actor) do
@@ -1369,24 +1372,13 @@ mod Ur.Citizens do
       { person with progress: person.progress +. (event.limit -. person.progress) *. t }
     end
   end
-  -- The progress of walker_at(event, time), without copying the citizen.
-  pfn walk_progress(event : WalkEvent, time : Float) : Float do
-    let person = event.entry.person
-    if event.limit == person.progress || time <= event.started do person.progress else
-      let t = if time >= event.finish do 1.0 else (time -. event.started) /. (event.finish -. event.started) end
-      person.progress +. (event.limit -. person.progress) *. t
-    end
-  end
   fn each_walk(roster : Roster, draw : Int -> Citizen -> Unit) : Unit do
     Map.fold(roster.walk_events, (), fn (_, _, events) ->
       List.each(events, fn event -> draw(event.entry.slot, walker_at(event, roster.walk_time))))
   end
-  -- Each scheduled walker as its slot, its citizen at the start of the walk, and its current progress.
-  fn each_walk_progress(roster : Roster, draw : Int -> Citizen -> Float -> Unit) : Unit do
-    Map.fold(roster.walk_events, (), fn (_, _, events) ->
-      List.each(events, fn event -> draw(event.entry.slot, event.entry.person, walk_progress(event, roster.walk_time))))
-  end
-  fn begin_walk_frame(roster : Roster) : Roster do { roster with walk_exits: Nil } end
+  fn begin_walk_frame(roster : Roster) : Roster do { roster with walk_exits: Nil, walk_log: Nil } end
+  doc "What happened to the walkers since `begin_walk_frame`, oldest first."
+  fn walk_log(roster : Roster) : List(WalkNote) do List.reverse(roster.walk_log) end
   pfn walk_entries(roster : Roster) : List(Actor) do
     Map.fold(roster.walk_events, Nil, fn (entries, _, events) ->
       List.fold_left(events, entries, fn (out, event) ->
@@ -1395,7 +1387,7 @@ mod Ur.Citizens do
   fn wake_walkers(roster : Roster) : Roster do
     let due = List.sort_by(walk_entries(roster), slot_order)
     { roster with active: merge_actors(roster.active, due), walk_events: Map.empty(), walk_pending: Nil, walk_crossings: Map.empty(),
-      walk_count: 0, walk_exits: List.map(due, fn entry -> entry.slot) }
+      walk_count: 0, walk_exits: List.map(due, fn entry -> entry.slot), walk_log: List.map(due, fn entry -> WalkLeft(entry.slot)) }
   end
   fn snapshot(roster : Roster) : List(Citizen) do
     let entries = List.append(walk_entries(roster), List.append(roster.active, Map.values(roster.sleeping)))
@@ -1485,7 +1477,7 @@ mod Ur.Citizens do
   -- A new event waits in [walk_pending] until flush_walks files it: thousands are queued a frame,
   -- and filing each into [walk_events] alone copied the Map's path every time.
   pfn queue_walk(roster : Roster, event : WalkEvent) : Roster do
-    { roster with walk_pending: Cons((walk_bucket_of(event), event), roster.walk_pending),
+    { roster with walk_pending: Cons((walk_bucket_of(event), event), roster.walk_pending), walk_log: Cons(WalkQueued(event), roster.walk_log),
       walk_count: roster.walk_count + 1, walk_crossings: crossing_reservation(roster.walk_crossings, event.arm, 1) }
   end
   -- Files [group] (one bucket's events, oldest first) newest first, ahead of what the bucket
@@ -1625,7 +1617,7 @@ mod Ur.Citizens do
         match plan_walk(entry, occupied, tick_time, roster.walk_time, guard) do
           Some(next) -> finish_walks(c, rest, queue_walk(roster, next), occupied, tick_time, guard, waking)
           None ->
-            let roster = { roster with walk_exits: Cons(entry.slot, roster.walk_exits) }
+            let roster = { roster with walk_exits: Cons(entry.slot, roster.walk_exits), walk_log: Cons(WalkLeft(entry.slot), roster.walk_log) }
             finish_walks(c, rest, roster, occupied, tick_time, guard, Cons(entry, waking))
         end
     end
