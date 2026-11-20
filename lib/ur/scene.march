@@ -2138,7 +2138,7 @@ mod Ur.Scene do
           end
           match end_point do
             Some((x1, z1, y1)) ->
-              (x0 != x1 || z0 != z1) && Vk.footprint_blocked(int_to_float(x0), int_to_float(y0), int_to_float(z0),
+              (x0 != x1 || z0 != z1) && Strata.Ffi.Footprints.blocked(int_to_float(x0), int_to_float(y0), int_to_float(z0),
                 int_to_float(x1), int_to_float(y1), int_to_float(z1), ignore)
             None -> false
           end
@@ -2149,6 +2149,8 @@ mod Ur.Scene do
   fn citizen_chunk_slots() : Int do walker_template_base() + walker_templates() + 200000 end
   pfn citizen_walker_slot(slot : Int) : Int do walker_template_base() + walker_templates() + slot * 2 end
   pfn citizen_car_slot(slot : Int) : Int do citizen_walker_slot(slot) + 1 end
+  -- Runs inside the citizen step, which is on a worker task: it reads the footprints frozen
+  -- before the step started (Vk.footprints_freeze), never the renderer's live ones.
   fn yield_to_vehicle(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, slot : Int, before : Ur.Citizens.Citizen, after : Ur.Citizens.Citizen) : Ur.Citizens.Citizen do
     if pedestrian_crossing(c, map, before, after, citizen_car_slot(slot)) do before else after end
   end
