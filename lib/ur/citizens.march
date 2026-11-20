@@ -1300,8 +1300,8 @@ mod Ur.Citizens do
   type WalkNote = WalkQueued(WalkEvent) | WalkLeft(Int)
   type WalkStage = { limit : Float, arm : Int, gate : Bool }
   type Roster = { walk_time : Float, walk_bucket : Int, walk_events : Map(Int, List(WalkEvent)), walk_pending : List((Int, WalkEvent)), walk_crossings : Map(Int, Int),
-    walk_count : Int, walk_exits : List(Int), active : List(Actor), sleeping : Map(Int, Actor), wakeups : Map(Int, List(Actor)), clock : Int,
-    parked_actors : Map(Int, Actor), reservations : Map(Int, Int), indoor : CitizenCounts, crew : List(Citizen), parcels : Map(Int, List(Int)),
+    walk_count : Int, walk_exits : List(Int), active : List(Actor), wakeups : Map(Int, List(Actor)), resting : List(Actor), clock : Int,
+    reservations : Map(Int, Int), indoor : CitizenCounts, crew : List(Citizen), parcels : Map(Int, List(Int)),
     parked_sorted : List(Actor), parked_fresh : Bool, walk_log : List(WalkNote) }
 
   pfn hour_at(time : Float) : Int do
@@ -1315,14 +1315,15 @@ mod Ur.Citizens do
     else if resting(person, hour) do person.rest_until
     else -1 end end end
   end
+  -- A sleeper is held once: in [wakeups] under the hour it wakes, or in [resting] when it never
+  -- wakes on its own. Who is asleep, who is parked and who has an id are all read from there, so
+  -- putting a citizen to sleep and waking an hour's batch touch no per-citizen map.
   pfn sleep_actor(c : Ur.Sim.City, roster : Roster, entry : Actor, wake : Int) : Roster do
-    let sleeping = Map.insert(roster.sleeping, entry.person.id, entry, Map.int_cmp)
-    let wakeups = if wake == -2 do roster.wakeups else
-      Map.insert(roster.wakeups, wake, Cons(entry, Map.get_or(roster.wakeups, wake, Nil, Map.int_cmp)), Map.int_cmp)
+    let (wakeups, resting) = if wake == -2 do (roster.wakeups, Cons(entry, roster.resting)) else
+      (Map.insert(roster.wakeups, wake, Cons(entry, Map.get_or(roster.wakeups, wake, Nil, Map.int_cmp)), Map.int_cmp), roster.resting)
     end
-    let parked = if entry.person.parking != 0 do Map.insert(roster.parked_actors, entry.slot, entry, Map.int_cmp) else roster.parked_actors end
     let crew = if entry.person.activity == 6 do Cons(entry.person, roster.crew) else roster.crew end
-    { roster with sleeping: sleeping, wakeups: wakeups, parked_actors: parked, crew: crew,
+    { roster with wakeups: wakeups, resting: resting, crew: crew,
       parked_fresh: roster.parked_fresh && entry.person.parking == 0,
       reservations: park_actor(roster.reservations, entry.person, 1), indoor: count_person(c, entry.person, roster.indoor, 1) }
   end
@@ -1348,8 +1349,8 @@ mod Ur.Citizens do
   end
   fn index(c : Ur.Sim.City, people : List(Citizen), time : Float) : Roster do
     index_people(c, people, { walk_time: 0.0, walk_bucket: 0, walk_events: Map.empty(), walk_pending: Nil, walk_crossings: Map.empty(),
-      walk_count: 0, walk_exits: Nil, active: Nil, sleeping: Map.empty(), wakeups: Map.empty(), clock: hour_at(time),
-      parked_actors: Map.empty(), reservations: Map.empty(), indoor: empty_counts(), crew: Nil, parcels: Map.empty(),
+      walk_count: 0, walk_exits: Nil, active: Nil, wakeups: Map.empty(), resting: Nil, clock: hour_at(time),
+      reservations: Map.empty(), indoor: empty_counts(), crew: Nil, parcels: Map.empty(),
       parked_sorted: Nil, parked_fresh: false, walk_log: Nil }, 0)
   end
   pfn slot_order(a : Actor, b : Actor) : Bool do a.slot <= b.slot end
@@ -1390,11 +1391,22 @@ mod Ur.Citizens do
       walk_count: 0, walk_exits: List.map(due, fn entry -> entry.slot), walk_log: List.map(due, fn entry -> WalkLeft(entry.slot)) }
   end
   fn snapshot(roster : Roster) : List(Citizen) do
-    let entries = List.append(walk_entries(roster), List.append(roster.active, Map.values(roster.sleeping)))
+    let entries = List.append(walk_entries(roster), List.append(roster.active, sleepers(roster)))
     List.map(List.sort_by(entries, slot_order), fn entry -> entry.person)
   end
+  -- Everyone asleep, in no particular order.
+  pfn sleepers(roster : Roster) : List(Actor) do
+    Map.fold(roster.wakeups, roster.resting, fn (out, _, batch) -> List.fold_left(batch, out, fn (acc, entry) -> Cons(entry, acc)))
+  end
+  pfn find_sleeper(roster : Roster, id : Int) : Option(Actor) do
+    match List.find(roster.resting, fn entry -> entry.person.id == id) do
+      Some(entry) -> Some(entry)
+      None -> Map.fold(roster.wakeups, None, fn (found, _, batch) ->
+        if Option.is_some(found) do found else List.find(batch, fn entry -> entry.person.id == id) end)
+    end
+  end
   fn find(roster : Roster, id : Int) : Option(Citizen) do
-    match Map.get(roster.sleeping, id, Map.int_cmp) do
+    match find_sleeper(roster, id) do
       Some(entry) -> Some(entry.person)
       None ->
         match List.find(roster.active, fn entry -> entry.person.id == id) do
@@ -1417,7 +1429,7 @@ mod Ur.Citizens do
       end)
   end
   pfn parked_order(roster : Roster) : List(Actor) do
-    if roster.parked_fresh do roster.parked_sorted else List.sort_by(Map.values(roster.parked_actors), slot_order) end
+    if roster.parked_fresh do roster.parked_sorted else List.sort_by(List.filter(sleepers(roster), fn entry -> entry.person.parking != 0), slot_order) end
   end
   fn visible_actors(roster : Roster) : List(Actor) do
     merge_actors(roster.active, parked_order(roster))
@@ -1437,9 +1449,7 @@ mod Ur.Citizens do
       List.any(roster.active, fn entry -> emergency_move(entry.person))
   end
   pfn wake_actor(c : Ur.Sim.City, roster : Roster, entry : Actor) : Roster do
-    let parked = if entry.person.parking != 0 do Map.remove(roster.parked_actors, entry.slot, Map.int_cmp) else roster.parked_actors end
-    let sleeping = Map.remove(roster.sleeping, entry.person.id, Map.int_cmp)
-    { roster with sleeping: sleeping, parked_actors: parked, parked_fresh: roster.parked_fresh && entry.person.parking == 0,
+    { roster with parked_fresh: roster.parked_fresh && entry.person.parking == 0,
       reservations: park_actor(roster.reservations, entry.person, -1),
       indoor: count_person(c, entry.person, roster.indoor, -1) }
   end
