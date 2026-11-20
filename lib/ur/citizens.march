@@ -1488,8 +1488,8 @@ mod Ur.Citizens do
     { roster with walk_pending: Cons((walk_bucket_of(event), event), roster.walk_pending),
       walk_count: roster.walk_count + 1, walk_crossings: crossing_reservation(roster.walk_crossings, event.arm, 1) }
   end
-  -- Files [group] (one bucket's events, newest first) ahead of what the bucket already holds,
-  -- as queueing them one at a time did.
+  -- Files [group] (one bucket's events, oldest first) newest first, ahead of what the bucket
+  -- already holds, as queueing them one at a time did.
   pfn file_walks(events : Map(Int, List(WalkEvent)), bucket : Int, group : List(WalkEvent)) : Map(Int, List(WalkEvent)) do
     Map.insert(events, bucket, List.append(List.reverse(group), Map.get_or(events, bucket, Nil, Map.int_cmp)), Map.int_cmp)
   end
@@ -1504,13 +1504,36 @@ mod Ur.Citizens do
         end
     end
   end
-  -- One Map insert per bucket instead of per event. Each event carries the bucket queue_walk
-  -- computed, so the sort compares plain Ints. The sort is stable, so each bucket keeps its
-  -- events newest first.
+  -- Splits [pending] (newest first) into [bucket]'s events, oldest first as file_walks takes
+  -- them, and everything else, oldest first.
+  pfn split_bucket(pending : List((Int, WalkEvent)), bucket : Int, group : List(WalkEvent), rest : List((Int, WalkEvent))) : (List(WalkEvent), List((Int, WalkEvent))) do
+    match pending do
+      Nil -> (group, rest)
+      Cons((b, event), tail) ->
+        if b == bucket do split_bucket(tail, bucket, Cons(event, group), rest)
+        else split_bucket(tail, bucket, group, Cons((b, event), rest)) end
+    end
+  end
+  -- Files one bucket per pass. A flush holds up to ~14k events but rarely more than a few
+  -- buckets (a wake burst finishes together), so a few linear passes beat sorting. Past
+  -- [rounds] buckets the remainder is sorted instead, bounding the worst case.
+  pfn file_pending(events : Map(Int, List(WalkEvent)), pending : List((Int, WalkEvent)), rounds : Int) : Map(Int, List(WalkEvent)) do
+    match pending do
+      Nil -> events
+      Cons((bucket, _), _) ->
+        if rounds == 0 do
+          file_groups(events, List.sort_by(pending, fn (a, b) -> Tuple.first(a) <= Tuple.first(b)), -1, Nil)
+        else
+          match split_bucket(pending, bucket, Nil, Nil) do
+            (group, rest) -> file_pending(file_walks(events, bucket, group), List.reverse(rest), rounds - 1)
+          end
+        end
+    end
+  end
+  -- One Map insert per bucket instead of per event; each bucket keeps its events newest first.
   pfn flush_walks(roster : Roster) : Roster do
     if List.is_empty(roster.walk_pending) do roster else
-      let sorted = List.sort_by(roster.walk_pending, fn (a, b) -> Tuple.first(a) <= Tuple.first(b))
-      { roster with walk_events: file_groups(roster.walk_events, sorted, -1, Nil), walk_pending: Nil }
+      { roster with walk_events: file_pending(roster.walk_events, roster.walk_pending, 16), walk_pending: Nil }
     end
   end
   pfn sidewalk_stage(map : WalkMap, person : Citizen, a : Int, b : Int) : WalkStage do
