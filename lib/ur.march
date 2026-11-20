@@ -15,7 +15,7 @@ mod Ur do
   type Play = { flood_drill : Bool, sanitation : Ur.Scene.SanitationShift, truck_selected : Bool, citizen_focus : Int, activity : List(Ur.Activity.NeighborhoodEvent), fleet : List(Ur.Fleet.Run), fleet_routes : List(Ur.Food.Trip), city : Ur.Sim.City, stats : Ur.Sim.Stats, food : List(Ur.Food.Trip), citizens : Ur.Citizens.Roster, shown : Ur.Citizens.Roster, stepping : Option(Task((Ur.Citizens.Roster, Int))), step_ms : Int, walk_map : Ur.Citizens.WalkMap, day_plan : Option(DayPlan), traffic_time : Float, rotor_phases : NativeF32Arr, cloud_offset : (Float, Float), cx : Float, cz : Float, zoom : Float, yaw : Float, tool : Int, group : Int, page : Int, layer : Int, sidebar_visible : Bool, sidebar_tab : Int, crime_focus : Int, council_focus : Int, finance_view : Ur.Hud.FinanceView, paused : Bool, speed : Int,
     road_draft : Ur.Build.Draft, road_bench : Int, road_pointer : (Float, Float), sidewalk_spot : Int, keys : Int, mouse : Bool, anchor : Int, stroke : List(Int), hovered : Int, parcel_focus : Int, popup : Int, religion_site : Int, religion_choice : Int, reason : String, preview : Ur.Build.Preview, preview_chunks : Int, undo : List(Ur.Sim.City), time : Float, elapsed : Float,
     frame : Int, drawn : Int, limit : Int, profile : Bool, trace_input : Bool, tick_ms : Float, fps : FrameRate,
-    setup : NativeIntArr, world_seed : Int, setup_keys : Int, seed_focus : Bool, setup_drag : Int, menu_open : Bool, boot : Bool, notice : String, confirm : Atom, save_path : String, saved : Bool, quit : Bool }
+    setup : NativeIntArr, world_seed : Int, setup_keys : Int, seed_focus : Bool, setup_drag : Int, menu_open : Bool, boot : Bool, notice : String, confirm : Atom, save_path : String, saved : Bool, quit : Bool, dev : Strata.Devtools.Dev }
   pfn minimum(a : Float, b : Float) : Float do if a < b do a else b end end
   pfn maximum(a : Float, b : Float) : Float do if a > b do a else b end end
   pfn frame_rate(sample : FrameRate, time : Float, drawn : Int) : FrameRate do
@@ -186,6 +186,19 @@ mod Ur do
     let counts = Ur.Citizens.indexed_counts(c, roster)
     counts.tracked
   end
+  -- Ur's own devtools commands; Strata.Devtools.handle answers the shared ones first.
+  pfn dev_command(p : Play, d : Strata.Devtools.Dev, r : Strata.Devtools.DReq) : Strata.Devtools.Dev do
+    let id = Strata.Devtools.req_id(r)
+    let cmd = Strata.Devtools.req_cmd(r)
+    if cmd == "camera_get" do
+      Strata.Devtools.ok(d, id, Strata.Devtools.fields([Strata.Devtools.fnum("cx", p.cx), Strata.Devtools.fnum("cz", p.cz),
+        Strata.Devtools.fnum("zoom", p.zoom), Strata.Devtools.fnum("yaw", p.yaw)]))
+      d
+    else
+      Strata.Devtools.fail(d, id, "no command " ++ cmd ++ " in Ur (the shared ones: status, pause, resume, step, screenshot, stats, perf_mark, perf_report, perf_values; and camera_get)")
+      d
+    end
+  end
   pfn run_frames(p : Play) : Unit do
     Vk.poll()
     if Vk.should_close() || p.quit || (p.limit > 0 && p.frame >= p.limit) do
@@ -243,11 +256,21 @@ mod Ur do
       -- The step started under last frame's draw finishes here: p.citizens is its roster from
       -- now on, and p.shown the roster that frame drew.
       let p = settle(p)
+      -- Strata devtools (on with STRATA_DEVTOOLS=<dir>): this frame's requests, the shared ones
+      -- (pause, step, screenshot, perf_report, ...) answered by Strata.Devtools, the rest here.
+      let (dev_taken, dev_reqs) = Strata.Devtools.take(p.dev, p.frame)
+      let dev = List.fold_left(dev_reqs, dev_taken, fn (d, r) ->
+        match Strata.Devtools.handle(d, r, p.frame) do
+          Some(d2) -> d2
+          None -> dev_command(p, d, r)
+        end)
+      let timing = p.profile || Strata.Devtools.is_on(dev)
       -- perf: move_ms is how long this thread waited for that step, step_ms how long the
       -- worker spent on it (whole milliseconds).
-      let move_ms = if p.profile do (Vk.time() -. time) *. 1000.0 else 0.0 end
+      let move_ms = if timing do (Vk.time() -. time) *. 1000.0 else 0.0 end
       let fps = frame_rate(p.fps, time, p.drawn)
-      let dt = minimum(0.25, maximum(0.0, time -. p.time))
+      -- devtools' pause holds the frame's time step (and so the citizens and traffic)
+      let dt = Strata.Devtools.dt(dev, minimum(0.25, maximum(0.0, time -. p.time)))
       let keys = keymask(0, 0)
       let mouse = Vk.mouse_button(0)
       let mx = Vk.mouse_x()
@@ -535,7 +558,7 @@ mod Ur do
       let cx = if unlanded do 234.0 else if just_landed do int_to_float(c.harbour % S.width() * 8 + 4) else cx end end
       let cz = if unlanded do 176.0 else if just_landed do int_to_float(c.harbour / S.width() * 8 + 4) else cz end end
       let zoom = if unlanded do 345.0 else if just_landed do 60.0 else zoom end end
-      let steps = if paused || c.harbour < 0 || just_landed || S.valid(anchor) || paint || property_changed || undone do 0 else speed end
+      let steps = if paused || !Strata.Devtools.advancing(dev) || c.harbour < 0 || just_landed || S.valid(anchor) || paint || property_changed || undone do 0 else speed end
       let game_dt = dt *. int_to_float(steps)
       -- Advance the saved calendar phase over 24 real seconds per day at 1x.
       let clock_rate = S.day_seconds() /. 24.0
@@ -717,7 +740,7 @@ mod Ur do
           None -> (step(), None)
         end
       end
-      let render_start = if p.profile do Vk.time() else 0.0 end
+      let render_start = if timing do Vk.time() else 0.0 end
       let drew = Vk.frame()
       let drawn = p.drawn + (if drew do 1 else 0 end)
       if p.profile do
@@ -733,9 +756,18 @@ mod Ur do
           " batch_instances=" ++ int_to_string(float_to_int(Vk.stat(30))) ++ " batch_draws=" ++ int_to_string(float_to_int(Vk.stat(31))) ++
           " opaque_commands=" ++ int_to_string(float_to_int(Vk.stat(32)))))
       else () end
+      let dev = if !Strata.Devtools.is_on(dev) do dev else
+        let frame_ms = (Vk.time() -. time) *. 1000.0
+        let dev = Strata.Devtools.record_timed(dev, [("frame_ms", frame_ms), ("update_ms", (render_start -. time) *. 1000.0),
+          ("move_ms", move_ms), ("sim_ms", int_to_float(p.step_ms)), ("speed", int_to_float(steps)),
+          ("walking", int_to_float(citizen_stats.walking)), ("driving", int_to_float(citizen_stats.driving))], dt)
+        Strata.Devtools.end_frame(dev, Strata.Devtools.fields([Strata.Devtools.fint("frame", p.frame), Strata.Devtools.fnum("frame_ms", frame_ms),
+          Strata.Devtools.fnum("sim_ms", int_to_float(p.step_ms)), Strata.Devtools.fnum("renderer_ms", Vk.stat(0)), Strata.Devtools.fnum("gpu_ms", Vk.stat(3)),
+          Strata.Devtools.fint("walking", citizen_stats.walking), Strata.Devtools.fbool("paused", Strata.Devtools.paused(dev))]), dt)
+      end
       run_frames({ flood_drill: p.flood_drill, sanitation: sanitation, truck_selected: truck_selected, citizen_focus: citizen_focus, activity: activity, fleet: fleet, fleet_routes: wanted, city: c, stats: st, food: food, citizens: next_citizens, shown: citizens, stepping: stepping, step_ms: p.step_ms, walk_map: walk_map, day_plan: day_plan, traffic_time: traffic_time, rotor_phases: rotor_phases, cloud_offset: cloud_offset, cx: cx, cz: cz, zoom: zoom, yaw: yaw, tool: tool, group: group, page: page, layer: layer, sidebar_visible: sidebar_visible && !S.valid(activity_lot) && !S.valid(council_lot) && !S.valid(diagnosis_lot), sidebar_tab: sidebar_tab, crime_focus: crime_focus, council_focus: council_focus, finance_view: finance_view, paused: paused, speed: speed,
         road_draft: draft, road_bench: p.road_bench, road_pointer: (mx, my), sidewalk_spot: spot, keys: keys, mouse: mouse, anchor: anchor, stroke: if mouse do stroke else Nil end, hovered: hovered, parcel_focus: parcel_focus, popup: popup, religion_site: religion_site, religion_choice: religion_choice, reason: reason, preview: preview, preview_chunks: preview_chunks, undo: undo,
-        time: time, elapsed: elapsed, frame: p.frame + 1, drawn: drawn, limit: p.limit, profile: p.profile, trace_input: p.trace_input, tick_ms: tick_ms, fps: fps, setup: p.setup, world_seed: p.world_seed, setup_keys: p.setup_keys, seed_focus: p.seed_focus, setup_drag: p.setup_drag, menu_open: false, boot: false, notice: "", confirm: :nothing, save_path: p.save_path, saved: p.saved, quit: false })
+        time: time, elapsed: elapsed, frame: p.frame + 1, drawn: drawn, limit: p.limit, profile: p.profile, trace_input: p.trace_input, tick_ms: tick_ms, fps: fps, setup: p.setup, world_seed: p.world_seed, setup_keys: p.setup_keys, seed_focus: p.seed_focus, setup_drag: p.setup_drag, menu_open: false, boot: false, notice: "", confirm: :nothing, save_path: p.save_path, saved: p.saved, quit: false, dev: dev })
     end end end
   end
   pfn corridor_report(label : String, c : Ur.Sim.City) : Unit do
@@ -979,7 +1011,7 @@ mod Ur do
       let page = if S.grade_tool(start_tool) do 1 else if layer == 35 do 7 else if layer == 4 || layer == 29 || layer == 30 || layer == 32 || layer == 33 do 2 else if layer >= 5 && layer <= 8 do 1 else if layer == 23 || layer == 24 || layer == 27 || layer == 28 do 6 else if layer >= 23 && layer != 31 do 5 else if layer >= 20 && layer != 31 do 4 else if layer >= 12 && layer != 31 do 3 else if demo == 7 && layer == 0 do 1 else if demo == 8 && layer == 0 do 2 else 0 end end end end end end end end end end
       run_frames({ flood_drill: demo == 22 && drill == 1, sanitation: Ur.Scene.empty_sanitation(), truck_selected: false, citizen_focus: -1, activity: Nil, fleet: Ur.Fleet.step(c, stats.traffic, Nil, fleet_routes, 0.0, true), fleet_routes: fleet_routes, city: c, stats: stats, food: Ur.Food.producer_traffic(c, stats), citizens: citizens, shown: citizens, stepping: None, step_ms: 0, walk_map: Ur.Citizens.walk_map(c), day_plan: None, traffic_time: clock_phase(c), rotor_phases: NativeArray.make_f32(S.count(), 0.0), cloud_offset: (0.0, 0.0), cx: cx, cz: cz, zoom: zoom, yaw: 0.55, tool: tool, group: group, page: page, layer: layer, sidebar_visible: (demo > 0 && !road_demo && !metro && !streets_demo && demo != 11 && demo != 14 && demo != 15 && demo != 16 && demo != 18 && demo != 19 && demo != 20 && demo != 22) || details_tab >= 5, sidebar_tab: details_tab, crime_focus: -1, council_focus: -1, finance_view: { month: 0, lines: finance_lines }, paused: demo == 0 || road_demo || fire_demo || demo == 13 || demo == 18 || demo == 19 || demo == 20 || demo == 21 || demo == 22 || demo == 27, speed: if metro || (demo == 22 && drill == 1) do 3 else 1 end,
         road_draft: draft, road_bench: road_bench, road_pointer: (-1.0, -1.0), sidewalk_spot: -1, keys: 0, mouse: false, anchor: -1, stroke: Nil, hovered: -1, parcel_focus: if demo == 17 do S.index(10, 17) else if details_tab == 12 do S.index(9, 19) else -1 end end, popup: if fire_demo do Ur.Scenario.fire_recovery_home() else if demo == 22 do (if evacuation_demo do Ur.Scenario.evacuation_home() else Ur.Scenario.storm_station() end) else -1 end end, religion_site: religion_site, religion_choice: 0, preview: preview, undo: Nil, reason: if c.harbour < 0 do "Choose a cyan shoreline parcel to land." else "Select a parcel to inspect development" end,
-        time: Vk.time(), elapsed: clock_phase(c), frame: 0, drawn: 0, limit: Authority.must(Env.get_int("UR_FRAMES", 0)), profile: profile, trace_input: Authority.must(Env.get_int("UR_INPUT_LOG", 0)) > 0, tick_ms: 0.0, fps: { since: Vk.time(), drawn: 0, value: -1 }, setup: S.default_setup(), world_seed: 1, setup_keys: 0, seed_focus: true, setup_drag: -1, menu_open: boot, boot: boot, notice: if saved do "" else "No saved city yet." end, confirm: :nothing, save_path: save_path, saved: saved, quit: false, preview_chunks: preview_chunks })
+        time: Vk.time(), elapsed: clock_phase(c), frame: 0, drawn: 0, limit: Authority.must(Env.get_int("UR_FRAMES", 0)), profile: profile, trace_input: Authority.must(Env.get_int("UR_INPUT_LOG", 0)) > 0, tick_ms: 0.0, fps: { since: Vk.time(), drawn: 0, value: -1 }, setup: S.default_setup(), world_seed: 1, setup_keys: 0, seed_focus: true, setup_drag: -1, menu_open: boot, boot: boot, notice: if saved do "" else "No saved city yet." end, confirm: :nothing, save_path: save_path, saved: saved, quit: false, preview_chunks: preview_chunks, dev: Strata.Devtools.start() })
     else Ur.AppError.stop("Could not open Strata renderer; check Vulkan and GLFW installation") end end end end end end end
   end
 end
