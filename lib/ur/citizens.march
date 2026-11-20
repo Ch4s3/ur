@@ -1404,7 +1404,8 @@ mod Ur.Citizens do
   fn wake_walkers(roster : Roster) : Roster do
     let due = List.sort_by(walk_entries(roster), slot_order)
     { roster with active: merge_actors(roster.active, due), walk_events: Map.empty(), walk_pending: Nil, walk_crossings: Map.empty(),
-      walk_count: 0, walk_exits: List.map(due, fn entry -> entry.slot), walk_log: List.map(due, fn entry -> WalkLeft(entry.slot)) }
+      walk_count: 0, walk_exits: List.fold_left(due, roster.walk_exits, fn (exits, entry) -> Cons(entry.slot, exits)),
+      walk_log: List.fold_left(due, roster.walk_log, fn (log, entry) -> Cons(WalkLeft(entry.slot), log)) }
   end
   fn snapshot(roster : Roster) : List(Citizen) do
     let entries = List.append(walk_entries(roster), List.append(roster.active, sleepers(roster)))
