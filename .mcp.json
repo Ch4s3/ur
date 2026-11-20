@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "strata": {
+      "command": "node",
+      "args": ["../strata/tools/strata-mcp/server.mjs"]
+    }
+  }
+}
