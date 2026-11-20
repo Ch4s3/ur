@@ -627,9 +627,8 @@ mod Ur do
       else citizens end
       let citizens = Ur.Citizens.sort_parked(citizens)
       Ur.Scene.sanitation_truck(c, moment, sanitation.driver, night, section.after > 0)
-      Ur.Scene.clear_walk_exits(citizens)
+      Ur.Scene.walk_motions(c, walk_map, citizens)
       Ur.Scene.citizen_vehicles(c, walk_map, Ur.Citizens.visible_actors(citizens), Ur.Citizens.visible_actors(p.citizens), night, !scene_changed && p.frame > 0, section.after > 0)
-      Ur.Scene.scheduled_walks(c, walk_map, citizens, { w: w, h: h, cx: cx, cz: cz, zoom: zoom, yaw: yaw }, p.frame)
       let truck_selected = truck_selected && sanitation.driver >= 0 && sanitation.pickup == p.sanitation.pickup && !undone
       let citizen_stats = Ur.Citizens.indexed_counts(c, citizens)
       if layer != p.layer || (layer > 0 && (flood_day || religion_event)) || (midnight && (layer == 29 || layer == 30 || layer == 26 || layer == 4 || layer == 3 || layer == 9 || layer == 32 || layer == 33 || layer == 34 || Ur.Layers.is_utility(layer))) || (layer > 0 && (paint || undone || policy_changed || day_changed || (due && (layer == 3 || layer == 4 || layer == 9 || Ur.Layers.is_utility(layer) || layer >= 12)))) do Ur.Scene.map_layer(c, st, layer) else () end
