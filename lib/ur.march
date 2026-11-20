@@ -58,13 +58,13 @@ mod Ur do
     if i >= 7 do tool else select_tool(now, old, i + 1, if pressed(now, old, i) do i + 1 else tool end) end
   end
   pfn axis(negative : Int, positive : Int) : Float do (if Vk.key(positive) do 1.0 else 0.0 end) -. (if Vk.key(negative) do 1.0 else 0.0 end) end
-  pfn move_citizens(c : Ur.Sim.City, walk : Ur.Citizens.WalkMap, running : NativeIntArr, bus : Ur.Citizens.TransitService, citizens : Ur.Citizens.Roster, time : Float, dt : Float, clock_dt : Float, steps : Int, junctions : NativeIntArr, traffic_time : Float) : Ur.Citizens.Roster do
+  pfn move_citizens(c : Ur.Sim.City, walk : Ur.Citizens.WalkMap, running : NativeIntArr, bus : Ur.Citizens.TransitService, citizens : Ur.Citizens.Roster, time : Float, dt : Float, clock_dt : Float, steps : Int, junctions : NativeIntArr, traffic_time : Float, vehicle_lots : NativeIntArr) : Ur.Citizens.Roster do
     if steps == 0 do citizens else
       let next_time = time +. clock_dt
       let motion = traffic_time +. dt
       let citizens = Ur.Citizens.step_guarded(c, walk, running, Some(bus), citizens, next_time, dt, junctions, motion,
-        fn (slot, before, after) -> Ur.Scene.yield_to_vehicle(c, walk, slot, before, after))
-      move_citizens(c, walk, running, bus, citizens, next_time, dt, clock_dt, steps - 1, junctions, motion)
+        fn (slot, before, after) -> Ur.Scene.yield_to_vehicle(c, walk, vehicle_lots, slot, before, after))
+      move_citizens(c, walk, running, bus, citizens, next_time, dt, clock_dt, steps - 1, junctions, motion, vehicle_lots)
     end
   end
   pfn roll_day(c : Ur.Sim.City, traffic : NativeIntArr, completed : List(Int), flood_drill : Bool) : DayResult do
@@ -612,7 +612,7 @@ mod Ur do
       let walk_map = if midnight || scene_changed do Ur.Citizens.walk_map(c) else p.walk_map end
       let move_start = if p.profile do Vk.time() else 0.0 end
       let citizens = if steps == 0 do citizens else
-        move_citizens(S.operating_city(c, st.buses), walk_map, st.running_transit, { routes: wanted, active: fleet }, citizens, calendar_time, dt, dt *. clock_rate, steps, st.junctions, motion_time)
+        move_citizens(S.operating_city(c, st.buses), walk_map, st.running_transit, { routes: wanted, active: fleet }, citizens, calendar_time, dt, dt *. clock_rate, steps, st.junctions, motion_time, Ur.Scene.vehicle_lots())
       end
       let move_ms = if p.profile do (Vk.time() -. move_start) *. 1000.0 else 0.0 end
       let night = hour >= 18 || hour < 6
