@@ -96,6 +96,60 @@ mod CitizenMovementTest do
     Test.assert_eq_int(cached.home, total.home, "cached indoor counts match the complete roster")
   end
 
+  -- An hour's batch larger than the per-step budget wakes over several steps, earliest first,
+  -- and the roster's order and counts stay whole meanwhile.
+  pfn spread_wake_burst(c : Ur.Sim.City, base : Ur.Citizens.Citizen, empty : NativeIntArr) : Unit do
+    let sleeper = { base with work: base.home, study: -1, shop: -1, park: -1, location: base.home,
+      parking: 0, activity: 0, route: Nil, wait: 0.0, rest_until: 4 }
+    let budget = Ur.Citizens.wake_budget(0.02)
+    let size = budget * 2 + budget / 2
+    let people = List.map(List.range(0, size), fn i -> { sleeper with id: i + 1, parking: i % 2 })
+    let pending = fn roster -> List.length(Map.get_or(roster.wakeups, 4, Nil, Map.int_cmp))
+    let parked = List.filter(List.range(0, size), fn slot -> slot % 2 == 1)
+    let roster = Ur.Citizens.sort_parked(Ur.Citizens.index(c, people, 0.26))
+    Test.assert_eq_int(pending(roster), size, "the whole batch sleeps until hour 4")
+    let first_step = Ur.Citizens.step_indexed(c, empty, None, roster, 0.31, 0.02, empty, 0.0)
+    Test.assert_eq_int(pending(first_step), size - budget, "one step wakes at most the budget")
+    Test.assert_eq_int(first_step.clock, 4, "the clock still reaches the current hour")
+    let second = Ur.Citizens.step_indexed(c, empty, None, first_step, 0.31, 0.02, empty, 0.0)
+    Test.assert_eq_int(pending(second), size - budget * 2, "the rest carries to the next step")
+    let third = Ur.Citizens.step_indexed(c, empty, None, second, 0.31, 0.02, empty, 0.0)
+    Test.assert_eq_int(pending(third), 0, "the batch finishes waking")
+    let snapshot = Ur.Citizens.snapshot(third)
+    Test.assert_true(List.map(snapshot, fn person -> person.id) == List.map(people, fn person -> person.id),
+      "spreading the wake keeps every citizen in roster order")
+    Test.assert_true(List.all(snapshot, fn person -> person.rest_until == 5), "every sleeper woke and set its next check")
+    List.each([first_step, second, third], fn r ->
+      Test.assert_true(List.map(Ur.Citizens.visible_actors(r), fn entry -> entry.slot) == parked,
+        "parked sleepers stay visible once each while the batch wakes and sleeps again")
+      Test.assert_true(List.map(Ur.Citizens.visible_actors(Ur.Citizens.sort_parked(r)), fn entry -> entry.slot) == parked,
+        "sorting the parked list keeps the same cars")
+      let cached = Ur.Citizens.indexed_counts(c, r)
+      let total = Ur.Citizens.tally(c, Ur.Citizens.snapshot(r))
+      Test.assert_eq_int(cached.tracked, total.tracked, "a partial wake does not double-count")
+      Test.assert_eq_int(cached.home, total.home, "indoor counts stay whole during a partial wake"))
+  end
+
+  -- Sleepers that stay up after a partial wake leave the sorted parked list without it being
+  -- rebuilt, and the visible list still holds every active citizen and parked car once, in order.
+  pfn spread_wake_parked(c : Ur.Sim.City, base : Ur.Citizens.Citizen, empty : NativeIntArr) : Unit do
+    let sleeper = { base with work: base.home, study: -1, shop: -1, park: -1, location: base.home,
+      parking: 0, activity: 0, route: Nil, wait: 1.0, rest_until: 4 }
+    let budget = Ur.Citizens.wake_budget(0.02)
+    let people = List.map(List.range(0, budget * 2), fn i -> { sleeper with id: i + 1, parking: i % 2 })
+    let expected = fn roster ->
+      let up = List.map(roster.active, fn entry -> entry.slot)
+      List.filter(List.range(0, budget * 2), fn slot -> slot % 2 == 1 || List.any(up, fn s -> s == slot))
+    let roster = Ur.Citizens.sort_parked(Ur.Citizens.index(c, people, 0.26))
+    Test.assert_true(List.map(Ur.Citizens.visible_actors(roster), fn entry -> entry.slot) == expected(roster),
+      "every parked sleeper is visible before the wake")
+    let woke = Ur.Citizens.step_indexed(c, empty, None, roster, 0.31, 0.02, empty, 0.0)
+    Test.assert_eq_int(List.length(woke.active), budget, "the woken stay up")
+    Test.assert_true(woke.parked_fresh, "a partial wake keeps the sorted parked list")
+    Test.assert_true(List.map(Ur.Citizens.visible_actors(woke), fn entry -> entry.slot) == expected(woke),
+      "woken parked citizens are visible once, as active citizens")
+  end
+
   pfn cached_walk_geometry(c : Ur.Sim.City) : Unit do
     let a = S.index(12, 22)
     let b = S.neighbour(a, 1)
@@ -158,6 +212,8 @@ mod CitizenMovementTest do
     let empty = NativeArray.make_int(S.count(), 0)
     working_hours(city, resident, empty)
     indexed_movement(city, resident, empty)
+    spread_wake_burst(city, resident, empty)
+    spread_wake_parked(city, resident, empty)
     cached_walk_geometry(city)
     scheduled_crossing(city, resident, empty)
     List.each([2, 3, 4], fn mode -> transit_mode(city, resident, empty, mode))

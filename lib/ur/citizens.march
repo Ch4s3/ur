@@ -1316,9 +1316,9 @@ mod Ur.Citizens do
   type WalkNote = WalkQueued(WalkEvent) | WalkLeft(Int)
   type WalkStage = { limit : Float, arm : Int, gate : Bool }
   type Roster = { walk_time : Float, walk_bucket : Int, walk_events : Map(Int, List(WalkEvent)), walk_pending : List((Int, WalkEvent)), walk_crossings : Map(Int, Int),
-    walk_count : Int, walk_exits : List(Int), active : List(Actor), wakeups : Map(Int, List(Actor)), resting : List(Actor), clock : Int,
+    walk_count : Int, walk_exits : List(Int), active : List(Actor), wakeups : Map(Int, List(Actor)), resting : List(Actor), clock : Int, wake_from : Int,
     reservations : Map(Int, Int), indoor : CitizenCounts, crew : List(Citizen), parcels : Map(Int, List(Int)),
-    parked_sorted : List(Actor), parked_fresh : Bool, walk_log : List(WalkNote) }
+    parked_sorted : List(Actor), parked_new : List(Actor), parked_fresh : Bool, walk_log : List(WalkNote) }
 
   pfn hour_at(time : Float) : Int do
     float_to_int(Math.floor(time /. S.day_seconds())) * 24 + S.street_hour(time)
@@ -1340,7 +1340,7 @@ mod Ur.Citizens do
     end
     let crew = if entry.person.activity == 6 do Cons(entry.person, roster.crew) else roster.crew end
     { roster with wakeups: wakeups, resting: resting, crew: crew,
-      parked_fresh: roster.parked_fresh && entry.person.parking == 0,
+      parked_new: if roster.parked_fresh && entry.person.parking != 0 do Cons(entry, roster.parked_new) else roster.parked_new end,
       reservations: park_actor(roster.reservations, entry.person, 1), indoor: count_person(c, entry.person, roster.indoor, 1) }
   end
   pfn register_parcel(parcels : Map(Int, List(Int)), lot : Int, id : Int) : Map(Int, List(Int)) do
@@ -1365,9 +1365,9 @@ mod Ur.Citizens do
   end
   fn index(c : Ur.Sim.City, people : List(Citizen), time : Float) : Roster do
     index_people(c, people, { walk_time: 0.0, walk_bucket: 0, walk_events: Map.empty(), walk_pending: Nil, walk_crossings: Map.empty(),
-      walk_count: 0, walk_exits: Nil, active: Nil, wakeups: Map.empty(), resting: Nil, clock: hour_at(time),
+      walk_count: 0, walk_exits: Nil, active: Nil, wakeups: Map.empty(), resting: Nil, clock: hour_at(time), wake_from: hour_at(time) + 1,
       reservations: Map.empty(), indoor: empty_counts(), crew: Nil, parcels: Map.empty(),
-      parked_sorted: Nil, parked_fresh: false, walk_log: Nil }, 0)
+      parked_sorted: Nil, parked_new: Nil, parked_fresh: false, walk_log: Nil }, 0)
   end
   pfn slot_order(a : Actor, b : Actor) : Bool do a.slot <= b.slot end
   pfn merge_ordered(a : List(Actor), b : List(Actor), reversed : List(Actor)) : List(Actor) do
@@ -1445,15 +1445,18 @@ mod Ur.Citizens do
       end)
   end
   pfn parked_order(roster : Roster) : List(Actor) do
-    if roster.parked_fresh do roster.parked_sorted else List.sort_by(List.filter(sleepers(roster), fn entry -> entry.person.parking != 0), slot_order) end
+    if !roster.parked_fresh do List.sort_by(List.filter(sleepers(roster), fn entry -> entry.person.parking != 0), slot_order)
+    else if List.is_empty(roster.parked_new) do roster.parked_sorted
+    else merge_actors(roster.parked_sorted, List.sort_by(roster.parked_new, slot_order)) end end
   end
   fn visible_actors(roster : Roster) : List(Actor) do
     merge_actors(roster.active, parked_order(roster))
   end
-  -- Sort the parked actors once, after one was added or removed, instead of on every
-  -- visible_actors call (twice a frame).
+  -- Sort the parked actors once a frame instead of on every visible_actors call (twice a frame):
+  -- merge in the ones parked since, or, after index, sort every parked sleeper.
   fn sort_parked(roster : Roster) : Roster do
-    if roster.parked_fresh do roster else { roster with parked_sorted: parked_order(roster), parked_fresh: true } end
+    if roster.parked_fresh && List.is_empty(roster.parked_new) do roster
+    else { roster with parked_sorted: parked_order(roster), parked_new: Nil, parked_fresh: true } end
   end
   fn indexed_counts(c : Ur.Sim.City, roster : Roster) : CitizenCounts do
     let counts = List.fold_left(roster.active, roster.indoor, fn (counts, entry) -> count_person(c, entry.person, counts, 1))
@@ -1465,21 +1468,57 @@ mod Ur.Citizens do
       List.any(roster.active, fn entry -> emergency_move(entry.person))
   end
   pfn wake_actor(c : Ur.Sim.City, roster : Roster, entry : Actor) : Roster do
-    { roster with parked_fresh: roster.parked_fresh && entry.person.parking == 0,
-      reservations: park_actor(roster.reservations, entry.person, -1),
+    { roster with reservations: park_actor(roster.reservations, entry.person, -1),
       indoor: count_person(c, entry.person, roster.indoor, -1) }
   end
-  pfn wake_through(c : Ur.Sim.City, roster : Roster, hour : Int, due : List(Actor)) : Roster do
-    if roster.clock >= hour || Map.is_empty(roster.wakeups) do
-      { roster with clock: hour, active: merge_actors(roster.active, List.sort_by(due, slot_order)) }
+  -- [sorted] without the actors in [gone] (both in slot order, [gone] a subset).
+  pfn drop_slots(sorted : List(Actor), gone : List(Actor), kept : List(Actor)) : List(Actor) do
+    match (sorted, gone) do
+      (_, Nil) -> List.append(List.reverse(kept), sorted)
+      (Nil, _) -> List.reverse(kept)
+      (Cons(entry, rest), Cons(drop, more)) ->
+        if entry.slot == drop.slot do drop_slots(rest, more, kept)
+        else if entry.slot < drop.slot do drop_slots(rest, gone, Cons(entry, kept))
+        else drop_slots(sorted, more, kept) end end
+    end
+  end
+  -- Takes the woken parked cars out of the parked list, so a step that wakes a few sleepers
+  -- keeps it instead of filtering and sorting every sleeper again.
+  pfn unpark_woken(roster : Roster, woken : List(Actor)) : Roster do
+    let parked = List.sort_by(List.filter(woken, fn entry -> entry.person.parking != 0), slot_order)
+    if !roster.parked_fresh || List.is_empty(parked) do roster
     else
-      let next = roster.clock + 1
-      match Map.get(roster.wakeups, next, Map.int_cmp) do
-        None -> wake_through(c, { roster with clock: next }, hour, due)
+      let fresh = if List.is_empty(roster.parked_new) do Nil else drop_slots(List.sort_by(roster.parked_new, slot_order), parked, Nil) end
+      { roster with parked_sorted: drop_slots(roster.parked_sorted, parked, Nil), parked_new: fresh }
+    end
+  end
+  -- At most this many sleepers wake in a step of [dt] seconds (a game hour is one second of
+  -- steps). An hour boundary used to wake its whole batch (over ten thousand in the metro) in one
+  -- frame; now the rest wake over the next steps, earliest hour first. The budget is about 30,000
+  -- an hour (512 a step at 60 steps a second), so a burst is spread over part of an hour and slow
+  -- frames, whose steps cover more game time, wake more and never fall behind.
+  fn wake_budget(dt : Float) : Int do
+    let paced = float_to_int(dt *. 30720.0)
+    if paced > 512 do paced else 512 end
+  end
+  -- Wakes the batches due by [hour], from [wake_from] (the earliest hour that may still hold
+  -- sleepers whose time has come) up, at most [budget] of them. A batch cut short keeps its rest
+  -- under its hour, and [wake_from] stays there for the next step.
+  pfn wake_through(c : Ur.Sim.City, roster : Roster, hour : Int, budget : Int, due : List(Actor)) : Roster do
+    let from = roster.wake_from
+    if from > hour || budget <= 0 || Map.is_empty(roster.wakeups) do
+      let from = if Map.is_empty(roster.wakeups) do hour + 1 else from end
+      { roster with clock: hour, wake_from: from, active: merge_actors(roster.active, List.sort_by(due, slot_order)) }
+    else
+      match Map.get(roster.wakeups, from, Map.int_cmp) do
+        None -> wake_through(c, { roster with wake_from: from + 1 }, hour, budget, due)
         Some(batch) ->
-          let roster = List.fold_left(batch, roster, fn (r, entry) -> wake_actor(c, r, entry))
-          let roster = { roster with wakeups: Map.remove(roster.wakeups, next, Map.int_cmp), clock: next }
-          wake_through(c, roster, hour, List.append(batch, due))
+          let (woken, rest) = List.split_at(batch, budget)
+          let roster = unpark_woken(List.fold_left(woken, roster, fn (r, entry) -> wake_actor(c, r, entry)), woken)
+          let roster = if List.is_empty(rest) do
+            { roster with wakeups: Map.remove(roster.wakeups, from, Map.int_cmp), wake_from: from + 1 }
+          else { roster with wakeups: Map.insert(roster.wakeups, from, rest, Map.int_cmp) } end
+          wake_through(c, roster, hour, budget - List.length(woken), List.append(woken, due))
       end
     end
   end
@@ -1688,7 +1727,9 @@ mod Ur.Citizens do
   pfn step_roster(c : Ur.Sim.City, walk : WalkMap, running : NativeIntArr, bus : Option(TransitService), roster : Roster, time : Float,
     dt : Float, junctions : NativeIntArr, traffic_time : Float, guard : Int -> Citizen -> Citizen -> Citizen, schedule : Bool) : Roster do
     let hour = hour_at(time)
-    let roster = if hour > roster.clock do wake_through(c, roster, hour, Nil) else roster end
+    let roster = if hour > roster.clock || roster.wake_from <= roster.clock do
+      wake_through(c, roster, if hour > roster.clock do hour else roster.clock end, wake_budget(dt), Nil)
+    else roster end
     let time = roster.walk_time +. dt
     let roster = { roster with walk_time: time }
     if List.is_empty(roster.active) && roster.walk_count == 0 do
