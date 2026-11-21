@@ -342,7 +342,49 @@ mod Ur.Citizens do
       end)
     routes.by_home
   end
-  type RosterBuild = { old : Map(Int, Citizen), positions : NativeIntArr, parking : Map(Int, Int), people : List(Citizen) }
+  -- The previous roster by citizen id, for a rebuild: an open-addressing table (id -> position,
+  -- linear probing, at most half full) over a vector of the citizens. It answers exactly what a
+  -- Map built by inserting them in order would (the last of a repeated id wins); at 500,000
+  -- citizens building that Map was most of a multi-second rebuild.
+  type CitizenIndex = { keys : NativeIntArr, at : NativeIntArr, people : Array.PVec(Citizen), mask : Int }
+  pfn index_size(n : Int, size : Int) : Int do if size >= n * 2 do size else index_size(n, size * 2) end end
+  pfn id_hash(id : Int, mask : Int) : Int do
+    let x = int_xor(id, int_shr(id, 17)) * 1597334677
+    int_and(int_xor(x, int_shr(x, 15)), mask)
+  end
+  pfn index_probe(keys : NativeIntArr, id : Int, h : Int, mask : Int) : Int do
+    let k = NativeArray.get_int(keys, h)
+    if k == -1 || k == id do h else index_probe(keys, id, int_and(h + 1, mask), mask) end
+  end
+  pfn index_fill(keys : NativeIntArr, at : NativeIntArr, people : List(Citizen), i : Int, mask : Int) : (NativeIntArr, NativeIntArr) do
+    match people do
+      Nil -> (keys, at)
+      Cons(person, rest) ->
+        let h = index_probe(keys, person.id, id_hash(person.id, mask), mask)
+        index_fill(NativeArray.set_int(keys, h, person.id), NativeArray.set_int(at, h, i), rest, i + 1, mask)
+    end
+  end
+  fn citizen_index(people : List(Citizen)) : CitizenIndex do
+    let size = index_size(List.length(people), 16)
+    let mask = size - 1
+    let (keys, at) = index_fill(NativeArray.make_int(size, -1), NativeArray.make_int(size, 0), people, 0, mask)
+    { keys: keys, at: at, people: Array.from_list(people), mask: mask }
+  end
+  fn lookup(ix : CitizenIndex, id : Int) : Option(Citizen) do
+    let h = index_probe(ix.keys, id, id_hash(id, ix.mask), ix.mask)
+    if NativeArray.get_int(ix.keys, h) == id do Some(Array.get(ix.people, NativeArray.get_int(ix.at, h))) else None end
+  end
+  -- Folds over each id's citizen once (the one lookup returns), in no particular order.
+  pfn index_fold(ix : CitizenIndex, acc : b, f : b -> Citizen -> b) : b do
+    index_fold_from(ix, 0, acc, f)
+  end
+  pfn index_fold_from(ix : CitizenIndex, h : Int, acc : b, f : b -> Citizen -> b) : b do
+    if h > ix.mask do acc else
+      let acc = if NativeArray.get_int(ix.keys, h) == -1 do acc else f(acc, Array.get(ix.people, NativeArray.get_int(ix.at, h))) end
+      index_fold_from(ix, h + 1, acc, f)
+    end
+  end
+  type RosterBuild = { old : CitizenIndex, positions : NativeIntArr, parking : Map(Int, Int), people : List(Citizen) }
   type FamilySizes = { base : Int, larger : Map(Int, Bool) }
   pfn family_sizes(c : Ur.Sim.City, homes : List(Int), households : Int, people : Int) : FamilySizes do
     let extra = people % households
@@ -390,7 +432,7 @@ mod Ur.Citizens do
             end
             let position = if study < 0 && S.valid(work) do S.get(build.positions, work) + 1 else 0 end
             let positions = if position > 0 do NativeArray.set_int(build.positions, work, position) else build.positions end
-            let old = Map.get(build.old, id, Map.int_cmp)
+            let old = lookup(build.old, id)
             let parking_keys = match old do
               Some(person) -> park_actor(build.parking, person, -1)
               None -> build.parking
@@ -449,9 +491,9 @@ mod Ur.Citizens do
         previous: -1, parking: prior.parking, by_car: false, car_phase: 0, arrival: 0, board: -1, alight: -1, bus_slot: -1, transit_phase: 0 }
     end
   end
-  pfn evacuate(c : Ur.Sim.City, orders : NativeIntArr, old : Map(Int, Citizen), person : Citizen) : Citizen do
+  pfn evacuate(c : Ur.Sim.City, orders : NativeIntArr, old : CitizenIndex, person : Citizen) : Citizen do
     let displaced = S.displaced_homes(c, person.home) > 0
-    let prior = Map.get(old, person.id, Map.int_cmp)
+    let prior = lookup(old, person.id)
     if displaced do
       let shelter = S.get(orders, person.home) - 1
       let previous = Option.unwrap_or(prior, person)
@@ -500,10 +542,7 @@ mod Ur.Citizens do
       home_order(c, previous, lot + 1, Cons(lot, priority), normal)
     else home_order(c, previous, lot + 1, priority, Cons(lot, normal)) end end end
   end
-  pfn citizens_by_id(people : List(Citizen)) : Map(Int, Citizen) do
-    List.fold_left(people, Map.empty(), fn (index, person) -> Map.insert(index, person.id, person, Map.int_cmp))
-  end
-  pfn refresh_roster(c : Ur.Sim.City, old : Map(Int, Citizen), roads : NativeIntArr, people : Int, hires : List(Ur.Sim.JobMatch), previous : NativeIntArr, orders : NativeIntArr) : List(Citizen) do
+  pfn refresh_roster(c : Ur.Sim.City, old : CitizenIndex, roads : NativeIntArr, people : Int, hires : List(Ur.Sim.JobMatch), previous : NativeIntArr, orders : NativeIntArr) : List(Citizen) do
     let homes = home_order(c, previous, 0, Nil, Nil)
     match homes do
       Nil -> Nil
@@ -513,7 +552,7 @@ mod Ur.Citizens do
           let stores = Ur.Food.destinations(c, fn i -> S.public_trade(c, i))
           let bars = Ur.Food.destinations(c, fn i -> S.nightlife(c, i))
           let education = { schools: education_routes(c, roads, 0), population: people, hires: job_routes(c, hires), shelters: orders }
-          let parking = Map.fold(old, Map.empty(), fn (keys, _, person) -> park_actor(keys, person, 1))
+          let parking = index_fold(old, Map.empty(), fn (keys, person) -> park_actor(keys, person, 1))
           let build = { old: old, positions: NativeArray.make_int(S.count(), 0), parking: parking, people: Nil }
           let sizes = family_sizes(c, homes, households, people)
           roster(c, stores, bars, S.park_walk(c), education, sizes, build, homes, members_at(c, sizes, lot),
@@ -527,7 +566,7 @@ mod Ur.Citizens do
   fn refresh_with(c : Ur.Sim.City, old : List(Citizen), roads : NativeIntArr, people : Int, hires : List(Ur.Sim.JobMatch)) : List(Citizen) do
     let previous = List.fold_left(old, NativeArray.make_int(S.count(), 0), fn (field, person) ->
       if emergency_move(person) do NativeArray.set_int(field, person.home, person.shelter + 2) else field end)
-    let prior = citizens_by_id(old)
+    let prior = citizen_index(old)
     let has_emergency = c.flood_active || S.severe_rain(c) || S.curse_god(c) == 3 || List.any(old, emergency_move) ||
       displaced_city(c, 0)
     let orders = if has_emergency do Ur.Evacuation.plan(c, roads, previous) else previous end
@@ -550,7 +589,8 @@ mod Ur.Citizens do
     if List.is_empty(trips) do refresh_with(c, Nil, roads, people, hires) else
       let (previous, saved, spaces) = saved_assignments(trips, NativeArray.make_int(S.count(), 0), Map.empty(), Map.empty())
       let orders = Ur.Evacuation.plan(c, roads, previous)
-      let people = refresh_roster(c, Map.empty(), roads, people, hires, previous, orders)
+      let none = citizen_index(Nil)
+      let people = refresh_roster(c, none, roads, people, hires, previous, orders)
       List.map(people, fn person ->
         match Map.get(saved, person.id, Map.int_cmp) do
           Some(trip) ->
@@ -561,14 +601,14 @@ mod Ur.Citizens do
                 work: travel.work, study: travel.study, qualification: travel.qualification, work_position: travel.position,
                 parking: travel.parking, arrival: travel.arrival, by_car: travel.car_phase > 0, car_phase: travel.car_phase,
                 transit_phase: travel.transit_phase, board: travel.board, alight: travel.alight }
-            else evacuate(c, orders, Map.empty(), person) end
+            else evacuate(c, orders, none, person) end
           None ->
             let person = match parking_at(person.parking) do
               Some(space) ->
                 if holds_key(spaces, parking_key(space)) do { person with parking: 0 } else person end
               None -> person
             end
-            evacuate(c, orders, Map.empty(), person)
+            evacuate(c, orders, none, person)
         end)
     end
   end
@@ -1419,6 +1459,15 @@ mod Ur.Citizens do
     let entries = List.append(walk_entries(roster), List.append(roster.active, sleepers(roster)))
     List.map(List.sort_by(entries, slot_order), fn entry -> entry.person)
   end
+  -- Everyone, for a rebuild (refresh_with). Without evacuees the rebuild's result does not
+  -- depend on the order it is given its input in (ids are unique and every other use is a sum),
+  -- so this skips snapshot's sort by slot; with any, it is the snapshot.
+  fn rebuild_input(roster : Roster) : List(Citizen) do
+    let entries = List.append(walk_entries(roster), List.append(roster.active, sleepers(roster)))
+    if List.any(entries, fn entry -> emergency_move(entry.person)) do
+      List.map(List.sort_by(entries, slot_order), fn entry -> entry.person)
+    else List.map(entries, fn entry -> entry.person) end
+  end
   -- Everyone asleep, in no particular order.
   pfn sleepers(roster : Roster) : List(Actor) do
     Map.fold(roster.wakeups, roster.resting, fn (out, _, batch) -> List.fold_left(batch, out, fn (acc, entry) -> Cons(entry, acc)))
@@ -1529,6 +1578,75 @@ mod Ur.Citizens do
           else { roster with wakeups: Map.insert(roster.wakeups, from, rest, Map.int_cmp) } end
           wake_through(c, roster, hour, budget - List.length(woken), List.append(woken, due))
       end
+    end
+  end
+  -- The sanitation shift's crew change, made on the roster in place: whoever was on shift
+  -- (activity 6) goes back to their day and [driver] goes on shift, as sanitation_crew does to
+  -- a citizen list. Snapshotting and re-indexing the whole roster for it cost seconds at
+  -- 500,000 citizens and restarted every walk in progress.
+  fn swap_crew(c : Ur.Sim.City, roster : Roster, previous : Int, driver : Int) : Roster do
+    if previous == driver && driver < 0 do roster else
+      let off = List.filter(roster.resting, fn entry -> entry.person.activity == 6 && entry.person.id != driver)
+      let roster = List.fold_left(off, roster, fn (r, entry) ->
+        let r = take_sleeper(c, r, entry)
+        place(c, r, { entry with person: { entry.person with activity: 1, rest_until: -1 } }))
+      if driver < 0 do roster else
+        match take_citizen(c, roster, driver) do
+          None -> roster
+          Some((r, entry)) ->
+            let person = entry.person
+            let person = if person.activity == 6 do person else { person with activity: 6, rest_until: -1 } end
+            place(c, r, { entry with person: person })
+        end
+      end
+    end
+  end
+  -- Files [entry] as index_people would: active in slot order, or asleep.
+  pfn place(c : Ur.Sim.City, roster : Roster, entry : Actor) : Roster do
+    let wake = wake_at(c, entry.person, roster.clock)
+    if wake == -1 do { roster with active: merge_actors(roster.active, Cons(entry, Nil)) }
+    else sleep_actor(c, roster, entry, wake) end
+  end
+  -- [entry] (asleep) out of the roster, with what sleep_actor counted for it undone.
+  pfn take_sleeper(c : Ur.Sim.City, roster : Roster, entry : Actor) : Roster do
+    let slot = entry.slot
+    let without = fn list -> List.filter(list, fn e -> e.slot != slot)
+    let roster = { roster with resting: without(roster.resting),
+      wakeups: Map.fold(roster.wakeups, roster.wakeups, fn (w, hour, batch) ->
+        if List.any(batch, fn e -> e.slot == slot) do
+          let rest = without(batch)
+          if List.is_empty(rest) do Map.remove(w, hour, Map.int_cmp) else Map.insert(w, hour, rest, Map.int_cmp) end
+        else w end),
+      crew: List.filter(roster.crew, fn person -> person.id != entry.person.id) }
+    unpark_woken(wake_actor(c, roster, entry), Cons(entry, Nil))
+  end
+  -- The citizen [id] out of the roster wherever it is (asleep, active or walking), with its
+  -- bookkeeping undone; a walker leaves the walk set where it stands, as wake_walkers does.
+  pfn take_citizen(c : Ur.Sim.City, roster : Roster, id : Int) : Option((Roster, Actor)) do
+    match find_sleeper(roster, id) do
+      Some(entry) -> Some((take_sleeper(c, roster, entry), entry))
+      None ->
+        match List.find(roster.active, fn entry -> entry.person.id == id) do
+          Some(entry) -> Some(({ roster with active: List.filter(roster.active, fn e -> e.slot != entry.slot) }, entry))
+          None ->
+            let roster = flush_walks(roster)
+            let found = Map.fold(roster.walk_events, None, fn (found, bucket, events) ->
+              if Option.is_some(found) do found else
+                Option.map(List.find(events, fn event -> event.entry.person.id == id), fn event -> (bucket, event))
+              end)
+            match found do
+              None -> None
+              Some((bucket, event)) ->
+                let slot = event.entry.slot
+                let rest = List.filter(Map.get_or(roster.walk_events, bucket, Nil, Map.int_cmp), fn e -> e.entry.slot != slot)
+                let events = if List.is_empty(rest) do Map.remove(roster.walk_events, bucket, Map.int_cmp)
+                  else Map.insert(roster.walk_events, bucket, rest, Map.int_cmp) end
+                let entry = { slot: slot, person: walker_at(event, roster.walk_time) }
+                Some(({ roster with walk_events: events, walk_count: roster.walk_count - 1,
+                  walk_crossings: crossing_reservation(roster.walk_crossings, event.arm, -1),
+                  walk_exits: Cons(slot, roster.walk_exits), walk_log: Cons(WalkLeft(slot), roster.walk_log) }, entry))
+            end
+        end
     end
   end
   pfn active_parking(cars : List(Actor), keys : Map(Int, Int)) : Map(Int, Int) do

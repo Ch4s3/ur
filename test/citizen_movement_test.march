@@ -206,6 +206,93 @@ mod CitizenMovementTest do
     Test.assert_eq_int(person.location, b, "the arrival reaches the original destination")
   end
 
+  -- The sanitation shift change swaps the crew in place; the roster must then hold exactly
+  -- the citizens the old path (snapshot, sanitation_crew, index) produced, with its counts,
+  -- crew list and parked list whole, wherever the new driver was (asleep, active or walking).
+  pfn crew_swap(c : Ur.Sim.City, base : Ur.Citizens.Citizen, empty : NativeIntArr) : Unit do
+    let a = S.index(12, 22)
+    let from = S.neighbour(a, 0)
+    let b = S.neighbour(a, 1)
+    let road = List.fold_left([a, b, from, S.neighbour(a, 2), S.neighbour(a, 3)], empty,
+      fn (roads, lot) -> NativeArray.set_int(roads, lot, 2))
+    let c = { c with roads: road, heights: NativeArray.make_int(S.count(), 22) }
+    let map = Ur.Citizens.walk_map(c)
+    let people = List.map(List.range(0, 24), fn i ->
+      let person = { base with id: i + 1 }
+      if i % 3 == 0 do { person with work: base.home, study: -1, shop: -1, park: -1, location: base.home,
+        activity: 0, route: Nil, wait: 1.0, rest_until: 4, parking: i % 2 }
+      else if i == 2 do { person with activity: 6, rest_until: -1 }
+      else if i % 3 == 1 do { person with location: -1, route: [a, b], previous: from, target: b,
+        work: b, study: -1, car_phase: 0, parking: 0, arrival: 0, by_car: false,
+        activity: 1, progress: 0.0, transit_phase: 0, bus_slot: -1, rest_until: -1, park_trip: false }
+      else { person with work: -1, study: -1, shop: -1, park: -1, location: base.home, parking: 0,
+        activity: 0, route: Nil, wait: 1.0, rest_until: -1 } end end end)
+    let step = fn (roster, dt) ->
+      Ur.Citizens.step_guarded(c, map, empty, None, roster, 0.25, dt, empty, 0.0, fn (_, _, next) -> Ur.Citizens.unguarded(next))
+    let roster = Ur.Citizens.sort_parked(step(step(Ur.Citizens.index(c, people, 0.25), 0.1), 0.25))
+    Test.assert_true(roster.walk_count > 0, "the test town has citizens mid-walk")
+    Test.assert_true(List.length(roster.active) > 0, "and citizens active")
+    let walker = match List.find(Ur.Citizens.visible_people(roster), fn person ->
+        !List.any(roster.active, fn entry -> entry.person.id == person.id)) do
+      Some(person) -> person.id
+      None -> panic("no walker in the test town")
+    end
+    let active = (first(List.map(roster.active, fn entry -> entry.person))).id
+    let asleep = 1
+    List.each([asleep, active, walker, -1], fn driver ->
+      let before = Ur.Citizens.snapshot(roster)
+      let swapped = Ur.Citizens.sort_parked(Ur.Citizens.swap_crew(c, roster, 3, driver))
+      let after = Ur.Citizens.snapshot(swapped)
+      let expected = Ur.Citizens.sanitation_crew(before, 3, driver)
+      Test.assert_true(List.map(after, fn person -> person.id) == List.map(expected, fn person -> person.id),
+        "the swap keeps every citizen in roster order")
+      Test.assert_true(List.map(after, fn person -> person.activity) == List.map(expected, fn person -> person.activity),
+        "the swap sets the same shifts as sanitation_crew")
+      Test.assert_true(List.map(after, fn person -> person.rest_until) == List.map(expected, fn person -> person.rest_until),
+        "and the same rest times")
+      Test.assert_true(List.map(after, fn person -> person.progress) == List.map(expected, fn person -> person.progress),
+        "and leaves everyone where they stood")
+      Test.assert_true(List.map(swapped.crew, fn person -> person.id) == (if driver < 0 do Nil else [driver] end),
+        "only the new driver is on the crew")
+      let cached = Ur.Citizens.indexed_counts(c, swapped)
+      let total = Ur.Citizens.tally(c, after)
+      Test.assert_eq_int(cached.tracked, total.tracked, "the swap keeps the tracked count whole")
+      Test.assert_eq_int(cached.home, total.home, "and the indoor counts")
+      Test.assert_true(List.map(Ur.Citizens.visible_actors(swapped), fn entry -> entry.slot) ==
+        List.map(Ur.Citizens.visible_actors(Ur.Citizens.sort_parked({ swapped with parked_fresh: false })), fn entry -> entry.slot),
+        "the parked list matches a fresh sort"))
+  end
+
+  -- The rebuild's id index answers what a Map built by inserting the citizens in order would:
+  -- the last of a repeated id, and nothing for an id it never saw.
+  pfn citizen_index_matches_map(base : Ur.Citizens.Citizen) : Unit do
+    let ids = List.flat_map(List.range(0, 1500), fn h -> List.map(List.range(0, 1 + h % 4), fn m -> S.member_id(h * 37, m)))
+    let people = List.append(List.map(ids, fn id -> { base with id: id, home: 1 }),
+      List.map(List.take(ids, 200), fn id -> { base with id: id, home: 2 }))
+    let ix = Ur.Citizens.citizen_index(people)
+    let map = List.fold_left(people, Map.empty(), fn (m, person) -> Map.insert(m, person.id, person, Map.int_cmp))
+    let probes = List.append(ids, List.map(List.range(0, 500), fn i -> S.member_id(i * 37 + 1, 0)))
+    Test.assert_true(List.all(probes, fn id ->
+      match (Ur.Citizens.lookup(ix, id), Map.get(map, id, Map.int_cmp)) do
+        (Some(a), Some(b)) -> a.id == b.id && a.home == b.home
+        (None, None) -> true
+        _ -> false
+      end), "the id index agrees with a Map for every id, present, repeated or missing")
+    Test.assert_true(Option.is_none(Ur.Citizens.lookup(Ur.Citizens.citizen_index(Nil), 7)), "an empty index finds nobody")
+  end
+
+  -- A rebuild without evacuees takes the roster in any order (rebuild_input skips the sort).
+  pfn rebuild_ignores_order(c : Ur.Sim.City) : Unit do
+    let people = Ur.Citizens.refresh(c, Nil)
+    let moved = List.map(people, fn person -> { person with wait: person.wait +. 0.5 })
+    let ordered = Ur.Citizens.refresh(c, moved)
+    let reversed = Ur.Citizens.refresh(c, List.reverse(moved))
+    Test.assert_true(List.length(people) > 1, "the test town has several citizens")
+    Test.assert_true(List.map(ordered, fn person -> (person.id, person.home, person.work, person.wait, person.parking)) ==
+      List.map(reversed, fn person -> (person.id, person.home, person.work, person.wait, person.parking)),
+      "a rebuild gives the same citizens whatever order the old roster comes in")
+  end
+
   fn main(_cap : Cap(IO)) : Unit do
     let city = Ur.Scenario.evacuation_site()
     let resident = first(Ur.Citizens.refresh(city, Nil))
@@ -214,6 +301,9 @@ mod CitizenMovementTest do
     indexed_movement(city, resident, empty)
     spread_wake_burst(city, resident, empty)
     spread_wake_parked(city, resident, empty)
+    crew_swap(city, resident, empty)
+    citizen_index_matches_map(resident)
+    rebuild_ignores_order(city)
     cached_walk_geometry(city)
     scheduled_crossing(city, resident, empty)
     List.each([2, 3, 4], fn mode -> transit_mode(city, resident, empty, mode))

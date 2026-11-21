@@ -651,7 +651,11 @@ mod Ur do
       let evacuation_update = flood_day || ((midnight || paint) && Ur.Citizens.has_evacuation(p.citizens))
       let rebuild = undone || evacuation_update || operation_changed || ((paint || due || policy_changed || day_changed || building_day || flood_day) &&
         (st.people != p.stats.people || S.households_changed(c.households, p.city.households) || S.assignments_changed(p.stats.job_matches, st.job_matches) || Ur.Citizens.education_changed(c, p.city) || Ur.Citizens.changed(c, p.city, 0)))
-      let reset_roster = rebuild || scene_changed
+      -- A weekday change alone leaves the roster as it is: timed rests end by midnight (see
+      -- Citizens.resting), so every sleeper re-checks the new day's schedule as it wakes, and
+      -- the weekday rules (working hours, car-free streets) are read each step. Re-indexing all
+      -- of it here stalled the 500,000-citizen metro for 3-6 s on each such day.
+      let reset_roster = rebuild || (scene_changed && (paint || undone || due || policy_changed || building_day || flood_day || religion_event))
       let pace_changed = if midnight do
         let previous = S.temperature(p.city)
         let current = S.temperature(c)
@@ -661,7 +665,8 @@ mod Ur do
       -- replayed below and cleared before this frame's step starts.
       let citizens = if reset_roster do
         Ur.Scene.clear_scheduled_walks(p.shown)
-        let old = if undone && !Ur.Citizens.has_evacuation(p.citizens) do Nil else Ur.Citizens.snapshot(p.citizens) end
+        let old = if undone && !Ur.Citizens.has_evacuation(p.citizens) do Nil
+          else if rebuild do Ur.Citizens.rebuild_input(p.citizens) else Ur.Citizens.snapshot(p.citizens) end end
         let people = if rebuild do Ur.Citizens.refresh_with(c, old, st.routes, st.people, st.job_matches) else old end
         Ur.Citizens.index(c, Ur.Citizens.wake_indoor(people), calendar_time)
       else if pace_changed do Ur.Citizens.wake_walkers(p.citizens) else p.citizens end end
@@ -670,11 +675,9 @@ mod Ur do
       let moment = Ur.Scene.sanitation_moment(c, elapsed)
       let prior_shift = if midnight || undone do Ur.Scene.empty_sanitation() else p.sanitation end
       let sanitation = Ur.Scene.sanitation_shift_indexed(c, phase, prior_shift, moment, citizens)
+      -- The shift's crew change moves only the old and new crew in the roster (see swap_crew).
       let citizens = if sanitation.driver != p.sanitation.driver || (rebuild && sanitation.driver >= 0) do
-        Ur.Scene.clear_walk_exits(citizens)
-        Ur.Scene.clear_scheduled_walks(citizens)
-        let people = Ur.Citizens.sanitation_crew(Ur.Citizens.snapshot(citizens), p.sanitation.driver, sanitation.driver)
-        Ur.Citizens.index(c, people, calendar_time +. game_dt *. clock_rate)
+        Ur.Citizens.swap_crew(c, citizens, p.sanitation.driver, sanitation.driver)
       else citizens end
       let citizens = Ur.Citizens.sort_parked(citizens)
       Ur.Scene.sanitation_truck(c, moment, sanitation.driver, night, section.after > 0)
