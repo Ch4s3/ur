@@ -15,8 +15,27 @@ mod Ur.UtilitiesNetwork do
   fn remaining(n : Network, lot : Int) : Int do NativeArray.get_int(n.source, lot) end
   fn add_source(n : Network, lot : Int, units : Int) : Network do
     if capacity(n, lot) == 0 || units <= 0 do n else
-      { n with source: NativeArray.set_int(n.source, lot, remaining(n, lot) + units) }
+      set_source(n, lot, remaining(n, lot) + units)
     end
+  end
+  -- Each field is read out before an array is set, so a record held once sets its arrays in place
+  -- (`{ n with f: set_int(n.f, ..) }` copies the whole array: the update still reads n after the set).
+  pfn set_source(n : Network, lot : Int, v : Int) : Network do
+    let width = n.width
+    let size = n.size
+    let capacity = n.capacity
+    let source = n.source
+    let flow = n.flow
+    { width: width, size: size, capacity: capacity, source: NativeArray.set_int(source, lot, v), flow: flow }
+  end
+  pfn add_flow(n : Network, index : Int, change : Int) : Network do
+    let width = n.width
+    let size = n.size
+    let capacity = n.capacity
+    let source = n.source
+    let flow = n.flow
+    let was = NativeArray.get_int(flow, index)
+    { width: width, size: size, capacity: capacity, source: source, flow: NativeArray.set_int(flow, index, was + change) }
   end
   fn peer(n : Network, lot : Int, arm : Int) : Int do
     match arm do
@@ -46,8 +65,12 @@ mod Ur.UtilitiesNetwork do
     else (b * 5 + direction(n, b, a), 0 - units) end end
   end
   pfn push(s : Search, from : Int, to : Int) : Search do
-    if NativeArray.get_int(s.next, from) >= 0 do s else
-      { s with next: NativeArray.set_int(s.next, from, to), queue: NativeArray.set_int(s.queue, s.tail, from), tail: s.tail + 1 }
+    let next = s.next
+    let queue = s.queue
+    let tail = s.tail
+    let origin = s.origin
+    if NativeArray.get_int(next, from) >= 0 do { next: next, queue: queue, tail: tail, origin: origin } else
+      { next: NativeArray.set_int(next, from, to), queue: NativeArray.set_int(queue, tail, from), tail: tail + 1, origin: origin }
     end
   end
   pfn incoming(n : Network, s : Search, node : Int, arm : Int) : Search do
@@ -87,8 +110,7 @@ mod Ur.UtilitiesNetwork do
     if from == target do n else
       let to = NativeArray.get_int(next, from)
       let (index, change) = edge(n, from, to, units)
-      let flow = NativeArray.set_int(n.flow, index, NativeArray.get_int(n.flow, index) + change)
-      transfer({ n with flow: flow }, next, to, target, units)
+      transfer(add_flow(n, index, change), next, to, target, units)
     end
   end
   pfn draw_to(n : Network, target : Int, units : Int, delivered : Int) : (Network, Int) do
@@ -101,7 +123,7 @@ mod Ur.UtilitiesNetwork do
         let supply = remaining(n, lot)
         let request = units - delivered
         let amount = path_room(n, route.next, route.origin, target, if supply < request do supply else request end)
-        let n = { n with source: NativeArray.set_int(n.source, lot, supply - amount) }
+        let n = set_source(n, lot, supply - amount)
         draw_to(transfer(n, route.next, route.origin, target, amount), target, units, delivered + amount)
       end
     end

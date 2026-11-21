@@ -1,4 +1,5 @@
 mod Ur.Citizens do
+  needs IO.Spawn
   alias Ur.Sim as S
   type TransitService = { routes : List(Ur.Food.Trip), active : List(Ur.Fleet.Run) }
   type Parking = { lot : Int, road : Int, kind : Int, bay : Int, edge : Int, steps : Int, site : Int }
@@ -9,7 +10,10 @@ mod Ur.Citizens do
     car_phase : Int, transit_phase : Int, board : Int, alight : Int }
   type EvacuationTrip = { id : Int, home : Int, shelter : Int, activity : Int, location : Int, target : Int,
     route : List(Int), previous : Int, progress : Float, wait : Float, travel : ShelterTravel }
-  type WalkMap = { pace : NativeFloatArr, terrain : NativeIntArr }
+  -- [near] flags the lots a walker is planned in detail on (crossing stages, signals, vehicle
+  -- yields); elsewhere a walker crosses whole lots per event (see coarse_walk). walk_map flags
+  -- every lot, so callers that never set a view (tests, the overview) keep exact planning.
+  type WalkMap = { pace : NativeFloatArr, terrain : NativeIntArr, near : NativeIntArr }
   type Occupied = { walk : WalkMap, lanes : NativeIntArr, parking_keys : Map(Int, Int), junctions : NativeIntArr, crossings : NativeIntArr, signal_tick : Int }
   type CitizenCounts = { tracked : Int, walking : Int, waiting : Int, riding : Int, driving : Int, queued : Int, at_work : Int, studying : Int, shopping : Int, visiting_park : Int, home : Int,
     evacuating : Int, sheltered : Int, returning : Int, stranded : Int }
@@ -309,7 +313,7 @@ mod Ur.Citizens do
     if stage == 9 do Nil else
       let field = if S.program_enrolled(c, stage) > 0 do
         Ur.Food.campus_destinations(c, fn i -> S.active_program_at(c, i) == stage && S.building_access(c, roads, i) >= 0)
-      else NativeArray.make_int(2640, -1) end
+      else NativeArray.make_int(S.count(), -1) end
       Cons(field, education_routes(c, roads, stage + 1))
     end
   end
@@ -341,7 +345,49 @@ mod Ur.Citizens do
       end)
     routes.by_home
   end
-  type RosterBuild = { old : Map(Int, Citizen), positions : NativeIntArr, parking : Map(Int, Int), people : List(Citizen) }
+  -- The previous roster by citizen id, for a rebuild: an open-addressing table (id -> position,
+  -- linear probing, at most half full) over a vector of the citizens. It answers exactly what a
+  -- Map built by inserting them in order would (the last of a repeated id wins); at 500,000
+  -- citizens building that Map was most of a multi-second rebuild.
+  type CitizenIndex = { keys : NativeIntArr, at : NativeIntArr, people : Array.PVec(Citizen), mask : Int }
+  pfn index_size(n : Int, size : Int) : Int do if size >= n * 2 do size else index_size(n, size * 2) end end
+  pfn id_hash(id : Int, mask : Int) : Int do
+    let x = int_xor(id, int_shr(id, 17)) * 1597334677
+    int_and(int_xor(x, int_shr(x, 15)), mask)
+  end
+  pfn index_probe(keys : NativeIntArr, id : Int, h : Int, mask : Int) : Int do
+    let k = NativeArray.get_int(keys, h)
+    if k == -1 || k == id do h else index_probe(keys, id, int_and(h + 1, mask), mask) end
+  end
+  pfn index_fill(keys : NativeIntArr, at : NativeIntArr, people : List(Citizen), i : Int, mask : Int) : (NativeIntArr, NativeIntArr) do
+    match people do
+      Nil -> (keys, at)
+      Cons(person, rest) ->
+        let h = index_probe(keys, person.id, id_hash(person.id, mask), mask)
+        index_fill(NativeArray.set_int(keys, h, person.id), NativeArray.set_int(at, h, i), rest, i + 1, mask)
+    end
+  end
+  fn citizen_index(people : List(Citizen)) : CitizenIndex do
+    let size = index_size(List.length(people), 16)
+    let mask = size - 1
+    let (keys, at) = index_fill(NativeArray.make_int(size, -1), NativeArray.make_int(size, 0), people, 0, mask)
+    { keys: keys, at: at, people: Array.from_list(people), mask: mask }
+  end
+  fn lookup(ix : CitizenIndex, id : Int) : Option(Citizen) do
+    let h = index_probe(ix.keys, id, id_hash(id, ix.mask), ix.mask)
+    if NativeArray.get_int(ix.keys, h) == id do Some(Array.get(ix.people, NativeArray.get_int(ix.at, h))) else None end
+  end
+  -- Folds over each id's citizen once (the one lookup returns), in no particular order.
+  pfn index_fold(ix : CitizenIndex, acc : b, f : b -> Citizen -> b) : b do
+    index_fold_from(ix, 0, acc, f)
+  end
+  pfn index_fold_from(ix : CitizenIndex, h : Int, acc : b, f : b -> Citizen -> b) : b do
+    if h > ix.mask do acc else
+      let acc = if NativeArray.get_int(ix.keys, h) == -1 do acc else f(acc, Array.get(ix.people, NativeArray.get_int(ix.at, h))) end
+      index_fold_from(ix, h + 1, acc, f)
+    end
+  end
+  type RosterBuild = { old : CitizenIndex, positions : NativeIntArr, parking : Map(Int, Int), people : List(Citizen) }
   type FamilySizes = { base : Int, larger : Map(Int, Bool) }
   pfn family_sizes(c : Ur.Sim.City, homes : List(Int), households : Int, people : Int) : FamilySizes do
     let extra = people % households
@@ -389,7 +435,7 @@ mod Ur.Citizens do
             end
             let position = if study < 0 && S.valid(work) do S.get(build.positions, work) + 1 else 0 end
             let positions = if position > 0 do NativeArray.set_int(build.positions, work, position) else build.positions end
-            let old = Map.get(build.old, id, Map.int_cmp)
+            let old = lookup(build.old, id)
             let parking_keys = match old do
               Some(person) -> park_actor(build.parking, person, -1)
               None -> build.parking
@@ -448,9 +494,9 @@ mod Ur.Citizens do
         previous: -1, parking: prior.parking, by_car: false, car_phase: 0, arrival: 0, board: -1, alight: -1, bus_slot: -1, transit_phase: 0 }
     end
   end
-  pfn evacuate(c : Ur.Sim.City, orders : NativeIntArr, old : Map(Int, Citizen), person : Citizen) : Citizen do
+  pfn evacuate(c : Ur.Sim.City, orders : NativeIntArr, old : CitizenIndex, person : Citizen) : Citizen do
     let displaced = S.displaced_homes(c, person.home) > 0
-    let prior = Map.get(old, person.id, Map.int_cmp)
+    let prior = lookup(old, person.id)
     if displaced do
       let shelter = S.get(orders, person.home) - 1
       let previous = Option.unwrap_or(prior, person)
@@ -499,10 +545,7 @@ mod Ur.Citizens do
       home_order(c, previous, lot + 1, Cons(lot, priority), normal)
     else home_order(c, previous, lot + 1, priority, Cons(lot, normal)) end end end
   end
-  pfn citizens_by_id(people : List(Citizen)) : Map(Int, Citizen) do
-    List.fold_left(people, Map.empty(), fn (index, person) -> Map.insert(index, person.id, person, Map.int_cmp))
-  end
-  pfn refresh_roster(c : Ur.Sim.City, old : Map(Int, Citizen), roads : NativeIntArr, people : Int, hires : List(Ur.Sim.JobMatch), previous : NativeIntArr, orders : NativeIntArr) : List(Citizen) do
+  pfn refresh_roster(c : Ur.Sim.City, old : CitizenIndex, roads : NativeIntArr, people : Int, hires : List(Ur.Sim.JobMatch), previous : NativeIntArr, orders : NativeIntArr) : List(Citizen) do
     let homes = home_order(c, previous, 0, Nil, Nil)
     match homes do
       Nil -> Nil
@@ -512,7 +555,7 @@ mod Ur.Citizens do
           let stores = Ur.Food.destinations(c, fn i -> S.public_trade(c, i))
           let bars = Ur.Food.destinations(c, fn i -> S.nightlife(c, i))
           let education = { schools: education_routes(c, roads, 0), population: people, hires: job_routes(c, hires), shelters: orders }
-          let parking = Map.fold(old, Map.empty(), fn (keys, _, person) -> park_actor(keys, person, 1))
+          let parking = index_fold(old, Map.empty(), fn (keys, person) -> park_actor(keys, person, 1))
           let build = { old: old, positions: NativeArray.make_int(S.count(), 0), parking: parking, people: Nil }
           let sizes = family_sizes(c, homes, households, people)
           roster(c, stores, bars, S.park_walk(c), education, sizes, build, homes, members_at(c, sizes, lot),
@@ -526,7 +569,7 @@ mod Ur.Citizens do
   fn refresh_with(c : Ur.Sim.City, old : List(Citizen), roads : NativeIntArr, people : Int, hires : List(Ur.Sim.JobMatch)) : List(Citizen) do
     let previous = List.fold_left(old, NativeArray.make_int(S.count(), 0), fn (field, person) ->
       if emergency_move(person) do NativeArray.set_int(field, person.home, person.shelter + 2) else field end)
-    let prior = citizens_by_id(old)
+    let prior = citizen_index(old)
     let has_emergency = c.flood_active || S.severe_rain(c) || S.curse_god(c) == 3 || List.any(old, emergency_move) ||
       displaced_city(c, 0)
     let orders = if has_emergency do Ur.Evacuation.plan(c, roads, previous) else previous end
@@ -549,7 +592,8 @@ mod Ur.Citizens do
     if List.is_empty(trips) do refresh_with(c, Nil, roads, people, hires) else
       let (previous, saved, spaces) = saved_assignments(trips, NativeArray.make_int(S.count(), 0), Map.empty(), Map.empty())
       let orders = Ur.Evacuation.plan(c, roads, previous)
-      let people = refresh_roster(c, Map.empty(), roads, people, hires, previous, orders)
+      let none = citizen_index(Nil)
+      let people = refresh_roster(c, none, roads, people, hires, previous, orders)
       List.map(people, fn person ->
         match Map.get(saved, person.id, Map.int_cmp) do
           Some(trip) ->
@@ -560,14 +604,14 @@ mod Ur.Citizens do
                 work: travel.work, study: travel.study, qualification: travel.qualification, work_position: travel.position,
                 parking: travel.parking, arrival: travel.arrival, by_car: travel.car_phase > 0, car_phase: travel.car_phase,
                 transit_phase: travel.transit_phase, board: travel.board, alight: travel.alight }
-            else evacuate(c, orders, Map.empty(), person) end
+            else evacuate(c, orders, none, person) end
           None ->
             let person = match parking_at(person.parking) do
               Some(space) ->
                 if holds_key(spaces, parking_key(space)) do { person with parking: 0 } else person end
               None -> person
             end
-            evacuate(c, orders, Map.empty(), person)
+            evacuate(c, orders, none, person)
         end)
     end
   end
@@ -612,7 +656,7 @@ mod Ur.Citizens do
   end
   -- Each parcel caches its crossing arms, closure, sidewalk width and curve.
   pfn cache_walk(c : Ur.Sim.City, temperature : Int, lot : Int, pace : NativeFloatArr, terrain : NativeIntArr) : WalkMap do
-    if lot >= S.count() do { pace: pace, terrain: terrain } else
+    if lot >= S.count() do { pace: pace, terrain: terrain, near: NativeArray.make_int(S.count(), 1) } else
       let road = S.get(c.roads, lot)
       let motor = S.motor_street(c, lot)
       let arms = if motor do
@@ -634,6 +678,32 @@ mod Ur.Citizens do
   fn walk_map(c : Ur.Sim.City) : WalkMap do
     cache_walk(c, S.temperature(c), 0, NativeArray.make_float(S.count(), 1.0), NativeArray.make_int(S.count() * 3, 0))
   end
+  -- Past this half-width in metres the camera shows walkers a few pixels tall: every lot is
+  -- planned coarsely.
+  fn detail_zoom() : Float do 200.0 end
+  -- [map] with [near] set from the camera (the orthographic view of Scene.camera: half-width
+  -- [zoom] metres across, zoom / aspect up the screen, which the ~38 degree tilt stretches on
+  -- the ground), plus a margin a coarse walk can cover before it is planned again.
+  fn with_view(map : WalkMap, cx : Float, cz : Float, zoom : Float, aspect : Float, yaw : Float) : WalkMap do
+    let near = if zoom > detail_zoom() do NativeArray.make_int(S.count(), 0) else
+      let margin = 48.0
+      let across = zoom +. margin
+      let along = zoom /. (if aspect > 0.1 do aspect else 1.6 end) *. 1.65 +. margin
+      view_lots(NativeArray.make_int(S.count(), 0), 0, cx, cz, across, along, Math.cos(yaw), Math.sin(yaw))
+    end
+    { map with near: near }
+  end
+  pfn view_lots(near : NativeIntArr, lot : Int, cx : Float, cz : Float, across : Float, along : Float, cy : Float, sy : Float) : NativeIntArr do
+    if lot >= S.count() do near else
+      let dx = int_to_float(lot % S.width() * 8 + 4) -. cx
+      let dz = int_to_float(lot / S.width() * 8 + 4) -. cz
+      let a = dx *. cy -. dz *. sy
+      let f = dx *. sy +. dz *. cy
+      let inside = Math.abs(a) <= across && Math.abs(f) <= along
+      view_lots(if inside do NativeArray.set_int(near, lot, 1) else near end, lot + 1, cx, cz, across, along, cy, sy)
+    end
+  end
+  fn near_lot(map : WalkMap, lot : Int) : Bool do S.valid(lot) && NativeArray.get_int(map.near, lot) != 0 end
   fn walk_arm(map : WalkMap, lot : Int, arm : Int) : Bool do
     arm >= 0 && arm < 4 && S.valid(lot) && int_and(NativeArray.get_int(map.terrain, lot * 3), int_shl(1, arm)) > 0
   end
@@ -776,8 +846,8 @@ mod Ur.Citizens do
     let mode = S.get(c.transit, board)
     let alight = transit_stop_for(c, running, target, mode, 0)
     if !S.valid(board) || !S.valid(alight) || board == alight || mode != S.get(c.transit, alight) do Nil else
-      let search = { parents: NativeArray.set_int(NativeArray.make_int(2640, -1), alight, alight),
-        queue: NativeArray.set_int(NativeArray.make_int(2640, 0), 0, alight), tail: 1 }
+      let search = { parents: NativeArray.set_int(NativeArray.make_int(S.count(), -1), alight, alight),
+        queue: NativeArray.set_int(NativeArray.make_int(S.count(), 0), 0, alight), tail: 1 }
       let links = find_transit(c, search, board, mode, 0)
       if S.get(links, board) < 0 do Nil else
         let path = trace_transit(links, board, alight, target)
@@ -1312,7 +1382,9 @@ mod Ur.Citizens do
   type Actor = { slot : Int, person : Citizen }
   -- [from] and [to]: the scene's poses of the walk's two ends, packed, when the guard took them while
   -- planning it (-1 when it did not), so the scene need not pose them again.
-  type WalkEvent = { entry : Actor, started : Float, finish : Float, limit : Float, arm : Int, from : Int, to : Int }
+  -- [legs] whole lots the walk goes on through after the current one (a coarse walk; see
+  -- coarse_walk); 0 for a walk within one lot.
+  type WalkEvent = { entry : Actor, started : Float, finish : Float, limit : Float, arm : Int, from : Int, to : Int, legs : Int }
   -- What the walk guard let a citizen do, and the packed poses it took of the step's two ends
   -- (-1 for an end it did not pose).
   type WalkCheck = { person : Citizen, from : Int, to : Int }
@@ -1391,10 +1463,13 @@ mod Ur.Citizens do
   end
   fn walker_at(event : WalkEvent, time : Float) : Citizen do
     let person = event.entry.person
-    if event.limit == person.progress || time <= event.started do person else
+    if event.legs > 0 do
+      if time <= event.started do person
+      else walk_pose(event, if time >= event.finish do 1.0 else (time -. event.started) /. (event.finish -. event.started) end) end
+    else if event.limit == person.progress || time <= event.started do person else
       let t = if time >= event.finish do 1.0 else (time -. event.started) /. (event.finish -. event.started) end
       { person with progress: person.progress +. (event.limit -. person.progress) *. t }
-    end
+    end end
   end
   fn each_walk(roster : Roster, draw : Int -> Citizen -> Unit) : Unit do
     Map.fold(roster.walk_events, (), fn (_, _, events) ->
@@ -1417,6 +1492,15 @@ mod Ur.Citizens do
   fn snapshot(roster : Roster) : List(Citizen) do
     let entries = List.append(walk_entries(roster), List.append(roster.active, sleepers(roster)))
     List.map(List.sort_by(entries, slot_order), fn entry -> entry.person)
+  end
+  -- Everyone, for a rebuild (refresh_with). Without evacuees the rebuild's result does not
+  -- depend on the order it is given its input in (ids are unique and every other use is a sum),
+  -- so this skips snapshot's sort by slot; with any, it is the snapshot.
+  fn rebuild_input(roster : Roster) : List(Citizen) do
+    let entries = List.append(walk_entries(roster), List.append(roster.active, sleepers(roster)))
+    if List.any(entries, fn entry -> emergency_move(entry.person)) do
+      List.map(List.sort_by(entries, slot_order), fn entry -> entry.person)
+    else List.map(entries, fn entry -> entry.person) end
   end
   -- Everyone asleep, in no particular order.
   pfn sleepers(roster : Roster) : List(Actor) do
@@ -1530,6 +1614,75 @@ mod Ur.Citizens do
       end
     end
   end
+  -- The sanitation shift's crew change, made on the roster in place: whoever was on shift
+  -- (activity 6) goes back to their day and [driver] goes on shift, as sanitation_crew does to
+  -- a citizen list. Snapshotting and re-indexing the whole roster for it cost seconds at
+  -- 500,000 citizens and restarted every walk in progress.
+  fn swap_crew(c : Ur.Sim.City, roster : Roster, previous : Int, driver : Int) : Roster do
+    if previous == driver && driver < 0 do roster else
+      let off = List.filter(roster.resting, fn entry -> entry.person.activity == 6 && entry.person.id != driver)
+      let roster = List.fold_left(off, roster, fn (r, entry) ->
+        let r = take_sleeper(c, r, entry)
+        place(c, r, { entry with person: { entry.person with activity: 1, rest_until: -1 } }))
+      if driver < 0 do roster else
+        match take_citizen(c, roster, driver) do
+          None -> roster
+          Some((r, entry)) ->
+            let person = entry.person
+            let person = if person.activity == 6 do person else { person with activity: 6, rest_until: -1 } end
+            place(c, r, { entry with person: person })
+        end
+      end
+    end
+  end
+  -- Files [entry] as index_people would: active in slot order, or asleep.
+  pfn place(c : Ur.Sim.City, roster : Roster, entry : Actor) : Roster do
+    let wake = wake_at(c, entry.person, roster.clock)
+    if wake == -1 do { roster with active: merge_actors(roster.active, Cons(entry, Nil)) }
+    else sleep_actor(c, roster, entry, wake) end
+  end
+  -- [entry] (asleep) out of the roster, with what sleep_actor counted for it undone.
+  pfn take_sleeper(c : Ur.Sim.City, roster : Roster, entry : Actor) : Roster do
+    let slot = entry.slot
+    let without = fn list -> List.filter(list, fn e -> e.slot != slot)
+    let roster = { roster with resting: without(roster.resting),
+      wakeups: Map.fold(roster.wakeups, roster.wakeups, fn (w, hour, batch) ->
+        if List.any(batch, fn e -> e.slot == slot) do
+          let rest = without(batch)
+          if List.is_empty(rest) do Map.remove(w, hour, Map.int_cmp) else Map.insert(w, hour, rest, Map.int_cmp) end
+        else w end),
+      crew: List.filter(roster.crew, fn person -> person.id != entry.person.id) }
+    unpark_woken(wake_actor(c, roster, entry), Cons(entry, Nil))
+  end
+  -- The citizen [id] out of the roster wherever it is (asleep, active or walking), with its
+  -- bookkeeping undone; a walker leaves the walk set where it stands, as wake_walkers does.
+  pfn take_citizen(c : Ur.Sim.City, roster : Roster, id : Int) : Option((Roster, Actor)) do
+    match find_sleeper(roster, id) do
+      Some(entry) -> Some((take_sleeper(c, roster, entry), entry))
+      None ->
+        match List.find(roster.active, fn entry -> entry.person.id == id) do
+          Some(entry) -> Some(({ roster with active: List.filter(roster.active, fn e -> e.slot != entry.slot) }, entry))
+          None ->
+            let roster = flush_walks(roster)
+            let found = Map.fold(roster.walk_events, None, fn (found, bucket, events) ->
+              if Option.is_some(found) do found else
+                Option.map(List.find(events, fn event -> event.entry.person.id == id), fn event -> (bucket, event))
+              end)
+            match found do
+              None -> None
+              Some((bucket, event)) ->
+                let slot = event.entry.slot
+                let rest = List.filter(Map.get_or(roster.walk_events, bucket, Nil, Map.int_cmp), fn e -> e.entry.slot != slot)
+                let events = if List.is_empty(rest) do Map.remove(roster.walk_events, bucket, Map.int_cmp)
+                  else Map.insert(roster.walk_events, bucket, rest, Map.int_cmp) end
+                let entry = { slot: slot, person: walker_at(event, roster.walk_time) }
+                Some(({ roster with walk_events: events, walk_count: roster.walk_count - 1,
+                  walk_crossings: crossing_reservation(roster.walk_crossings, event.arm, -1),
+                  walk_exits: Cons(slot, roster.walk_exits), walk_log: Cons(WalkLeft(slot), roster.walk_log) }, entry))
+            end
+        end
+    end
+  end
   pfn active_parking(cars : List(Actor), keys : Map(Int, Int)) : Map(Int, Int) do
     List.fold_left(cars, keys, fn (keys, entry) -> park_actor(keys, entry.person, 1))
   end
@@ -1634,6 +1787,58 @@ mod Ur.Citizens do
     else if next >= limit do limit
     else guarded_reach(slot, target, limit, guard) end end
   end
+  -- Most lots a walker crosses one per event, over up to 8 more: through lots away from the
+  -- camera, a walk does not stop at crosswalk stages or signals, reserve crossings or yield to
+  -- vehicles; nobody sees it. It stops before a lot near the camera, a turn, its transit stop,
+  -- or the route's end, and complete_walk then steps the route lot by lot as before.
+  fn coarse_max_legs() : Int do 8 end
+  pfn coarse_walk(entry : Actor, map : WalkMap, now : Float, pace : Float) : WalkEvent do
+    let person = entry.person
+    let first = (1.0 -. person.progress) /. (0.32 *. pace)
+    let (legs, time) = match person.route do
+      Cons(_, Cons(b, tail)) -> coarse_legs(map, person, b, tail, 0, first)
+      _ -> (0, first)
+    end
+    { entry: entry, started: now, finish: now +. time, limit: 1.0, arm: -1, from: -1, to: -1, legs: legs }
+  end
+  pfn coarse_legs(map : WalkMap, person : Citizen, b : Int, tail : List(Int), legs : Int, time : Float) : (Int, Float) do
+    match tail do
+      Cons(n, rest) ->
+        let pace = walk_segment_pace(map, b, n)
+        let (turn_b, _) = walk_turn(map, b)
+        let (turn_n, _) = walk_turn(map, n)
+        let stop = person.transit_phase == 1 && b == person.board
+        if legs >= coarse_max_legs() || stop || pace <= 0.0 || turn_b >= 0 || turn_n >= 0 || S.span_distance(b, n) != 1 ||
+          near_lot(map, b) || near_lot(map, n) do (legs, time)
+        else coarse_legs(map, person, n, rest, legs + 1, time +. 1.0 /. (0.32 *. pace)) end
+      Nil -> (legs, time)
+    end
+  end
+  -- Where a coarse walk has [person] after [u] lots of its way (a walk within one lot: the
+  -- progress). Each lot of the walk is taken as an equal share of its time.
+  fn walk_along(person : Citizen, u : Float) : Citizen do
+    let first = 1.0 -. person.progress
+    if u <= first do { person with progress: person.progress +. u } else
+      let rest = u -. first
+      let whole = float_to_int(Math.floor(rest))
+      along_route(person, person.route, whole + 1, rest -. int_to_float(whole))
+    end
+  end
+  pfn along_route(person : Citizen, route : List(Int), drop : Int, progress : Float) : Citizen do
+    match route do
+      Cons(here, Cons(next, more)) ->
+        if drop == 0 do { person with route: route, progress: progress }
+        else if List.is_empty(more) do { person with route: route, progress: 1.0 }
+        else along_route({ person with previous: here }, Cons(next, more), drop - 1, progress) end end
+      _ -> { person with route: route, progress: 1.0 }
+    end
+  end
+  doc "Where [event]'s walker is [f] (0 .. 1) of the way through it."
+  fn walk_pose(event : WalkEvent, f : Float) : Citizen do
+    let person = event.entry.person
+    if event.legs == 0 do { person with progress: person.progress +. (event.limit -. person.progress) *. f }
+    else walk_along(person, f *. (1.0 -. person.progress +. int_to_float(event.legs))) end
+  end
   pfn plan_walk(entry : Actor, occupied : Occupied, tick_time : Float, now : Float, guard : Int -> Citizen -> Citizen -> WalkCheck) : Option(WalkEvent) do
     let person = entry.person
     if !ordinary_walk(person) do None else
@@ -1642,12 +1847,13 @@ mod Ur.Citizens do
           let pace = walk_segment_pace(occupied.walk, a, b)
           let (turn_a, _) = walk_turn(occupied.walk, a)
           let (turn_b, _) = walk_turn(occupied.walk, b)
-          if pace <= 0.0 || turn_a >= 0 || turn_b >= 0 || S.span_distance(a, b) != 1 || person.progress >= 1.0 do None else
+          if pace <= 0.0 || turn_a >= 0 || turn_b >= 0 || S.span_distance(a, b) != 1 || person.progress >= 1.0 do None
+          else if !near_lot(occupied.walk, a) && !near_lot(occupied.walk, b) do Some(coarse_walk(entry, occupied.walk, now, pace)) else
             let stage = sidewalk_stage(occupied.walk, person, a, b)
             if stage.gate && stage.arm >= 0 && S.get(occupied.junctions, a) == 2 &&
               !S.crosswalk_open(a, stage.arm, occupied.signal_tick) do
               let green = int_to_float(crosswalk_wakeup(a, stage.arm, occupied.signal_tick)) *. 0.5
-              Some({ entry: entry, started: now, finish: now +. (green -. tick_time), limit: person.progress, arm: -1, from: -1, to: -1 })
+              Some({ entry: entry, started: now, finish: now +. (green -. tick_time), limit: person.progress, arm: -1, from: -1, to: -1, legs: 0 })
             else
               let target = { person with progress: stage.limit }
               let checked = guard(entry.slot, person, target)
@@ -1655,20 +1861,31 @@ mod Ur.Citizens do
               let limit = if whole do stage.limit else guarded_reach(entry.slot, person, stage.limit, guard) end
               if limit <= person.progress do
                 -- Blocked where it stands: hold and ask again in a second, as at a red light, instead of every tick.
-                Some({ entry: entry, started: now, finish: now +. 1.0, limit: person.progress, arm: -1, from: checked.from, to: -1 })
+                Some({ entry: entry, started: now, finish: now +. 1.0, limit: person.progress, arm: -1, from: checked.from, to: -1, legs: 0 })
               else
                 let arm = if stage.arm >= 0 && S.get(occupied.junctions, a) != 0 do a * 4 + stage.arm else -1 end
                 Some({ entry: entry, started: now, finish: now +. (limit -. person.progress) /. (0.32 *. pace),
-                  limit: limit, arm: arm, from: checked.from, to: if whole do checked.to else -1 end })
+                  limit: limit, arm: arm, from: checked.from, to: if whole do checked.to else -1 end, legs: 0 })
               end
             end
-          end
+          end end
         _ -> None
       end
     end
   end
+  -- A coarse walk's lots before its last, stepped as finishing each one would.
+  pfn through_legs(c : Ur.Sim.City, person : Citizen, occupied : Occupied, legs : Int) : Citizen do
+    if legs == 0 do person else
+      match person.route do
+        Cons(_, Cons(b, tail)) ->
+          let (next, _) = next_leg(c, person, occupied, b, tail)
+          through_legs(c, { next with progress: 1.0 }, occupied, legs - 1)
+        _ -> person
+      end
+    end
+  end
   pfn complete_walk(c : Ur.Sim.City, event : WalkEvent, occupied : Occupied, clock : Int) : Citizen do
-    let person = { event.entry.person with progress: event.limit }
+    let person = through_legs(c, { event.entry.person with progress: event.limit }, occupied, event.legs)
     if event.limit < 1.0 do person else
       match person.route do
         Cons(_, Cons(b, tail)) ->
@@ -1680,22 +1897,61 @@ mod Ur.Citizens do
       end
     end
   end
-  pfn finish_walks(c : Ur.Sim.City, events : List(WalkEvent), roster : Roster, occupied : Occupied, tick_time : Float,
-    guard : Int -> Citizen -> Citizen -> WalkCheck, waking : List(Actor)) : (Roster, List(Actor)) do
-    match events do
+  -- One finished walk's re-plan. It reads only [c], [occupied] and the bucket's clock and walk
+  -- time (none of which a bucket's events change), so a bucket's events are re-planned in
+  -- parallel and applied to the roster in their original order: the result is the sequential one.
+  type WalkReplan = { arm : Int, entry : Actor, next : Option(WalkEvent) }
+  pfn replan(c : Ur.Sim.City, event : WalkEvent, occupied : Occupied, clock : Int, tick_time : Float, walk_time : Float,
+    guard : Int -> Citizen -> Citizen -> WalkCheck) : WalkReplan do
+    let person = complete_walk(c, event, occupied, clock)
+    let entry = { slot: event.entry.slot, person: person }
+    { arm: event.arm, entry: entry, next: plan_walk(entry, occupied, tick_time, walk_time, guard) }
+  end
+  -- Below this many items a list is mapped on the calling thread: a task costs more.
+  pfn parallel_min() : Int do 2048 end
+  pfn parallel_chunks() : Int do 8 end
+  -- List.map(xs, f) in [parallel_chunks] tasks, results in order. [f] must read only what no
+  -- other item's work changes. A chunk whose task could not start, or failed, is mapped here.
+  pfn par_map(xs : List(a), f : a -> b) : List(b) do
+    let n = List.length(xs)
+    if n < parallel_min() do List.map(xs, f) else
+      let size = (n + parallel_chunks() - 1) / parallel_chunks()
+      let one = fn chunk -> List.map(chunk, f)
+      let tasks = List.map(List.chunks(xs, if size > 0 do size else 1 end), fn chunk ->
+        (chunk, Task.async(fn () -> one(chunk))))
+      List.concat(List.map(tasks, fn t ->
+        match t do
+          (chunk, Ok(task)) ->
+            match Task.await(task) do
+              Ok(out) -> out
+              Err(_) -> one(chunk)
+            end
+          (chunk, Err(_)) -> one(chunk)
+        end))
+    end
+  end
+  pfn replan_all(c : Ur.Sim.City, events : List(WalkEvent), occupied : Occupied, clock : Int, tick_time : Float, walk_time : Float,
+    guard : Int -> Citizen -> Citizen -> WalkCheck) : List(WalkReplan) do
+    par_map(events, fn event -> replan(c, event, occupied, clock, tick_time, walk_time, guard))
+  end
+  pfn apply_replans(plans : List(WalkReplan), roster : Roster, waking : List(Actor)) : (Roster, List(Actor)) do
+    match plans do
       Nil -> (roster, waking)
-      Cons(event, rest) ->
+      Cons(plan, rest) ->
         let roster = { roster with walk_count: roster.walk_count - 1,
-          walk_crossings: crossing_reservation(roster.walk_crossings, event.arm, -1) }
-        let person = complete_walk(c, event, occupied, roster.clock)
-        let entry = { slot: event.entry.slot, person: person }
-        match plan_walk(entry, occupied, tick_time, roster.walk_time, guard) do
-          Some(next) -> finish_walks(c, rest, queue_walk(roster, next), occupied, tick_time, guard, waking)
+          walk_crossings: crossing_reservation(roster.walk_crossings, plan.arm, -1) }
+        match plan.next do
+          Some(next) -> apply_replans(rest, queue_walk(roster, next), waking)
           None ->
+            let entry = plan.entry
             let roster = { roster with walk_exits: Cons(entry.slot, roster.walk_exits), walk_log: Cons(WalkLeft(entry.slot), roster.walk_log) }
-            finish_walks(c, rest, roster, occupied, tick_time, guard, Cons(entry, waking))
+            apply_replans(rest, roster, Cons(entry, waking))
         end
     end
+  end
+  pfn finish_walks(c : Ur.Sim.City, events : List(WalkEvent), roster : Roster, occupied : Occupied, tick_time : Float,
+    guard : Int -> Citizen -> Citizen -> WalkCheck, waking : List(Actor)) : (Roster, List(Actor)) do
+    apply_replans(replan_all(c, events, occupied, roster.clock, tick_time, roster.walk_time, guard), roster, waking)
   end
   pfn dispatch_walks(c : Ur.Sim.City, roster : Roster, occupied : Occupied, tick_time : Float, through : Int,
     guard : Int -> Citizen -> Citizen -> WalkCheck, waking : List(Actor)) : (Roster, List(Actor)) do

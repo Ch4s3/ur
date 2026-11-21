@@ -236,7 +236,7 @@ mod Ur do
         else if setup_row == 7 do { p with world_seed: int_mod_euclid(Authority.must(System.now_ms()), 2147483646) + 1 }
         else { p with setup: setup } end end
       let p = if setup_row == 9 do
-        restore(p, { city: S.unclaimed_setup(p.world_seed, p.setup), cx: 234.0, cz: 176.0, zoom: 345.0, yaw: 0.55, paused: true, speed: 1 }, Nil)
+        restore(p, { city: S.unclaimed_setup(p.world_seed, p.setup), cx: S.overview_x(), cz: S.overview_z(), zoom: S.overview_zoom(), yaw: 0.55, paused: true, speed: 1 }, Nil)
       else p end
       let action = if was_setup || setup_row >= 0 do :nothing
         else if pressed(keys, p.keys, 15) do (if p.boot do :quit else :resume end)
@@ -286,13 +286,13 @@ mod Ur do
       let right = (if Vk.key(68) || Vk.key(262) do 1.0 else 0.0 end) -. (if Vk.key(65) || Vk.key(263) do 1.0 else 0.0 end)
       let back = (if Vk.key(83) || Vk.key(264) do 1.0 else 0.0 end) -. (if Vk.key(87) || Vk.key(265) do 1.0 else 0.0 end)
       let pan = dt *. p.zoom *. 0.7 /. maximum(1.0, math_sqrt(right *. right +. back *. back))
-      let cx = maximum(0.0, minimum(480.0, p.cx +. (right *. Math.cos(yaw) +. back *. Math.sin(yaw)) *. pan))
-      let cz = maximum(0.0, minimum(352.0, p.cz +. (back *. Math.cos(yaw) -. right *. Math.sin(yaw)) *. pan))
+      let cx = maximum(0.0, minimum(S.map_metres_x(), p.cx +. (right *. Math.cos(yaw) +. back *. Math.sin(yaw)) *. pan))
+      let cz = maximum(0.0, minimum(S.map_metres_z(), p.cz +. (back *. Math.cos(yaw) -. right *. Math.sin(yaw)) *. pan))
       let keys_zoom = (if Vk.key(61) || Vk.key(334) do 1.0 else 0.0 end) -. (if Vk.key(45) || Vk.key(333) do 1.0 else 0.0 end)
       let over_toolbar = Toolbar.over(mx, my, w, h, p.group, p.page)
       let scroll = if Ur.Hud.over_panel(mx, my, w, h, p.sidebar_visible) || over_toolbar do 0.0 else Vk.scroll_y() end
       let amount = maximum(-1.0, minimum(1.0, scroll *. 0.14 +. keys_zoom *. dt *. 1.2))
-      let zoom = maximum(18.0, minimum(380.0, p.zoom *. Math.exp(0.0 -. amount)))
+      let zoom = maximum(18.0, minimum(S.max_zoom(), p.zoom *. Math.exp(0.0 -. amount)))
       let view = { w: w, h: h, cx: cx, cz: cz, zoom: zoom, yaw: yaw }
       let old_moment = Ur.Scene.sanitation_moment(p.city, p.elapsed)
       let truck_point = Ur.Scene.sanitation_point(p.city, view, old_moment, p.sanitation.driver, p.layer == 35)
@@ -569,9 +569,9 @@ mod Ur do
       let group = if just_landed do 1 else group end
       let page = if just_landed do 0 else page end
       let tool = if just_landed do 1 else tool end
-      let cx = if unlanded do 234.0 else if just_landed do int_to_float(c.harbour % S.width() * 8 + 4) else cx end end
-      let cz = if unlanded do 176.0 else if just_landed do int_to_float(c.harbour / S.width() * 8 + 4) else cz end end
-      let zoom = if unlanded do 345.0 else if just_landed do 60.0 else zoom end end
+      let cx = if unlanded do S.overview_x() else if just_landed do int_to_float(c.harbour % S.width() * 8 + 4) else cx end end
+      let cz = if unlanded do S.overview_z() else if just_landed do int_to_float(c.harbour / S.width() * 8 + 4) else cz end end
+      let zoom = if unlanded do S.overview_zoom() else if just_landed do 60.0 else zoom end end
       let steps = if paused || !Strata.Devtools.advancing(dev) || c.harbour < 0 || just_landed || S.valid(anchor) || paint || property_changed || undone do 0 else speed end
       let game_dt = dt *. int_to_float(steps)
       -- Advance the saved calendar phase over 24 real seconds per day at 1x.
@@ -665,7 +665,11 @@ mod Ur do
       let evacuation_update = flood_day || ((midnight || paint) && Ur.Citizens.has_evacuation(p.citizens))
       let rebuild = undone || evacuation_update || operation_changed || ((paint || due || policy_changed || day_changed || building_day || flood_day) &&
         (st.people != p.stats.people || S.households_changed(c.households, p.city.households) || S.assignments_changed(p.stats.job_matches, st.job_matches) || Ur.Citizens.education_changed(c, p.city) || Ur.Citizens.changed(c, p.city, 0)))
-      let reset_roster = rebuild || scene_changed
+      -- A weekday change alone leaves the roster as it is: timed rests end by midnight (see
+      -- Citizens.resting), so every sleeper re-checks the new day's schedule as it wakes, and
+      -- the weekday rules (working hours, car-free streets) are read each step. Re-indexing all
+      -- of it here stalled the 500,000-citizen metro for 3-6 s on each such day.
+      let reset_roster = rebuild || (scene_changed && (paint || undone || due || policy_changed || building_day || flood_day || religion_event))
       let pace_changed = if midnight do
         let previous = S.temperature(p.city)
         let current = S.temperature(c)
@@ -675,7 +679,8 @@ mod Ur do
       -- replayed below and cleared before this frame's step starts.
       let citizens = if reset_roster do
         Ur.Scene.clear_scheduled_walks(p.shown)
-        let old = if undone && !Ur.Citizens.has_evacuation(p.citizens) do Nil else Ur.Citizens.snapshot(p.citizens) end
+        let old = if undone && !Ur.Citizens.has_evacuation(p.citizens) do Nil
+          else if rebuild do Ur.Citizens.rebuild_input(p.citizens) else Ur.Citizens.snapshot(p.citizens) end end
         let people = if rebuild do Ur.Citizens.refresh_with(c, old, st.routes, st.people, st.job_matches) else old end
         Ur.Citizens.index(c, Ur.Citizens.wake_indoor(people), calendar_time)
       else if pace_changed do Ur.Citizens.wake_walkers(p.citizens) else p.citizens end end
@@ -684,11 +689,9 @@ mod Ur do
       let moment = Ur.Scene.sanitation_moment(c, elapsed)
       let prior_shift = if midnight || undone do Ur.Scene.empty_sanitation() else p.sanitation end
       let sanitation = Ur.Scene.sanitation_shift_indexed(c, phase, prior_shift, moment, citizens)
+      -- The shift's crew change moves only the old and new crew in the roster (see swap_crew).
       let citizens = if sanitation.driver != p.sanitation.driver || (rebuild && sanitation.driver >= 0) do
-        Ur.Scene.clear_walk_exits(citizens)
-        Ur.Scene.clear_scheduled_walks(citizens)
-        let people = Ur.Citizens.sanitation_crew(Ur.Citizens.snapshot(citizens), p.sanitation.driver, sanitation.driver)
-        Ur.Citizens.index(c, people, calendar_time +. game_dt *. clock_rate)
+        Ur.Citizens.swap_crew(c, citizens, p.sanitation.driver, sanitation.driver)
       else citizens end
       let citizens = Ur.Citizens.sort_parked(citizens)
       Ur.Scene.sanitation_truck(c, moment, sanitation.driver, night, section.after > 0)
@@ -748,7 +751,9 @@ mod Ur do
         -- The mask of lots a vehicle reaches reads the live footprints, so it is built here on
         -- the main thread, at the moment start_step freezes the copy the step checks against.
         let lots = Ur.Scene.vehicle_lots()
-        let step = fn () -> move_citizens(city, walk_map, st.running_transit, bus, ready, calendar_time, dt, dt *. clock_rate, steps, st.junctions, motion_time, lots)
+        -- Walkers away from the camera cross whole lots per event (Citizens.coarse_walk).
+        let view_map = Ur.Citizens.with_view(walk_map, cx, cz, zoom, if h > 0.0 do w /. h else 1.6 end, yaw)
+        let step = fn () -> move_citizens(city, view_map, st.running_transit, bus, ready, calendar_time, dt, dt *. clock_rate, steps, st.junctions, motion_time, lots)
         match start_step(step) do
           Some(task) -> (ready, Some(task))
           None -> (step(), None)
@@ -883,7 +888,9 @@ mod Ur do
     let road_demo = demo == 29
     let fire_demo = demo == 10
     let profile = Authority.must(Env.get_int("UR_PERF", 0)) > 0
-    let quad_capacity = S.clamp(Authority.must(Env.get_int("UR_QUAD_CAPACITY", if metro do 4194304 else 1048576 end)), 524288, 4194304)
+    -- quads scale with the map's area (the metro's towers fill about 1.1M of 4M on the original map)
+    let lots = S.count() / 2640
+    let quad_capacity = S.clamp(Authority.must(Env.get_int("UR_QUAD_CAPACITY", (if metro do 4194304 else 1048576 end) * Math.max_int(1, lots))), 524288, 4194304 * Math.max_int(1, lots) * 2)
     if drill == 2 do flood_backup_report(Ur.Scenario.flood_backup_start(), 9)
     else if council > 0 do
       let base = Ur.Scenario.council_outcome_baseline()
@@ -966,7 +973,7 @@ mod Ur do
       let landing_z = Authority.must(Env.get_int("UR_LAND_Z", -1))
       let c = if landing_x >= 0 && landing_x < S.width() && landing_z >= 0 && landing_z < S.depth() do S.land(c, S.index(landing_x, landing_z)) else c end
       let stats = S.stats(c)
-      if metro && stats.people != 100000 do Ur.AppError.stop("Metropolitan benchmark requires 100,000 residents") else () end
+      if metro && stats.people != Ur.Scenario.metro_people() do Ur.AppError.stop("Metropolitan benchmark: " ++ int_to_string(stats.people) ++ " residents housed, " ++ int_to_string(Ur.Scenario.metro_people()) ++ " asked for (raise UR_METRO_FLOORS)") else () end
       let road_bench = if metro && profile do S.clamp(Authority.must(Env.get_int("UR_ROAD_BENCH", 0)), 0, 2) else 0 end
       let start_tool = match road_fixture do Some(setup) -> setup.tool | None -> -1 end
       let draft = match road_fixture do
@@ -991,7 +998,7 @@ mod Ur do
       let initial_tab = if demo == 27 do 14 else if demo == 13 || demo == 21 do 8 else if demo == 17 do 12 else 0 end end end
       let details_tab = S.clamp(Authority.must(Env.get_int("UR_DETAILS_TAB", initial_tab)), 0, 16)
       let (cx, cz, zoom) = match demo do
-        0 -> (234.0, 176.0, 345.0)
+        0 -> (S.overview_x(), S.overview_z(), S.overview_zoom())
         3 -> (72.0, 173.0, 42.0)
         4 -> (350.0, 180.0, 178.0)
         5 -> (255.0, 180.0, 49.0)
@@ -1008,7 +1015,7 @@ mod Ur do
         18 -> (135.0, 148.0, 110.0)
         19 -> (100.0, 140.0, 72.0)
         20 -> (151.0, 139.0, 125.0)
-        28 -> (153.0, 153.0, 165.0)
+        28 -> (153.0, 153.0, match Authority.must(Env.get_int("UR_ZOOM", 0)) do 0 -> 165.0 | z -> int_to_float(z) end)
         29 -> match road_fixture do Some(setup) -> (setup.cx, setup.cz, setup.zoom) | None -> (91.0, 143.0, 76.0) end
         _ -> if channel do (180.0, 118.0, 62.0) else if region do (142.0, 105.0, 171.0) else (91.0, 143.0, 76.0) end end
       end
