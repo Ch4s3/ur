@@ -60,10 +60,13 @@ mod Ur.Debt do
   -- Debt against a year's revenue, debt service against a month's, the last
   -- year's deficits and two years of missed payments. Under an administrator
   -- the rating is D.
+  fn has_history(c : Ur.Sim.City) : Bool do !List.is_empty(c.finance_history) end
+  -- Before the first month closes there is no revenue to measure debt against,
+  -- so a new city is rated on its payment record alone.
   fn rating(c : Ur.Sim.City) : Int do
     if c.economy.administrator >= 0 do 7 else
-      let debt_ratio = total_debt(c) * 100 / yearly_revenue(c)
-      let service_ratio = debt_service(c) * 100 / monthly_revenue(c)
+      let debt_ratio = if has_history(c) do total_debt(c) * 100 / yearly_revenue(c) else 0 end
+      let service_ratio = if has_history(c) do debt_service(c) * 100 / monthly_revenue(c) else 0 end
       let deficits = deficit_months(c.finance_history, 12, 0)
       S.clamp(debt_ratio / 100 + service_ratio / 30 + deficits / 4 + misses_within(c, 24) * 2, 0, 6)
     end
@@ -72,7 +75,7 @@ mod Ur.Debt do
   fn rating_reason(c : Ur.Sim.City) : String do
     if c.economy.administrator >= 0 do "Under administration after repeated missed payments"
     else if misses_within(c, 24) > 0 do int_to_string(misses_within(c, 24)) ++ " missed payment(s) in two years"
-    else if total_debt(c) * 100 / yearly_revenue(c) >= 80 do "Debt is " ++ int_to_string(total_debt(c) * 100 / yearly_revenue(c)) ++ "% of a year's revenue"
+    else if has_history(c) && total_debt(c) * 100 / yearly_revenue(c) >= 80 do "Debt is " ++ int_to_string(total_debt(c) * 100 / yearly_revenue(c)) ++ "% of a year's revenue"
     else if deficit_months(c.finance_history, 12, 0) >= 4 do int_to_string(deficit_months(c.finance_history, 12, 0)) ++ " deficit months this year"
     else if total_debt(c) == 0 do "No borrowing" else "Debt well covered by revenue" end end end end end
   end
@@ -215,17 +218,23 @@ mod Ur.Debt do
   -- Month end, after the city's books are settled: cover any operating
   -- shortfall, pay debt service and arrears, then move through the stages.
   fn settle(c : Ur.Sim.City) : Ur.Sim.City do
-    let c = overdraft(c)
+    -- This month's service is owed on the debts already held: an overdraft
+    -- taken now starts its instalments next month.
     let due = debt_service(c)
+    let (debts, to_residents) = advance_debts(c.economy.debts, Nil, 0)
+    let c = overdraft({ c with economy: { c.economy with debts: debts } })
     let owed = due + c.economy.arrears
     let paid = S.clamp(c.cash, 0, owed)
-    let missed_now = due > 0 && paid < due
-    let (debts, to_residents) = advance_debts(c.economy.debts, Nil, 0)
+    let paid_due = S.clamp(paid, 0, due)
+    let missed_now = due > 0 && paid_due < due
     let arrears = owed - paid
     let missed = if missed_now do Cons(c.month, List.take(c.economy.missed, 23)) else c.economy.missed end
-    let c = pay_residents({ c with cash: c.cash - paid, economy: { c.economy with debts: debts, arrears: arrears, missed: missed } }, to_residents)
+    -- Resident bondholders receive only what the city actually paid; the rest
+    -- is a default they bear with the city's other creditors.
+    let resident_paid = if due > 0 do to_residents * paid_due / due else to_residents end
+    let c = pay_residents({ c with cash: c.cash - paid, economy: { c.economy with arrears: arrears, missed: missed } }, resident_paid)
     let misses = misses_within(c, 12)
-    let administrator = if c.economy.administrator < 0 && misses >= 3 do c.month
+    let administrator = if c.economy.administrator < 0 && missed_now && misses >= 3 do c.month
       else if c.economy.administrator >= 0 && arrears == 0 && c.month - c.economy.administrator >= 3 && paid_streak(c) do -1
       else c.economy.administrator end end
     let earlier = arrears_before(c.economy.debt_history, c.month - 12)

@@ -31,9 +31,10 @@ mod StockMarketTest do
     Test.assert_true(Ur.Market.noise(c, 5, 1) == Ur.Market.noise(c, 5, 1), "Shocks are seeded")
     Test.assert_true(Ur.Market.noise(c, 5, 1) >= -1000 && Ur.Market.noise(c, 5, 1) <= 1000, "Shocks stay in range")
 
-    let indebted = { c with economy: { c.economy with debts: [{ id: 1, kind: 0, principal: 500000, rate: 100, months: 36, resident: 0 }] } }
-    Test.assert_true(Ur.Market.multiple(indebted) < Ur.Market.multiple(c), "Heavy city debt lowers valuations")
-    Test.assert_true(Ur.Market.debt_ratio(indebted) > Ur.Market.debt_ratio(c), "Debt is measured against revenue")
+    let settled = Ur.Clock.advance(c, 1)
+    let indebted = { settled with economy: { settled.economy with debts: [{ id: 1, kind: 0, principal: 500000, rate: 100, months: 36, resident: 0 }] } }
+    Test.assert_true(Ur.Market.multiple(indebted) < Ur.Market.multiple(settled), "Heavy city debt lowers valuations")
+    Test.assert_true(Ur.Market.debt_ratio(indebted) > Ur.Market.debt_ratio(settled), "Debt is measured against revenue")
 
     let listed = listed_stock(c, shop, 500)
     Test.assert_true(S.listed(listed, shop), "A listed parcel is known to the simulation")
@@ -56,6 +57,17 @@ mod StockMarketTest do
     Test.assert_true(gone.price <= 500 / 10, "Its shares are left near worthless")
     Test.assert_true(demolished.economy.market.index < 10000, "A failure pulls the index down")
 
+    let renamed = { listed with economy: { listed.economy with stocks: List.map(listed.economy.stocks, fn s -> { s with sector: 5 }) } }
+    let still = match Ur.Market.stock_at(Ur.Market.settle(renamed), 1) do
+      Some(s) -> s
+      None -> panic("stock missing")
+    end
+    Test.assert_true(still.delisted < 0 && still.sector == Ur.Market.sector_of(c, shop), "A firm that changes line of business keeps trading under its new sector")
+    let feeing = { c with cash: 50, economy: { c.economy with listing_incentive: true } }
+    Test.assert_true((Ur.Treasury.close_month(feeing)).cash >= 0, "The listing fee never leaves cash below zero")
+    let home = S.index(10, 20)
+    let modest = { c with economy: { c.economy with savings: NativeArray.set_int(c.economy.savings, home, 100 * S.occupied_homes(c, home)) } }
+    Test.assert_eq_int(S.get((Ur.Market.pay_dividends(modest, 1000)).economy.savings, home), S.get(modest.economy.savings, home), "Households with nothing in the index get no dividends")
     let streaky = { c with economy: { c.economy with profit_streak: NativeArray.set_int(c.economy.profit_streak, shop, 30) } }
     let listing = Ur.Market.settle(streaky)
     Test.assert_true(S.job_slots(c, shop) < Ur.Market.listing_jobs(c) || S.listed(listing, shop), "A long-profitable firm with enough jobs lists")

@@ -28,6 +28,8 @@ mod FundingTest do
     let lean = set_level(staffed, 0, 50)
     Test.assert_eq_int(S.facility_staffed(lean, school), 50, "Half funding leaves half the posts empty")
     Test.assert_eq_int(S.parcel_facility_upkeep(lean, school), S.parcel_facility_upkeep(staffed, school) / 2, "Half funding halves the school's upkeep")
+    Test.assert_true(S.job_slots(lean, school) < S.job_slots(staffed, school), "Underfunded posts are taken off the job market")
+    Test.assert_true(S.job_slots(lean, school) >= 1, "An underfunded facility keeps at least one post")
     Test.assert_true(S.service_spending(lean, S.stats(lean), 0) < S.service_spending(staffed, S.stats(staffed), 0), "Education spending follows its level")
 
     let corridor = Ur.Scenario.employment_corridor()

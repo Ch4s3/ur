@@ -11,6 +11,12 @@ mod Ur.Treasury do
     else if row >= 20 && row <= 21 do Ur.Market.act(c, row, delta)
     else c end end end end
   end
-  -- Runs once the month's books are settled: debts first, then the market.
-  fn close_month(c : Ur.Sim.City) : Ur.Sim.City do Ur.Market.settle(Ur.Debt.settle(c)) end
+  -- Runs once the month's books are settled: the listing fee, then debts, then
+  -- the market. A debt warning outranks news of a listing.
+  fn close_month(c : Ur.Sim.City) : Ur.Sim.City do
+    let charged = Ur.Market.charge_incentive(c)
+    let settled = Ur.Debt.settle(charged)
+    let traded = Ur.Market.settle(settled)
+    if settled.message != charged.message do { traded with message: settled.message } else traded end
+  end
 end

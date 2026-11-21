@@ -54,7 +54,9 @@ mod Ur.Market do
     float_to_int(80.0 *. Math.sin(t +. phase) +. 20.0 *. Math.sin(t *. 2.7 +. phase *. 1.3))
   end
   -- Debt against a year's revenue, in percent.
-  fn debt_ratio(c : Ur.Sim.City) : Int do Ur.Debt.total_debt(c) * 100 / Ur.Debt.yearly_revenue(c) end
+  fn debt_ratio(c : Ur.Sim.City) : Int do
+    if Ur.Debt.has_history(c) do Ur.Debt.total_debt(c) * 100 / Ur.Debt.yearly_revenue(c) else 0 end
+  end
   -- Change in city spending over a year, in percent.
   fn spending_growth(c : Ur.Sim.City) : Int do
     match (List.nth_opt(c.finance_history, 0), List.nth_opt(c.finance_history, 12)) do
@@ -94,52 +96,91 @@ mod Ur.Market do
     S.margin(S.business_accounts(c, books.routes, books.labor, books.people, books.jobs, lot))
   end
 
-  pfn update_streaks(c : Ur.Sim.City, books : Books, i : Int, out : NativeIntArr) : NativeIntArr do
+  -- This month's profit for every trading parcel, computed once and shared by
+  -- the listing streaks, price moves and new listings.
+  pfn month_profits(c : Ur.Sim.City, books : Books, i : Int, out : NativeIntArr) : NativeIntArr do
     if i >= S.count() do out else
-      let next = if trading(c, i) && profit(c, books, i) > 0 do S.clamp(S.get(out, i) + 1, 0, 1000) else 0 end
-      update_streaks(c, books, i + 1, if next == S.get(out, i) do out else NativeArray.set_int(out, i, next) end)
+      month_profits(c, books, i + 1, if trading(c, i) do NativeArray.set_int(out, i, profit(c, books, i)) else out end)
+    end
+  end
+  pfn update_streaks(c : Ur.Sim.City, profits : NativeIntArr, i : Int, out : NativeIntArr) : NativeIntArr do
+    if i >= S.count() do out else
+      let next = if trading(c, i) && S.get(profits, i) > 0 do S.clamp(S.get(out, i) + 1, 0, 1000) else 0 end
+      update_streaks(c, profits, i + 1, if next == S.get(out, i) do out else NativeArray.set_int(out, i, next) end)
     end
   end
 
   type Moves = { stocks : List(Ur.Sim.Stock), old_value : Int, new_value : Int, dividends : Int }
   -- One month for every company already listed: delist failures near zero,
   -- move prices toward value with a shock, and pay dividends from profit.
-  pfn move_prices(c : Ur.Sim.City, books : Books, stocks : List(Ur.Sim.Stock), mult : Int, vol : Int, out : Moves) : Moves do
+  pfn move_prices(c : Ur.Sim.City, profits : NativeIntArr, stocks : List(Ur.Sim.Stock), mult : Int, vol : Int, out : Moves) : Moves do
     match stocks do
       Nil -> { out with stocks: List.reverse(out.stocks) }
       Cons(s, rest) ->
         if s.delisted >= 0 do
           let keep = c.month - s.delisted < 24
-          move_prices(c, books, rest, mult, vol, if keep do { out with stocks: Cons(s, out.stocks) } else out end)
-        else if !trading(c, s.lot) || sector_of(c, s.lot) != s.sector do
+          move_prices(c, profits, rest, mult, vol, if keep do { out with stocks: Cons(s, out.stocks) } else out end)
+        else if !trading(c, s.lot) do
           let crashed = S.clamp(s.price / 20, 1, s.price)
           let gone = { s with price: crashed, earnings: 0, dividend: 0, delisted: c.month, history: Cons(crashed, List.take(s.history, history_months() - 1)) }
-          move_prices(c, books, rest, mult, vol, { out with stocks: Cons(gone, out.stocks), old_value: out.old_value + s.price, new_value: out.new_value + crashed })
+          move_prices(c, profits, rest, mult, vol, { out with stocks: Cons(gone, out.stocks), old_value: out.old_value + s.price, new_value: out.new_value + crashed })
         else
-          let earnings = profit(c, books, s.lot)
+          let earnings = S.get(profits, s.lot)
           let fair = fair_value(earnings, mult)
           let shock = s.price * noise(c, c.month, s.id) / 1000 * vol / 1000
           let price = S.clamp(s.price + (fair - s.price) * 15 / 100 + shock, 1, 100000000)
           let dividend = if earnings > 0 do earnings * 40 / 100 else 0 end
-          let moved = { s with price: price, earnings: earnings, dividend: dividend, history: Cons(price, List.take(s.history, history_months() - 1)) }
-          move_prices(c, books, rest, mult, vol, { out with stocks: Cons(moved, out.stocks), old_value: out.old_value + s.price, new_value: out.new_value + price, dividends: out.dividends + dividend })
+          -- A firm that changes line of business (a shop turned office, an
+          -- office turned specialist) keeps trading under its new sector.
+          let moved = { s with sector: sector_of(c, s.lot), price: price, earnings: earnings, dividend: dividend, history: Cons(price, List.take(s.history, history_months() - 1)) }
+          move_prices(c, profits, rest, mult, vol, { out with stocks: Cons(moved, out.stocks), old_value: out.old_value + s.price, new_value: out.new_value + price, dividends: out.dividends + dividend })
         end end
     end
   end
-  pfn new_listings(c : Ur.Sim.City, books : Books, streaks : NativeIntArr, mult : Int, i : Int, next_id : Int, out : List(Ur.Sim.Stock)) : (List(Ur.Sim.Stock), Int) do
+  pfn new_listings(c : Ur.Sim.City, profits : NativeIntArr, streaks : NativeIntArr, mult : Int, i : Int, next_id : Int, out : List(Ur.Sim.Stock)) : (List(Ur.Sim.Stock), Int) do
     if i >= S.count() do (List.reverse(out), next_id) else
       let eligible = S.get(streaks, i) >= listing_months(c) && S.job_slots(c, i) >= listing_jobs(c) && trading(c, i) && !S.listed(c, i)
       if eligible do
-        let price = fair_value(profit(c, books, i), mult)
+        let price = fair_value(S.get(profits, i), mult)
         let s = { id: next_id, lot: i, sector: sector_of(c, i), shares: shares(), price: price, earnings: 0, dividend: 0, history: Cons(price, Nil), listed: c.month, delisted: -1 }
-        new_listings(c, books, streaks, mult, i + 1, next_id + 1, Cons(s, out))
-      else new_listings(c, books, streaks, mult, i + 1, next_id, out) end
+        new_listings(c, profits, streaks, mult, i + 1, next_id + 1, Cons(s, out))
+      else new_listings(c, profits, streaks, mult, i + 1, next_id, out) end
     end
   end
 
+  -- The incentive's monthly fee, charged before debts are settled so the
+  -- overdraft covers it if cash runs short.
+  fn charge_incentive(c : Ur.Sim.City) : Ur.Sim.City do
+    if c.economy.listing_incentive do { c with cash: c.cash - incentive_cost() } else c end
+  end
+  -- What a parcel's households hold in the index, using the same cushion the
+  -- bond market treats as spare savings.
+  fn holdings(c : Ur.Sim.City, lot : Int) : Int do
+    let homes = S.occupied_homes(c, lot)
+    if homes <= 0 do 0 else
+      let per_home = S.get(c.economy.savings, lot) / homes
+      let spare = per_home - 200
+      if spare <= 0 do 0 else spare * S.invested_share(per_home, 200) / 100 * homes end
+    end
+  end
+  pfn holdings_total(c : Ur.Sim.City, i : Int, total : Int) : Int do
+    if i >= S.count() do total else holdings_total(c, i + 1, total + holdings(c, i)) end
+  end
+  pfn share_dividends(c : Ur.Sim.City, amount : Int, pool : Int, i : Int, out : NativeIntArr) : NativeIntArr do
+    if i >= S.count() do out else
+      let part = amount * holdings(c, i) / pool
+      share_dividends(c, amount, pool, i + 1, if part <= 0 do out else NativeArray.set_int(out, i, S.get(out, i) + part) end)
+    end
+  end
+  -- Dividends go to households in proportion to what they hold in the index.
+  fn pay_dividends(c : Ur.Sim.City, amount : Int) : Ur.Sim.City do
+    let pool = holdings_total(c, 0, 0)
+    if amount <= 0 || pool <= 0 do c else
+      { c with economy: { c.economy with savings: share_dividends(c, amount, pool, 0, c.economy.savings) } }
+    end
+  end
   -- Month end, after debts are settled.
   fn settle(c : Ur.Sim.City) : Ur.Sim.City do
-    let c = if c.economy.listing_incentive do { c with cash: c.cash - incentive_cost() } else c end
     let st = S.stats(c)
     let books = { routes: st.routes, labor: st.labor, people: st.people, jobs: st.work }
     let market = c.economy.market
@@ -149,15 +190,16 @@ mod Ur.Market do
     let volatility = market.volatility + ((if calm do 40 else 120 end) - market.volatility) / 3
     let c = { c with economy: { c.economy with market: { market with sentiment: sentiment, volatility: volatility } } }
     let mult = multiple(c)
-    let streaks = update_streaks(c, books, 0, c.economy.profit_streak)
-    let moved = move_prices(c, books, c.economy.stocks, mult, volatility, { stocks: Nil, old_value: 0, new_value: 0, dividends: 0 })
-    let (fresh, next_id) = new_listings({ c with economy: { c.economy with stocks: moved.stocks } }, books, streaks, mult, 0, market.next_id, Nil)
+    let profits = month_profits(c, books, 0, NativeArray.make_int(S.count(), 0))
+    let streaks = update_streaks(c, profits, 0, c.economy.profit_streak)
+    let moved = move_prices(c, profits, c.economy.stocks, mult, volatility, { stocks: Nil, old_value: 0, new_value: 0, dividends: 0 })
+    let (fresh, next_id) = new_listings({ c with economy: { c.economy with stocks: moved.stocks } }, profits, streaks, mult, 0, market.next_id, Nil)
     let index = if moved.old_value > 0 do S.clamp(market.index * S.clamp(moved.new_value * 10000 / moved.old_value, 0, 1000000) / 10000, 1, 100000000) else market.index end
     let first = market.base == 0 && !List.is_empty(fresh)
     let market = { market with sentiment: sentiment, volatility: volatility, index: index, next_id: next_id,
       base: if first do c.month else market.base end, history: Cons(market.index, List.take(market.history, history_months() - 1)) }
     let c = { c with economy: { c.economy with stocks: List.append(moved.stocks, fresh), market: market, profit_streak: streaks } }
-    let c = Ur.Debt.pay_residents(c, moved.dividends)
+    let c = pay_dividends(c, moved.dividends)
     if List.is_empty(fresh) do c else
       { c with message: (match fresh do
         Cons(s, _) -> company_name(c, s) ++ " listed on the market"
