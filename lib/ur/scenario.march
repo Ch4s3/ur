@@ -53,10 +53,33 @@ mod Ur.Scenario do
   -- The metro demo: every lot of the map built up, the residents UR_METRO_PEOPLE asks for (default
   -- 100,000) in homes UR_METRO_FLOORS tall (default 9 to 11 floors; the original map houses about
   -- 114,000 at 9, a 120 x 88 map about 456,000, and 13 floors fit 500,000 there).
+  -- The lot nearest (x, z) a harbour can be founded on (a shoreline lot), searching rings out to
+  -- 12 lots; the design-grid landing point is inland once the islands are scaled up.
+  pfn landing_near(c : Ur.Sim.City, x : Int, z : Int, r : Int) : Int do
+    if r > 12 do S.index(x, z) else
+      match landing_ring(c, x, z, r, 0 - r) do
+        Some(i) -> i
+        None -> landing_near(c, x, z, r + 1)
+      end
+    end
+  end
+  pfn landing_ring(c : Ur.Sim.City, x : Int, z : Int, r : Int, dz : Int) : Option(Int) do
+    if dz > r do None else
+      let found = List.find(List.map(Range.to_list(Range.new(0 - r, r + 1)), fn dx -> (x + dx, z + dz)), fn p ->
+        match p do
+          (px, pz) -> (px - x == r || x - px == r || pz - z == r || z - pz == r) && px >= 0 && px < S.width() && pz >= 0 && pz < S.depth() && S.can_land(c, S.index(px, pz))
+        end)
+      match found do
+        Some((px, pz)) -> Some(S.index(px, pz))
+        None -> landing_ring(c, x, z, r, dz + 1)
+      end
+    end
+  end
   fn metro_people() : Int do Authority.must(Env.get_int("UR_METRO_PEOPLE", 100000)) end
   fn metropolitan_benchmark() : Ur.Sim.City do
     let floors = S.clamp(Authority.must(Env.get_int("UR_METRO_FLOORS", 9)), 3, 40)
-    let c = metro_parcels(S.land(S.unclaimed(), S.index(20 * S.width() / 60, 36 * S.depth() / 44)), floors, 0)
+    let island = S.unclaimed()
+    let c = metro_parcels(S.land(island, landing_near(island, 20 * S.width() / 60, 36 * S.depth() / 44, 0)), floors, 0)
     { c with census: Ur.Demography.seed(metro_people()), clock_ms: 600, cash: 120000, founding_map: false }
   end
   pfn street(c : Ur.Sim.City, x : Int, z : Int) : Ur.Sim.City do

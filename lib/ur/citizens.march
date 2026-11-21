@@ -1,4 +1,5 @@
 mod Ur.Citizens do
+  needs IO.Spawn
   alias Ur.Sim as S
   type TransitService = { routes : List(Ur.Food.Trip), active : List(Ur.Fleet.Run) }
   type Parking = { lot : Int, road : Int, kind : Int, bay : Int, edge : Int, steps : Int, site : Int }
@@ -1680,22 +1681,57 @@ mod Ur.Citizens do
       end
     end
   end
-  pfn finish_walks(c : Ur.Sim.City, events : List(WalkEvent), roster : Roster, occupied : Occupied, tick_time : Float,
-    guard : Int -> Citizen -> Citizen -> WalkCheck, waking : List(Actor)) : (Roster, List(Actor)) do
-    match events do
+  -- One finished walk's re-plan. It reads only [c], [occupied] and the bucket's clock and walk
+  -- time (none of which a bucket's events change), so a bucket's events are re-planned in
+  -- parallel and applied to the roster in their original order: the result is the sequential one.
+  type WalkReplan = { arm : Int, entry : Actor, next : Option(WalkEvent) }
+  pfn replan(c : Ur.Sim.City, event : WalkEvent, occupied : Occupied, clock : Int, tick_time : Float, walk_time : Float,
+    guard : Int -> Citizen -> Citizen -> WalkCheck) : WalkReplan do
+    let person = complete_walk(c, event, occupied, clock)
+    let entry = { slot: event.entry.slot, person: person }
+    { arm: event.arm, entry: entry, next: plan_walk(entry, occupied, tick_time, walk_time, guard) }
+  end
+  -- Below this many events a bucket is re-planned on the calling thread: a task costs more.
+  pfn parallel_replan_min() : Int do 2048 end
+  pfn replan_chunks() : Int do 8 end
+  pfn replan_all(c : Ur.Sim.City, events : List(WalkEvent), occupied : Occupied, clock : Int, tick_time : Float, walk_time : Float,
+    guard : Int -> Citizen -> Citizen -> WalkCheck) : List(WalkReplan) do
+    let n = List.length(events)
+    if n < parallel_replan_min() do List.map(events, fn event -> replan(c, event, occupied, clock, tick_time, walk_time, guard)) else
+      let size = (n + replan_chunks() - 1) / replan_chunks()
+      let one = fn chunk -> List.map(chunk, fn event -> replan(c, event, occupied, clock, tick_time, walk_time, guard))
+      -- A chunk whose task could not start, or failed, is re-planned here.
+      let tasks = List.map(List.chunks(events, if size > 0 do size else 1 end), fn chunk ->
+        (chunk, Task.async(fn () -> one(chunk))))
+      List.concat(List.map(tasks, fn t ->
+        match t do
+          (chunk, Ok(task)) ->
+            match Task.await(task) do
+              Ok(plans) -> plans
+              Err(_) -> one(chunk)
+            end
+          (chunk, Err(_)) -> one(chunk)
+        end))
+    end
+  end
+  pfn apply_replans(plans : List(WalkReplan), roster : Roster, waking : List(Actor)) : (Roster, List(Actor)) do
+    match plans do
       Nil -> (roster, waking)
-      Cons(event, rest) ->
+      Cons(plan, rest) ->
         let roster = { roster with walk_count: roster.walk_count - 1,
-          walk_crossings: crossing_reservation(roster.walk_crossings, event.arm, -1) }
-        let person = complete_walk(c, event, occupied, roster.clock)
-        let entry = { slot: event.entry.slot, person: person }
-        match plan_walk(entry, occupied, tick_time, roster.walk_time, guard) do
-          Some(next) -> finish_walks(c, rest, queue_walk(roster, next), occupied, tick_time, guard, waking)
+          walk_crossings: crossing_reservation(roster.walk_crossings, plan.arm, -1) }
+        match plan.next do
+          Some(next) -> apply_replans(rest, queue_walk(roster, next), waking)
           None ->
+            let entry = plan.entry
             let roster = { roster with walk_exits: Cons(entry.slot, roster.walk_exits), walk_log: Cons(WalkLeft(entry.slot), roster.walk_log) }
-            finish_walks(c, rest, roster, occupied, tick_time, guard, Cons(entry, waking))
+            apply_replans(rest, roster, Cons(entry, waking))
         end
     end
+  end
+  pfn finish_walks(c : Ur.Sim.City, events : List(WalkEvent), roster : Roster, occupied : Occupied, tick_time : Float,
+    guard : Int -> Citizen -> Citizen -> WalkCheck, waking : List(Actor)) : (Roster, List(Actor)) do
+    apply_replans(replan_all(c, events, occupied, roster.clock, tick_time, roster.walk_time, guard), roster, waking)
   end
   pfn dispatch_walks(c : Ur.Sim.City, roster : Roster, occupied : Occupied, tick_time : Float, through : Int,
     guard : Int -> Citizen -> Citizen -> WalkCheck, waking : List(Actor)) : (Roster, List(Actor)) do
