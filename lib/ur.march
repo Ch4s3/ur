@@ -737,7 +737,9 @@ mod Ur do
         -- The mask of lots a vehicle reaches reads the live footprints, so it is built here on
         -- the main thread, at the moment start_step freezes the copy the step checks against.
         let lots = Ur.Scene.vehicle_lots()
-        let step = fn () -> move_citizens(city, walk_map, st.running_transit, bus, ready, calendar_time, dt, dt *. clock_rate, steps, st.junctions, motion_time, lots)
+        -- Walkers away from the camera cross whole lots per event (Citizens.coarse_walk).
+        let view_map = Ur.Citizens.with_view(walk_map, cx, cz, zoom, if h > 0.0 do w /. h else 1.6 end, yaw)
+        let step = fn () -> move_citizens(city, view_map, st.running_transit, bus, ready, calendar_time, dt, dt *. clock_rate, steps, st.junctions, motion_time, lots)
         match start_step(step) do
           Some(task) -> (ready, Some(task))
           None -> (step(), None)
@@ -998,7 +1000,7 @@ mod Ur do
         18 -> (135.0, 148.0, 110.0)
         19 -> (100.0, 140.0, 72.0)
         20 -> (151.0, 139.0, 125.0)
-        28 -> (153.0, 153.0, 165.0)
+        28 -> (153.0, 153.0, match Authority.must(Env.get_int("UR_ZOOM", 0)) do 0 -> 165.0 | z -> int_to_float(z) end)
         29 -> match road_fixture do Some(setup) -> (setup.cx, setup.cz, setup.zoom) | None -> (91.0, 143.0, 76.0) end
         _ -> if channel do (180.0, 118.0, 62.0) else if region do (142.0, 105.0, 171.0) else (91.0, 143.0, 76.0) end end
       end

@@ -293,6 +293,51 @@ mod CitizenMovementTest do
       "a rebuild gives the same citizens whatever order the old roster comes in")
   end
 
+  -- Away from the camera a walker crosses several lots per event and still arrives where
+  -- exact planning takes it; its pose runs from where it stands to the walk's last lot.
+  pfn coarse_walks(c : Ur.Sim.City, base : Ur.Citizens.Citizen, empty : NativeIntArr) : Unit do
+    let lots = List.map(List.range(10, 19), fn x -> S.index(x, 22))
+    let road = List.fold_left(lots, empty, fn (roads, lot) -> NativeArray.set_int(roads, lot, 2))
+    let c = { c with roads: road, heights: NativeArray.make_int(S.count(), 22) }
+    let exact = Ur.Citizens.walk_map(c)
+    let far = { exact with near: NativeArray.make_int(S.count(), 0) }
+    let last = S.index(18, 22)
+    let person = { base with id: 2, location: -1, route: lots, previous: S.index(9, 22), target: last,
+      work: last, study: -1, car_phase: 0, parking: 0, arrival: 0, by_car: false, shop: -1, park: -1,
+      activity: 1, progress: 0.0, transit_phase: 0, bus_slot: -1, rest_until: -1, park_trip: false }
+    let step = fn (map, roster, dt) ->
+      Ur.Citizens.step_guarded(c, map, empty, None, roster, 0.25, dt, empty, 0.0, fn (_, _, next) -> Ur.Citizens.unguarded(next))
+    let arrival = fn map -> steps_to_arrive(c, map, empty, Ur.Citizens.index(c, [person], 0.25), last, 0)
+    let events = fn roster -> Map.fold(roster.walk_events, Nil, fn (out, _, list) -> List.append(list, out))
+    let first = step(far, Ur.Citizens.index(c, [person], 0.25), 0.1)
+    match events(first) do
+      Cons(event, _) ->
+        Test.assert_true(event.legs > 0, "a walker away from the camera crosses several lots in one event")
+        let start = Ur.Citizens.walk_pose(event, 0.0)
+        let end_pose = Ur.Citizens.walk_pose(event, 1.0)
+        Test.assert_true(start.route == event.entry.person.route && start.progress == event.entry.person.progress,
+          "a coarse walk's pose starts where the walker stands")
+        Test.assert_eq_int(List.length(event.entry.person.route) - List.length(end_pose.route), event.legs,
+          "and ends on the walk's last lot")
+        Test.assert_true(end_pose.progress == 1.0, "at the end of it")
+      Nil -> panic("the coarse walker was not scheduled")
+    end
+    Test.assert_true(List.all(events(step(exact, Ur.Citizens.index(c, [person], 0.25), 0.1)), fn event -> event.legs == 0),
+      "near the camera every event stays within one lot")
+    let coarse = arrival(far)
+    let detailed = arrival(exact)
+    Test.assert_true(detailed > 0, "the exact walker reaches its destination")
+    Test.assert_true(coarse > 0, "the coarse walker reaches the same destination")
+    Test.assert_true(coarse <= detailed, "no later than exact planning does")
+  end
+  -- Steps of a quarter second until the citizen stands at [last]; -1 if not within a minute.
+  pfn steps_to_arrive(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, empty : NativeIntArr, roster : Ur.Citizens.Roster, last : Int, n : Int) : Int do
+    if (first(Ur.Citizens.snapshot(roster))).location == last do n
+    else if n >= 240 do -1
+    else steps_to_arrive(c, map, empty, Ur.Citizens.step_guarded(c, map, empty, None, roster, 0.25, 0.25, empty, 0.0,
+      fn (_, _, next) -> Ur.Citizens.unguarded(next)), last, n + 1) end end
+  end
+
   fn main(_cap : Cap(IO)) : Unit do
     let city = Ur.Scenario.evacuation_site()
     let resident = first(Ur.Citizens.refresh(city, Nil))
@@ -304,6 +349,7 @@ mod CitizenMovementTest do
     crew_swap(city, resident, empty)
     citizen_index_matches_map(resident)
     rebuild_ignores_order(city)
+    coarse_walks(city, resident, empty)
     cached_walk_geometry(city)
     scheduled_crossing(city, resident, empty)
     List.each([2, 3, 4], fn mode -> transit_mode(city, resident, empty, mode))

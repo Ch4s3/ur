@@ -2385,10 +2385,33 @@ mod Ur.Scene do
     let coat = if kind == 2 do 3 else person.id % 4 end
     walker_template_base() + kind * 48 + coat * 12 + person.id / 5 % 3 * 4 + (if person.id % 3 == 0 do 0 else 1 end) * 2
   end
+  -- A coarse walk (several lots, see Citizens.coarse_walk) hands Strata nine keys sampled along
+  -- its route, an eighth of its time apart; its gait runs over the lots it covers.
+  pfn coarse_motion(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, event : Ur.Citizens.WalkEvent, chunk : Int) : Unit do
+    let person = event.entry.person
+    let keys = List.map(List.range(0, 9), fn k ->
+      let at = Ur.Citizens.walk_pose(event, int_to_float(k) /. 8.0)
+      match at.route do
+        Cons(a, Cons(b, _)) ->
+          let (x, z, y) = walker_position_at(c, map, at, at.progress, a, b)
+          { k: k, x: x - 1, y: y, z: z - 1 }
+        _ -> packed_key(0, k)
+      end)
+    let units = 1.0 -. person.progress +. int_to_float(event.legs)
+    if Vk.chunk_motion(chunk, walker_prototype(person), event.started, event.finish, person.progress, person.progress +. units,
+      motion_words(keys, NativeArray.make_i32(36, 0), 0), 9, true) do () else
+      match person.route do
+        Cons(a, Cons(b, _)) ->
+          citizen_walker(c, map, person, person.progress, a, b, chunk)
+          Vk.chunk_show(chunk, true)
+        _ -> ()
+      end
+    end
+  end
   pfn walk_motion(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, event : Ur.Citizens.WalkEvent) : Unit do
     let person = event.entry.person
     let chunk = citizen_walker_slot(event.entry.slot)
-    if chunk >= citizen_chunk_slots() do () else
+    if chunk >= citizen_chunk_slots() do () else if event.legs > 0 do coarse_motion(c, map, event, chunk) else
       match person.route do
         Cons(a, Cons(b, _)) ->
           if person.transit_phase == 3 do Vk.chunk_free(chunk) else
@@ -2408,7 +2431,7 @@ mod Ur.Scene do
           end
         _ -> citizen_vehicle(c, map, person, person.progress, chunk, false)
       end
-    end
+    end end
   end
   -- Replay this frame's walks and departures in order: a walk queued hands its motion to Strata,
   -- a walker that stopped walking frees its slot (the stop or the car draws it from here on).
