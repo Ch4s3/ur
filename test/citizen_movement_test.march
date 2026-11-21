@@ -127,7 +127,9 @@ mod CitizenMovementTest do
       let cached = Ur.Citizens.indexed_counts(c, r)
       let total = Ur.Citizens.tally(c, Ur.Citizens.snapshot(r))
       Test.assert_eq_int(cached.tracked, total.tracked, "a partial wake does not double-count")
-      Test.assert_eq_int(cached.home, total.home, "indoor counts stay whole during a partial wake"))
+      Test.assert_eq_int(cached.home, total.home, "indoor counts stay whole during a partial wake")
+      Test.assert_true(Ur.Citizens.reservation_list(r) == Ur.Citizens.recount_reservations(r),
+        "parking reservations stay whole during a partial wake"))
   end
 
   -- Sleepers that stay up after a partial wake leave the sorted parked list without it being
@@ -232,6 +234,9 @@ mod CitizenMovementTest do
     let roster = Ur.Citizens.sort_parked(step(step(Ur.Citizens.index(c, people, 0.25), 0.1), 0.25))
     Test.assert_true(roster.walk_count > 0, "the test town has citizens mid-walk")
     Test.assert_true(List.length(roster.active) > 0, "and citizens active")
+    Test.assert_true(!List.is_empty(Ur.Citizens.reservation_list(roster)), "and parked cars holding spaces")
+    Test.assert_true(Ur.Citizens.reservation_list(roster) == Ur.Citizens.recount_reservations(roster),
+      "the running parking reservations match a recount after steps")
     let walker = match List.find(Ur.Citizens.visible_people(roster), fn person ->
         !List.any(roster.active, fn entry -> entry.person.id == person.id)) do
       Some(person) -> person.id
@@ -260,7 +265,9 @@ mod CitizenMovementTest do
       Test.assert_eq_int(cached.home, total.home, "and the indoor counts")
       Test.assert_true(List.map(Ur.Citizens.visible_actors(swapped), fn entry -> entry.slot) ==
         List.map(Ur.Citizens.visible_actors(Ur.Citizens.sort_parked({ swapped with parked_fresh: false })), fn entry -> entry.slot),
-        "the parked list matches a fresh sort"))
+        "the parked list matches a fresh sort")
+      Test.assert_true(Ur.Citizens.reservation_list(swapped) == Ur.Citizens.recount_reservations(swapped),
+        "the running parking reservations match a recount after a crew swap"))
   end
 
   -- The rebuild's id index answers what a Map built by inserting the citizens in order would:
@@ -378,6 +385,26 @@ mod CitizenMovementTest do
     Test.assert_true(Math.abs(wait_of(step(exact, start, 0.0)) -. 0.9) < 0.000001, "including the early ones")
   end
 
+  -- Through a morning's car trips (parking taken, cars left, walks to and from them) the
+  -- roster's running parking reservations stay equal to a recount of everyone holding one.
+  pfn commute_reservations() : Unit do
+    let c = Ur.Scenario.traffic_district()
+    let empty = NativeArray.make_int(S.count(), 0)
+    let people = Ur.Citizens.refresh(c, Nil)
+    let (roster, drove, whole) = List.fold_left(List.range(0, 240), (Ur.Citizens.index(c, people, 0.40), false, true), fn (state, i) ->
+      match state do
+        (roster, drove, whole) ->
+          let next = Ur.Citizens.step_indexed(c, empty, None, roster, 0.40 +. int_to_float(i) *. 0.002, 0.05, empty, 0.0)
+          let driving = List.any(Ur.Citizens.snapshot(next), fn p -> p.car_phase > 0)
+          let checked = if i % 20 == 19 do Ur.Citizens.reservation_list(next) == Ur.Citizens.recount_reservations(next) else true end
+          (next, drove || driving, whole && checked)
+      end)
+    Test.assert_true(List.length(people) > 10, "the traffic district has residents")
+    Test.assert_true(drove, "some of them drive during the morning")
+    Test.assert_true(whole, "the running parking reservations match a recount throughout")
+    Test.assert_true(Ur.Citizens.reservation_list(roster) == Ur.Citizens.recount_reservations(roster), "and at the end")
+  end
+
   fn main(_cap : Cap(IO)) : Unit do
     let city = Ur.Scenario.evacuation_site()
     let resident = first(Ur.Citizens.refresh(city, Nil))
@@ -392,6 +419,7 @@ mod CitizenMovementTest do
     coarse_walks(city, resident, empty)
     coarse_corner(city, resident, empty)
     deferred_steps(city, resident, empty)
+    commute_reservations()
     cached_walk_geometry(city)
     scheduled_crossing(city, resident, empty)
     List.each([2, 3, 4], fn mode -> transit_mode(city, resident, empty, mode))

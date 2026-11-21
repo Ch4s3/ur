@@ -143,6 +143,14 @@ mod Ur.Citizens do
     else keys end
     if person.arrival != 0 do change_reservation(keys, parking_at(person.arrival), delta) else keys end
   end
+  -- park_actor's view of a citizen: two citizens alike here hold the same spaces.
+  pfn same_parking(a : Citizen, b : Citizen) : Bool do
+    a.arrival == b.arrival && (if a.parking != 0 && a.car_phase < 2 do b.parking == a.parking && b.car_phase < 2
+      else b.parking == 0 || b.car_phase >= 2 end)
+  end
+  pfn repark(keys : Map(Int, Int), before : Citizen, after : Citizen) : Map(Int, Int) do
+    if same_parking(before, after) do keys else park_actor(park_actor(keys, before, -1), after, 1) end
+  end
   pfn lane_get(occupied : Occupied, index : Int) : Int do NativeArray.get_int(occupied.lanes, index) end
   -- Every field is read out before the set, so an Occupied handed over whole leaves [lanes] one
   -- reference and the set writes in place ({ occupied with lanes: .. } copied the whole array).
@@ -631,10 +639,11 @@ mod Ur.Citizens do
     if p.kind == 0 do 0.46 else 0.38 end
   end
   pfn position(progress : Float) : Int do 1 + float_to_int(progress *. 1000.0) end
+  -- car_phase first: the storm test reads the day's weather and flooding, and every
+  -- pedestrian on a street used to pay for it at each lot.
   fn driving(c : Ur.Sim.City, person : Citizen, a : Int, b : Int) : Bool do
-    let storm_segment = S.motor_street(c, a) && S.motor_street(c, b) &&
-      (S.storm_road_closed(c, a) || S.storm_road_closed(c, b))
-    person.car_phase == 2 && (connected(c, a, b) || storm_segment) &&
+    person.car_phase == 2 && (connected(c, a, b) ||
+      (S.motor_street(c, a) && S.motor_street(c, b) && (S.storm_road_closed(c, a) || S.storm_road_closed(c, b)))) &&
       (match parking_at(person.arrival) do
           Some(p) -> p.road != a
           None -> false
@@ -1407,6 +1416,9 @@ mod Ur.Citizens do
   -- that stopped walking.
   type WalkNote = WalkQueued(WalkEvent) | WalkLeft(Int)
   type WalkStage = { limit : Float, arm : Int, gate : Bool }
+  -- [reservations]: the parking every sleeping and active citizen holds (park_actor), kept up
+  -- to date as they change; a citizen on a walk event holds none. A step's parking keys start
+  -- from it, where each sub-step used to fold every active citizen into the sleepers' map.
   type Roster = { walk_time : Float, walk_bucket : Int, walk_events : Map(Int, List(WalkEvent)), walk_pending : List((Int, WalkEvent)), walk_crossings : Map(Int, Int),
     walk_count : Int, walk_exits : List(Int), active : List(Actor), wakeups : Map(Int, List(Actor)), resting : List(Actor), clock : Int, wake_from : Int,
     reservations : Map(Int, Int), indoor : CitizenCounts, crew : List(Citizen), parcels : Map(Int, List(Int)),
@@ -1435,7 +1447,7 @@ mod Ur.Citizens do
     let crew = if entry.person.activity == 6 do Cons(entry.person, roster.crew) else roster.crew end
     { roster with wakeups: wakeups, resting: resting, crew: crew,
       parked_new: if roster.parked_fresh && entry.person.parking != 0 do Cons(entry, roster.parked_new) else roster.parked_new end,
-      reservations: park_actor(roster.reservations, entry.person, 1), indoor: count_person(c, entry.person, roster.indoor, 1) }
+      indoor: count_person(c, entry.person, roster.indoor, 1) }
   end
   pfn register_parcel(parcels : Map(Int, List(Int)), lot : Int, id : Int) : Map(Int, List(Int)) do
     if !S.valid(lot) do parcels else
@@ -1450,7 +1462,7 @@ mod Ur.Citizens do
         let parcels = register_parcel(roster.parcels, person.home, person.id)
         let parcels = if person.work == person.home do parcels else register_parcel(parcels, person.work, person.id) end
         let parcels = if person.shelter == person.home || person.shelter == person.work do parcels else register_parcel(parcels, person.shelter, person.id) end
-        let roster = { roster with parcels: parcels }
+        let roster = { roster with parcels: parcels, reservations: park_actor(roster.reservations, person, 1) }
         let wake = wake_at(c, person, roster.clock)
         let next = if wake == -1 do { roster with active: Cons(entry, roster.active) }
           else sleep_actor(c, roster, entry, wake) end
@@ -1500,7 +1512,8 @@ mod Ur.Citizens do
   end
   fn wake_walkers(roster : Roster) : Roster do
     let due = List.sort_by(walk_entries(roster), slot_order)
-    { roster with active: merge_actors(roster.active, due), walk_events: Map.empty(), walk_pending: Nil, walk_crossings: Map.empty(),
+    { roster with active: merge_actors(roster.active, due), walk_events: Map.empty(),
+      reservations: List.fold_left(due, roster.reservations, fn (keys, entry) -> park_actor(keys, entry.person, 1)), walk_pending: Nil, walk_crossings: Map.empty(),
       walk_count: 0, walk_exits: List.fold_left(due, roster.walk_exits, fn (exits, entry) -> Cons(entry.slot, exits)),
       walk_log: List.fold_left(due, roster.walk_log, fn (log, entry) -> Cons(WalkLeft(entry.slot), log)) }
   end
@@ -1516,6 +1529,15 @@ mod Ur.Citizens do
     if List.any(entries, fn entry -> emergency_move(entry.person)) do
       List.map(List.sort_by(entries, slot_order), fn entry -> entry.person)
     else List.map(entries, fn entry -> entry.person) end
+  end
+  doc "The parking [roster] should hold, counted afresh: every sleeping and active citizen's (park_actor), as [key, count] pairs in key order. Tests compare it with `reservation_list(roster)`."
+  fn recount_reservations(roster : Roster) : List((Int, Int)) do
+    map_pairs(List.fold_left(List.append(roster.active, sleepers(roster)), Map.empty(), fn (keys, entry) -> park_actor(keys, entry.person, 1)))
+  end
+  doc "[roster]'s running parking reservations as [key, count] pairs in key order."
+  fn reservation_list(roster : Roster) : List((Int, Int)) do map_pairs(roster.reservations) end
+  pfn map_pairs(m : Map(Int, Int)) : List((Int, Int)) do
+    List.sort_by(Map.fold(m, Nil, fn (out, k, v) -> Cons((k, v), out)), fn (a, b) -> match (a, b) do ((x, _), (y, _)) -> x <= y end)
   end
   -- Everyone asleep, in no particular order.
   pfn sleepers(roster : Roster) : List(Actor) do
@@ -1575,8 +1597,7 @@ mod Ur.Citizens do
       List.any(roster.active, fn entry -> emergency_move(entry.person))
   end
   pfn wake_actor(c : Ur.Sim.City, roster : Roster, entry : Actor) : Roster do
-    { roster with reservations: park_actor(roster.reservations, entry.person, -1),
-      indoor: count_person(c, entry.person, roster.indoor, -1) }
+    { roster with indoor: count_person(c, entry.person, roster.indoor, -1) }
   end
   -- [sorted] without the actors in [gone] (both in slot order, [gone] a subset).
   pfn drop_slots(sorted : List(Actor), gone : List(Actor), kept : List(Actor)) : List(Actor) do
@@ -1652,6 +1673,7 @@ mod Ur.Citizens do
   end
   -- Files [entry] as index_people would: active in slot order, or asleep.
   pfn place(c : Ur.Sim.City, roster : Roster, entry : Actor) : Roster do
+    let roster = { roster with reservations: park_actor(roster.reservations, entry.person, 1) }
     let wake = wake_at(c, entry.person, roster.clock)
     if wake == -1 do { roster with active: merge_actors(roster.active, Cons(entry, Nil)) }
     else sleep_actor(c, roster, entry, wake) end
@@ -1666,7 +1688,8 @@ mod Ur.Citizens do
           let rest = without(batch)
           if List.is_empty(rest) do Map.remove(w, hour, Map.int_cmp) else Map.insert(w, hour, rest, Map.int_cmp) end
         else w end),
-      crew: List.filter(roster.crew, fn person -> person.id != entry.person.id) }
+      crew: List.filter(roster.crew, fn person -> person.id != entry.person.id),
+      reservations: park_actor(roster.reservations, entry.person, -1) }
     unpark_woken(wake_actor(c, roster, entry), Cons(entry, Nil))
   end
   -- The citizen [id] out of the roster wherever it is (asleep, active or walking), with its
@@ -1676,7 +1699,8 @@ mod Ur.Citizens do
       Some(entry) -> Some((take_sleeper(c, roster, entry), entry))
       None ->
         match List.find(roster.active, fn entry -> entry.person.id == id) do
-          Some(entry) -> Some(({ roster with active: List.filter(roster.active, fn e -> e.slot != entry.slot) }, entry))
+          Some(entry) -> Some(({ roster with active: List.filter(roster.active, fn e -> e.slot != entry.slot),
+            reservations: park_actor(roster.reservations, entry.person, -1) }, entry))
           None ->
             let roster = flush_walks(roster)
             let found = Map.fold(roster.walk_events, None, fn (found, bucket, events) ->
@@ -1697,9 +1721,6 @@ mod Ur.Citizens do
             end
         end
     end
-  end
-  pfn active_parking(cars : List(Actor), keys : Map(Int, Int)) : Map(Int, Int) do
-    List.fold_left(cars, keys, fn (keys, entry) -> park_actor(keys, entry.person, 1))
   end
   pfn crossing_reservation(reservations : Map(Int, Int), arm : Int, delta : Int) : Map(Int, Int) do
     if arm < 0 do reservations else
@@ -1961,7 +1982,8 @@ mod Ur.Citizens do
           Some(next) -> apply_replans(rest, queue_walk(roster, next), waking)
           None ->
             let entry = plan.entry
-            let roster = { roster with walk_exits: Cons(entry.slot, roster.walk_exits), walk_log: Cons(WalkLeft(entry.slot), roster.walk_log) }
+            let roster = { roster with walk_exits: Cons(entry.slot, roster.walk_exits), walk_log: Cons(WalkLeft(entry.slot), roster.walk_log),
+              reservations: park_actor(roster.reservations, entry.person, 1) }
             apply_replans(rest, roster, Cons(entry, waking))
         end
     end
@@ -2009,11 +2031,15 @@ mod Ur.Citizens do
         let (person, occupied) = advance_person(c, running, bus, entry.person, occupied, roster.clock, if far do far_dt else dt end, motion, boarding)
         let answer = guard(entry.slot, entry.person, person)
         let person = answer.person
+        let before = entry.person
         let entry = { entry with person: person }
         let event = if schedule do plan_walk(entry, occupied, tick_time, roster.walk_time, guard) else None end
         match event do
-          Some(event) -> advance_actors(c, running, bus, rest, queue_walk(roster, event), active, occupied, dt, far_dt, tick_time, motion, boarding, guard, schedule)
+          Some(event) ->
+            let roster = { roster with reservations: park_actor(roster.reservations, before, -1) }
+            advance_actors(c, running, bus, rest, queue_walk(roster, event), active, occupied, dt, far_dt, tick_time, motion, boarding, guard, schedule)
           None ->
+            let roster = { roster with reservations: repark(roster.reservations, before, person) }
             let wake = wake_at(c, person, roster.clock)
             if wake == -1 do advance_actors(c, running, bus, rest, roster, Cons(entry, active), occupied, dt, far_dt, tick_time, motion, boarding, guard, schedule)
             else advance_actors(c, running, bus, rest, sleep_actor(c, roster, entry, wake), active, occupied, dt, far_dt, tick_time, motion, boarding, guard, schedule) end
@@ -2037,7 +2063,7 @@ mod Ur.Citizens do
       let (roster, waking) = dispatch_walks(c, roster, occupancy, traffic_time, float_to_int(Math.floor(time *. 40.0)), guard, Nil)
       let cars = roster.active
       let roster = { roster with active: Nil }
-      let occupancy = { occupancy with parking_keys: active_parking(cars, roster.reservations), crossings: reserve_walks(roster) }
+      let occupancy = { occupancy with crossings: reserve_walks(roster) }
       let (motion, boarding) = match bus do
         Some(service) ->
           let motion = Ur.Fleet.passenger_progress(service.active)
