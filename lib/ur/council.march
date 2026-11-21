@@ -256,10 +256,18 @@ mod Ur.Council do
     end
   end
 
+  -- A ward is a block of the map (6 x 6 lots of the 60 x 44 design grid, Ur.Sim.crime_district);
+  -- ward_lot walks its lots and those of the four wards beside it, ward_offsets in all.
+  pfn ward_block_w() : Int do 6 * S.width() / 60 end
+  pfn ward_block_h() : Int do 6 * S.depth() / 44 end
+  pfn ward_offsets() : Int do 5 * ward_block_w() * ward_block_h() end
   pfn ward_lot(ward : Int, offset : Int) : Int do
-    let cell = offset / 36
-    let x = ward % 10 * 6 + offset % 6 + (if cell == 1 do -6 else if cell == 2 do 6 else 0 end end)
-    let z = ward / 10 * 6 + offset / 6 % 6 + (if cell == 3 do -6 else if cell == 4 do 6 else 0 end end)
+    let bw = ward_block_w()
+    let bh = ward_block_h()
+    let cell = offset / (bw * bh)
+    let k = offset % (bw * bh)
+    let x = ward % 10 * bw + k % bw + (if cell == 1 do 0 - bw else if cell == 2 do bw else 0 end end)
+    let z = ward / 10 * bh + k / bw + (if cell == 3 do 0 - bh else if cell == 4 do bh else 0 end end)
     if x >= 0 && x < S.width() && z >= 0 && z < S.depth() do S.index(x, z) else -1 end
   end
 
@@ -268,7 +276,7 @@ mod Ur.Council do
   end
 
   pfn curse_damage(c : Ur.Sim.City, ward : Int, offset : Int, homes : Int, damaged : Int, example : Int) : (Int, Int, Int) do
-    if offset == 180 do (homes, damaged, example) else
+    if offset == ward_offsets() do (homes, damaged, example) else
       let lot = ward_lot(ward, offset)
       -- Temporarily displaced households remain in the recovery count.
       let residents = if ward_at(c, lot) == ward do S.resident_homes(c, lot) else 0 end
@@ -406,7 +414,7 @@ mod Ur.Council do
   end
 
   pfn survey_ward(c : Ur.Sim.City, st : Ur.Sim.Stats, ward : Int, offset : Int, report : WardReport) : WardReport do
-    if offset >= 180 do report else
+    if offset >= ward_offsets() do report else
       let lot = ward_lot(ward, offset)
       let next = if ward_at(c, lot) != ward do report else
         let homes = S.occupied_homes(c, lot)
@@ -458,7 +466,7 @@ mod Ur.Council do
   end
   fn leading_issue(report : WardReport) : Int do leading(report, 1, 0, 0) end
   pfn amenities(c : Ur.Sim.City, ward : Int, improvement : Int, offset : Int, total : Int) : Int do
-    if offset == 180 do total else
+    if offset == ward_offsets() do total else
       let lot = ward_lot(ward, offset)
       let eligible = ward_at(c, lot) == ward && (match improvement do
         1 -> S.get(c.plants, lot) == 18 && street_access(c, lot, 0)
@@ -481,7 +489,7 @@ mod Ur.Council do
     end)
   end
   pfn find_target(c : Ur.Sim.City, ward : Int, improvement : Int, offset : Int) : Int do
-    if offset == 180 do -1 else
+    if offset == ward_offsets() do -1 else
       let lot = ward_lot(ward, offset)
       if ward_at(c, lot) == ward && suitable_target(c, lot, improvement) do lot else find_target(c, ward, improvement, offset + 1) end
     end
@@ -537,7 +545,7 @@ mod Ur.Council do
     S.clamp(S.base_happiness(c, st, lot) - financial - unemployment - displacement - S.utility_strain(c, lot), 0, 100)
   end
   pfn sentiment(c : Ur.Sim.City, st : Ur.Sim.Stats, ward : Int, festival_days : Int, offset : Int, total : Int, residents : Int) : Int do
-    if offset == 180 do (if residents > 0 do total / residents else if festival_days >= 0 do 0 else 40 end end) else
+    if offset == ward_offsets() do (if residents > 0 do total / residents else if festival_days >= 0 do 0 else 40 end end) else
       let lot = ward_lot(ward, offset)
       let floors = if ward_at(c, lot) == ward do S.resident_homes(c, lot) else 0 end
       let score = if floors == 0 do 0 else

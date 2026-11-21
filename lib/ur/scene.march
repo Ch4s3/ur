@@ -110,9 +110,34 @@ mod Ur.Scene do
       end
     end
   end
+  -- Render slots, laid out from the lot count N = S.count() (at the original 60 x 44 map these
+  -- are the numbers the game always used):
+  --   0 .. 4N           per-lot layers (lot * 4 + layer: terrain, building, overpass, cutaways)
+  --   sea_slot          the sea's chunks (sea_cols x sea_rows, at most 31)
+  --   cloud_slot        7 clouds
+  --   rotor_slot        N: a lot's ferry vessel or wind-turbine rotor
+  --   overlay_slot      N: a lot's map-layer overlay
+  --   food_slot         60 food vehicles
+  --   fleet_slot        180 fleet runs
+  --   incident_slot     16 incidents, a marker and a vehicle each, then their window smoke (+32)
+  --   preview_slot      72 build-preview tiles and road markers
+  --   sanitation_slot, marker_slot
+  --   walker_template_base   the walker templates, then two slots per citizen (walker, car)
+  pfn sea_slot(i : Int) : Int do 4 * S.count() + 1 + i end
+  pfn cloud_slot(i : Int) : Int do 4 * S.count() + 32 + i end
+  pfn rotor_slot(i : Int) : Int do 4 * S.count() + 40 + i end
+  pfn overlay_slot(i : Int) : Int do 5 * S.count() + 40 + i end
+  pfn food_slot(i : Int) : Int do 6 * S.count() + 40 + i end
+  pfn fleet_slot(i : Int) : Int do 6 * S.count() + 100 + i end
+  pfn preview_slot(i : Int) : Int do 6 * S.count() + 472 + i end
+  pfn sanitation_slot() : Int do 6 * S.count() + 600 end
+  pfn marker_slot() : Int do 6 * S.count() + 603 end
+  -- The sea: level-5 chunks 32 lots across, from lot -32 past the far edge.
+  pfn sea_cols() : Int do (S.width() + 63) / 32 + 1 end
+  pfn sea_rows_n() : Int do (S.depth() + 63) / 32 + 1 end
   pfn sea(i : Int, m : Mesh) : Unit do
-    if i >= 16 do () else
-      if Vk.chunk_begin(10561 + i, (i % 4 - 1) * 1024, -32, (i / 4 - 1) * 1024, 5) && Vk.chunk_part(0, m.words, m.quads) && Vk.chunk_commit() do sea(i + 1, m)
+    if i >= sea_cols() * sea_rows_n() do () else
+      if Vk.chunk_begin(sea_slot(i), (i % sea_cols() - 1) * 1024, -32, (i / sea_cols() - 1) * 1024, 5) && Vk.chunk_part(0, m.words, m.quads) && Vk.chunk_commit() do sea(i + 1, m)
       else Ur.AppError.stop("Sea mesh upload failed") end
     end
   end
@@ -155,17 +180,24 @@ mod Ur.Scene do
       else sea_rows(c, ox, oz, row, col + 1, if gap do col + 1 else start end, m, side) end
     end
   end
+  -- The sea chunks that overlap the map, whose water the tunnel cutaway opens.
+  pfn inner_sea(i : Int, out : List(Int)) : List(Int) do
+    if i >= sea_cols() * sea_rows_n() do List.reverse(out) else
+      let x = (i % sea_cols() - 1) * 32
+      let z = (i / sea_cols() - 1) * 32
+      inner_sea(i + 1, if x >= 0 && x < S.width() && z >= 0 && z < S.depth() do Cons(i, out) else out end)
+    end
+  end
   pfn section_sea(c : Ur.Sim.City, side : Int) : Unit do
-    List.each([5, 6, 9, 10], fn i ->
-      let x = (i % 4 - 1) * 32
-      let z = (i / 4 - 1) * 32
+    List.each(inner_sea(0, Nil), fn i ->
+      let x = (i % sea_cols() - 1) * 32
+      let z = (i / sea_cols() - 1) * 32
       let m = if side > 0 do sea_rows(c, x, z, 0, 0, 0, { words: NativeArray.make_i32(1024, 0), quads: 0 }, side)
         else face({ words: NativeArray.make_i32(2, 0), quads: 0 }, 0, 0, 0, 32, 32, 0, 3) end
-      if m.quads == 0 do Vk.chunk_free(10561 + i)
-      else if Vk.chunk_begin(10561 + i, x * 32, -32, z * 32, 5) && Vk.chunk_part(0, m.words, m.quads) && Vk.chunk_commit() do ()
+      if m.quads == 0 do Vk.chunk_free(sea_slot(i))
+      else if Vk.chunk_begin(sea_slot(i), x * 32, -32, z * 32, 5) && Vk.chunk_part(0, m.words, m.quads) && Vk.chunk_commit() do ()
       else Ur.AppError.stop("Tunnel cutaway water upload failed") end end)
   end
-  pfn cloud_slot(i : Int) : Int do 10592 + i end
   pfn cloud_puff(x : Int, y : Int, z : Int, vertical : Int, size : Int) : Bool do
     x * x * 12 + y * y * vertical + z * z * 23 <= size
   end
@@ -654,7 +686,7 @@ mod Ur.Scene do
       Nil -> used
       Cons(i, rest) ->
         if index % stride != 0 do preview_tiles(c, rest, stride, index + 1, used, mesh) else
-          let slot = 16312 + used
+          let slot = preview_slot(used)
           let y = layer_floor(c, i % S.width() * 32, i / S.width() * 32) + 2
           if Vk.chunk_begin(slot, i % S.width() * 32, y, i / S.width() * 32, 0) &&
             Vk.chunk_part(0, mesh.words, mesh.quads) && Vk.chunk_commit() do preview_tiles(c, rest, stride, index + 1, used + 1, mesh)
@@ -664,7 +696,7 @@ mod Ur.Scene do
   end
   fn clear_preview(i : Int, old_count : Int) : Unit do
     if i >= old_count do () else
-      Vk.chunk_free(16312 + i)
+      Vk.chunk_free(preview_slot(i))
       clear_preview(i + 1, old_count)
     end
   end
@@ -693,7 +725,7 @@ mod Ur.Scene do
       let x = i % S.width() * 32
       let z = i / S.width() * 32
       let y = layer_floor(c, x, z) + 3
-      if Vk.chunk_begin(16312 + slot, x, y, z, 0) && Vk.chunk_part(0, mesh.words, mesh.quads) && Vk.chunk_commit() do slot + 1 else slot end
+      if Vk.chunk_begin(preview_slot(slot), x, y, z, 0) && Vk.chunk_part(0, mesh.words, mesh.quads) && Vk.chunk_commit() do slot + 1 else slot end
     end
   end
   pfn road_markers(c : Ur.Sim.City, tiles : List(Int), next : Int, stride : Int, offset : Int, mesh : Mesh) : Int do
@@ -911,7 +943,7 @@ mod Ur.Scene do
     end end
   end
   pfn ferry_slot(c : Ur.Sim.City, i : Int, time : Float, clock : Float, refresh : Bool) : Unit do
-    let slot = 10600 + i
+    let slot = rotor_slot(i)
     let peer = S.get(c.ferries, i) - 1
     if !S.valid(peer) || peer <= i do (if refresh do Vk.chunk_free(slot) else () end) else
       let phase = time *. 0.25 +. int_to_float(i % 11) *. 0.17
@@ -965,7 +997,7 @@ mod Ur.Scene do
         let wind = S.wind_at(c, i)
         let turn = NativeArray.get_f32(phases, i) +. int_to_float(wind.speed) *. 0.09 *. dt
         let angle = turn -. Math.floor(turn /. 6.283185307) *. 6.283185307
-        rotor(c, i, 10600 + i, angle, wind, refresh)
+        rotor(c, i, rotor_slot(i), angle, wind, refresh)
         NativeArray.set_f32(phases, i, angle)
       else
         if S.get(c.ferries, i) > 0 || (refresh && (was_turbine || S.get(old.ferries, i) > 0)) do
@@ -1091,8 +1123,8 @@ mod Ur.Scene do
       end
     end
   end
-  -- Fleet vehicles occupy 15940–16119. Keep incident meshes out of the sea slots.
-  pfn incident_slot(index : Int) : Int do 16120 + index * 2 end
+  -- Incidents follow the fleet's 180 slots (see the render-slot layout at sea_slot).
+  pfn incident_slot(index : Int) : Int do 6 * S.count() + 280 + index * 2 end
   pfn window_slot(slot : Int, side : Int) : Int do slot + 32 + side end
   pfn clear_window_smoke(slot : Int) : Unit do
     Vk.chunk_free(window_slot(slot, 0))
@@ -1597,7 +1629,7 @@ mod Ur.Scene do
     { x: x, y: y, z: z, dx: bx -. ax, dz: bz -. az, visible: !grade || !covered_lane(c, a, x, z, section) }
   end
   fn sanitation_truck(c : Ur.Sim.City, moment : Option(SanitationMoment), driver : Int, night : Bool, section : Bool) : Unit do
-    let slot = 16440
+    let slot = sanitation_slot()
     match moment do
       Some(m) ->
         if driver < 0 do Vk.chunk_free(slot) else
@@ -1685,7 +1717,7 @@ mod Ur.Scene do
     end
   end
   fn sidewalk_marker(c : Ur.Sim.City, lot : Int, spot : Int, valid : Bool) : Unit do
-    let slot = 16443
+    let slot = marker_slot()
     let (x, _) = S.sidewalk_point(c, lot, 0)
     if x < 0 do Vk.chunk_free(slot) else
       let mesh = sidewalk_marker_faces(c, lot, spot, valid, 0, { words: NativeArray.make_i32(8, 0), quads: 0 })
@@ -1717,7 +1749,7 @@ mod Ur.Scene do
     match old do
       Nil -> ()
       Cons(run, rest) ->
-        if List.any(active, fn next -> next.slot == run.slot) do () else Vk.chunk_free(15940 + run.slot) end
+        if List.any(active, fn next -> next.slot == run.slot) do () else Vk.chunk_free(fleet_slot(run.slot)) end
         clear_fleet(active, rest)
     end
   end
@@ -1727,7 +1759,7 @@ mod Ur.Scene do
       Cons(run, rest) ->
         let forward = Ur.Fleet.forward(run.trip, run.progress)
         let rotation = if run.trip.mode == 2 do Ur.Fleet.bus_rotation(run) else 0.0 end
-        trip_pose(c, run.trip, Ur.Fleet.position(run.trip, run.progress), forward, rotation, 15940 + run.slot, section)
+        trip_pose(c, run.trip, Ur.Fleet.position(run.trip, run.progress), forward, rotation, fleet_slot(run.slot), section)
         draw_fleet(c, rest, section)
     end
   end
@@ -1736,7 +1768,7 @@ mod Ur.Scene do
     draw_fleet(c, active, section)
   end
   fn food_vehicles(c : Ur.Sim.City, trips : List(Ur.Food.Trip), old : List(Ur.Food.Trip), time : Float, index : Int, section : Bool) : Unit do
-    let slot = 15880 + index
+    let slot = food_slot(index)
     let tail = match old do
       Cons(_, rest) -> rest
       Nil -> Nil
@@ -1913,7 +1945,7 @@ mod Ur.Scene do
       None -> (x, z, y)
     end
   end
-  pfn walker_template_base() : Int do 16480 end
+  pfn walker_template_base() : Int do 6 * S.count() + 640 end
   pfn walker_templates() : Int do 3 * 4 * 3 * 2 * 2 end
   pfn walker_mesh(kind : Int, coat_index : Int, skin_index : Int, hair : Int, gait : Int) : Mesh do
     let coat = match coat_index do
@@ -2203,7 +2235,10 @@ mod Ur.Scene do
       _ -> Ur.Citizens.unguarded(after)
     end
   end
-  fn citizen_chunk_slots() : Int do walker_template_base() + walker_templates() + 200000 end
+  -- Citizens that can be drawn: two slots each (walker, car), up to 48 residents a lot of map
+  -- (the metro's towers house about 43 at 9 to 11 floors, 76 at 18 to 20).
+  fn max_drawn_citizens() : Int do S.count() * 48 end
+  fn citizen_chunk_slots() : Int do walker_template_base() + walker_templates() + 2 * max_drawn_citizens() end
   pfn citizen_walker_slot(slot : Int) : Int do walker_template_base() + walker_templates() + slot * 2 end
   pfn citizen_car_slot(slot : Int) : Int do citizen_walker_slot(slot) + 1 end
   -- Runs inside the citizen step, which is on a worker task: it reads the footprints frozen
@@ -2584,7 +2619,7 @@ mod Ur.Scene do
       let z = i / S.width() * 32
       let floor = S.clamp(L.height(c, x + 16, z + 16) - 12, 0, 200)
       let mesh = gradient_quads(c, samples, x, z, floor, tag, 0, { words: NativeArray.make_i32(32, 0), quads: 0 })
-      let slot = 13240 + i
+      let slot = overlay_slot(i)
       if mesh.quads == 0 do Vk.chunk_free(slot)
       else if Vk.chunk_begin(slot, x, floor, z, 0) && Vk.chunk_part(2, mesh.words, mesh.quads) && Vk.chunk_commit() do ()
       else Ur.AppError.stop("Gradient overlay upload failed") end end
@@ -2603,7 +2638,7 @@ mod Ur.Scene do
   pfn layer_tiles(c : Ur.Sim.City, st : Ur.Sim.Stats, layer : Int, i : Int) : Unit do
     if i >= S.count() do () else
       let tex = Ur.Layers.material(c, st, layer, i)
-      let slot = 13240 + i
+      let slot = overlay_slot(i)
       if tex < 0 do Vk.chunk_free(slot) else if layer == 29 do wind_arrow(c, i, slot, tex) else
         let x = i % S.width() * 32
         let z = i / S.width() * 32
@@ -2657,7 +2692,7 @@ mod Ur.Scene do
     if lot >= S.count() do () else
       let wall = S.get(c.seawalls, lot) > 0
       let protected = wall || S.get(c.storm_drains, lot) > 0 || S.get(c.pump_orders, lot) > 0
-      let slot = 13240 + lot
+      let slot = overlay_slot(lot)
       if !wall && S.get(c.heights, lot) == 0 do Vk.chunk_free(slot) else
         let x = lot % S.width() * 32
         let z = lot / S.width() * 32
@@ -2684,7 +2719,7 @@ mod Ur.Scene do
       _ -> 0
     end
     if layer == 33 do
-      let zero = NativeArray.make_int(2640, 0)
+      let zero = NativeArray.make_int(S.count(), 0)
       flood_map(c, flood_fields(c, 0, S.severe_rain(c), { live: zero, potential: zero }), 0)
     else if tag > 0 do gradient_tiles(c, Ur.OverlayField.field(c, layer), tag, 0)
     else layer_tiles(c, st, layer, 0) end end

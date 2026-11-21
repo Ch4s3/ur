@@ -1,6 +1,7 @@
 -- A reproducible player-built expansion, used by tests and screenshot runs.
 -- The showcase includes a prebuilt bridge. Other construction uses player tools.
 mod Ur.Scenario do
+  needs IO.Process
   alias Ur.Sim as S
   pfn corridor(c : Ur.Sim.City, x : Int) : Ur.Sim.City do
     if x > 28 do c else
@@ -30,14 +31,14 @@ mod Ur.Scenario do
     let c = S.act(S.act(c, S.index(16, 15), 7), S.index(16, 15), 25)
     S.act(S.act(c, S.index(18, 15), 7), S.index(18, 15), 23)
   end
-  pfn metro_parcels(c : Ur.Sim.City, lot : Int) : Ur.Sim.City do
+  pfn metro_parcels(c : Ur.Sim.City, floors : Int, lot : Int) : Ur.Sim.City do
     if lot == S.count() do c else
       let x = lot % S.width()
       let z = lot / S.width()
       let height = S.get(c.heights, lot)
       let road = x % 4 == 1 || z % 4 == 0
       let office = (x / 4 + z / 4) % 7 == 2
-      let tower = (if office do 7 else 9 end) + (lot * 31 + x * z) % 3
+      let tower = (if office do 7 else floors end) + (lot * 31 + x * z) % 3
       let c = if height < 4 || height > 92 || S.get(c.plants, lot) > 0 || S.get(c.roads, lot) > 0 || lot == c.harbour do c
         else if road do
           { c with roads: NativeArray.set_int(c.roads, lot, if x % 8 == 1 || z % 8 == 0 do 2 else 1 end),
@@ -46,12 +47,17 @@ mod Ur.Scenario do
           { c with zones: NativeArray.set_int(c.zones, lot, if office do 2 else 1 end),
             buildings: NativeArray.set_int(c.buildings, lot, tower) }
         end end
-      metro_parcels(c, lot + 1)
+      metro_parcels(c, floors, lot + 1)
     end
   end
+  -- The metro demo: every lot of the map built up, the residents UR_METRO_PEOPLE asks for (default
+  -- 100,000) in homes UR_METRO_FLOORS tall (default 9 to 11 floors; the original map houses about
+  -- 114,000 at 9, a 120 x 88 map about 456,000, and 13 floors fit 500,000 there).
+  fn metro_people() : Int do Authority.must(Env.get_int("UR_METRO_PEOPLE", 100000)) end
   fn metropolitan_benchmark() : Ur.Sim.City do
-    let c = metro_parcels(S.land(S.unclaimed(), S.index(20, 36)), 0)
-    { c with census: Ur.Demography.seed(100000), clock_ms: 600, cash: 120000, founding_map: false }
+    let floors = S.clamp(Authority.must(Env.get_int("UR_METRO_FLOORS", 9)), 3, 40)
+    let c = metro_parcels(S.land(S.unclaimed(), S.index(20 * S.width() / 60, 36 * S.depth() / 44)), floors, 0)
+    { c with census: Ur.Demography.seed(metro_people()), clock_ms: 600, cash: 120000, founding_map: false }
   end
   pfn street(c : Ur.Sim.City, x : Int, z : Int) : Ur.Sim.City do
     let i = S.index(x, z)
@@ -271,9 +277,9 @@ mod Ur.Scenario do
     let stations = Cons(S.index(29, 21), Cons(S.index(30, 23), Cons(hospital, Nil)))
     let fire = { lot: S.index(33, 21), kind: 3, reported: 0, station: -1, response: -1, travel: 0, road: Nil, spread: Nil, medical: None }
     let medical = { fire with lot: S.index(26, 23), kind: 4 }
-    let (fire, busy) = S.run_emergency(c, traffic.traffic, stations, NativeArray.make_int(2640, 0), fire)
+    let (fire, busy) = S.run_emergency(c, traffic.traffic, stations, NativeArray.make_int(S.count(), 0), fire)
     let (medical, busy) = S.run_emergency(c, traffic.traffic, stations, busy, medical)
-    let beds = NativeArray.set_int(NativeArray.make_int(10560, 0), S.index(30, 23) * 4, 95)
+    let beds = NativeArray.set_int(NativeArray.make_int(S.count() * 4, 0), S.index(30, 23) * 4, 95)
     let (medical, _, _) = S.transfer_patient(c, traffic.traffic, stations, busy, beds, medical)
     let history = match c.crime_history do
       Cons(_, rest) -> rest
@@ -379,7 +385,7 @@ mod Ur.Scenario do
   end
   fn employment_corridor() : Ur.Sim.City do
     let c = S.new()
-    let empty = NativeArray.make_int(2640, 0)
+    let empty = NativeArray.make_int(S.count(), 0)
     let c = { c with buildings: empty, zones: empty, construction: empty, clock_ms: 540 }
     let c = corridor_row(corridor_row(c, 9, 13, 18), 21, 25, 18)
     let c = corridor_row(corridor_column(corridor_column(c, 13, 15), 21, 15), 13, 21, 14)

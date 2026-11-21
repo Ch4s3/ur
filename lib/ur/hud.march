@@ -648,7 +648,7 @@ mod Ur.Hud do
   pfn safety_trends(a : Strata.Ui.Ui, c : Ur.Sim.City, focus : Int, layer : Int, x : Float, y : Float, width : Float) : Strata.Ui.Ui do
     let filter = if layer == 20 || layer == 21 do layer - 17 else 0 end
     let scope = if S.valid(focus) do
-      "Neighborhood " ++ int_to_string(focus % S.width() / 6 + 1) ++ " / " ++ int_to_string(focus / S.width() / 6 + 1)
+      "Neighborhood " ++ int_to_string(S.design_x(focus % S.width()) / 6 + 1) ++ " / " ++ int_to_string(S.design_z(focus / S.width()) / 6 + 1)
     else "Citywide" end
     let a = label(a, x, y +. 55.0, 17.0, scope ++ (if filter == 3 do " · Fires" else if filter == 4 do " · Medical calls" else " safety" end end), true)
     let a = finance_button(a, x +. width -. 136.0, y +. 53.0, 95.0, "Citywide", !S.valid(focus))
@@ -671,7 +671,7 @@ mod Ur.Hud do
       Cons(event, rest) ->
         let a = U.rect(a, 0, x, y, width -. 36.0, 33.0, (0.09, 0.17, 0.20, 1.0))
         let a = label(a, x +. 8.0, y +. 8.0, 11.0, "M" ++ int_to_string(event.month), false)
-        let location = int_to_string(event.lot % S.width() / 6 + 1) ++ "/" ++ int_to_string(event.lot / S.width() / 6 + 1)
+        let location = int_to_string(S.design_x(event.lot % S.width()) / 6 + 1) ++ "/" ++ int_to_string(S.design_z(event.lot / S.width()) / 6 + 1)
         let wrap_width = width -. (if width < 540.0 do 96.0 else 219.0 end)
         let a = T.styled(a, 0, x +. 53.0, y +. 6.0, T.default_font(), 12.0, (0.93, 0.95, 0.90, 1.0), T.with_wrap(T.style(), wrap_width), event.title)
         let a = if width < 540.0 do a else label(a, x +. width -. 155.0, y +. 8.0, 11.0, if S.valid(event.lot) do "Neighborhood " ++ location else "Citywide" end, false) end

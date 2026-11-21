@@ -309,7 +309,7 @@ mod Ur.Citizens do
     if stage == 9 do Nil else
       let field = if S.program_enrolled(c, stage) > 0 do
         Ur.Food.campus_destinations(c, fn i -> S.active_program_at(c, i) == stage && S.building_access(c, roads, i) >= 0)
-      else NativeArray.make_int(2640, -1) end
+      else NativeArray.make_int(S.count(), -1) end
       Cons(field, education_routes(c, roads, stage + 1))
     end
   end
@@ -776,8 +776,8 @@ mod Ur.Citizens do
     let mode = S.get(c.transit, board)
     let alight = transit_stop_for(c, running, target, mode, 0)
     if !S.valid(board) || !S.valid(alight) || board == alight || mode != S.get(c.transit, alight) do Nil else
-      let search = { parents: NativeArray.set_int(NativeArray.make_int(2640, -1), alight, alight),
-        queue: NativeArray.set_int(NativeArray.make_int(2640, 0), 0, alight), tail: 1 }
+      let search = { parents: NativeArray.set_int(NativeArray.make_int(S.count(), -1), alight, alight),
+        queue: NativeArray.set_int(NativeArray.make_int(S.count(), 0), 0, alight), tail: 1 }
       let links = find_transit(c, search, board, mode, 0)
       if S.get(links, board) < 0 do Nil else
         let path = trace_transit(links, board, alight, target)
