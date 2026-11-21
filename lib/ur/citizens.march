@@ -1911,13 +1911,35 @@ mod Ur.Citizens do
       end
     end
   end
-  -- A coarse walk's lots before its last, stepped as finishing each one would.
+  -- A coarse walk's lots before its last, passed as finishing each one would. A coarse walker
+  -- is out of any car (ordinary_walk) and its walk stops before its transit stop
+  -- (coarse_legs), so next_leg at each of these lots only moves the route on: the route loses
+  -- the lot it left, [previous] becomes that lot, and progress, queued and wait reset. One
+  -- record update does all [legs] of them; anyone else still goes through next_leg.
   pfn through_legs(c : Ur.Sim.City, person : Citizen, occupied : Occupied, legs : Int) : Citizen do
+    if legs == 0 do person
+    else if person.car_phase != 0 || person.transit_phase >= 2 do through_legs_one(c, person, occupied, legs)
+    else
+      match drop_lots(person.route, legs, current_plot(person.route)) do
+        (route, previous) -> { person with route: route, previous: previous, progress: 1.0, queued: false, wait: 0.0 }
+      end
+    end end
+  end
+  -- [route] less its first [n] lots, and the last lot dropped ([previous] when n is 0).
+  pfn drop_lots(route : List(Int), n : Int, previous : Int) : (List(Int), Int) do
+    if n == 0 do (route, previous) else
+      match route do
+        Cons(lot, rest) -> drop_lots(rest, n - 1, lot)
+        Nil -> (Nil, previous)
+      end
+    end
+  end
+  pfn through_legs_one(c : Ur.Sim.City, person : Citizen, occupied : Occupied, legs : Int) : Citizen do
     if legs == 0 do person else
       match person.route do
         Cons(_, Cons(b, tail)) ->
           let (next, _) = next_leg(c, person, occupied, b, tail)
-          through_legs(c, { next with progress: 1.0 }, occupied, legs - 1)
+          through_legs_one(c, { next with progress: 1.0 }, occupied, legs - 1)
         _ -> person
       end
     end

@@ -2385,21 +2385,39 @@ mod Ur.Scene do
     let coat = if kind == 2 do 3 else person.id % 4 end
     walker_template_base() + kind * 48 + coat * 12 + person.id / 5 % 3 * 4 + (if person.id % 3 == 0 do 0 else 1 end) * 2
   end
-  -- A coarse walk (several lots, see Citizens.coarse_walk) hands Strata nine keys sampled along
-  -- its route, an eighth of its time apart; its gait runs over the lots it covers.
+  -- A coarse walk (several lots, see Citizens.coarse_walk) hands Strata keys sampled along its
+  -- route at eighths of its time: both ends, and a midpoint only where the route strays more
+  -- than a voxel from a straight line between its neighbours (as motion_between does for a
+  -- walk within one lot), so a straight walk takes three samples, not nine. Its gait runs over
+  -- the lots it covers.
+  pfn coarse_key(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, event : Ur.Citizens.WalkEvent, k : Int) : MotionKey do
+    let at = Ur.Citizens.walk_pose(event, int_to_float(k) /. 8.0)
+    match at.route do
+      Cons(a, Cons(b, _)) ->
+        let (x, z, y) = walker_position_at(c, map, at, at.progress, a, b)
+        { k: k, x: x - 1, y: y, z: z - 1 }
+      _ -> packed_key(0, k)
+    end
+  end
+  pfn coarse_between(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, event : Ur.Citizens.WalkEvent,
+    lo : MotionKey, hi : MotionKey, after : List(MotionKey)) : List(MotionKey) do
+    if hi.k - lo.k < 2 do after else
+      let mid = coarse_key(c, map, event, (lo.k + hi.k) / 2)
+      let f = int_to_float(mid.k - lo.k) /. int_to_float(hi.k - lo.k)
+      let off = Math.max_float(motion_off(lo.x, hi.x, mid.x, f), Math.max_float(motion_off(lo.y, hi.y, mid.y, f), motion_off(lo.z, hi.z, mid.z, f)))
+      if off <= 1.0 do after
+      else coarse_between(c, map, event, lo, mid, Cons(mid, coarse_between(c, map, event, mid, hi, after))) end
+    end
+  end
   pfn coarse_motion(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, event : Ur.Citizens.WalkEvent, chunk : Int) : Unit do
     let person = event.entry.person
-    let keys = List.map(List.range(0, 9), fn k ->
-      let at = Ur.Citizens.walk_pose(event, int_to_float(k) /. 8.0)
-      match at.route do
-        Cons(a, Cons(b, _)) ->
-          let (x, z, y) = walker_position_at(c, map, at, at.progress, a, b)
-          { k: k, x: x - 1, y: y, z: z - 1 }
-        _ -> packed_key(0, k)
-      end)
+    let first = coarse_key(c, map, event, 0)
+    let last = coarse_key(c, map, event, 8)
+    let keys = Cons(first, coarse_between(c, map, event, first, last, Cons(last, Nil)))
+    let n = List.length(keys)
     let units = 1.0 -. person.progress +. int_to_float(event.legs)
     if Vk.chunk_motion(chunk, walker_prototype(person), event.started, event.finish, person.progress, person.progress +. units,
-      motion_words(keys, NativeArray.make_i32(36, 0), 0), 9, true) do () else
+      motion_words(keys, NativeArray.make_i32(n * 4, 0), 0), n, true) do () else
       match person.route do
         Cons(a, Cons(b, _)) ->
           citizen_walker(c, map, person, person.progress, a, b, chunk)
