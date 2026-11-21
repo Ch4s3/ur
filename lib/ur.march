@@ -58,13 +58,16 @@ mod Ur do
     if i >= 7 do tool else select_tool(now, old, i + 1, if pressed(now, old, i) do i + 1 else tool end) end
   end
   pfn axis(negative : Int, positive : Int) : Float do (if Vk.key(positive) do 1.0 else 0.0 end) -. (if Vk.key(negative) do 1.0 else 0.0 end) end
-  pfn move_citizens(c : Ur.Sim.City, walk : Ur.Citizens.WalkMap, running : NativeIntArr, bus : Ur.Citizens.TransitService, citizens : Ur.Citizens.Roster, time : Float, dt : Float, clock_dt : Float, steps : Int, junctions : NativeIntArr, traffic_time : Float, vehicle_lots : NativeIntArr) : Ur.Citizens.Roster do
+  -- [total] sub-steps of [dt] this frame; citizens away from the camera are stepped once, in the
+  -- last, by the whole frame (Citizens.deferrable).
+  pfn move_citizens(c : Ur.Sim.City, walk : Ur.Citizens.WalkMap, running : NativeIntArr, bus : Ur.Citizens.TransitService, citizens : Ur.Citizens.Roster, time : Float, dt : Float, clock_dt : Float, steps : Int, total : Int, junctions : NativeIntArr, traffic_time : Float, vehicle_lots : NativeIntArr) : Ur.Citizens.Roster do
     if steps == 0 do citizens else
       let next_time = time +. clock_dt
       let motion = traffic_time +. dt
-      let citizens = Ur.Citizens.step_guarded(c, walk, running, Some(bus), citizens, next_time, dt, junctions, motion,
+      let far_dt = if steps == 1 do dt *. int_to_float(total) else 0.0 end
+      let citizens = Ur.Citizens.step_paced(c, walk, running, Some(bus), citizens, next_time, dt, far_dt, junctions, motion,
         fn (slot, before, after) -> Ur.Scene.yield_to_vehicle(c, walk, vehicle_lots, slot, before, after))
-      move_citizens(c, walk, running, bus, citizens, next_time, dt, clock_dt, steps - 1, junctions, motion, vehicle_lots)
+      move_citizens(c, walk, running, bus, citizens, next_time, dt, clock_dt, steps - 1, total, junctions, motion, vehicle_lots)
     end
   end
   -- The citizen step runs on a worker task while the main thread draws the frame (see
@@ -753,7 +756,7 @@ mod Ur do
         let lots = Ur.Scene.vehicle_lots()
         -- Walkers away from the camera cross whole lots per event (Citizens.coarse_walk).
         let view_map = Ur.Citizens.with_view(walk_map, cx, cz, zoom, if h > 0.0 do w /. h else 1.6 end, yaw)
-        let step = fn () -> move_citizens(city, view_map, st.running_transit, bus, ready, calendar_time, dt, dt *. clock_rate, steps, st.junctions, motion_time, lots)
+        let step = fn () -> move_citizens(city, view_map, st.running_transit, bus, ready, calendar_time, dt, dt *. clock_rate, steps, steps, st.junctions, motion_time, lots)
         match start_step(step) do
           Some(task) -> (ready, Some(task))
           None -> (step(), None)

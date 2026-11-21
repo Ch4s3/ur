@@ -1802,11 +1802,14 @@ mod Ur.Citizens do
     else if next >= limit do limit
     else guarded_reach(slot, target, limit, guard) end end
   end
-  -- Most lots a walker crosses one per event, over up to 8 more: through lots away from the
+  -- Most lots a walker crosses one per event, over up to 12 more: through lots away from the
   -- camera, a walk does not stop at crosswalk stages or signals, reserve crossings or yield to
-  -- vehicles; nobody sees it. It stops before a lot near the camera, a turn, its transit stop,
-  -- or the route's end, and complete_walk then steps the route lot by lot as before.
-  fn coarse_max_legs() : Int do 8 end
+  -- vehicles; nobody sees it. A curved road lot (walk_turn) changes only the drawn path, which
+  -- the GPU keys sample, so a coarse walk goes round corners. It stops before a lot near the
+  -- camera, its transit stop or the route's end, and complete_walk then steps the route lot by
+  -- lot as before.
+  -- 12 more lots keeps a walk's GPU keys within the 511 voxels chunk_motion allows (32 a lot).
+  fn coarse_max_legs() : Int do 12 end
   pfn coarse_walk(entry : Actor, map : WalkMap, now : Float, pace : Float) : WalkEvent do
     let person = entry.person
     let first = (1.0 -. person.progress) /. (0.32 *. pace)
@@ -1820,10 +1823,8 @@ mod Ur.Citizens do
     match tail do
       Cons(n, rest) ->
         let pace = walk_segment_pace(map, b, n)
-        let (turn_b, _) = walk_turn(map, b)
-        let (turn_n, _) = walk_turn(map, n)
         let stop = person.transit_phase == 1 && b == person.board
-        if legs >= coarse_max_legs() || stop || pace <= 0.0 || turn_b >= 0 || turn_n >= 0 || S.span_distance(b, n) != 1 ||
+        if legs >= coarse_max_legs() || stop || pace <= 0.0 || S.span_distance(b, n) != 1 ||
           near_lot(map, b) || near_lot(map, n) do (legs, time)
         else coarse_legs(map, person, n, rest, legs + 1, time +. 1.0 /. (0.32 *. pace)) end
       Nil -> (legs, time)
@@ -1862,8 +1863,9 @@ mod Ur.Citizens do
           let pace = walk_segment_pace(occupied.walk, a, b)
           let (turn_a, _) = walk_turn(occupied.walk, a)
           let (turn_b, _) = walk_turn(occupied.walk, b)
-          if pace <= 0.0 || turn_a >= 0 || turn_b >= 0 || S.span_distance(a, b) != 1 || person.progress >= 1.0 do None
-          else if !near_lot(occupied.walk, a) && !near_lot(occupied.walk, b) do Some(coarse_walk(entry, occupied.walk, now, pace)) else
+          if pace <= 0.0 || S.span_distance(a, b) != 1 || person.progress >= 1.0 do None
+          else if !near_lot(occupied.walk, a) && !near_lot(occupied.walk, b) do Some(coarse_walk(entry, occupied.walk, now, pace))
+          else if turn_a >= 0 || turn_b >= 0 do None else
             let stage = sidewalk_stage(occupied.walk, person, a, b)
             if stage.gate && stage.arm >= 0 && S.get(occupied.junctions, a) == 2 &&
               !S.crosswalk_open(a, stage.arm, occupied.signal_tick) do
@@ -1883,7 +1885,7 @@ mod Ur.Citizens do
                   limit: limit, arm: arm, from: checked.from, to: if whole do checked.to else -1 end, legs: 0 })
               end
             end
-          end end
+          end end end
         _ -> None
       end
     end
@@ -1986,28 +1988,41 @@ mod Ur.Citizens do
     end
   end
   -- [active] collects, newest first, the actors that stay active.
+  -- A citizen away from the camera who is not in a car, on a bus or in an emergency is
+  -- stepped once a frame, by the frame's whole time step ([far_dt]; 0.0 in the frame's other
+  -- sub-steps, which leave it as it is). Cars, riders and everyone near the camera keep every
+  -- sub-step. step_guarded passes far_dt = dt, which steps everyone every time.
+  pfn deferrable(map : WalkMap, person : Citizen) : Bool do
+    person.car_phase == 0 && person.bus_slot < 0 && person.transit_phase < 2 && !emergency_move(person) && !guest(person) &&
+      !near_lot(map, if person.location >= 0 do person.location else current_plot(person.route) end)
+  end
   pfn advance_actors(c : Ur.Sim.City, running : NativeIntArr, bus : Option(TransitService), actors : List(Actor),
-    roster : Roster, active : List(Actor), occupied : Occupied, dt : Float, tick_time : Float, motion : NativeFloatArr, boarding : List(Citizen),
+    roster : Roster, active : List(Actor), occupied : Occupied, dt : Float, far_dt : Float, tick_time : Float, motion : NativeFloatArr, boarding : List(Citizen),
     guard : Int -> Citizen -> Citizen -> WalkCheck, schedule : Bool) : Roster do
     match actors do
       Nil -> { roster with active: List.reverse(active) }
       Cons(entry, rest) ->
-        let (person, occupied) = advance_person(c, running, bus, entry.person, occupied, roster.clock, dt, motion, boarding)
+        let far = far_dt != dt && deferrable(occupied.walk, entry.person)
+        if far && far_dt == 0.0 do
+          advance_actors(c, running, bus, rest, roster, Cons(entry, active), occupied, dt, far_dt, tick_time, motion, boarding, guard, schedule)
+        else
+        let (person, occupied) = advance_person(c, running, bus, entry.person, occupied, roster.clock, if far do far_dt else dt end, motion, boarding)
         let answer = guard(entry.slot, entry.person, person)
         let person = answer.person
         let entry = { entry with person: person }
         let event = if schedule do plan_walk(entry, occupied, tick_time, roster.walk_time, guard) else None end
         match event do
-          Some(event) -> advance_actors(c, running, bus, rest, queue_walk(roster, event), active, occupied, dt, tick_time, motion, boarding, guard, schedule)
+          Some(event) -> advance_actors(c, running, bus, rest, queue_walk(roster, event), active, occupied, dt, far_dt, tick_time, motion, boarding, guard, schedule)
           None ->
             let wake = wake_at(c, person, roster.clock)
-            if wake == -1 do advance_actors(c, running, bus, rest, roster, Cons(entry, active), occupied, dt, tick_time, motion, boarding, guard, schedule)
-            else advance_actors(c, running, bus, rest, sleep_actor(c, roster, entry, wake), active, occupied, dt, tick_time, motion, boarding, guard, schedule) end
+            if wake == -1 do advance_actors(c, running, bus, rest, roster, Cons(entry, active), occupied, dt, far_dt, tick_time, motion, boarding, guard, schedule)
+            else advance_actors(c, running, bus, rest, sleep_actor(c, roster, entry, wake), active, occupied, dt, far_dt, tick_time, motion, boarding, guard, schedule) end
+        end
         end
     end
   end
   pfn step_roster(c : Ur.Sim.City, walk : WalkMap, running : NativeIntArr, bus : Option(TransitService), roster : Roster, time : Float,
-    dt : Float, junctions : NativeIntArr, traffic_time : Float, guard : Int -> Citizen -> Citizen -> WalkCheck, schedule : Bool) : Roster do
+    dt : Float, far_dt : Float, junctions : NativeIntArr, traffic_time : Float, guard : Int -> Citizen -> Citizen -> WalkCheck, schedule : Bool) : Roster do
     let hour = hour_at(time)
     let roster = if hour > roster.clock || roster.wake_from <= roster.clock do
       wake_through(c, roster, if hour > roster.clock do hour else roster.clock end, wake_budget(dt), Nil)
@@ -2032,13 +2047,18 @@ mod Ur.Citizens do
       end
       let occupancy = reserve(c, cars, occupancy)
       let next = advance_actors(c, running, bus, cars, roster, Nil, occupancy,
-        dt, traffic_time, motion, boarding, guard, schedule)
+        dt, far_dt, traffic_time, motion, boarding, guard, schedule)
       flush_walks({ next with active: merge_actors(next.active, List.sort_by(waking, slot_order)) })
     end
   end
   fn step_guarded(c : Ur.Sim.City, walk : WalkMap, running : NativeIntArr, bus : Option(TransitService), roster : Roster, time : Float,
     dt : Float, junctions : NativeIntArr, traffic_time : Float, guard : Int -> Citizen -> Citizen -> WalkCheck) : Roster do
-    step_roster(c, walk, running, bus, roster, time, dt, junctions, traffic_time, guard, true)
+    step_roster(c, walk, running, bus, roster, time, dt, dt, junctions, traffic_time, guard, true)
+  end
+  doc "step_guarded, stepping citizens away from the camera by [far_dt] (see deferrable): the frame's whole time step in its last sub-step, 0.0 in the others."
+  fn step_paced(c : Ur.Sim.City, walk : WalkMap, running : NativeIntArr, bus : Option(TransitService), roster : Roster, time : Float,
+    dt : Float, far_dt : Float, junctions : NativeIntArr, traffic_time : Float, guard : Int -> Citizen -> Citizen -> WalkCheck) : Roster do
+    step_roster(c, walk, running, bus, roster, time, dt, far_dt, junctions, traffic_time, guard, true)
   end
   fn step_indexed(c : Ur.Sim.City, running : NativeIntArr, bus : Option(TransitService), roster : Roster, time : Float,
     dt : Float, junctions : NativeIntArr, traffic_time : Float) : Roster do
@@ -2047,7 +2067,7 @@ mod Ur.Citizens do
   fn step_with_bus(c : Ur.Sim.City, running : NativeIntArr, bus : Option(TransitService), people : List(Citizen),
     time : Float, dt : Float, junctions : NativeIntArr, traffic_time : Float) : List(Citizen) do
     -- One-shot callers do not keep the event queue between updates.
-    snapshot(step_roster(c, walk_map(c), running, bus, index(c, people, time), time, dt, junctions, traffic_time, fn (_, _, person) -> unguarded(person), false))
+    snapshot(step_roster(c, walk_map(c), running, bus, index(c, people, time), time, dt, dt, junctions, traffic_time, fn (_, _, person) -> unguarded(person), false))
   end
   fn step_with(c : Ur.Sim.City, running : NativeIntArr, cars : List(Citizen), time : Float, dt : Float) : List(Citizen) do
     let junctions = S.junction_controls(c, NativeArray.make_int(S.count() * 4, 0), 0, NativeArray.make_int(S.count(), 0))

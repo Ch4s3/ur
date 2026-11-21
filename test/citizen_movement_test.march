@@ -338,6 +338,46 @@ mod CitizenMovementTest do
       fn (_, _, next) -> Ur.Citizens.unguarded(next)), last, n + 1) end end
   end
 
+  -- A coarse walk goes round a corner: on an L-shaped street away from the camera one event
+  -- carries the walker past the bend, and it arrives where exact planning takes it.
+  pfn coarse_corner(c : Ur.Sim.City, base : Ur.Citizens.Citizen, empty : NativeIntArr) : Unit do
+    let lots = List.append(List.map(List.range(10, 15), fn x -> S.index(x, 22)), List.map(List.range(23, 27), fn z -> S.index(14, z)))
+    let road = List.fold_left(lots, empty, fn (roads, lot) -> NativeArray.set_int(roads, lot, 2))
+    let c = { c with roads: road, heights: NativeArray.make_int(S.count(), 22) }
+    let exact = Ur.Citizens.walk_map(c)
+    let far = { exact with near: NativeArray.make_int(S.count(), 0) }
+    let last = S.index(14, 26)
+    let person = { base with id: 2, location: -1, route: lots, previous: S.index(9, 22), target: last,
+      work: last, study: -1, car_phase: 0, parking: 0, arrival: 0, by_car: false, shop: -1, park: -1,
+      activity: 1, progress: 0.0, transit_phase: 0, bus_slot: -1, rest_until: -1, park_trip: false }
+    let first_step = Ur.Citizens.step_guarded(c, far, empty, None, Ur.Citizens.index(c, [person], 0.25), 0.25, 0.1, empty, 0.0,
+      fn (_, _, next) -> Ur.Citizens.unguarded(next))
+    let legs = Map.fold(first_step.walk_events, 0, fn (most, _, events) -> List.fold_left(events, most, fn (m, e) -> if e.legs > m do e.legs else m end))
+    Test.assert_true(legs >= 5, "one coarse event carries the walker past the corner")
+    let coarse = steps_to_arrive(c, far, empty, Ur.Citizens.index(c, [person], 0.25), last, 0)
+    let detailed = steps_to_arrive(c, exact, empty, Ur.Citizens.index(c, [person], 0.25), last, 0)
+    Test.assert_true(detailed > 0 && coarse > 0, "both walkers reach the end of the L")
+  end
+  -- Away from the camera a citizen is stepped once a frame by the whole frame (step_paced);
+  -- near it, every sub-step.
+  pfn deferred_steps(c : Ur.Sim.City, base : Ur.Citizens.Citizen, empty : NativeIntArr) : Unit do
+    let exact = Ur.Citizens.walk_map(c)
+    let far = { exact with near: NativeArray.make_int(S.count(), 0) }
+    let waiter = { base with id: 2, work: -1, study: -1, shop: -1, park: -1, location: base.home, parking: 0,
+      activity: 0, route: Nil, wait: 1.0, rest_until: -1, car_phase: 0, bus_slot: -1, transit_phase: 0 }
+    let step = fn (map, roster, far_dt) ->
+      Ur.Citizens.step_paced(c, map, empty, None, roster, 0.25, 0.1, far_dt, empty, 0.0, fn (_, _, next) -> Ur.Citizens.unguarded(next))
+    let wait_of = fn roster -> (first(Ur.Citizens.snapshot(roster))).wait
+    let start = Ur.Citizens.index(c, [waiter], 0.25)
+    let early = step(far, start, 0.0)
+    Test.assert_true(wait_of(early) == 1.0, "a distant citizen is left alone in a frame's early sub-steps")
+    let frame = step(far, step(far, early, 0.0), 0.3)
+    Test.assert_true(Math.abs(wait_of(frame) -. 0.7) < 0.000001, "and steps by the whole frame in its last")
+    let near = step(exact, step(exact, step(exact, start, 0.0), 0.0), 0.3)
+    Test.assert_true(Math.abs(wait_of(near) -. 0.7) < 0.000001, "near the camera it steps every sub-step, to the same place")
+    Test.assert_true(Math.abs(wait_of(step(exact, start, 0.0)) -. 0.9) < 0.000001, "including the early ones")
+  end
+
   fn main(_cap : Cap(IO)) : Unit do
     let city = Ur.Scenario.evacuation_site()
     let resident = first(Ur.Citizens.refresh(city, Nil))
@@ -350,6 +390,8 @@ mod CitizenMovementTest do
     citizen_index_matches_map(resident)
     rebuild_ignores_order(city)
     coarse_walks(city, resident, empty)
+    coarse_corner(city, resident, empty)
+    deferred_steps(city, resident, empty)
     cached_walk_geometry(city)
     scheduled_crossing(city, resident, empty)
     List.each([2, 3, 4], fn mode -> transit_mode(city, resident, empty, mode))
