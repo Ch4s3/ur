@@ -88,8 +88,8 @@ mod CitizenMovementTest do
       "an active citizen continues to advance before the next scheduled wakeup")
     let roster = Ur.Citizens.step_indexed(c, empty, None, roster, 0.31, 0.02, empty, 0.0)
     let people = Ur.Citizens.snapshot(roster)
-    Test.assert_true(List.any(people, fn person -> person.id == 2 && person.rest_until == 5),
-      "the scheduled citizen wakes and sets the next check")
+    Test.assert_true(List.any(people, fn person -> person.id == 2 && person.rest_until == 24),
+      "the scheduled citizen wakes and sleeps until its schedule next changes (midnight: it stays in all day)")
     let cached = Ur.Citizens.indexed_counts(c, roster)
     let total = Ur.Citizens.tally(c, people)
     Test.assert_eq_int(cached.tracked, total.tracked, "waking does not double-count a resident")
@@ -118,7 +118,7 @@ mod CitizenMovementTest do
     let snapshot = Ur.Citizens.snapshot(third)
     Test.assert_true(List.map(snapshot, fn person -> person.id) == List.map(people, fn person -> person.id),
       "spreading the wake keeps every citizen in roster order")
-    Test.assert_true(List.all(snapshot, fn person -> person.rest_until == 5), "every sleeper woke and set its next check")
+    Test.assert_true(List.all(snapshot, fn person -> person.rest_until == 24), "every sleeper woke and sleeps until its schedule next changes")
     List.each([first_step, second, third], fn r ->
       Test.assert_true(List.map(Ur.Citizens.visible_actors(r), fn entry -> entry.slot) == parked,
         "parked sleepers stay visible once each while the batch wakes and sleeps again")

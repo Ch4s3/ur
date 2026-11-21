@@ -1094,7 +1094,8 @@ mod Ur.Citizens do
       trip(c, running, bus, { person with campus_day: c.calendar_day }, occupied, 1, target, lap, false)
     else if target == person.location do
       let indoors = S.valid(target) && activity != 5
-      ({ person with wait: if indoors do 0.0 else 0.04 end, activity: activity, rest_until: if indoors do clock_hour + 1 else -1 end }, occupied)
+      ({ person with wait: if indoors do 0.0 else 0.04 end, activity: activity,
+        rest_until: if indoors do settled_until(c, person, clock_hour, activity, target) else -1 end }, occupied)
     else
       let route = route_for(c, person, target)
       if List.is_empty(route) do ({ person with wait: 0.10 }, occupied) else
@@ -1102,6 +1103,20 @@ mod Ur.Citizens do
           target == S.festival_destination(c, person.home) || (S.temple_tier(c, person.location) > 0 && person.location != person.work))
       end
     end end end
+  end
+  -- The hour a citizen settled indoors next has somewhere else to be: the first later hour
+  -- today whose scheduled_activity differs, or midnight (when every rest ends; see resting).
+  -- Waking every hour to find the same answer was most of the active list at 500,000 citizens.
+  -- A student between classes may set off on a lap any hour (depart), so it still checks hourly.
+  pfn settled_until(c : Ur.Sim.City, person : Citizen, clock_hour : Int, activity : Int, target : Int) : Int do
+    let day = clock_hour - clock_hour % 24
+    if person.study >= 3 do clock_hour + 1 else settled_from(c, person, day, clock_hour % 24 + 1, activity, target) end
+  end
+  pfn settled_from(c : Ur.Sim.City, person : Citizen, day : Int, hour : Int, activity : Int, target : Int) : Int do
+    if hour >= 24 do day + 24 else
+      let (a, t) = scheduled_activity(c, person, hour)
+      if a != activity || t != target do day + hour else settled_from(c, person, day, hour + 1, activity, target) end
+    end
   end
   pfn current_plot(route : List(Int)) : Int do
     match route do
