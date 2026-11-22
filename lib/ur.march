@@ -698,6 +698,27 @@ mod Ur do
       else citizens end
       let citizens = Ur.Citizens.sort_parked(citizens)
       Ur.Scene.sanitation_truck(c, moment, sanitation.driver, night, section.after > 0)
+      -- This frame's step runs on a worker while the main thread hands this roster's walks and
+      -- citizens to Strata, builds the HUD and draws; the next frame settles it. It starts as soon
+      -- as the roster is final: the scene and HUD work below only reads that roster, which the step
+      -- does not change (it builds a new one). Everything it reads is captured here; the vehicle
+      -- footprints it checks walkers against are frozen now, after every vehicle but citizens' own
+      -- cars has been drawn this frame (those it sees as the last frame left them).
+      let ready = Ur.Citizens.begin_walk_frame(citizens)
+      let (next_citizens, stepping) = if steps == 0 do (ready, None) else
+        let city = S.operating_city(c, st.buses)
+        let bus = { routes: wanted, active: fleet }
+        -- The mask of lots a vehicle reaches reads the live footprints, so it is built here on
+        -- the main thread, at the moment start_step freezes the copy the step checks against.
+        let lots = Ur.Scene.vehicle_lots()
+        -- Walkers away from the camera cross whole lots per event (Citizens.coarse_walk).
+        let view_map = Ur.Citizens.with_view(walk_map, cx, cz, zoom, if h > 0.0 do w /. h else 1.6 end, yaw)
+        let step = fn () -> move_citizens(city, view_map, st.running_transit, bus, ready, calendar_time, dt, dt *. clock_rate, steps, steps, st.junctions, motion_time, lots)
+        match start_step(step) do
+          Some(task) -> (ready, Some(task))
+          None -> (step(), None)
+        end
+      end
       Ur.Scene.walk_motions(c, walk_map, citizens)
       Ur.Scene.citizen_vehicles(c, walk_map, Ur.Citizens.visible_actors(citizens), Ur.Citizens.visible_actors(p.shown), night, !scene_changed && p.frame > 0, section.after > 0)
       let truck_selected = truck_selected && sanitation.driver >= 0 && sanitation.pickup == p.sanitation.pickup && !undone
@@ -744,23 +765,6 @@ mod Ur do
           (List.is_empty(c.waste_runs) || S.street_hour(elapsed) >= 21) do
           start_day_plan(c, st.traffic, sanitation.completed, p.flood_drill)
         else day_plan end
-      end
-      -- This frame's step runs on a worker while Vk.frame draws what the last one produced; the
-      -- next frame settles it. Everything it reads is captured here.
-      let ready = Ur.Citizens.begin_walk_frame(citizens)
-      let (next_citizens, stepping) = if steps == 0 do (ready, None) else
-        let city = S.operating_city(c, st.buses)
-        let bus = { routes: wanted, active: fleet }
-        -- The mask of lots a vehicle reaches reads the live footprints, so it is built here on
-        -- the main thread, at the moment start_step freezes the copy the step checks against.
-        let lots = Ur.Scene.vehicle_lots()
-        -- Walkers away from the camera cross whole lots per event (Citizens.coarse_walk).
-        let view_map = Ur.Citizens.with_view(walk_map, cx, cz, zoom, if h > 0.0 do w /. h else 1.6 end, yaw)
-        let step = fn () -> move_citizens(city, view_map, st.running_transit, bus, ready, calendar_time, dt, dt *. clock_rate, steps, steps, st.junctions, motion_time, lots)
-        match start_step(step) do
-          Some(task) -> (ready, Some(task))
-          None -> (step(), None)
-        end
       end
       let render_start = if timing do Vk.time() else 0.0 end
       let drew = Vk.frame()
