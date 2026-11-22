@@ -12,7 +12,11 @@ mod Ur do
   type FrameRate = { since : Float, drawn : Int, value : Int }
   type DayResult = { city : Ur.Sim.City, stats : Ur.Sim.Stats }
   type DayPlan = { completed : List(Int), task : Task(DayResult) }
-  type Play = { flood_drill : Bool, sanitation : Ur.Scene.SanitationShift, truck_selected : Bool, citizen_focus : Int, activity : List(Ur.Activity.NeighborhoodEvent), fleet : List(Ur.Fleet.Run), fleet_routes : List(Ur.Food.Trip), city : Ur.Sim.City, stats : Ur.Sim.Stats, food : List(Ur.Food.Trip), citizens : Ur.Citizens.Roster, shown : Ur.Citizens.Roster, stepping : Option(Task((Ur.Citizens.Roster, Int))), step_ms : Int, rebuilding : Option(Task(Ur.Citizens.RefreshChanges)), stale_rebuilds : List(Task(Ur.Citizens.RefreshChanges)), walk_map : Ur.Citizens.WalkMap, day_plan : Option(DayPlan), traffic_time : Float, rotor_phases : NativeF32Arr, cloud_offset : (Float, Float), cx : Float, cz : Float, zoom : Float, yaw : Float, tool : Int, group : Int, page : Int, layer : Int, sidebar_visible : Bool, sidebar_tab : Int, crime_focus : Int, council_focus : Int, finance_view : Ur.Hud.FinanceView, paused : Bool, speed : Int,
+  -- An edit's, undo's or policy change's S.stats runs on a task (see run_frames). [city] is the
+  -- city the frame's current stats describe; [undo] and [edit] carry an undo or edit made
+  -- while they were pending; [stale] are superseded tasks, polled until they finish.
+  type StatsWait = { task : Option(Task(Ur.Sim.Stats)), stale : List(Task(Ur.Sim.Stats)), city : Ur.Sim.City, undo : Bool }
+  type Play = { flood_drill : Bool, sanitation : Ur.Scene.SanitationShift, truck_selected : Bool, citizen_focus : Int, activity : List(Ur.Activity.NeighborhoodEvent), fleet : List(Ur.Fleet.Run), fleet_routes : List(Ur.Food.Trip), city : Ur.Sim.City, stats : Ur.Sim.Stats, food : List(Ur.Food.Trip), citizens : Ur.Citizens.Roster, shown : Ur.Citizens.Roster, stepping : Option(Task((Ur.Citizens.Roster, Int))), step_ms : Int, rebuilding : Option(Task(Ur.Citizens.RefreshChanges)), stale_rebuilds : List(Task(Ur.Citizens.RefreshChanges)), stats_wait : StatsWait, walk_map : Ur.Citizens.WalkMap, day_plan : Option(DayPlan), traffic_time : Float, rotor_phases : NativeF32Arr, cloud_offset : (Float, Float), cx : Float, cz : Float, zoom : Float, yaw : Float, tool : Int, group : Int, page : Int, layer : Int, sidebar_visible : Bool, sidebar_tab : Int, crime_focus : Int, council_focus : Int, finance_view : Ur.Hud.FinanceView, paused : Bool, speed : Int,
     road_draft : Ur.Build.Draft, road_bench : Int, road_pointer : (Float, Float), sidewalk_spot : Int, keys : Int, mouse : Bool, anchor : Int, stroke : List(Int), hovered : Int, parcel_focus : Int, popup : Int, religion_site : Int, religion_choice : Int, reason : String, preview : Ur.Build.Preview, preview_chunks : Int, undo : List(Ur.Sim.City), time : Float, elapsed : Float,
     frame : Int, drawn : Int, limit : Int, profile : Bool, trace_input : Bool, tick_ms : Float, fps : FrameRate,
     setup : NativeIntArr, world_seed : Int, setup_keys : Int, seed_focus : Bool, setup_drag : Int, menu_open : Bool, boot : Bool, notice : String, confirm : Atom, save_path : String, saved : Bool, quit : Bool, dev : Strata.Devtools.Dev }
@@ -110,6 +114,20 @@ mod Ur do
       Err(_) -> None
     end
   end
+  -- S.stats of [c] on a worker task; None when it could not be spawned.
+  pfn start_stats(c : Ur.Sim.City) : Option(Task(Ur.Sim.Stats)) do
+    match Task.async(fn () -> S.stats(c)) do
+      Ok(task) -> Some(task)
+      Err(_) -> None
+    end
+  end
+  -- [wait]'s pending stats task joins its stale ones.
+  pfn retire_stats(wait : StatsWait) : List(Task(Ur.Sim.Stats)) do
+    match wait.task do
+      Some(task) -> Cons(task, wait.stale)
+      None -> wait.stale
+    end
+  end
   -- [pending] joins the stale rebuilds, polled until each finishes and then dropped.
   pfn retire_rebuild(pending : Option(Task(Ur.Citizens.RefreshChanges)), stale : List(Task(Ur.Citizens.RefreshChanges))) : List(Task(Ur.Citizens.RefreshChanges)) do
     match pending do
@@ -174,7 +192,7 @@ mod Ur do
     Ur.Scene.fleet(c, Nil, p.fleet, false)
     Ur.Scene.clear_scheduled_walks(p.shown)
     Ur.Scene.citizen_vehicles(c, walk_map, Ur.Citizens.visible_actors(citizens), Ur.Citizens.visible_actors(p.shown), S.street_hour(clock_phase(c)) >= 18 || S.street_hour(clock_phase(c)) < 6, false, false)
-    { p with flood_drill: false, sanitation: Ur.Scene.empty_sanitation(), truck_selected: false, citizen_focus: -1, activity: Nil, fleet: Ur.Fleet.step(c, stats.traffic, Nil, fleet_routes, 0.0, true), fleet_routes: fleet_routes, city: c, stats: stats, food: food, citizens: citizens, shown: citizens, stepping: None, step_ms: 0, rebuilding: None, stale_rebuilds: retire_rebuild(p.rebuilding, p.stale_rebuilds), walk_map: walk_map, day_plan: None, cx: game.cx, cz: game.cz, zoom: game.zoom, yaw: game.yaw,
+    { p with flood_drill: false, sanitation: Ur.Scene.empty_sanitation(), truck_selected: false, citizen_focus: -1, activity: Nil, fleet: Ur.Fleet.step(c, stats.traffic, Nil, fleet_routes, 0.0, true), fleet_routes: fleet_routes, city: c, stats: stats, food: food, citizens: citizens, shown: citizens, stepping: None, step_ms: 0, rebuilding: None, stale_rebuilds: retire_rebuild(p.rebuilding, p.stale_rebuilds), stats_wait: { task: None, stale: retire_stats(p.stats_wait), city: c, undo: false }, walk_map: walk_map, day_plan: None, cx: game.cx, cz: game.cz, zoom: game.zoom, yaw: game.yaw,
       paused: game.paused, speed: game.speed, menu_open: false, boot: false, confirm: :nothing,
       notice: "", layer: layer, group: 1, page: 0, tool: 1, anchor: -1, stroke: Nil, hovered: -1, parcel_focus: -1, popup: -1, religion_site: -1, religion_choice: 0, sidewalk_spot: -1, undo: Nil,
       preview: Build.preview(c, 0, -1, -1), road_draft: Build.new_draft(), preview_chunks: 0, elapsed: clock_phase(c), traffic_time: clock_phase(c), rotor_phases: rotor_phases, cloud_offset: (0.0, 0.0), sidebar_tab: 0, crime_focus: -1, council_focus: -1,
@@ -616,12 +634,44 @@ mod Ur do
         { c with shelter_demand: Ur.Citizens.shelter_demand(trips) }
       else if midnight && Option.is_some(c.shelter_demand) do { c with shelter_demand: None }
       else c end end
+      -- An edit's, undo's or policy change's S.stats (0.3 s at 500,000 citizens) runs on a task.
+      -- Until it lands the frame keeps the stats it had, and what reads them waits for it:
+      -- [stats_landed] stands in for the edit, undo or policy change there (food, fleet, the
+      -- reason line, the day plan, the roster rebuild and re-index), and [stats_undo] for undone
+      -- in the rebuild. Midnight's own stats supersede a pending task.
+      let wait = p.stats_wait
+      -- (a facility paused or resumed rebuilds the roster on its own frame, so it keeps its stats there)
+      let want_stats = (paint || undone || policy_changed) && !midnight
+      let defer_stats = want_stats && !operation_changed
+      let (pending_stats, stale_stats) = if want_stats || midnight do (None, retire_stats(wait)) else (wait.task, wait.stale) end
+      let stale_stats = List.filter(stale_stats, fn task -> Option.is_none(Task.poll(task)))
+      let (arrived, pending_stats) = match pending_stats do
+        Some(task) ->
+          match Task.poll(task) do
+            Some(Ok(stats)) -> (Some(stats), None)
+            Some(Err(_)) -> (Some(S.stats(c)), None)
+            None -> (None, Some(task))
+          end
+        None -> (None, None)
+      end
+      let launched = if defer_stats do start_stats(c) else None end
+      let sync_stats = want_stats && Option.is_none(launched)
+      let stats_landed = Option.is_some(arrived) || sync_stats || (midnight && Option.is_some(wait.task))
+      let stats_undo = (wait.undo || undone) && (stats_landed || (midnight && undone))
+      let day_plan = if Option.is_some(arrived) do None else day_plan end
       let (day, day_ready) = if midnight do
         complete_day(day_plan, c, p.stats.traffic, p.sanitation.completed, p.flood_drill)
       else
-        let stats = if paint || undone || policy_changed do S.stats(c) else p.stats end
+        let stats = match arrived do
+          Some(stats) -> stats
+          None -> if sync_stats do S.stats(c) else p.stats end
+        end
         ({ city: c, stats: stats }, false)
       end
+      let stats_from = wait.city
+      let stats_wait = { task: if defer_stats do launched else pending_stats end, stale: stale_stats,
+        city: if midnight || Option.is_some(arrived) || sync_stats do day.city else wait.city end,
+        undo: if stats_landed || midnight do false else wait.undo || undone end }
       let next = day.city
       let due = next.month != c.month
       let day_changed = next.street_day != c.street_day && (next.street_day >= 5 || c.street_day >= 5)
@@ -673,27 +723,29 @@ mod Ur do
         chunks
       else p.preview_chunks end
       let preview_ms = if p.profile do quote_ms +. (Vk.time() -. preview_start) *. 1000.0 else 0.0 end
-      let reason = if hovered != p.hovered || popup != p.popup || parcel_focus != p.parcel_focus || sidebar_tab != p.sidebar_tab || paint || undone || midnight || due || policy_changed || day_changed || building_day do S.reason_with(c, inspect, st) else p.reason end
+      let reason = if hovered != p.hovered || popup != p.popup || parcel_focus != p.parcel_focus || sidebar_tab != p.sidebar_tab || paint || undone || midnight || due || policy_changed || day_changed || building_day || stats_landed do S.reason_with(c, inspect, st) else p.reason end
       Ur.Scene.begin_vehicle_lights(hour)
       let wind = S.regional_wind(c)
       Ur.Scene.incidents(c, int_to_float(c.calendar_day) *. S.day_seconds() +. elapsed, wind, traffic_time, section.after > 0)
       let rotor_phases = Ur.Scene.vehicles(c, p.city, p.rotor_phases, traffic_time, elapsed, game_dt,
         paint || undone || midnight || policy_changed || p.frame == 0, 0)
-      let food = if paint || undone || midnight do Ur.Food.producer_traffic(c, st) else p.food end
+      let food = if paint || undone || midnight || stats_landed do Ur.Food.producer_traffic(c, st) else p.food end
       Ur.Scene.food_vehicles(c, food, p.food, traffic_time, 0, section.after > 0)
-      let fleet_changed = paint || undone || midnight || policy_changed
+      let fleet_changed = paint || undone || midnight || policy_changed || stats_landed
       let wanted = if fleet_changed do Ur.Fleet.routes_with(c, st.running_transit, st.buses) else p.fleet_routes end
       let old_fleet = if undone do Nil else p.fleet end
       let fleet = Ur.Fleet.step_at(c, st.traffic, old_fleet, wanted, elapsed, game_dt, fleet_changed || p.frame == 0, st.junctions, signal_after)
       Ur.Scene.fleet(c, fleet, p.fleet, section.after > 0)
-      let evacuation_update = flood_day || ((midnight || paint) && Ur.Citizens.has_evacuation(p.citizens))
-      let rebuild = undone || evacuation_update || operation_changed || ((paint || due || policy_changed || day_changed || building_day || flood_day) &&
-        (st.people != p.stats.people || S.households_changed(c.households, p.city.households) || S.assignments_changed(p.stats.job_matches, st.job_matches) || Ur.Citizens.education_changed(c, p.city) || Ur.Citizens.changed(c, p.city, 0)))
+      let evacuation_update = flood_day || ((midnight || stats_landed) && Ur.Citizens.has_evacuation(p.citizens))
+      -- compared with the city the previous stats describe (stats_from), which is last frame's
+      -- city unless an edit's stats were pending
+      let rebuild = stats_undo || evacuation_update || operation_changed || ((stats_landed || due || day_changed || building_day || flood_day) &&
+        (st.people != p.stats.people || S.households_changed(c.households, stats_from.households) || S.assignments_changed(p.stats.job_matches, st.job_matches) || Ur.Citizens.education_changed(c, stats_from) || Ur.Citizens.changed(c, stats_from, 0)))
       -- A weekday change alone leaves the roster as it is: timed rests end by midnight (see
       -- Citizens.resting), so every sleeper re-checks the new day's schedule as it wakes, and
       -- the weekday rules (working hours, car-free streets) are read each step. Re-indexing all
       -- of it here stalled the 500,000-citizen metro for 3-6 s on each such day.
-      let reset_roster = rebuild || (scene_changed && (paint || undone || due || policy_changed || building_day || flood_day || religion_event))
+      let reset_roster = rebuild || stats_landed || (scene_changed && (due || building_day || flood_day || religion_event))
       let pace_changed = if midnight do
         let previous = S.temperature(p.city)
         let current = S.temperature(c)
@@ -707,7 +759,7 @@ mod Ur do
       -- The rebuild itself (refresh_with, over a second at 500,000 citizens) runs on a task, and
       -- is applied on the frame it finishes; until then citizens keep their old assignments. A
       -- newer rebuild of any kind makes a pending one stale: it is left to finish and dropped.
-      let in_place = rebuild && (paint || undone) && !evacuation_update && !operation_changed && !Ur.Citizens.has_evacuation(p.citizens)
+      let in_place = rebuild && stats_landed && !midnight && !evacuation_update && !operation_changed && !Ur.Citizens.has_evacuation(p.citizens)
       let (pending, stale_rebuilds) = if rebuild do (None, retire_rebuild(p.rebuilding, p.stale_rebuilds))
         else (p.rebuilding, p.stale_rebuilds) end
       let stale_rebuilds = List.filter(stale_rebuilds, fn task -> Option.is_none(Task.poll(task)))
@@ -720,15 +772,15 @@ mod Ur do
           end
         None -> (None, None)
       end
-      let rebuilding = if in_place do start_rebuild(c, p.citizens, undone, st) else pending end
+      let rebuilding = if in_place do start_rebuild(c, p.citizens, stats_undo, st) else pending end
       let citizens = if in_place do
         if Option.is_some(rebuilding) do p.citizens else
-          let old = if undone do Nil else Ur.Citizens.rebuild_input(p.citizens) end
+          let old = if stats_undo do Nil else Ur.Citizens.rebuild_input(p.citizens) end
           Ur.Citizens.apply_refresh(c, p.citizens, Ur.Citizens.refresh_with(c, old, st.routes, st.people, st.job_matches))
         end
       else if reset_roster do
         Ur.Scene.clear_scheduled_walks(p.shown)
-        let old = if undone && !Ur.Citizens.has_evacuation(p.citizens) do Nil
+        let old = if stats_undo && !Ur.Citizens.has_evacuation(p.citizens) do Nil
           else if rebuild do Ur.Citizens.rebuild_input(p.citizens) else Ur.Citizens.snapshot(p.citizens) end end
         let people = if rebuild do Ur.Citizens.refresh_with(c, old, st.routes, st.people, st.job_matches) else old end
         Ur.Citizens.index(c, Ur.Citizens.wake_indoor(people), calendar_time)
@@ -842,7 +894,7 @@ mod Ur do
           Strata.Devtools.fint("walking", citizen_stats.walking), Strata.Devtools.fbool("paused", Strata.Devtools.paused(dev))]), dt)
       end
       let insolvent_now = c.economy.insolvent && !p.city.economy.insolvent
-      run_frames({ flood_drill: p.flood_drill, sanitation: sanitation, truck_selected: truck_selected, citizen_focus: citizen_focus, activity: activity, fleet: fleet, fleet_routes: wanted, city: c, stats: st, food: food, citizens: next_citizens, shown: citizens, stepping: stepping, step_ms: p.step_ms, rebuilding: rebuilding, stale_rebuilds: stale_rebuilds, walk_map: walk_map, day_plan: day_plan, traffic_time: traffic_time, rotor_phases: rotor_phases, cloud_offset: cloud_offset, cx: cx, cz: cz, zoom: zoom, yaw: yaw, tool: tool, group: group, page: page, layer: layer, sidebar_visible: sidebar_visible && !S.valid(activity_lot) && !S.valid(council_lot) && !S.valid(diagnosis_lot), sidebar_tab: sidebar_tab, crime_focus: crime_focus, council_focus: council_focus, finance_view: finance_view, paused: paused, speed: speed,
+      run_frames({ flood_drill: p.flood_drill, sanitation: sanitation, truck_selected: truck_selected, citizen_focus: citizen_focus, activity: activity, fleet: fleet, fleet_routes: wanted, city: c, stats: st, food: food, citizens: next_citizens, shown: citizens, stepping: stepping, step_ms: p.step_ms, rebuilding: rebuilding, stale_rebuilds: stale_rebuilds, stats_wait: stats_wait, walk_map: walk_map, day_plan: day_plan, traffic_time: traffic_time, rotor_phases: rotor_phases, cloud_offset: cloud_offset, cx: cx, cz: cz, zoom: zoom, yaw: yaw, tool: tool, group: group, page: page, layer: layer, sidebar_visible: sidebar_visible && !S.valid(activity_lot) && !S.valid(council_lot) && !S.valid(diagnosis_lot), sidebar_tab: sidebar_tab, crime_focus: crime_focus, council_focus: council_focus, finance_view: finance_view, paused: paused, speed: speed,
         road_draft: draft, road_bench: p.road_bench, road_pointer: (mx, my), sidewalk_spot: spot, keys: keys, mouse: mouse, anchor: anchor, stroke: if mouse do stroke else Nil end, hovered: hovered, parcel_focus: parcel_focus, popup: popup, religion_site: religion_site, religion_choice: religion_choice, reason: reason, preview: preview, preview_chunks: preview_chunks, undo: undo,
         time: time, elapsed: elapsed, frame: p.frame + 1, drawn: drawn, limit: p.limit, profile: p.profile, trace_input: p.trace_input, tick_ms: tick_ms, fps: fps, setup: p.setup, world_seed: p.world_seed, setup_keys: p.setup_keys, seed_focus: p.seed_focus, setup_drag: p.setup_drag, menu_open: insolvent_now, boot: insolvent_now, notice: if insolvent_now do insolvency_notice(c) else "" end, confirm: :nothing, save_path: p.save_path, saved: p.saved, quit: false, dev: dev })
     end end end
@@ -1088,7 +1140,7 @@ mod Ur do
       let tool = if road_demo do start_tool else if layer > 0 || civic_demo || demo == 2 || demo == 15 || demo == 16 || demo == 17 || demo == 18 || demo == 20 || demo == 22 || demo == 27 do 0 else 1 end end
       let group = if road_demo do 1 else if layer > 0 && demo != 14 do 7 else if civic_demo || demo == 8 do 5 else if demo == 2 do 3 else if demo == 14 || demo == 15 do 0 else 1 end end end end end
       let page = if S.grade_tool(start_tool) do 1 else if layer == 35 do 7 else if layer == 4 || layer == 29 || layer == 30 || layer == 32 || layer == 33 do 2 else if layer >= 5 && layer <= 8 do 1 else if layer == 23 || layer == 24 || layer == 27 || layer == 28 do 6 else if layer >= 23 && layer != 31 do 5 else if layer >= 20 && layer != 31 do 4 else if layer >= 12 && layer != 31 do 3 else if demo == 7 && layer == 0 do 1 else if demo == 8 && layer == 0 do 2 else 0 end end end end end end end end end end
-      run_frames({ flood_drill: demo == 22 && drill == 1, sanitation: Ur.Scene.empty_sanitation(), truck_selected: false, citizen_focus: -1, activity: Nil, fleet: Ur.Fleet.step(c, stats.traffic, Nil, fleet_routes, 0.0, true), fleet_routes: fleet_routes, city: c, stats: stats, food: Ur.Food.producer_traffic(c, stats), citizens: citizens, shown: citizens, stepping: None, step_ms: 0, rebuilding: None, stale_rebuilds: Nil, walk_map: Ur.Citizens.walk_map(c), day_plan: None, traffic_time: clock_phase(c), rotor_phases: NativeArray.make_f32(S.count(), 0.0), cloud_offset: (0.0, 0.0), cx: cx, cz: cz, zoom: zoom, yaw: 0.55, tool: tool, group: group, page: page, layer: layer, sidebar_visible: (demo > 0 && !road_demo && !metro && !streets_demo && demo != 11 && demo != 14 && demo != 15 && demo != 16 && demo != 18 && demo != 19 && demo != 20 && demo != 22) || details_tab >= 5, sidebar_tab: details_tab, crime_focus: -1, council_focus: -1, finance_view: { month: 0, lines: finance_lines, stock: -1 }, paused: demo == 0 || road_demo || fire_demo || demo == 13 || demo == 18 || demo == 19 || demo == 20 || demo == 21 || demo == 22 || demo == 27, speed: if metro || (demo == 22 && drill == 1) do 3 else 1 end,
+      run_frames({ flood_drill: demo == 22 && drill == 1, sanitation: Ur.Scene.empty_sanitation(), truck_selected: false, citizen_focus: -1, activity: Nil, fleet: Ur.Fleet.step(c, stats.traffic, Nil, fleet_routes, 0.0, true), fleet_routes: fleet_routes, city: c, stats: stats, food: Ur.Food.producer_traffic(c, stats), citizens: citizens, shown: citizens, stepping: None, step_ms: 0, rebuilding: None, stale_rebuilds: Nil, stats_wait: { task: None, stale: Nil, city: c, undo: false }, walk_map: Ur.Citizens.walk_map(c), day_plan: None, traffic_time: clock_phase(c), rotor_phases: NativeArray.make_f32(S.count(), 0.0), cloud_offset: (0.0, 0.0), cx: cx, cz: cz, zoom: zoom, yaw: 0.55, tool: tool, group: group, page: page, layer: layer, sidebar_visible: (demo > 0 && !road_demo && !metro && !streets_demo && demo != 11 && demo != 14 && demo != 15 && demo != 16 && demo != 18 && demo != 19 && demo != 20 && demo != 22) || details_tab >= 5, sidebar_tab: details_tab, crime_focus: -1, council_focus: -1, finance_view: { month: 0, lines: finance_lines, stock: -1 }, paused: demo == 0 || road_demo || fire_demo || demo == 13 || demo == 18 || demo == 19 || demo == 20 || demo == 21 || demo == 22 || demo == 27, speed: if metro || (demo == 22 && drill == 1) do 3 else 1 end,
         road_draft: draft, road_bench: road_bench, road_pointer: (-1.0, -1.0), sidewalk_spot: -1, keys: 0, mouse: false, anchor: -1, stroke: Nil, hovered: -1, parcel_focus: if demo == 17 do S.index(10, 17) else if details_tab == 12 do S.index(9, 19) else -1 end end, popup: if fire_demo do Ur.Scenario.fire_recovery_home() else if demo == 22 do (if evacuation_demo do Ur.Scenario.evacuation_home() else Ur.Scenario.storm_station() end) else -1 end end, religion_site: religion_site, religion_choice: 0, preview: preview, undo: Nil, reason: if c.harbour < 0 do "Choose a cyan shoreline parcel to land." else "Select a parcel to inspect development" end,
         time: Vk.time(), elapsed: clock_phase(c), frame: 0, drawn: 0, limit: Authority.must(Env.get_int("UR_FRAMES", 0)), profile: profile, trace_input: Authority.must(Env.get_int("UR_INPUT_LOG", 0)) > 0, tick_ms: 0.0, fps: { since: Vk.time(), drawn: 0, value: -1 }, setup: S.default_setup(), world_seed: 1, setup_keys: 0, seed_focus: true, setup_drag: -1, menu_open: boot, boot: boot, notice: if saved do "" else "No saved city yet." end, confirm: :nothing, save_path: save_path, saved: saved, quit: false, preview_chunks: preview_chunks, dev: Strata.Devtools.start() })
     else Ur.AppError.stop("Could not open Strata renderer; check Vulkan and GLFW installation") end end end end end end end
