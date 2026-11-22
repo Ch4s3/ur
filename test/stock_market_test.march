@@ -11,7 +11,7 @@ mod StockMarketTest do
     let s = { id: c.economy.market.next_id, lot: lot, sector: Ur.Market.sector_of(c, lot), shares: Ur.Market.shares(), price: price, earnings: 0,
       dividend: 0, history: Cons(price, Nil), listed: c.month, delisted: -1 }
     let market = c.economy.market
-    { c with economy: { c.economy with stocks: Cons(s, c.economy.stocks), market: { market with next_id: market.next_id + 1, base: c.month } } }
+    S.with_stocks({ c with economy: { c.economy with market: { market with next_id: market.next_id + 1, base: c.month } } }, Cons(s, c.economy.stocks))
   end
   fn main(_cap : Cap(IO)) : Unit do
     let c = S.new()
@@ -48,6 +48,17 @@ mod StockMarketTest do
     Test.assert_true((Ur.Treasury.adjust(c, 20, 1)).economy.listing_incentive, "The listing incentive can be switched on")
     Test.assert_true(Ur.Market.listing_months(Ur.Treasury.adjust(c, 20, 1)) < Ur.Market.listing_months(c), "The incentive lets firms list sooner")
 
+    let shut = Ur.Market.settle({ listed with flood_damage: NativeArray.set_int(listed.flood_damage, shop, 3) })
+    let held = match Ur.Market.stock_at(shut, 1) do
+      Some(s) -> s
+      None -> panic("stock missing")
+    end
+    Test.assert_true(held.delisted < 0 && held.price == 500, "A firm shut for repairs keeps its listing and its price")
+    let after = Ur.Market.settle(listed)
+    Test.assert_true(match after.economy.market.history do
+      Cons(latest, _) -> latest == after.economy.market.index
+      Nil -> false
+    end, "The index history starts with the current index")
     let demolished = Ur.Clock.month(S.act({ listed with cash: 50000 }, shop, 7))
     let gone = match Ur.Market.stock_at(demolished, 1) do
       Some(s) -> s
@@ -72,8 +83,8 @@ mod StockMarketTest do
     let listing = Ur.Market.settle(streaky)
     Test.assert_true(S.job_slots(c, shop) < Ur.Market.listing_jobs(c) || S.listed(listing, shop), "A long-profitable firm with enough jobs lists")
 
-    let boom = { c with economy: { c.economy with market: { c.economy.market with index: 13000, history: [12000, 11500, 11000, 10800, 10600, 10500, 10400, 10300, 10200, 10100, 10050, 10000, 10000] } } }
-    let bust = { c with economy: { c.economy with market: { c.economy.market with index: 7000, history: [8000, 8500, 9000, 9200, 9400, 9500, 9600, 9700, 9800, 9900, 9950, 10000, 10000] } } }
+    let boom = { c with economy: { c.economy with market: { c.economy.market with index: 13000, history: [13000, 12000, 11500, 11000, 10800, 10600, 10500, 10400, 10300, 10200, 10100, 10050, 10000, 10000] } } }
+    let bust = { c with economy: { c.economy with market: { c.economy.market with index: 7000, history: [7000, 8000, 8500, 9000, 9200, 9400, 9500, 9600, 9700, 9800, 9900, 9950, 10000, 10000] } } }
     Test.assert_true(Ur.Council.market_vote(boom) >= Ur.Council.market_vote(bust), "Voters reward a rising market")
     Test.assert_true(S.market_boost(boom) > S.market_boost(bust), "A rising market draws better firms")
 

@@ -41,6 +41,10 @@ mod FundingTest do
     let austere = all_at(c, 50, 0)
     let st = S.stats(austere)
     Test.assert_true(S.power_total(st.generation) > 0, "Cutting every service to half keeps some power on")
+    Test.assert_true(S.power_total(st.generation) < S.power_total((S.stats(c)).generation), "Underfunded utilities generate less")
+    let greened = S.act({ c with cash: 10000 }, S.index(11, 20), 53)
+    Test.assert_true(S.environment_score(set_level(greened, 5, 50), S.index(10, 20)) <= S.environment_score(greened, S.index(10, 20)), "Neglected parks do less for their surroundings")
+    Test.assert_true((Ur.Treasury.adjust({ c with economy: { c.economy with administrator: 3 } }, 0, 1)).message != (Ur.Treasury.adjust(c, 0, 1)).message, "The funding message says when the administrator holds a level down")
     Test.assert_true(st.budget.infrastructure <= (S.stats(c)).budget.infrastructure, "Austerity does not raise upkeep")
 
     let administered = { lean with economy: { lean.economy with administrator: 3, funding: NativeArray.make_int(6, 150) } }

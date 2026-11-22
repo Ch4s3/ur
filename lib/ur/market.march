@@ -84,10 +84,13 @@ mod Ur.Market do
     S.clamp(earnings * 12 * multiple * 10 / shares(), 1, 100000000)
   end
 
-  fn trading(c : Ur.Sim.City, lot : Int) : Bool do
+  -- The business still exists: zoned for it, built and not closed down.
+  fn alive(c : Ur.Sim.City, lot : Int) : Bool do
     let zone = S.get(c.zones, lot)
-    (zone == 2 || zone == 4 || S.live_work(c, lot)) && S.get(c.buildings, lot) > 0 && !S.business_closed(c, lot) && !S.building_offline(c, lot)
+    (zone == 2 || zone == 4 || S.live_work(c, lot)) && S.get(c.buildings, lot) > 0 && !S.business_closed(c, lot)
   end
+  -- Alive and open today; a building shut for repairs is alive but not trading.
+  fn trading(c : Ur.Sim.City, lot : Int) : Bool do alive(c, lot) && !S.building_offline(c, lot) end
   fn listing_months(c : Ur.Sim.City) : Int do if c.economy.listing_incentive do 6 else 12 end end
   fn listing_jobs(c : Ur.Sim.City) : Int do if c.economy.listing_incentive do 8 else 12 end end
 
@@ -120,7 +123,11 @@ mod Ur.Market do
         if s.delisted >= 0 do
           let keep = c.month - s.delisted < 24
           move_prices(c, profits, rest, mult, vol, if keep do { out with stocks: Cons(s, out.stocks) } else out end)
-        else if !trading(c, s.lot) do
+        else if alive(c, s.lot) && S.building_offline(c, s.lot) do
+          -- Shut for repairs: trading is suspended and the price holds.
+          let held = { s with earnings: 0, dividend: 0, history: Cons(s.price, List.take(s.history, history_months() - 1)) }
+          move_prices(c, profits, rest, mult, vol, { out with stocks: Cons(held, out.stocks), old_value: out.old_value + s.price, new_value: out.new_value + s.price })
+        else if !alive(c, s.lot) do
           let crashed = S.clamp(s.price / 20, 1, s.price)
           let gone = { s with price: crashed, earnings: 0, dividend: 0, delisted: c.month, history: Cons(crashed, List.take(s.history, history_months() - 1)) }
           move_prices(c, profits, rest, mult, vol, { out with stocks: Cons(gone, out.stocks), old_value: out.old_value + s.price, new_value: out.new_value + crashed })
@@ -134,7 +141,7 @@ mod Ur.Market do
           -- office turned specialist) keeps trading under its new sector.
           let moved = { s with sector: sector_of(c, s.lot), price: price, earnings: earnings, dividend: dividend, history: Cons(price, List.take(s.history, history_months() - 1)) }
           move_prices(c, profits, rest, mult, vol, { out with stocks: Cons(moved, out.stocks), old_value: out.old_value + s.price, new_value: out.new_value + price, dividends: out.dividends + dividend })
-        end end
+        end end end
     end
   end
   pfn new_listings(c : Ur.Sim.City, profits : NativeIntArr, streaks : NativeIntArr, mult : Int, i : Int, next_id : Int, out : List(Ur.Sim.Stock)) : (List(Ur.Sim.Stock), Int) do
@@ -151,7 +158,7 @@ mod Ur.Market do
   -- The incentive's monthly fee, charged before debts are settled so the
   -- overdraft covers it if cash runs short.
   fn charge_incentive(c : Ur.Sim.City) : Ur.Sim.City do
-    if c.economy.listing_incentive do { c with cash: c.cash - incentive_cost() } else c end
+    if c.economy.listing_incentive do Ur.Debt.book_expense({ c with cash: c.cash - incentive_cost() }, incentive_cost()) else c end
   end
   -- What a parcel's households hold in the index, using the same cushion the
   -- bond market treats as spare savings.
@@ -193,12 +200,12 @@ mod Ur.Market do
     let profits = month_profits(c, books, 0, NativeArray.make_int(S.count(), 0))
     let streaks = update_streaks(c, profits, 0, c.economy.profit_streak)
     let moved = move_prices(c, profits, c.economy.stocks, mult, volatility, { stocks: Nil, old_value: 0, new_value: 0, dividends: 0 })
-    let (fresh, next_id) = new_listings({ c with economy: { c.economy with stocks: moved.stocks } }, profits, streaks, mult, 0, market.next_id, Nil)
+    let (fresh, next_id) = new_listings(S.with_stocks(c, moved.stocks), profits, streaks, mult, 0, market.next_id, Nil)
     let index = if moved.old_value > 0 do S.clamp(market.index * S.clamp(moved.new_value * 10000 / moved.old_value, 0, 1000000) / 10000, 1, 100000000) else market.index end
     let first = market.base == 0 && !List.is_empty(fresh)
     let market = { market with sentiment: sentiment, volatility: volatility, index: index, next_id: next_id,
-      base: if first do c.month else market.base end, history: Cons(market.index, List.take(market.history, history_months() - 1)) }
-    let c = { c with economy: { c.economy with stocks: List.append(moved.stocks, fresh), market: market, profit_streak: streaks } }
+      base: if first do c.month else market.base end, history: Cons(index, List.take(market.history, history_months() - 1)) }
+    let c = S.with_stocks({ c with economy: { c.economy with market: market, profit_streak: streaks } }, List.append(moved.stocks, fresh))
     let c = pay_dividends(c, moved.dividends)
     if List.is_empty(fresh) do c else
       { c with message: (match fresh do
