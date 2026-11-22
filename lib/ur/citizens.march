@@ -1994,19 +1994,31 @@ mod Ur.Citizens do
     guard : Int -> Citizen -> Citizen -> WalkCheck) : List(WalkReplan) do
     par_map(events, fn event -> replan(c, event, occupied, clock, tick_time, walk_time, guard))
   end
+  -- What applying a bucket's re-plans changes in the roster, carried in one record so a burst
+  -- of thousands writes the 21-field roster once, not twice a walk (as queue_walk and the
+  -- walk-count update each did).
+  type ReplanState = { pending : List((Int, WalkEvent)), log : List(WalkNote), count : Int, crossings : Map(Int, Int),
+    exits : List(Int), keys : Map(Int, Int) }
   pfn apply_replans(plans : List(WalkReplan), roster : Roster, waking : List(Actor)) : (Roster, List(Actor)) do
+    let start = { pending: roster.walk_pending, log: roster.walk_log, count: roster.walk_count, crossings: roster.walk_crossings,
+      exits: roster.walk_exits, keys: roster.reservations }
+    let (done, woke) = apply_plans(plans, start, waking)
+    ({ roster with walk_pending: done.pending, walk_log: done.log, walk_count: done.count, walk_crossings: done.crossings,
+      walk_exits: done.exits, reservations: done.keys }, woke)
+  end
+  pfn apply_plans(plans : List(WalkReplan), st : ReplanState, waking : List(Actor)) : (ReplanState, List(Actor)) do
     match plans do
-      Nil -> (roster, waking)
+      Nil -> (st, waking)
       Cons(plan, rest) ->
-        let roster = { roster with walk_count: roster.walk_count - 1,
-          walk_crossings: crossing_reservation(roster.walk_crossings, plan.arm, -1) }
+        let crossings = crossing_reservation(st.crossings, plan.arm, -1)
         match plan.next do
-          Some(next) -> apply_replans(rest, queue_walk(roster, next), waking)
+          -- queue_walk, on the carried state
+          Some(next) -> apply_plans(rest, { st with pending: Cons((walk_bucket_of(next), next), st.pending), log: Cons(WalkQueued(next), st.log),
+            crossings: crossing_reservation(crossings, next.arm, 1) }, waking)
           None ->
             let entry = plan.entry
-            let roster = { roster with walk_exits: Cons(entry.slot, roster.walk_exits), walk_log: Cons(WalkLeft(entry.slot), roster.walk_log),
-              reservations: park_actor(roster.reservations, entry.person, 1) }
-            apply_replans(rest, roster, Cons(entry, waking))
+            apply_plans(rest, { st with count: st.count - 1, crossings: crossings, exits: Cons(entry.slot, st.exits),
+              log: Cons(WalkLeft(entry.slot), st.log), keys: park_actor(st.keys, entry.person, 1) }, Cons(entry, waking))
         end
     end
   end
