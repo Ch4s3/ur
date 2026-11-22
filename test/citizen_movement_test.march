@@ -450,6 +450,42 @@ mod CitizenMovementTest do
       Ur.Citizens.step_indexed(c, empty, None, r, 0.64 +. int_to_float(i) *. 0.002, 0.05, empty, 0.0))
     Test.assert_true(Ur.Citizens.reservation_list(later) == Ur.Citizens.recount_reservations(later),
       "and the roster keeps stepping with its reservations whole")
+    -- A rebuild task works out the changes against the roster it started from; the live roster
+    -- has stepped on by the time they are applied.
+    let changes = Ur.Citizens.refresh_changes(roster, next)
+    let moved = List.fold_left(List.range(0, 40), roster, fn (r, i) ->
+      Ur.Citizens.step_indexed(c, empty, None, r, 0.64 +. int_to_float(i) *. 0.002, 0.05, empty, 0.0))
+    let late = Ur.Citizens.apply_changes(c, moved, changes)
+    Test.assert_true(key(Ur.Citizens.snapshot(late)) == key(next), "changes applied after the roster stepped on leave the rebuilt citizens")
+    Test.assert_true(flat(late.parcels) == flat(fresh.parcels), "with a fresh index's parcels")
+    Test.assert_true(Ur.Citizens.reservation_list(late) == Ur.Citizens.recount_reservations(late), "and whole parking reservations")
+    let stepped = Ur.Citizens.citizen_index(Ur.Citizens.snapshot(moved))
+    Test.assert_true(List.all(Ur.Citizens.snapshot(late), fn person ->
+      match (Ur.Citizens.lookup(before, person.id), Ur.Citizens.lookup(stepped, person.id)) do
+        (Some(was), Some(now)) -> was.work != person.work || (now.location == person.location && now.route == person.route && now.activity == person.activity)
+        _ -> true
+      end), "keeping where everyone else had got to")
+  end
+
+  -- checked_route (the per-rebuild table) agrees with valid_route on every citizen's routes,
+  -- and on walks across every lot, its neighbours and a lot two away, in a town with ground
+  -- closed and lots of mixed heights.
+  pfn route_checks_match() : Unit do
+    let towns = [Ur.Scenario.traffic_district(), Ur.Scenario.evacuation_site()]
+    List.each(towns, fn town ->
+      let closed = { town with heights: List.fold_left(List.range(0, S.count() / 7), town.heights, fn (h, i) ->
+        NativeArray.set_int(h, i * 7, S.get(town.heights, i * 7) + (i % 5) * 9)) }
+      List.each([town, closed], fn c ->
+        let k = Ur.Citizens.route_checks(c)
+        let routes = List.flat_map(Ur.Citizens.refresh(c, Nil), fn person -> [person.work_route, person.shop_route, person.park_route])
+        let probes = List.flat_map(List.range(0, S.count() / 3), fn j ->
+          let i = j * 3
+          [[i, S.neighbour(i, 0), S.neighbour(S.neighbour(i, 0), 2)], [i, S.neighbour(i, 1)], [i, S.neighbour(i, 3), i], [i, i + 2]])
+        let probes = List.filter(probes, fn route -> List.all(route, fn lot -> S.valid(lot)))
+        Test.assert_true(List.all(List.append(routes, probes), fn route ->
+          Ur.Citizens.checked_route(c, k, route, true) == Ur.Citizens.valid_route(c, route, true) &&
+            Ur.Citizens.checked_route(c, k, route, false) == Ur.Citizens.valid_route(c, route, false)),
+          "the per-rebuild route table agrees with valid_route")))
   end
 
   fn main(_cap : Cap(IO)) : Unit do
@@ -468,6 +504,7 @@ mod CitizenMovementTest do
     deferred_steps(city, resident, empty)
     commute_reservations()
     refresh_in_place()
+    route_checks_match()
     cached_walk_geometry(city)
     scheduled_crossing(city, resident, empty)
     List.each([2, 3, 4], fn mode -> transit_mode(city, resident, empty, mode))

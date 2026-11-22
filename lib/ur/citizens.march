@@ -82,11 +82,60 @@ mod Ur.Citizens do
     else if Ur.Food.walkable(c, home) && S.get(links, home) >= 0 do follow(c, links, home, Nil, S.count())
     else follow(c, links, Ur.Food.entrance(c, links, home, 0), Cons(home, Nil), S.count()) end end
   end
-  pfn valid_route(c : Ur.Sim.City, route : List(Int), first : Bool) : Bool do
+  doc "Whether [route] can still be walked in [c]: no closed ground, every step a grade link or a short climb, and every lot after the first ([first] true) walkable."
+  fn valid_route(c : Ur.Sim.City, route : List(Int), first : Bool) : Bool do
     match route do
       Cons(a, Cons(b, rest)) ->
-        if !S.ground_closed(c, b) && (S.grade_link(c, a, b) || (S.span_distance(a, b) == 1 && int_abs(S.get(c.heights, a) - S.get(c.heights, b)) <= 12)) &&
-          (first || Ur.Food.walkable(c, a) || S.valid(S.campus_root(c, a)) || S.get(c.parks, a) > 0) do valid_route(c, Cons(b, rest), false) else false end
+        if step_ok(c, a, b) && (first || passable(c, a)) do valid_route(c, Cons(b, rest), false) else false end
+      Cons(_, Nil) -> true
+      Nil -> true
+    end
+  end
+  -- valid_route's per-step tests, taken once per rebuild instead of once per citizen per step:
+  -- [steps] at lot*4+d is 1 where the step to neighbour d passes the ground/grade test, and
+  -- [walks] at a lot is 1 where a route may pass through it. A rebuild re-checks three routes
+  -- per citizen; at 500,000 citizens that was most of the extra second a rebuild over the old
+  -- roster took.
+  type RouteChecks = { steps : NativeIntArr, walks : NativeIntArr }
+  pfn step_ok(c : Ur.Sim.City, a : Int, b : Int) : Bool do
+    !S.ground_closed(c, b) && (S.grade_link(c, a, b) || (S.span_distance(a, b) == 1 && int_abs(S.get(c.heights, a) - S.get(c.heights, b)) <= 12))
+  end
+  pfn passable(c : Ur.Sim.City, a : Int) : Bool do
+    Ur.Food.walkable(c, a) || S.valid(S.campus_root(c, a)) || S.get(c.parks, a) > 0
+  end
+  doc "valid_route's per-step tests over [c], for checked_route."
+  fn route_checks(c : Ur.Sim.City) : RouteChecks do
+    route_checks_from(c, 0, NativeArray.make_int(S.count() * 4, 0), NativeArray.make_int(S.count(), 0))
+  end
+  pfn route_checks_from(c : Ur.Sim.City, a : Int, steps : NativeIntArr, walks : NativeIntArr) : RouteChecks do
+    if a >= S.count() do { steps: steps, walks: walks } else
+      let steps = step_bits(c, a, 0, steps)
+      route_checks_from(c, a + 1, steps, if passable(c, a) do NativeArray.set_int(walks, a, 1) else walks end)
+    end
+  end
+  pfn step_bits(c : Ur.Sim.City, a : Int, d : Int, steps : NativeIntArr) : NativeIntArr do
+    if d == 4 do steps else
+      let b = S.neighbour(a, d)
+      step_bits(c, a, d + 1, if S.valid(b) && step_ok(c, a, b) do NativeArray.set_int(steps, a * 4 + d, 1) else steps end)
+    end
+  end
+  -- The direction (as S.neighbour numbers them) from [a] to [b], or -1 when b is no neighbour.
+  pfn step_direction(a : Int, b : Int) : Int do
+    let w = S.width()
+    if b == a - 1 && a % w > 0 do 0
+    else if b == a + 1 && a % w < w - 1 do 1
+    else if b == a - w && a >= w do 2
+    else if b == a + w && a < S.count() - w do 3
+    else -1 end end end end
+  end
+  doc "valid_route, reading [k] (route_checks of the same city) for each step between neighbours; a bridge or tunnel link is tested in full."
+  fn checked_route(c : Ur.Sim.City, k : RouteChecks, route : List(Int), first : Bool) : Bool do
+    match route do
+      Cons(a, Cons(b, rest)) ->
+        let d = if S.valid(a) do step_direction(a, b) else -1 end
+        let ok = if d >= 0 do NativeArray.get_int(k.steps, a * 4 + d) == 1 else step_ok(c, a, b) end
+        let through = first || (if S.valid(a) do NativeArray.get_int(k.walks, a) == 1 else passable(c, a) end)
+        if ok && through do checked_route(c, k, Cons(b, rest), false) else false end
       Cons(_, Nil) -> true
       Nil -> true
     end
@@ -256,14 +305,14 @@ mod Ur.Citizens do
       None -> true
     end
   end
-  pfn existing(c : Ur.Sim.City, old : Option(Citizen), home : Int, work : Int, work_route : List(Int), study : Int, qualification : Int) : Option(Citizen) do
+  pfn existing(c : Ur.Sim.City, k : RouteChecks, old : Option(Citizen), home : Int, work : Int, work_route : List(Int), study : Int, qualification : Int) : Option(Citizen) do
     match old do
       None -> None
       Some(person) ->
         if person.home == home && person.work == work && person.work_route == work_route && person.study == study && person.qualification == qualification &&
           (person.shop < 0 || S.public_trade(c, person.shop)) && valid_reserved_parking(c, person.parking) &&
-          valid_reserved_parking(c, person.arrival) && valid_route(c, person.work_route, true) &&
-          valid_route(c, person.shop_route, true) do Some(person)
+          valid_reserved_parking(c, person.arrival) && checked_route(c, k, person.work_route, true) &&
+          checked_route(c, k, person.shop_route, true) do Some(person)
         else None end
     end
   end
@@ -357,7 +406,7 @@ mod Ur.Citizens do
   -- linear probing, at most half full) over a vector of the citizens. It answers exactly what a
   -- Map built by inserting them in order would (the last of a repeated id wins); at 500,000
   -- citizens building that Map was most of a multi-second rebuild.
-  type CitizenIndex = { keys : NativeIntArr, at : NativeIntArr, people : Array.PVec(Citizen), mask : Int }
+  type CitizenIndex = { keys : NativeIntArr, at : NativeIntArr, people : Array.PVec(Citizen), list : List(Citizen), mask : Int }
   pfn index_size(n : Int, size : Int) : Int do if size >= n * 2 do size else index_size(n, size * 2) end end
   pfn id_hash(id : Int, mask : Int) : Int do
     let x = int_xor(id, int_shr(id, 17)) * 1597334677
@@ -379,23 +428,45 @@ mod Ur.Citizens do
     let size = index_size(List.length(people), 16)
     let mask = size - 1
     let (keys, at) = index_fill(NativeArray.make_int(size, -1), NativeArray.make_int(size, 0), people, 0, mask)
-    { keys: keys, at: at, people: Array.from_list(people), mask: mask }
+    { keys: keys, at: at, people: Array.from_list(people), list: people, mask: mask }
   end
   fn lookup(ix : CitizenIndex, id : Int) : Option(Citizen) do
     let h = index_probe(ix.keys, id, id_hash(id, ix.mask), ix.mask)
     if NativeArray.get_int(ix.keys, h) == id do Some(Array.get(ix.people, NativeArray.get_int(ix.at, h))) else None end
   end
-  -- Folds over each id's citizen once (the one lookup returns), in no particular order.
-  pfn index_fold(ix : CitizenIndex, acc : b, f : b -> Citizen -> b) : b do
-    index_fold_from(ix, 0, acc, f)
+  -- The position in the indexed list of [id]'s citizen (the one lookup returns), or -1.
+  pfn index_position(ix : CitizenIndex, id : Int) : Int do
+    let h = index_probe(ix.keys, id, id_hash(id, ix.mask), ix.mask)
+    if NativeArray.get_int(ix.keys, h) == id do NativeArray.get_int(ix.at, h) else -1 end
   end
-  pfn index_fold_from(ix : CitizenIndex, h : Int, acc : b, f : b -> Citizen -> b) : b do
-    if h > ix.mask do acc else
-      let acc = if NativeArray.get_int(ix.keys, h) == -1 do acc else f(acc, Array.get(ix.people, NativeArray.get_int(ix.at, h))) end
-      index_fold_from(ix, h + 1, acc, f)
+  -- Folds over each id's citizen once (the one lookup returns), walking the indexed list:
+  -- Array.get on the vector costs a trie walk per citizen.
+  pfn index_fold(ix : CitizenIndex, acc : b, f : b -> Citizen -> b) : b do
+    index_fold_list(ix, ix.list, 0, acc, f)
+  end
+  pfn index_fold_list(ix : CitizenIndex, list : List(Citizen), i : Int, acc : b, f : b -> Citizen -> b) : b do
+    match list do
+      Nil -> acc
+      Cons(person, rest) ->
+        index_fold_list(ix, rest, i + 1, if index_position(ix, person.id) == i do f(acc, person) else acc end, f)
     end
   end
-  type RosterBuild = { old : CitizenIndex, positions : NativeIntArr, parking : Map(Int, Int), people : List(Citizen) }
+  -- lookup for a caller that asks for ids in about the order they were indexed (a rebuild asks
+  -- in roster order): [cursor] is the indexed list from position [at] on. A citizen at or
+  -- past the cursor is reached by walking it forward; one behind it falls back to lookup.
+  type IndexCursor = { rest : List(Citizen), at : Int }
+  pfn cursor_lookup(ix : CitizenIndex, cursor : IndexCursor, id : Int) : (Option(Citizen), IndexCursor) do
+    let target = index_position(ix, id)
+    if target < 0 do (None, cursor)
+    else if target < cursor.at do (Some(Array.get(ix.people, target)), cursor)
+    else
+      match List.drop(cursor.rest, target - cursor.at) do
+        Cons(person, rest) -> (Some(person), { rest: rest, at: target + 1 })
+        Nil -> (None, cursor)
+      end
+    end end
+  end
+  type RosterBuild = { old : CitizenIndex, cursor : IndexCursor, checks : RouteChecks, positions : NativeIntArr, parking : Map(Int, Int), people : List(Citizen) }
   type FamilySizes = { base : Int, larger : Map(Int, Bool) }
   pfn family_sizes(c : Ur.Sim.City, homes : List(Int), households : Int, people : Int) : FamilySizes do
     let extra = people % households
@@ -443,13 +514,13 @@ mod Ur.Citizens do
             end
             let position = if study < 0 && S.valid(work) do S.get(build.positions, work) + 1 else 0 end
             let positions = if position > 0 do NativeArray.set_int(build.positions, work, position) else build.positions end
-            let old = lookup(build.old, id)
+            let (old, cursor) = cursor_lookup(build.old, build.cursor, id)
             let parking_keys = match old do
               Some(person) -> park_actor(build.parking, person, -1)
               None -> build.parking
             end
             let old = Option.filter(old, fn person -> person.home == lot)
-            let prior = existing(c, old, lot, work, work_route, study, qualification)
+            let prior = existing(c, build.checks, old, lot, work, work_route, study, qualification)
             let wants_car = roll / 19 % 100 < (if S.get(c.buildings, lot) >= 3 do 32 else if S.get(c.buildings, lot) == 2 do 62 else 92 end end)
             let person = match prior do
               Some(person) ->
@@ -478,7 +549,7 @@ mod Ur.Citizens do
                     route: Nil, target: lot, previous: -1, board: -1, alight: -1, bus_slot: -1, transit_phase: 0, by_car: false, car_phase: 0, parking: parking_value(parking), arrival: 0, activity: 0, wait: if study >= 0 do int_to_float(id % 13) *. 0.02 else 0.2 +. int_to_float(id % 17) *. 0.24 end, progress: 0.0, queued: false, rest_until: -1 }
             end
             let person = plan_park(c, walk, person)
-            let build = { build with positions: positions, parking: park_actor(parking_keys, person, 1), people: Cons(person, build.people) }
+            let build = { build with cursor: cursor, positions: positions, parking: park_actor(parking_keys, person, 1), people: Cons(person, build.people) }
             roster(c, stores, bars, walk, education, sizes, build, homes, others, hires)
         end
     end
@@ -564,7 +635,7 @@ mod Ur.Citizens do
           let bars = Ur.Food.destinations(c, fn i -> S.nightlife(c, i))
           let education = { schools: education_routes(c, roads, 0), population: people, hires: job_routes(c, hires), shelters: orders }
           let parking = index_fold(old, Map.empty(), fn (keys, person) -> park_actor(keys, person, 1))
-          let build = { old: old, positions: NativeArray.make_int(S.count(), 0), parking: parking, people: Nil }
+          let build = { old: old, cursor: { rest: old.list, at: 0 }, checks: if List.is_empty(old.list) do { steps: NativeArray.make_int(1, 0), walks: NativeArray.make_int(1, 0) } else route_checks(c) end, positions: NativeArray.make_int(S.count(), 0), parking: parking, people: Nil }
           let sizes = family_sizes(c, homes, households, people)
           roster(c, stores, bars, S.park_walk(c), education, sizes, build, homes, members_at(c, sizes, lot),
             Map.get_or(education.hires, lot, Nil, Map.int_cmp))
@@ -1678,7 +1749,8 @@ mod Ur.Citizens do
   -- of them; re-indexing all of them took most of a second, and re-planning every walk it
   -- dropped took several more over the next frames.
   -- A fingerprint of a citizen's assignment (home, work, study, shop, park, household,
-  -- shelter and their routes); two citizens with equal prints are taken to have the same one.
+  -- shelter and their routes; not campus_day, which a step sets on each trip to class); two
+  -- citizens with equal prints are taken to have the same one.
   -- A 44-bit collision between two different ones is vanishingly unlikely, and would only
   -- leave that citizen unrefiled until the next rebuild.
   -- kept to 44 bits so the multiply cannot overflow (March traps on it)
@@ -1696,7 +1768,7 @@ mod Ur.Citizens do
     let h = print_mix(print_mix(print_mix(print_mix(17, a.home), a.work), a.work_position), a.work_board)
     let h = print_mix(print_mix(print_mix(print_mix(h, a.study), a.qualification), a.shop), a.park)
     let h = print_mix(print_mix(print_mix(print_mix(h, a.household), a.member), a.family_size), a.shelter)
-    route_print(route_print(route_print(print_mix(h, a.campus_day), a.work_route), a.shop_route), a.park_route)
+    route_print(route_print(route_print(h, a.work_route), a.shop_route), a.park_route)
   end
   -- The arrays travel as separate arguments, as in index_fill: held in a tuple accumulator
   -- they are shared, and every set copies the whole table.
@@ -1773,7 +1845,16 @@ mod Ur.Citizens do
   end
   doc "Apply a rebuild's citizens [people] (refresh_with) to [roster] in place: only citizens whose assignment changed, or who are new or gone, are refiled; the rest keep their state."
   fn apply_refresh(c : Ur.Sim.City, roster : Roster, people : List(Citizen)) : Roster do
-    let roster = flush_walks(roster)
+    apply_changes(c, roster, refresh_changes(roster, people))
+  end
+  -- What apply_refresh refiles: the entries leaving (gone, or with a changed assignment, each
+  -- with its slot) and the citizens arriving in their place, worked out against [roster].
+  -- Pure, so a rebuild task can do it against the roster it started from: until a rebuild is
+  -- applied nothing else changes who lives and works where (a step only moves citizens; the
+  -- shelter fields it sets belong to evacuations, which re-index instead).
+  type RefreshChanges = { leaving : List(Actor), arriving : List(Citizen), top : Int }
+  doc "The citizens a rebuild's [people] changes in [roster], for apply_changes."
+  fn refresh_changes(roster : Roster, people : List(Citizen)) : RefreshChanges do
     let current = all_actors(roster)
     -- the rebuilt citizens by id, each with its assignment's fingerprint (no citizen is read
     -- back out: Array.get on a vector this size cost more than the rest of the apply)
@@ -1782,12 +1863,17 @@ mod Ur.Citizens do
     let (leaving, marks) = mark_current(current, keys, prints, NativeArray.make_int(mask + 1, 0), Nil, mask)
     let arriving = List.filter(people, fn person ->
       NativeArray.get_int(marks, index_probe(keys, person.id, id_hash(person.id, mask), mask)) != 1)
+    { leaving: leaving, arriving: arriving, top: List.fold_left(current, -1, fn (most, entry) -> if entry.slot > most do entry.slot else most end) }
+  end
+  doc "Refiles in [roster] the citizens [changes] (refresh_changes) names; everyone else keeps their state."
+  fn apply_changes(c : Ur.Sim.City, roster : Roster, changes : RefreshChanges) : Roster do
+    let leaving = changes.leaving
+    let arriving = changes.arriving
     if List.is_empty(leaving) && List.is_empty(arriving) do roster else
-      let roster = remove_ids(c, roster, citizen_index(List.map(leaving, fn entry -> entry.person)))
+      let roster = remove_ids(c, flush_walks(roster), citizen_index(List.map(leaving, fn entry -> entry.person)))
       -- a changed citizen keeps its slot; a new one takes the next one free
       let slots = List.fold_left(leaving, Map.empty(), fn (m, entry) -> Map.insert(m, entry.person.id, entry.slot, Map.int_cmp))
-      let top = List.fold_left(current, -1, fn (most, entry) -> if entry.slot > most do entry.slot else most end)
-      let (entries, _) = List.fold_left(arriving, (Nil, top + 1), fn (acc, person) -> slot_for(acc, person, slots))
+      let (entries, _) = List.fold_left(arriving, (Nil, changes.top + 1), fn (acc, person) -> slot_for(acc, person, slots))
       let parcels = List.fold_left(leaving, roster.parcels, fn (m, entry) ->
         List.fold_left(parcel_lots(entry.person), m, fn (m2, lot) -> unregister_parcel(m2, lot, entry.person.id)))
       let parcels = List.fold_left(entries, parcels, fn (m, entry) ->
