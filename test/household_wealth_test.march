@@ -30,6 +30,9 @@ mod HouseholdWealthTest do
     let bst = S.stats(broke)
     Test.assert_true(S.get((S.settle_wealth(broke, bst.routes, bst.commutes, bst.labor, 0)).economy.savings, home) >= 0, "Savings never fall below zero")
 
+    let closed = { rich with flood_damage: NativeArray.set_int(rich.flood_damage, home, 3) }
+    let cst = S.stats(closed)
+    Test.assert_eq_int(S.get((S.settle_wealth(closed, cst.routes, cst.commutes, cst.labor, 0)).economy.savings, home), S.get(rich.economy.savings, home), "A household displaced by repairs keeps its savings")
     Test.assert_eq_int(S.invested_share(50, 90), 0, "Savings under the cushion stay out of the market")
     Test.assert_true(S.invested_share(2000, 90) > S.invested_share(200, 90), "Wealthier households invest a larger share")
     let rst = S.stats(rich)

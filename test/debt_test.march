@@ -16,7 +16,7 @@ mod DebtTest do
   pfn earning(c : Ur.Sim.City, month : Int, left : Int, out : List(Ur.Sim.FinanceMonth)) : List(Ur.Sim.FinanceMonth) do
     if left <= 0 do List.reverse(out) else
       let budget = (S.stats(c)).budget
-      earning(c, month - 1, left - 1, Cons({ month: month, revenue: 6000, expenditures: 5000, budget: budget, construction: 0, property_receipts: 0 }, out))
+      earning(c, month - 1, left - 1, Cons({ month: month, revenue: 6000, expenditures: 5000, budget: budget, construction: 0, property_receipts: 0, debt_service: 0 }, out))
     end
   end
   fn main(_cap : Cap(IO)) : Unit do
@@ -27,6 +27,11 @@ mod DebtTest do
     Test.assert_eq_int(loan.cash, c.cash + 5000, "A loan pays out at once")
     Test.assert_true(Ur.Debt.debt_service(loan) > 5000 / Ur.Debt.loan_months(), "A loan costs principal plus interest each month")
     let repaid = Ur.Debt.settle(loan)
+    let booked = match repaid.finance_history do
+      Cons(m, _) -> m.debt_service
+      Nil -> 0
+    end
+    Test.assert_true(booked > 0, "Debt service is recorded in the month's finances")
     Test.assert_true(Ur.Debt.total_debt(repaid) < 5000, "Each month pays down the loan")
     Test.assert_true(repaid.cash < loan.cash, "Debt service comes out of cash")
 
@@ -55,6 +60,8 @@ mod DebtTest do
     let site = S.index(12, 20)
     let refused = S.act({ administered with cash: 50000 }, site, 2)
     Test.assert_eq_int(S.get(refused.zones, site), S.get(administered.zones, site), "The administrator freezes paid construction")
+    let dragged = S.draft_act({ administered with cash: 50000 }, site, 2)
+    Test.assert_eq_int(S.get(dragged.zones, site), S.get(administered.zones, site), "The freeze covers dragged construction too")
     let home = S.index(10, 20)
     let cleared = S.act({ administered with cash: 50000 }, home, 7)
     Test.assert_eq_int(S.get(cleared.buildings, home), 0, "Demolition is still allowed")
@@ -81,7 +88,12 @@ mod DebtTest do
       Some(d) -> d.resident > 0
       None -> false
     end, "The bond records what residents hold")
-    Test.assert_eq_int(total_savings(Ur.Debt.settle({ issued with cash: 0 }), 0, 0), total_savings(issued, 0, 0), "Bondholders receive nothing in a month the city cannot pay")
+    let shorted = Ur.Debt.settle({ issued with cash: 0 })
+    Test.assert_eq_int(total_savings(shorted, 0, 0), total_savings(issued, 0, 0), "Bondholders receive nothing in a month the city cannot pay")
+    Test.assert_true(shorted.economy.resident_arrears > 0, "What residents were shorted is recorded")
+    let made_good = Ur.Debt.settle({ shorted with cash: 100000 })
+    Test.assert_eq_int(made_good.economy.resident_arrears, 0, "Clearing the arrears settles the residents' claim")
+    Test.assert_true(total_savings(made_good, 0, 0) >= total_savings(shorted, 0, 0) + shorted.economy.resident_arrears, "Residents are repaid what they were shorted")
     let paid = Ur.Debt.settle({ issued with cash: 100000 })
     Test.assert_true(total_savings(paid, 0, 0) > total_savings(issued, 0, 0), "Bond interest and principal flow back to resident holders")
     let junk = { issued with month: 30, economy: { issued.economy with missed: [29, 25, 20] } }

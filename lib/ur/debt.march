@@ -215,6 +215,16 @@ mod Ur.Debt do
     !List.any(c.economy.missed, fn m -> m > c.month - 3)
   end
 
+  -- Add a payment made after the month's books closed to that month's record,
+  -- so the Finance panel and the deficit count include it.
+  fn book_expense(c : Ur.Sim.City, amount : Int) : Ur.Sim.City do
+    if amount <= 0 do c else
+      match c.finance_history do
+        Nil -> c
+        Cons(m, rest) -> { c with finance_history: Cons({ m with expenditures: m.expenditures + amount, debt_service: m.debt_service + amount }, rest) }
+      end
+    end
+  end
   -- Month end, after the city's books are settled: cover any operating
   -- shortfall, pay debt service and arrears, then move through the stages.
   fn settle(c : Ur.Sim.City) : Ur.Sim.City do
@@ -232,7 +242,14 @@ mod Ur.Debt do
     -- Resident bondholders receive only what the city actually paid; the rest
     -- is a default they bear with the city's other creditors.
     let resident_paid = if due > 0 do to_residents * paid_due / due else to_residents end
-    let c = pay_residents({ c with cash: c.cash - paid, economy: { c.economy with arrears: arrears, missed: missed } }, resident_paid)
+    -- What residents were shorted joins their claim on the arrears, and they
+    -- get it back as the arrears are paid down.
+    let old_arrears = c.economy.arrears
+    let claim = c.economy.resident_arrears
+    let resident_back = if old_arrears > 0 do S.clamp((paid - paid_due) * claim / old_arrears, 0, claim) else 0 end
+    let resident_arrears = if arrears == 0 do 0 else claim - resident_back + (to_residents - resident_paid) end
+    let settled = { c with cash: c.cash - paid, economy: { c.economy with arrears: arrears, missed: missed, resident_arrears: resident_arrears } }
+    let c = pay_residents(book_expense(settled, paid), resident_paid + (if arrears == 0 do claim else resident_back end))
     let misses = misses_within(c, 12)
     let administrator = if c.economy.administrator < 0 && missed_now && misses >= 3 do c.month
       else if c.economy.administrator >= 0 && arrears == 0 && c.month - c.economy.administrator >= 3 && paid_streak(c) do -1

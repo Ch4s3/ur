@@ -296,7 +296,7 @@ mod Ur.Hud do
     let right = mx -. menu_x(w)
     let width = menu_width(w)
     let y = my -. menu_y(h)
-    let minus = 18.0 +. width -. 118.0
+    let minus = funding_buttons(width)
     let row = float_to_int((y -. 100.0) /. 36.0)
     let along = right -. 18.0
     if tab == 17 && y >= 100.0 && row <= 5 && float_to_int(y -. 100.0) % 36 < 25 && right >= minus && right < minus +. 66.0 do
@@ -314,6 +314,8 @@ mod Ur.Hud do
       else if along >= 364.0 && along < 396.0 do (21, 1) else (-1, 0) end end end
     else (-1, 0) end end end
   end
+  -- Left edge of a funding row's − and + buttons, measured from the menu's left edge.
+  pfn funding_buttons(menu_width : Float) : Float do menu_width -. 136.0 end
   pfn plus_minus(a : Strata.Ui.Ui, x : Float, y : Float) : Strata.Ui.Ui do
     let a = U.rect(a, 0, x, y, 32.0, 25.0, (0.15, 0.26, 0.29, 1.0))
     let a = U.rect(a, 0, x +. 34.0, y, 32.0, 25.0, (0.15, 0.26, 0.29, 1.0))
@@ -326,7 +328,8 @@ mod Ur.Hud do
       let a = label(a, x, top +. 3.0, 13.0, S.service_group_name(group), true)
       let a = label(a, x +. 200.0, top +. 3.0, 13.0, int_to_string(level) ++ "%", level == 100)
       let a = label(a, x +. 260.0, top +. 3.0, 12.0, "$" ++ int_to_string(S.service_spending(c, st, group)) ++ " a month", false)
-      funding_rows(plus_minus(a, x +. width -. 118.0, top), c, st, x, y, width, group + 1)
+      -- `x` is inset 18 px and `width` is the menu's width less both insets.
+      funding_rows(plus_minus(a, x -. 18.0 +. funding_buttons(width +. 36.0), top), c, st, x, y, width, group + 1)
     end
   end
   pfn funding_panel(a : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, x : Float, y : Float, width : Float) : Strata.Ui.Ui do
@@ -445,7 +448,7 @@ mod Ur.Hud do
     let a = finance_button(a, x, y +. 84.0, 170.0, if c.economy.listing_incentive do "Listing incentive: on" else "Listing incentive: off" end, c.economy.listing_incentive)
     let a = label(a, x +. 186.0, y +. 88.0, 12.0, "Tax break " ++ int_to_string(c.economy.listed_tax_break) ++ "%", c.economy.listed_tax_break > 0)
     let a = plus_minus(a, x +. 330.0, y +. 84.0)
-    let a = price_chart(a, Cons(market.index, market.history), x, y +. 116.0, width -. 8.0, 54.0, (0.38, 0.78, 0.72, 1.0))
+    let a = price_chart(a, market.history, x, y +. 116.0, width -. 8.0, 54.0, (0.38, 0.78, 0.72, 1.0))
     let ordered = stock_order(c)
     let a = if List.is_empty(ordered) do
       prose(a, x, y +. 196.0, 12.0, "No company has listed yet. Firms list after " ++ int_to_string(Ur.Market.listing_months(c)) ++ " profitable months with " ++ int_to_string(Ur.Market.listing_jobs(c)) ++ " or more jobs.")
@@ -525,7 +528,7 @@ mod Ur.Hud do
     end
   end
   fn forecast(c : Ur.Sim.City, current : Ur.Sim.Budget) : List(FinancePoint) do
-    let expenses = current.infrastructure + current.operations
+    let expenses = current.infrastructure + current.operations + Ur.Debt.debt_service(c) + (if c.economy.listing_incentive do Ur.Market.incentive_cost() else 0 end)
     match c.finance_history do
       Nil -> if c.harbour < 0 do Nil else project_months(c.month + 1, current.revenue, expenses, 0, 0, 1, 0) end
       Cons(latest, _) ->
@@ -649,7 +652,7 @@ mod Ur.Hud do
     let a = label(a, x, y +. 58.0, 20.0, "City finances", true)
     if c.harbour < 0 do prose(a, x, y +. 105.0, 14.0, "Establish a harbour to see the forecast.") else
         let latest = match c.finance_history do
-          Nil -> { month: c.month, revenue: current.revenue, expenditures: current.infrastructure + current.operations, budget: current, construction: 0, property_receipts: 0 }
+          Nil -> { month: c.month, revenue: current.revenue, expenditures: current.infrastructure + current.operations, budget: current, construction: 0, property_receipts: 0, debt_service: 0 }
           Cons(m, _) -> m
         end
         let chosen = month_or_latest(c.finance_history, view.month, latest)
@@ -706,7 +709,7 @@ mod Ur.Hud do
           let a = if chosen.property_receipts > 0 do label(a, expense_x, y +. 240.0, 10.0, "Property recoveries included: $" ++ int_to_string(chosen.property_receipts), false) else a end
           money_rows(a, expense_x, y +. 280.0, column,
             Cons(("Construction", chosen.construction), Cons(("Infrastructure upkeep", b.infrastructure), Cons(("Power generation", b.power_cost),
-            Cons(("Food imports", b.food_cost), Cons(("Water supply", b.water_cost), Cons(("Waste and sewage", b.sanitation_cost), Cons(("Bus operations", b.bus_operations), Cons(("Freight operations", b.freight_operations), Nil)))))))))
+            Cons(("Food imports", b.food_cost), Cons(("Water supply", b.water_cost), Cons(("Waste and sewage", b.sanitation_cost), Cons(("Bus operations", b.bus_operations), Cons(("Freight operations", b.freight_operations), Cons(("Debt service and fees", chosen.debt_service), Nil))))))))))
         end
     end
   end

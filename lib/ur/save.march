@@ -269,11 +269,12 @@ mod Ur.Save do
       Cons(("insolvent", Json.encode_bool(e.insolvent)),
       Cons(("debt_history", Json.encode_array(List.map(e.debt_history, fn sample -> enc_array(sample, 3, Nil)))),
       Cons(("bond_size", Json.encode_int(e.bond_size)),
+      Cons(("resident_arrears", Json.encode_int(e.resident_arrears)),
       Cons(("stocks", Json.encode_array(List.map(e.stocks, encode_stock))),
       Cons(("market", encode_market(e.market)),
       Cons(("listing_incentive", Json.encode_bool(e.listing_incentive)),
       Cons(("listed_tax_break", Json.encode_int(e.listed_tax_break)),
-      Cons(("profit_streak", enc_array(e.profit_streak, S.count() - 1, Nil)), Nil)))))))))))))))))))
+      Cons(("profit_streak", enc_array(e.profit_streak, S.count() - 1, Nil)), Nil))))))))))))))))))))
   end
   pfn decode_economy(j : Json.JsonValue) : Result(Ur.Sim.Economy, String) do
     let base = S.new_economy()
@@ -296,6 +297,7 @@ mod Ur.Save do
       Some(raw) -> items(raw, decode_parcel_sample, 24)
     end
     let? bond_size = opt_int(j, "bond_size", base.bond_size)
+    let? resident_arrears = opt_int(j, "resident_arrears", 0)
     let? stocks = match Json.get(j, "stocks") do
       None -> Ok(Nil)
       Some(raw) -> items(raw, decode_stock, S.count())
@@ -309,8 +311,8 @@ mod Ur.Save do
     let? profit_streak = opt_parcels(j, "profit_streak", S.count(), 100000, base.profit_streak)
     Ok({ land_value: land_value, property_rate: S.clamp(property_rate, 0, 40), savings: savings, wealth_history: wealth_history,
       funding: funding, debts: debts, next_debt: S.clamp(next_debt, 1, 100000000), arrears: S.clamp(arrears, 0, 1000000000), missed: missed,
-      administrator: administrator, insolvent: insolvent, debt_history: debt_history, bond_size: S.clamp(bond_size, 10000, 200000),
-      stocks: stocks, market: market, listing_incentive: listing_incentive, listed_tax_break: S.clamp(listed_tax_break, 0, 50), profit_streak: profit_streak })
+      administrator: administrator, insolvent: insolvent, debt_history: debt_history, bond_size: S.clamp(bond_size, 10000, 200000), resident_arrears: S.clamp(resident_arrears, 0, 1000000000),
+      stocks: stocks, listed_lots: S.listed_flags(stocks), market: market, listing_incentive: listing_incentive, listed_tax_break: S.clamp(listed_tax_break, 0, 50), profit_streak: profit_streak })
   end
   pfn encode_month(v : Ur.Sim.FinanceMonth) : Json.JsonValue do
     Json.encode_object(
@@ -319,7 +321,8 @@ mod Ur.Save do
       Cons(("expenditures", Json.encode_int(v.expenditures)),
       Cons(("construction", Json.encode_int(v.construction)),
       Cons(("property_receipts", Json.encode_int(v.property_receipts)),
-      Cons(("budget", encode_budget(v.budget)), Nil)))))))
+      Cons(("debt_service", Json.encode_int(v.debt_service)),
+      Cons(("budget", encode_budget(v.budget)), Nil))))))))
   end
   pfn decode_month(j : Json.JsonValue) : Result(Ur.Sim.FinanceMonth, String) do
     let? raw_month = field(j, "month")
@@ -336,8 +339,9 @@ mod Ur.Save do
       None -> Ok(0)
       Some(raw) -> integer(raw)
     end
+    let? debt_service = opt_int(j, "debt_service", 0)
     Ok({ month: month, revenue: revenue, expenditures: expenditures, construction: construction, property_receipts: property_receipts,
-      budget: budget })
+      budget: budget, debt_service: debt_service })
   end
   pfn encode_shipment(v : Ur.Sim.Shipment) : Json.JsonValue do
     Json.encode_object(
