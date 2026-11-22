@@ -1671,6 +1671,150 @@ mod Ur.Citizens do
       end
     end
   end
+  -- A rebuild's citizens (refresh_with) applied to the live roster instead of re-indexing it:
+  -- only citizens whose assignment differs, and those new or gone, are taken out and filed
+  -- again (as index_people would, rest cleared as wake_indoor does); everyone else keeps their
+  -- state, a walk in progress included. An edit at 500,000 citizens changes about a thousand
+  -- of them; re-indexing all of them took most of a second, and re-planning every walk it
+  -- dropped took several more over the next frames.
+  -- A fingerprint of a citizen's assignment (home, work, study, shop, park, household,
+  -- shelter and their routes); two citizens with equal prints are taken to have the same one.
+  -- A 44-bit collision between two different ones is vanishingly unlikely, and would only
+  -- leave that citizen unrefiled until the next rebuild.
+  -- kept to 44 bits so the multiply cannot overflow (March traps on it)
+  pfn print_mix(h : Int, v : Int) : Int do
+    let x = int_and(h * 65599 + v + 40503, 17592186044415)
+    int_xor(x, int_shr(x, 21))
+  end
+  pfn route_print(h : Int, route : List(Int)) : Int do
+    match route do
+      Nil -> print_mix(h, -7)
+      Cons(lot, rest) -> route_print(print_mix(h, lot), rest)
+    end
+  end
+  pfn assignment_print(a : Citizen) : Int do
+    let h = print_mix(print_mix(print_mix(print_mix(17, a.home), a.work), a.work_position), a.work_board)
+    let h = print_mix(print_mix(print_mix(print_mix(h, a.study), a.qualification), a.shop), a.park)
+    let h = print_mix(print_mix(print_mix(print_mix(h, a.household), a.member), a.family_size), a.shelter)
+    route_print(route_print(route_print(print_mix(h, a.campus_day), a.work_route), a.shop_route), a.park_route)
+  end
+  -- The arrays travel as separate arguments, as in index_fill: held in a tuple accumulator
+  -- they are shared, and every set copies the whole table.
+  pfn file_prints(keys : NativeIntArr, prints : NativeIntArr, people : List(Citizen), mask : Int) : (NativeIntArr, NativeIntArr) do
+    match people do
+      Nil -> (keys, prints)
+      Cons(person, rest) ->
+        let h = index_probe(keys, person.id, id_hash(person.id, mask), mask)
+        file_prints(NativeArray.set_int(keys, h, person.id), NativeArray.set_int(prints, h, assignment_print(person)), rest, mask)
+    end
+  end
+  -- Each of [current] against the rebuilt citizens: leaving if gone or changed; its slot
+  -- marked 1 when it stays as it is, 2 when it changed.
+  pfn mark_current(current : List(Actor), keys : NativeIntArr, prints : NativeIntArr, marks : NativeIntArr, leaving : List(Actor), mask : Int) : (List(Actor), NativeIntArr) do
+    match current do
+      Nil -> (leaving, marks)
+      Cons(entry, rest) ->
+        let id = entry.person.id
+        let h = index_probe(keys, id, id_hash(id, mask), mask)
+        if NativeArray.get_int(keys, h) != id do mark_current(rest, keys, prints, marks, Cons(entry, leaving), mask)
+        else if NativeArray.get_int(prints, h) == assignment_print(entry.person) do mark_current(rest, keys, prints, NativeArray.set_int(marks, h, 1), leaving, mask)
+        else mark_current(rest, keys, prints, NativeArray.set_int(marks, h, 2), Cons(entry, leaving), mask) end end
+    end
+  end
+  pfn parcel_lots(person : Citizen) : List(Int) do
+    let lots = Cons(person.home, Nil)
+    let lots = if person.work == person.home do lots else Cons(person.work, lots) end
+    if person.shelter == person.home || person.shelter == person.work do lots else Cons(person.shelter, lots) end
+  end
+  pfn unregister_parcel(parcels : Map(Int, List(Int)), lot : Int, id : Int) : Map(Int, List(Int)) do
+    if !S.valid(lot) do parcels else
+      let rest = List.filter(Map.get_or(parcels, lot, Nil, Map.int_cmp), fn other -> other != id)
+      if List.is_empty(rest) do Map.remove(parcels, lot, Map.int_cmp) else Map.insert(parcels, lot, rest, Map.int_cmp) end
+    end
+  end
+  -- Everyone in the roster with their slot: active, asleep, and walking (where the walk has them now).
+  pfn all_actors(roster : Roster) : List(Actor) do
+    List.append(walk_entries(roster), List.append(roster.active, sleepers(roster)))
+  end
+  -- One wake-up batch (or walk bucket) less the citizens [gone] names, and those taken out.
+  pfn drop_sleepers(acc : (Map(Int, List(Actor)), List(Actor)), hour : Int, batch : List(Actor), gone : CitizenIndex) : (Map(Int, List(Actor)), List(Actor)) do
+    let (w, dropped) = acc
+    let (here, kept) = List.partition(batch, fn entry -> Option.is_some(lookup(gone, entry.person.id)))
+    if List.is_empty(here) do acc
+    else if List.is_empty(kept) do (Map.remove(w, hour, Map.int_cmp), List.append(here, dropped))
+    else (Map.insert(w, hour, kept, Map.int_cmp), List.append(here, dropped)) end end
+  end
+  pfn drop_walks(acc : (Map(Int, List(WalkEvent)), List(WalkEvent)), bucket : Int, list : List(WalkEvent), gone : CitizenIndex) : (Map(Int, List(WalkEvent)), List(WalkEvent)) do
+    let (ev, dropped) = acc
+    let (here, kept) = List.partition(list, fn event -> Option.is_some(lookup(gone, event.entry.person.id)))
+    if List.is_empty(here) do acc
+    else if List.is_empty(kept) do (Map.remove(ev, bucket, Map.int_cmp), List.append(here, dropped))
+    else (Map.insert(ev, bucket, kept, Map.int_cmp), List.append(here, dropped)) end end
+  end
+  -- [roster] without the citizens [gone] names, each one's bookkeeping undone: a sleeper's
+  -- count, parking and crew place, an active citizen's parking, a walker's walk (it leaves the
+  -- walk set where it stands, as wake_walkers does).
+  pfn remove_ids(c : Ur.Sim.City, roster : Roster, gone : CitizenIndex) : Roster do
+    let out = fn person -> Option.is_some(lookup(gone, person.id))
+    let (active_out, active) = List.partition(roster.active, fn entry -> out(entry.person))
+    let (resting_out, resting) = List.partition(roster.resting, fn entry -> out(entry.person))
+    let (wakeups, waking_out) = Map.fold(roster.wakeups, (roster.wakeups, Nil), fn (acc, hour, batch) -> drop_sleepers(acc, hour, batch, gone))
+    let asleep_out = List.append(resting_out, waking_out)
+    let keys = List.fold_left(List.append(active_out, asleep_out), roster.reservations, fn (k, entry) -> park_actor(k, entry.person, -1))
+    let indoor = List.fold_left(asleep_out, roster.indoor, fn (n, entry) -> count_person(c, entry.person, n, -1))
+    let (events, walked_out) = Map.fold(roster.walk_events, (roster.walk_events, Nil), fn (acc, bucket, list) -> drop_walks(acc, bucket, list, gone))
+    let roster = { roster with active: active, resting: resting, wakeups: wakeups, reservations: keys, indoor: indoor,
+      crew: List.filter(roster.crew, fn person -> !out(person)), walk_events: events,
+      walk_count: roster.walk_count - List.length(walked_out),
+      walk_crossings: List.fold_left(walked_out, roster.walk_crossings, fn (k, event) -> crossing_reservation(k, event.arm, -1)),
+      walk_exits: List.fold_left(walked_out, roster.walk_exits, fn (exits, event) -> Cons(event.entry.slot, exits)),
+      walk_log: List.fold_left(walked_out, roster.walk_log, fn (log, event) -> Cons(WalkLeft(event.entry.slot), log)) }
+    unpark_woken(roster, asleep_out)
+  end
+  doc "Apply a rebuild's citizens [people] (refresh_with) to [roster] in place: only citizens whose assignment changed, or who are new or gone, are refiled; the rest keep their state."
+  fn apply_refresh(c : Ur.Sim.City, roster : Roster, people : List(Citizen)) : Roster do
+    let roster = flush_walks(roster)
+    let current = all_actors(roster)
+    -- the rebuilt citizens by id, each with its assignment's fingerprint (no citizen is read
+    -- back out: Array.get on a vector this size cost more than the rest of the apply)
+    let mask = index_size(List.length(people), 16) - 1
+    let (keys, prints) = file_prints(NativeArray.make_int(mask + 1, -1), NativeArray.make_int(mask + 1, 0), people, mask)
+    let (leaving, marks) = mark_current(current, keys, prints, NativeArray.make_int(mask + 1, 0), Nil, mask)
+    let arriving = List.filter(people, fn person ->
+      NativeArray.get_int(marks, index_probe(keys, person.id, id_hash(person.id, mask), mask)) != 1)
+    if List.is_empty(leaving) && List.is_empty(arriving) do roster else
+      let roster = remove_ids(c, roster, citizen_index(List.map(leaving, fn entry -> entry.person)))
+      -- a changed citizen keeps its slot; a new one takes the next one free
+      let slots = List.fold_left(leaving, Map.empty(), fn (m, entry) -> Map.insert(m, entry.person.id, entry.slot, Map.int_cmp))
+      let top = List.fold_left(current, -1, fn (most, entry) -> if entry.slot > most do entry.slot else most end)
+      let (entries, _) = List.fold_left(arriving, (Nil, top + 1), fn (acc, person) -> slot_for(acc, person, slots))
+      let parcels = List.fold_left(leaving, roster.parcels, fn (m, entry) ->
+        List.fold_left(parcel_lots(entry.person), m, fn (m2, lot) -> unregister_parcel(m2, lot, entry.person.id)))
+      let parcels = List.fold_left(entries, parcels, fn (m, entry) ->
+        List.fold_left(parcel_lots(entry.person), m, fn (m2, lot) -> register_parcel(m2, lot, entry.person.id)))
+      place_all(c, { roster with parcels: parcels }, entries, Nil)
+    end
+  end
+  -- [person] (its rest cleared, as wake_indoor does) with the slot it had, or the next one free.
+  pfn slot_for(acc : (List(Actor), Int), person : Citizen, slots : Map(Int, Int)) : (List(Actor), Int) do
+    let (out, next) = acc
+    let person = if person.rest_until < 0 do person else { person with rest_until: -1 } end
+    match Map.get(slots, person.id, Map.int_cmp) do
+      Some(slot) -> (Cons({ slot: slot, person: person }, out), next)
+      None -> (Cons({ slot: next, person: person }, out), next + 1)
+    end
+  end
+  -- Files [entries] as place does, merging the active ones into the active list at once.
+  pfn place_all(c : Ur.Sim.City, roster : Roster, entries : List(Actor), up : List(Actor)) : Roster do
+    match entries do
+      Nil -> { roster with active: merge_actors(roster.active, List.sort_by(up, slot_order)) }
+      Cons(entry, rest) ->
+        let roster = { roster with reservations: park_actor(roster.reservations, entry.person, 1) }
+        let wake = wake_at(c, entry.person, roster.clock)
+        if wake == -1 do place_all(c, roster, rest, Cons(entry, up))
+        else place_all(c, sleep_actor(c, roster, entry, wake), rest, up) end
+    end
+  end
   -- Files [entry] as index_people would: active in slot order, or asleep.
   pfn place(c : Ur.Sim.City, roster : Roster, entry : Actor) : Roster do
     let roster = { roster with reservations: park_actor(roster.reservations, entry.person, 1) }

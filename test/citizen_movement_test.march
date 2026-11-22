@@ -405,6 +405,53 @@ mod CitizenMovementTest do
     Test.assert_true(Ur.Citizens.reservation_list(roster) == Ur.Citizens.recount_reservations(roster), "and at the end")
   end
 
+  -- An edit's rebuild applied in place (apply_refresh) refiles only the citizens it changed,
+  -- adds or drops: afterwards the roster holds exactly the rebuild's assignments, its parcels
+  -- match a fresh index, its parking reservations a recount, and everyone else is untouched.
+  pfn refresh_in_place() : Unit do
+    let c = Ur.Scenario.traffic_district()
+    let empty = NativeArray.make_int(S.count(), 0)
+    let people = Ur.Citizens.refresh(c, Nil)
+    let roster = List.fold_left(List.range(0, 120), Ur.Citizens.index(c, people, 0.40), fn (r, i) ->
+      Ur.Citizens.step_indexed(c, empty, None, r, 0.40 +. int_to_float(i) *. 0.002, 0.05, empty, 0.0))
+    let now = Ur.Citizens.rebuild_input(roster)
+    let lots = List.map(now, fn person -> person.home)
+    let other = fn person -> match List.find(lots, fn lot -> lot != person.work && lot != person.home) do
+      Some(lot) -> lot
+      None -> person.work
+    end
+    let top = List.fold_left(now, 0, fn (most, person) -> if person.id > most do person.id else most end)
+    let changed = List.filter_map(List.enumerate(now), fn pair -> match pair do
+      (i, person) ->
+        if i == 1 do None
+        else if i % 7 == 3 do Some({ person with work: other(person) })
+        else Some(person) end end
+    end)
+    let newcomer = { first(now) with id: top + 1 }
+    let next = List.append(changed, [newcomer])
+    let applied = Ur.Citizens.apply_refresh(c, roster, next)
+    let key = fn list -> List.sort_by(List.map(list, fn person -> (person.id, person.home, person.work)), fn (a, b) ->
+      match (a, b) do ((x, _, _), (y, _, _)) -> x <= y end)
+    let flat = fn parcels -> Map.fold(parcels, Nil, fn (out, lot, ids) -> Cons((lot, List.sort_by(ids, fn (a, b) -> a <= b)), out))
+    let fresh = Ur.Citizens.index(c, next, 0.64)
+    Test.assert_true(List.length(now) > 10, "the traffic district has residents to rebuild")
+    Test.assert_true(key(Ur.Citizens.snapshot(applied)) == key(next), "an in-place rebuild leaves exactly the rebuilt citizens")
+    Test.assert_true(flat(applied.parcels) == flat(fresh.parcels), "with the parcels a fresh index would file")
+    Test.assert_true(Ur.Citizens.reservation_list(applied) == Ur.Citizens.recount_reservations(applied),
+      "and parking reservations matching a recount")
+    let before = Ur.Citizens.citizen_index(now)
+    let kept = List.all(Ur.Citizens.snapshot(applied), fn person ->
+      match Ur.Citizens.lookup(before, person.id) do
+        Some(was) -> was.work != person.work || (was.location == person.location && was.route == person.route && was.activity == person.activity)
+        None -> true
+      end)
+    Test.assert_true(kept, "citizens the rebuild left alone keep where they are and what they are doing")
+    let later = List.fold_left(List.range(0, 60), applied, fn (r, i) ->
+      Ur.Citizens.step_indexed(c, empty, None, r, 0.64 +. int_to_float(i) *. 0.002, 0.05, empty, 0.0))
+    Test.assert_true(Ur.Citizens.reservation_list(later) == Ur.Citizens.recount_reservations(later),
+      "and the roster keeps stepping with its reservations whole")
+  end
+
   fn main(_cap : Cap(IO)) : Unit do
     let city = Ur.Scenario.evacuation_site()
     let resident = first(Ur.Citizens.refresh(city, Nil))
@@ -420,6 +467,7 @@ mod CitizenMovementTest do
     coarse_corner(city, resident, empty)
     deferred_steps(city, resident, empty)
     commute_reservations()
+    refresh_in_place()
     cached_walk_geometry(city)
     scheduled_crossing(city, resident, empty)
     List.each([2, 3, 4], fn mode -> transit_mode(city, resident, empty, mode))

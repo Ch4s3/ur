@@ -680,13 +680,20 @@ mod Ur do
       else false end
       -- p.citizens carries the walk log of the step that ran under last frame's draw; it is
       -- replayed below and cleared before this frame's step starts.
-      let citizens = if reset_roster do
+      -- An edit or an undo that changes who lives and works where applies the rebuild's citizens
+      -- to the live roster (Citizens.apply_refresh): the few whose assignment changed are
+      -- refiled and everyone else carries on, walks included. An evacuation still re-indexes.
+      let in_place = rebuild && (paint || undone) && !evacuation_update && !operation_changed && !Ur.Citizens.has_evacuation(p.citizens)
+      let citizens = if in_place do
+        let old = if undone do Nil else Ur.Citizens.rebuild_input(p.citizens) end
+        Ur.Citizens.apply_refresh(c, p.citizens, Ur.Citizens.refresh_with(c, old, st.routes, st.people, st.job_matches))
+      else if reset_roster do
         Ur.Scene.clear_scheduled_walks(p.shown)
         let old = if undone && !Ur.Citizens.has_evacuation(p.citizens) do Nil
           else if rebuild do Ur.Citizens.rebuild_input(p.citizens) else Ur.Citizens.snapshot(p.citizens) end end
         let people = if rebuild do Ur.Citizens.refresh_with(c, old, st.routes, st.people, st.job_matches) else old end
         Ur.Citizens.index(c, Ur.Citizens.wake_indoor(people), calendar_time)
-      else if pace_changed do Ur.Citizens.wake_walkers(p.citizens) else p.citizens end end
+      else if pace_changed do Ur.Citizens.wake_walkers(p.citizens) else p.citizens end end end
       let walk_map = if midnight || scene_changed do Ur.Citizens.walk_map(c) else p.walk_map end
       let night = hour >= 18 || hour < 6
       let moment = Ur.Scene.sanitation_moment(c, elapsed)
