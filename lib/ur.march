@@ -744,8 +744,12 @@ mod Ur do
       -- A weekday change alone leaves the roster as it is: timed rests end by midnight (see
       -- Citizens.resting), so every sleeper re-checks the new day's schedule as it wakes, and
       -- the weekday rules (working hours, car-free streets) are read each step. Re-indexing all
-      -- of it here stalled the 500,000-citizen metro for 3-6 s on each such day.
-      let reset_roster = rebuild || stats_landed || (scene_changed && (due || building_day || flood_day || religion_event))
+      -- of it here stalled the 500,000-citizen metro for 3-6 s on each such day. The same holds
+      -- for an edit, a policy change, a month end or a building day that needs no rebuild: what
+      -- citizens walk on and where they live and work is what rebuild tests (Citizens.changed and
+      -- the stats), so when that says nothing changed the roster stays as it is. A flood or a
+      -- religion event still re-indexes.
+      let reset_roster = rebuild || (scene_changed && (flood_day || religion_event))
       let pace_changed = if midnight do
         let previous = S.temperature(p.city)
         let current = S.temperature(c)
@@ -753,13 +757,15 @@ mod Ur do
       else false end
       -- p.citizens carries the walk log of the step that ran under last frame's draw; it is
       -- replayed below and cleared before this frame's step starts.
-      -- An edit or an undo that changes who lives and works where applies the rebuild's citizens
-      -- to the live roster (Citizens.apply_refresh): the few whose assignment changed are
-      -- refiled and everyone else carries on, walks included. An evacuation still re-indexes.
+      -- A rebuild (an edit, an undo, a policy change, a month end or a building day that changes
+      -- who lives and works where) applies its citizens to the live roster
+      -- (Citizens.apply_refresh): the few whose assignment changed are refiled and everyone else
+      -- carries on, walks included. An evacuation, a flood, a religion event and a facility
+      -- paused or resumed still re-index.
       -- The rebuild itself (refresh_with, over a second at 500,000 citizens) runs on a task, and
       -- is applied on the frame it finishes; until then citizens keep their old assignments. A
       -- newer rebuild of any kind makes a pending one stale: it is left to finish and dropped.
-      let in_place = rebuild && stats_landed && !midnight && !evacuation_update && !operation_changed && !Ur.Citizens.has_evacuation(p.citizens)
+      let in_place = rebuild && !flood_day && !religion_event && !evacuation_update && !operation_changed && !Ur.Citizens.has_evacuation(p.citizens)
       let (pending, stale_rebuilds) = if rebuild do (None, retire_rebuild(p.rebuilding, p.stale_rebuilds))
         else (p.rebuilding, p.stale_rebuilds) end
       let stale_rebuilds = List.filter(stale_rebuilds, fn task -> Option.is_none(Task.poll(task)))
@@ -774,9 +780,12 @@ mod Ur do
       end
       let rebuilding = if in_place do start_rebuild(c, p.citizens, stats_undo, st) else pending end
       let citizens = if in_place do
-        if Option.is_some(rebuilding) do p.citizens else
+        -- (the re-index a midnight rebuild used to get also restarted every walk; a pace change
+        -- still needs that)
+        let live = if pace_changed do Ur.Citizens.wake_walkers(p.citizens) else p.citizens end
+        if Option.is_some(rebuilding) do live else
           let old = if stats_undo do Nil else Ur.Citizens.rebuild_input(p.citizens) end
-          Ur.Citizens.apply_refresh(c, p.citizens, Ur.Citizens.refresh_with(c, old, st.routes, st.people, st.job_matches))
+          Ur.Citizens.apply_refresh(c, live, Ur.Citizens.refresh_with(c, old, st.routes, st.people, st.job_matches))
         end
       else if reset_roster do
         Ur.Scene.clear_scheduled_walks(p.shown)

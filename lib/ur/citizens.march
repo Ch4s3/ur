@@ -1890,16 +1890,27 @@ mod Ur.Citizens do
       None -> (Cons({ slot: next, person: person }, out), next + 1)
     end
   end
-  -- Files [entries] as place does, merging the active ones into the active list at once.
+  -- Files [entries] as place does, merging the active ones into the active list at once. One
+  -- who is indoors and about to set off is filed under the current hour instead, to wake
+  -- through the step's wake budget: a rebuild refiles thousands at once, and all of them
+  -- planning a trip in the same step cost several frames of over 100 ms at 500,000 citizens.
   pfn place_all(c : Ur.Sim.City, roster : Roster, entries : List(Actor), up : List(Actor)) : Roster do
     match entries do
       Nil -> { roster with active: merge_actors(roster.active, List.sort_by(up, slot_order)) }
       Cons(entry, rest) ->
         let roster = { roster with reservations: park_actor(roster.reservations, entry.person, 1) }
         let wake = wake_at(c, entry.person, roster.clock)
-        if wake == -1 do place_all(c, roster, rest, Cons(entry, up))
-        else place_all(c, sleep_actor(c, roster, entry, wake), rest, up) end
+        if wake != -1 do place_all(c, sleep_actor(c, roster, entry, wake), rest, up)
+        else if indoors(entry.person) do
+          let filed = sleep_actor(c, roster, entry, roster.clock)
+          let from = if filed.wake_from < filed.clock do filed.wake_from else filed.clock end
+          place_all(c, { filed with wake_from: from }, rest, up)
+        else place_all(c, roster, rest, Cons(entry, up)) end end
     end
+  end
+  -- Inside a building with no trip under way.
+  pfn indoors(person : Citizen) : Bool do
+    S.valid(person.location) && List.is_empty(person.route) && person.car_phase == 0 && person.transit_phase == 0 && person.bus_slot < 0
   end
   -- Files [entry] as index_people would: active in slot order, or asleep.
   pfn place(c : Ur.Sim.City, roster : Roster, entry : Actor) : Roster do
