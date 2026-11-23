@@ -743,8 +743,8 @@ mod Ur.Sim do
     1.0 -. int_to_float(clamp(heat - 280, 0, 90)) *. 0.004
   end
   fn walk_pace(c : City, lot : Int) : Float do walk_pace_at(c, lot, temperature(c)) end
-  fn rain_road_pace(c : City) : Float do
-    match current_weather(c) do
+  fn rain_road_pace(c : City, lot : Int) : Float do
+    match rain_here(c, lot) do
       4 -> 0.43
       3 -> 0.62
       2 -> 0.81
@@ -818,7 +818,7 @@ mod Ur.Sim do
   end
   fn surface_flood(c : City, lot : Int) : Int do
     let stored = get(c.surface_water, lot)
-    let storm = if severe_rain(c) do floodplain_depth(c, lot) else 0 end
+    let storm = if rain_here(c, lot) == 4 do floodplain_depth(c, lot) else 0 end
     let tide = tide_depth(c, lot)
     clamp(stored, clamp(storm, tide, 16), 16)
   end
@@ -3015,7 +3015,7 @@ mod Ur.Sim do
   fn delay_for(c : City, i : Int, demand : Int) : Int do
     let capacity = road_capacity(c, i)
     if capacity == 0 do 0 else
-      let rain = clamp(current_weather(c) - 1, 0, 3)
+      let rain = clamp(rain_here(c, i) - 1, 0, 3)
       clamp((demand - capacity) / 4, 0, 18) + rain * 2
     end
   end

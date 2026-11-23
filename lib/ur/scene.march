@@ -784,7 +784,7 @@ mod Ur.Scene do
     let hs = heights(c, x, z, NativeArray.make_int(100, 0), 0)
     let source = S.grade_source(c, i)
     let raised = S.grade_kind(c, source) == 1 && S.grade_link(c, source, S.grade_peer(c, source))
-    let probe = if S.get(c.heights, i) > 0 && (c.flood_active || S.severe_rain(c)) do
+    let probe = if S.get(c.heights, i) > 0 && (c.flood_active || S.rain_here(c, i) == 4) do
       flood_probe(c, i, fn lot -> S.surface_flood(c, lot), 0, empty_flood())
     else empty_flood() end
     layers(i, x, z, hs, high_ground(hs, 0, 0), sign_parts(c, i, control, tick, 0, L.structures(c, i, lighting)), probe, 0)
@@ -835,8 +835,8 @@ mod Ur.Scene do
   end
   fn sync(old : Ur.Sim.City, c : Ur.Sim.City, i : Int, force : Bool, structural : Bool, old_hour : Int, hour : Int,
     signals : Signals, old_power : Ur.Sim.UtilityDelivery, new_power : Ur.Sim.UtilityDelivery) : Unit do
-    let was_raining = S.severe_rain(old)
-    let raining = S.severe_rain(c)
+    let was_raining = S.severe_now(old)
+    let raining = S.severe_now(c)
     let water_changed = was_raining != raining || (structural && (was_raining || raining || old.flood_active || c.flood_active))
     sync_parcels(old, c, i, force, structural, water_changed, { hour: old_hour, electric: old_power }, { hour: hour, electric: new_power }, signals)
   end
@@ -1495,7 +1495,12 @@ mod Ur.Scene do
     let hour = phase /. S.day_seconds() *. 24.0
     if hour < 10.0 || hour >= 20.0 do None else
       let length = List.fold_left(c.waste_runs, 0, fn (total, run) -> total + sanitation_weight(run))
-      sanitation_window(c, c.waste_runs, (hour -. 10.0) /. 10.0 *. int_to_float(length) *. S.rain_road_pace(c))
+      -- the crew's pace in the rain where its round starts
+      let start = match c.waste_runs do
+        Cons(run, _) -> run.pickup
+        Nil -> -1
+      end
+      sanitation_window(c, c.waste_runs, (hour -. 10.0) /. 10.0 *. int_to_float(length) *. S.rain_road_pace(c, start))
     end
   end
   pfn sanitation_shift_with(c : Ur.Sim.City, old_phase : Float, prior : SanitationShift, moment : Option(SanitationMoment),
@@ -2390,14 +2395,14 @@ mod Ur.Scene do
     end
   end
   type FloodFields = { live : NativeIntArr, potential : NativeIntArr }
-  pfn flood_fields(c : Ur.Sim.City, lot : Int, storm : Bool, fields : FloodFields) : FloodFields do
+  pfn flood_fields(c : Ur.Sim.City, lot : Int, fields : FloodFields) : FloodFields do
     if lot >= S.count() do fields else
       let risk = S.floodplain_depth(c, lot)
       let retained = S.get(c.surface_water, lot)
-      let active = if storm && risk > retained do risk else retained end
+      let active = if S.rain_here(c, lot) == 4 && risk > retained do risk else retained end
       let potential = if risk > 0 do NativeArray.set_int(fields.potential, lot, risk) else fields.potential end
       let live = if active > 0 do NativeArray.set_int(fields.live, lot, active) else fields.live end
-      flood_fields(c, lot + 1, storm, { live: live, potential: potential })
+      flood_fields(c, lot + 1, { live: live, potential: potential })
     end
   end
   pfn flood_map_mesh(c : Ur.Sim.City, x : Int, z : Int, floor : Int, active : FloodProbe, risk : FloodProbe, n : Int, mesh : Mesh) : Mesh do
@@ -2445,7 +2450,7 @@ mod Ur.Scene do
     end
     if layer == 33 do
       let zero = NativeArray.make_int(2640, 0)
-      flood_map(c, flood_fields(c, 0, S.severe_rain(c), { live: zero, potential: zero }), 0)
+      flood_map(c, flood_fields(c, 0, { live: zero, potential: zero }), 0)
     else if tag > 0 do gradient_tiles(c, Ur.OverlayField.field(c, layer), tag, 0)
     else layer_tiles(c, st, layer, 0) end end
   end

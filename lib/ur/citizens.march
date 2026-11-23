@@ -449,7 +449,7 @@ mod Ur.Citizens do
       if emergency_move(person) do NativeArray.set_int(field, person.home, person.shelter + 2) else field end)
     let prior = citizens_by_id(old)
     let people = refresh_roster(c, prior, roads, people, hires, previous)
-    if c.flood_active || S.severe_rain(c) || S.curse_god(c) == 3 || List.any(old, emergency_move) || List.any(people, fn person -> S.displaced_homes(c, person.home) > 0) do
+    if c.flood_active || S.severe_now(c) || S.curse_god(c) == 3 || List.any(old, emergency_move) || List.any(people, fn person -> S.displaced_homes(c, person.home) > 0) do
       let orders = Ur.Evacuation.plan(c, roads, previous)
       List.map(people, fn person -> evacuate(c, orders, prior, person))
     else people end
@@ -985,7 +985,7 @@ mod Ur.Citizens do
     let old = cell(a, b, person.progress)
     let speed = if S.get(c.roads, a) == 2 && S.get(c.roads, b) == 2 do 0.78 else 0.62 end
     let length = if S.grade_link(c, a, b) do int_to_float(S.span_distance(a, b)) else 1.0 end
-    let pace = if S.storm_road_closed(c, b) do 0.0 else S.rain_road_pace(c) end
+    let pace = if S.storm_road_closed(c, b) do 0.0 else S.rain_road_pace(c, b) end
     let proposed = person.progress +. dt *. speed *. pace *. S.traffic_pace(c.street_day, hour) /. length
     let end_at = match parking_at(person.arrival) do
       Some(p) -> if b == p.road do parking_entry(p) else 1.0 end

@@ -451,7 +451,7 @@ mod Ur do
       let paused = paused || campaign_opened || council_voted
       let sidebar_tab = if campaign_opened || council_voted do 8 else sidebar_tab end
       let sidebar_visible = sidebar_visible || campaign_opened || council_voted
-      let flood_day = midnight && (p.city.flood_active || c.flood_active || S.severe_rain(c) || S.severe_rain(p.city))
+      let flood_day = midnight && (p.city.flood_active || c.flood_active || S.severe_now(c) || S.severe_now(p.city))
       let religion_event = S.last_festival(c) != S.last_festival(p.city) || S.favor_god(c) != S.favor_god(p.city) ||
         S.curse_god(c) != S.curse_god(p.city) || S.curse_stamp(c) != S.curse_stamp(p.city) || S.patron(c) != S.patron(p.city)
       let activity = if undone do Nil
@@ -466,7 +466,7 @@ mod Ur do
       let hour = S.street_hour(elapsed)
       let signal_before = S.signal_tick(p.traffic_time)
       let signal_after = S.signal_tick(traffic_time)
-      if scene_changed || S.severe_rain(c) != S.severe_rain(p.city) || old_hour != hour || signal_before != signal_after do
+      if scene_changed || S.severe_now(c) != S.severe_now(p.city) || old_hour != hour || signal_before != signal_after do
         Ur.Scene.sync(p.city, c, 0, false, scene_changed, old_hour, hour,
           { before: p.stats.junctions, after: st.junctions, before_tick: signal_before, after_tick: signal_after }, p.stats.utilities.electric, st.utilities.electric)
       else () end
