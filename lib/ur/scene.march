@@ -104,74 +104,113 @@ mod Ur.Scene do
       else Ur.AppError.stop("Sea mesh upload failed") end
     end
   end
-  pfn cloud_slot(i : Int) : Int do 10592 + i end
-  pfn cloud_puff(x : Int, y : Int, z : Int, vertical : Int, size : Int) : Bool do
-    x * x * 12 + y * y * vertical + z * z * 23 <= size
+  -- Clouds: twelve bodies, each a few flat-bottomed puffs drawn from a seed,
+  -- in slots after the citizens'. More of them gather, and they swell, as
+  -- the sky clouds over; each puff also casts a soft shadow on the ground.
+  fn cloud_bodies() : Int do 12 end
+  fn chunk_slots() : Int do citizen_chunk_slots() + cloud_bodies() end
+  pfn cloud_slot(i : Int) : Int do citizen_chunk_slots() + i end
+  -- a puff: centre and radii, in voxels of its body's 32 x 14 x 24 grid
+  type Puff = { px : Int, py : Int, pz : Int, rx : Int, ry : Int, rz : Int }
+  pfn cloud_roll(body : Int, k : Int) : Int do Strata.Seed.cell(919, body, k, 0, 0) % 1000 end
+  -- a wide middle puff, one to each side, and on most bodies a smaller crown
+  pfn cloud_puffs(body : Int) : List(Puff) do
+    let h0 = cloud_roll(body, 0)
+    let h1 = cloud_roll(body, 1)
+    let h2 = cloud_roll(body, 2)
+    let h3 = cloud_roll(body, 3)
+    let middle = { px: 16, py: 3, pz: 12, rx: 7 + h0 % 3, ry: 4 + h0 / 3 % 3, rz: 6 + h0 / 9 % 3 }
+    let left = { px: 16 - (6 + h1 % 4), py: 2, pz: 12 + h1 / 4 % 7 - 3, rx: 4 + h1 / 28 % 3, ry: 3 + h1 / 84 % 2, rz: 4 + h1 / 168 % 3 }
+    let right = { px: 16 + 6 + h2 % 4, py: 2, pz: 12 + h2 / 4 % 7 - 3, rx: 4 + h2 / 28 % 3, ry: 3 + h2 / 84 % 2, rz: 4 + h2 / 168 % 3 }
+    let puffs = Cons(middle, Cons(left, Cons(right, Nil)))
+    if h3 % 4 == 0 do puffs
+    else Cons({ px: 16 + h3 % 7 - 3, py: 7, pz: 12 + h3 / 7 % 5 - 2, rx: 4 + h3 / 35 % 2, ry: 3, rz: 4 + h3 / 70 % 2 }, puffs) end
   end
-  pfn cloud_solid(x : Int, y : Int, z : Int, shape : Int) : Bool do
-    match shape % 3 do
-      0 -> cloud_puff(x - 7, y - 3, z - 9, 105, 510) ||
-        cloud_puff(x - 15, y - 3, z - 10, 125, 780) ||
-        cloud_puff(x - 24, y - 3, z - 11, 145, 470)
-      1 -> cloud_puff(x - 9, y - 4, z - 9, 49, 650) ||
-        cloud_puff(x - 15, y - 6, z - 10, 28, 680) ||
-        cloud_puff(x - 21, y - 4, z - 11, 47, 620) ||
-        cloud_puff(x - 26, y - 3, z - 9, 58, 230)
-      _ -> cloud_puff(x - 7, y - 3, z - 7, 80, 370) ||
-        cloud_puff(x - 16, y - 5, z - 10, 44, 470) ||
-        cloud_puff(x - 24, y - 4, z - 12, 54, 430) ||
-        cloud_puff(x - 27, y - 3, z - 15, 75, 200)
-    end
+  pfn in_puff(x : Int, y : Int, z : Int, p : Puff) : Bool do
+    let dx = int_to_float(x - p.px) /. int_to_float(p.rx)
+    let dy = int_to_float(y - p.py) /. int_to_float(p.ry)
+    let dz = int_to_float(z - p.pz) /. int_to_float(p.rz)
+    dx *. dx +. dy *. dy +. dz *. dz <= 1.0
+  end
+  -- flat underneath: nothing below the grid's first layer
+  pfn cloud_solid(x : Int, y : Int, z : Int, puffs : List(Puff)) : Bool do
+    y >= 1 && x >= 0 && x < 32 && y < 14 && z >= 0 && z < 24 && List.any(puffs, fn p -> in_puff(x, y, z, p))
   end
   pfn cloud_face(m : Mesh, x : Int, y : Int, z : Int, direction : Int) : Mesh do
     let n = m.quads * 2
     let words = NativeArray.set_i32(m.words, n, Q.pack0(x, y, z, 1, 1, direction))
     { words: NativeArray.set_i32(words, n + 1, Q.pack1(8, 255, 250)), quads: m.quads + 1 }
   end
-  pfn cloud_mesh(shape : Int, i : Int, m : Mesh) : Mesh do
-    if i == 32 * 12 * 20 do m else
+  pfn cloud_mesh(puffs : List(Puff), i : Int, m : Mesh) : Mesh do
+    if i == 32 * 14 * 24 do m else
       let x = i % 32
-      let y = i / 32 % 12
-      let z = i / (32 * 12)
-      if !cloud_solid(x, y, z, shape) do cloud_mesh(shape, i + 1, m) else
-        let m = if cloud_solid(x, y + 1, z, shape) do m else cloud_face(m, x, y, z, 0) end
-        let m = if cloud_solid(x, y - 1, z, shape) do m else cloud_face(m, x, y, z, 1) end
-        let m = if cloud_solid(x + 1, y, z, shape) do m else cloud_face(m, x, y, z, 2) end
-        let m = if cloud_solid(x - 1, y, z, shape) do m else cloud_face(m, x, y, z, 3) end
-        let m = if cloud_solid(x, y, z + 1, shape) do m else cloud_face(m, x, y, z, 4) end
-        let m = if cloud_solid(x, y, z - 1, shape) do m else cloud_face(m, x, y, z, 5) end
-        cloud_mesh(shape, i + 1, m)
+      let y = i / 32 % 14
+      let z = i / (32 * 14)
+      if !cloud_solid(x, y, z, puffs) do cloud_mesh(puffs, i + 1, m) else
+        let m = if cloud_solid(x, y + 1, z, puffs) do m else cloud_face(m, x, y, z, 0) end
+        let m = if cloud_solid(x, y - 1, z, puffs) do m else cloud_face(m, x, y, z, 1) end
+        let m = if cloud_solid(x + 1, y, z, puffs) do m else cloud_face(m, x, y, z, 2) end
+        let m = if cloud_solid(x - 1, y, z, puffs) do m else cloud_face(m, x, y, z, 3) end
+        let m = if cloud_solid(x, y, z + 1, puffs) do m else cloud_face(m, x, y, z, 4) end
+        let m = if cloud_solid(x, y, z - 1, puffs) do m else cloud_face(m, x, y, z, 5) end
+        cloud_mesh(puffs, i + 1, m)
       end
     end
   end
   pfn setup_clouds(i : Int) : Unit do
-    if i == 7 do () else
-      let m = cloud_mesh(i, 0, empty())
+    if i == cloud_bodies() do () else
+      let m = cloud_mesh(cloud_puffs(i), 0, empty())
       let slot = cloud_slot(i)
       if Vk.body_begin(slot) && Vk.chunk_part(2, m.words, m.quads) && Vk.chunk_commit() do
-        Vk.slot_voxel(slot, 1.25 +. int_to_float(i % 3) *. 0.25)
         Vk.chunk_show(slot, false)
         setup_clouds(i + 1)
       else Ur.AppError.stop("Cloud mesh upload failed") end
     end
   end
-  -- More of the seven cloud bodies gather as the sky clouds over: two on a
-  -- clear day, all of them under full cloud.
-  fn clouds(overcast : Float, offset : (Float, Float), i : Int) : Unit do
-    if i == 7 do () else
+  -- a body's voxel size: 1.3 to 1.7 m on a fair day, about half as big again under full cloud
+  pfn cloud_voxel(i : Int, overcast : Float) : Float do (1.3 +. int_to_float(cloud_roll(i, 4) % 5) *. 0.1) *. (1.0 +. 0.55 *. overcast) end
+  -- where body i's low corner is: spread over the region and drifting with
+  -- the wind, wrapping round a 640 x 520 m field, 62 to 80 m up
+  pfn cloud_corner(i : Int, offset : (Float, Float)) : (Float, Float, Float) do
+    let (drift_x, drift_z) = offset
+    let travel = int_to_float(53 + i * 137 + cloud_roll(i, 5) % 40) +. drift_x
+    let across = int_to_float(22 + (i * 211) % 520 + cloud_roll(i, 6) % 30) +. drift_z
+    (travel -. 640.0 *. Math.floor(travel /. 640.0) -. 80.0, 62.0 +. int_to_float(cloud_roll(i, 7) % 4) *. 6.0,
+      across -. 520.0 *. Math.floor(across /. 520.0) -. 80.0)
+  end
+  pfn cloud_blobs(puffs : List(Puff), x : Float, y : Float, z : Float, voxel : Float, out : NativeF32Arr, n : Int) : (NativeF32Arr, Int) do
+    match puffs do
+      Nil -> (out, n)
+      Cons(p, rest) ->
+        if n >= 48 do (out, n) else
+          let o = n * 4
+          let a = NativeArray.set_f32(out, o, x +. (int_to_float(p.px) +. 0.5) *. voxel)
+          let b = NativeArray.set_f32(a, o + 1, y +. (int_to_float(p.py) +. 0.5) *. voxel)
+          let c = NativeArray.set_f32(b, o + 2, z +. (int_to_float(p.pz) +. 0.5) *. voxel)
+          let d = NativeArray.set_f32(c, o + 3, int_to_float(if p.rx > p.rz do p.rx else p.rz end) *. 1.35 *. voxel)
+          cloud_blobs(rest, x, y, z, voxel, d, n + 1)
+        end
+    end
+  end
+  pfn place_clouds(overcast : Float, offset : (Float, Float), i : Int, out : NativeF32Arr, n : Int) : (NativeF32Arr, Int) do
+    if i == cloud_bodies() do (out, n) else
       let slot = cloud_slot(i)
-      let show = i < 2 + float_to_int(overcast *. 5.6)
+      let show = i < 2 + float_to_int(overcast *. 10.5)
       Vk.chunk_show(slot, show)
       if show do
-        let (drift_x, drift_z) = offset
-        let travel = int_to_float(53 + i * 133) +. drift_x
-        let across = int_to_float(22 + (i * 109) % 315) +. drift_z
-        let x = travel -. 610.0 *. Math.floor(travel /. 610.0) -. 45.0
-        let z = across -. 485.0 *. Math.floor(across /. 485.0) -. 35.0
-        Vk.slot_pose(slot, x, 42.0 +. int_to_float(i % 4) *. 5.0, z, 0.0, 0.0, 0.0, 1.0)
-      else () end
-      clouds(overcast, offset, i + 1)
+        let voxel = cloud_voxel(i, overcast)
+        let (x, y, z) = cloud_corner(i, offset)
+        Vk.slot_voxel(slot, voxel)
+        Vk.slot_pose(slot, x, y, z, 0.0, 0.0, 0.0, 1.0)
+        let (blobs, count) = cloud_blobs(cloud_puffs(i), x, y, z, voxel, out, n)
+        place_clouds(overcast, offset, i + 1, blobs, count)
+      else place_clouds(overcast, offset, i + 1, out, n) end
     end
+  end
+  -- Show and place the clouds for the weather drawn now, and cast their shadows.
+  fn clouds(w : Strata.Weather.Weather, offset : (Float, Float)) : Unit do
+    let (blobs, n) = place_clouds((Strata.Weather.now(w)).overcast, offset, 0, NativeArray.make_f32(48 * 4, 0.0), 0)
+    Vk.set_cloud_shadows(blobs, n, Strata.Weather.shadow_darkness(w))
   end
   fn setup() : Unit do
     if !Vk.set_light_box(29, 2) || !Vk.textures_create(16, 32) do Ur.AppError.stop("Could not allocate Strata materials and lighting") else () end
