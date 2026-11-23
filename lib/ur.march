@@ -151,7 +151,7 @@ mod Ur do
   pfn run_frames(p : Play) : Unit do
     Vk.poll()
     if Vk.should_close() || p.quit || (p.limit > 0 && p.frame >= p.limit) do
-      Authority.must(println("ur: frames=" ++ int_to_string(p.frame) ++ " drawn=" ++ int_to_string(p.drawn) ++ " month=" ++ int_to_string(p.city.month) ++ " day=" ++ int_to_string(p.city.calendar_day + 1) ++ " population=" ++ int_to_string(S.population(p.city)) ++ " detailed=" ++ int_to_string(tracked_citizens(p.city, p.citizens)) ++ " fps=" ++ int_to_string(p.fps.value) ++ " tick_ms=" ++ float_to_string(p.tick_ms) ++ " frame_cpu_ms=" ++ float_to_string(Vk.stat(0)) ++ " gpu_ms=" ++ float_to_string(Vk.stat(3)) ++ " quads=" ++ int_to_string(Vk.live_quads()) ++ " refused=" ++ int_to_string(Vk.refused())))
+      Authority.must(println("ur: frames=" ++ int_to_string(p.frame) ++ " drawn=" ++ int_to_string(p.drawn) ++ " month=" ++ int_to_string(p.city.month) ++ " day=" ++ int_to_string(p.city.calendar_day + 1) ++ " population=" ++ int_to_string(S.population(p.city)) ++ " detailed=" ++ int_to_string(tracked_citizens(p.city, p.citizens)) ++ " fps=" ++ int_to_string(p.fps.value) ++ " tick_ms=" ++ float_to_string(p.tick_ms) ++ " frame_cpu_ms=" ++ float_to_string(Vk.stat(0)) ++ " gpu_ms=" ++ float_to_string(Vk.stat(3)) ++ " quads=" ++ int_to_string(Vk.live_quads()) ++ " refused=" ++ int_to_string(Vk.refused()) ++ " light_pages=" ++ float_to_string(Vk.stat(22)) ++ " light_misses=" ++ float_to_string(Vk.stat(23))))
       Vk.close()
     else if p.menu_open do
       let time = Vk.time()

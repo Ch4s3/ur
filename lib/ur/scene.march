@@ -446,7 +446,9 @@ mod Ur.Scene do
   pfn upload_ocean(slot : Int, x : Int, y : Int, z : Int, m : Mesh, surface : Mesh, light : NativeU8Arr) : Unit do
     if m.quads == 0 && surface.quads == 0 do Vk.chunk_free(slot)
     else if Vk.chunk_begin(slot, x, y, z, 0) && (m.quads == 0 || Vk.chunk_part(0, m.words, m.quads)) &&
-      (surface.quads == 0 || Vk.chunk_part(2, surface.words, surface.quads)) && Vk.chunk_light(light, NativeArray.length_u8(light)) && Vk.chunk_commit() do ()
+      (surface.quads == 0 || Vk.chunk_part(2, surface.words, surface.quads)) &&
+      -- a chunk of sea surface alone has no floor to shade or block light: it takes no light-volume page
+      (m.quads == 0 || Vk.chunk_light(light, NativeArray.length_u8(light))) && Vk.chunk_commit() do ()
     else Ur.AppError.stop("Strata refused a seabed mesh upload") end end
   end
   -- The sea's surface over a padded parcel: ocean quads (Strata.Quad.ocean1)
