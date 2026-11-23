@@ -107,7 +107,7 @@
 ### Task 4: Drive Strata from Ur
 
 **Files:**
-- Modify: `lib/ur/scene.march` (a new `sea(state : Ur.Sea.State) : Unit` and `sea_map(exposure : NativeF32Arr) : Unit`)
+- Modify: `lib/ur/scene.march` (a new `sea_state(state : Ur.Sea.State) : Unit` and `sea_map(exposure : NativeF32Arr) : Unit`)
 - Modify: `lib/ur.march` (Play gains `sea_sector : Int`; it starts at -1 so the first frame uploads)
 
 **Interfaces:**
