@@ -104,14 +104,102 @@ mod Ur.Scene do
       else Ur.AppError.stop("Sea mesh upload failed") end
     end
   end
+  -- Mountains that clouds part around. A peak is a parcel at least 12 m high
+  -- that no parcel within 40 m tops; peaks closer than 80 m are one mountain.
+  -- Each carries how wide the mountain is at ground heights from 4 m up,
+  -- every 2 m: the radius of a disc as large as the ground above that
+  -- height within 200 m of the peak.
+  type Peak = { peak_x : Float, peak_z : Float, top : Float, radii : NativeF32Arr }
+  pfn ground_m(c : Ur.Sim.City, x : Int, z : Int) : Float do
+    if x < 0 || z < 0 || x >= S.width() || z >= S.depth() do 0.0 else int_to_float(S.get(c.heights, S.index(x, z))) *. 0.25 end
+  end
+  pfn tallest_near(c : Ur.Sim.City, x : Int, z : Int, k : Int, best : Float) : Float do
+    if k >= 121 do best else
+      let dx = k % 11 - 5
+      let dz = k / 11 - 5
+      let h = if dx * dx + dz * dz <= 25 && (dx != 0 || dz != 0) do ground_m(c, x + dx, z + dz) else 0.0 end
+      tallest_near(c, x, z, k + 1, if h > best do h else best end)
+    end
+  end
+  -- parcels within 200 m of (x, z) at least [h] m high
+  pfn above(c : Ur.Sim.City, x : Int, z : Int, h : Float, k : Int, n : Int) : Int do
+    if k >= 51 * 51 do n else
+      let dx = k % 51 - 25
+      let dz = k / 51 - 25
+      let inside = dx * dx + dz * dz <= 625 && ground_m(c, x + dx, z + dz) >= h
+      above(c, x, z, h, k + 1, if inside do n + 1 else n end)
+    end
+  end
+  pfn peak_radii(c : Ur.Sim.City, x : Int, z : Int, band : Int, out : NativeF32Arr) : NativeF32Arr do
+    if band >= 14 do out else
+      let n = above(c, x, z, 4.0 +. int_to_float(band) *. 2.0, 0, 0)
+      peak_radii(c, x, z, band + 1, NativeArray.set_f32(out, band, math_sqrt(int_to_float(n) *. 64.0 /. 3.14159)))
+    end
+  end
+  pfn find_peaks(c : Ur.Sim.City, i : Int, acc : List(Peak)) : List(Peak) do
+    if i >= S.count() do acc else
+      let x = i % S.width()
+      let z = i / S.width()
+      let h = ground_m(c, x, z)
+      let px = int_to_float(x * 8 + 4)
+      let pz = int_to_float(z * 8 + 4)
+      let near = List.any(acc, fn p -> (p.peak_x -. px) *. (p.peak_x -. px) +. (p.peak_z -. pz) *. (p.peak_z -. pz) < 6400.0)
+      if h < 12.0 || near || tallest_near(c, x, z, 0, 0.0) > h do find_peaks(c, i + 1, acc)
+      else find_peaks(c, i + 1, Cons({ peak_x: px, peak_z: pz, top: h, radii: peak_radii(c, x, z, 0, NativeArray.make_f32(14, 0.0)) }, acc)) end
+    end
+  end
+  fn mountains(c : Ur.Sim.City) : List(Peak) do find_peaks(c, 0, Nil) end
+  -- A mountain blocks the air above it too, about 2.2 times its own height:
+  -- how wide its blocking is at height y (m), the width of the ground above
+  -- y / 2.2, and 0 when y is above even that.
+  pfn width_at(p : Peak, y : Float) : Float do
+    let h = y /. 2.2
+    if h >= p.top do 0.0 else
+      let band = (h -. 4.0) /. 2.0
+      if band <= 0.0 do NativeArray.get_f32(p.radii, 0) else
+        let k = float_to_int(band)
+        if k >= 13 do NativeArray.get_f32(p.radii, 13) else
+          let f = band -. int_to_float(k)
+          NativeArray.get_f32(p.radii, k) *. (1.0 -. f) +. NativeArray.get_f32(p.radii, k + 1) *. f
+        end
+      end
+    end
+  end
+  -- Where wind carrying a cloud past the peaks takes it. Air meeting a
+  -- mountain parts round it: a path that would cross the mountain's middle
+  -- [b] metres to one side is pushed out to sqrt(b^2 + R^2 g), R the
+  -- mountain's width at the cloud's height plus most of the cloud's own half
+  -- width, g falling from 1 beside the mountain to nothing far up or down
+  -- wind. Paths keep their order, so clouds squeeze past the flanks and
+  -- close up again in the lee, and none crosses the mountain.
+  pfn around(peaks : List(Peak), x : Float, z : Float, y : Float, half : Float, wx : Float, wz : Float) : (Float, Float) do
+    match peaks do
+      Nil -> (x, z)
+      Cons(p, rest) ->
+        let width = width_at(p, y)
+        if width <= 0.0 do around(rest, x, z, y, half, wx, wz) else
+          let r = width +. 0.7 *. half
+          let rx = x -. p.peak_x
+          let rz = z -. p.peak_z
+          let a = rx *. wx +. rz *. wz
+          let b = rz *. wx -. rx *. wz
+          let reach = a /. (1.6 *. r)
+          let g = 1.0 /. (1.0 +. reach *. reach *. reach *. reach)
+          let side = if b < 0.0 do -1.0 else 1.0 end
+          let b2 = side *. math_sqrt(b *. b +. r *. r *. g)
+          around(rest, p.peak_x +. a *. wx -. b2 *. wz, p.peak_z +. a *. wz +. b2 *. wx, y, half, wx, wz)
+        end
+    end
+  end
   -- Clouds, after the real genera. Thirty-two bodies, each one cloud of a
   -- given type built once from a seed, at that type's height:
-  --   0 cumulus humilis    fair-weather heaps, flat bases, wider than tall      low, 54-60 m
-  --   1 cumulus mediocris  heaped two or three tiers                           low, 54-60 m
-  --   2 cumulus congestus  tall cauliflower towers before showers              low, 52-58 m
-  --   3 cumulonimbus       storm towers with a broad flat anvil, dark beneath  low, 48-52 m
-  --   4 stratocumulus      broken layer of grey rolls with gaps                low, 60-68 m
-  --   5 nimbostratus       thick dark rain layer, ragged scud beneath          low, 44-50 m
+  --   0 cumulus humilis    fair-weather heaps, flat bases, wider than tall      low, 36-42 m
+  --   1 cumulus mediocris  heaped two or three tiers                           low, 36-42 m
+  --   2 cumulus congestus  tall cauliflower towers before showers              low, 34-40 m
+  --   3 cumulonimbus       storm towers with a broad flat anvil, dark beneath  low, 32-36 m
+  --   4 stratocumulus      broken layer of grey rolls with gaps                low, 44-52 m
+  --   5 nimbostratus       thick dark rain layer, ragged scud beneath          low, 30-36 m
+  -- Low clouds part round the mountains on their way (see `around`).
   --   6 altocumulus        mackerel sky: rows of small puffs                   middle, 98-108 m
   --   7 altostratus        thin grey veil                                     middle, 106-114 m
   --   8 cirrus             high wisps and streaks                             high, 128-140 m
@@ -317,11 +405,11 @@ mod Ur.Scene do
   -- the height of a body's base: heaped clouds share about one condensation level
   pfn cloud_height(i : Int) : Float do
     int_to_float(match cloud_type(i) do
-      0 | 1 -> roll_in(i, 7, 54, 60)
-      2 -> roll_in(i, 7, 52, 58)
-      3 -> roll_in(i, 7, 48, 52)
-      4 -> roll_in(i, 7, 60, 68)
-      5 -> roll_in(i, 7, 44, 50)
+      0 | 1 -> roll_in(i, 7, 36, 42)
+      2 -> roll_in(i, 7, 34, 40)
+      3 -> roll_in(i, 7, 32, 36)
+      4 -> roll_in(i, 7, 44, 52)
+      5 -> roll_in(i, 7, 30, 36)
       6 -> roll_in(i, 7, 98, 108)
       7 -> roll_in(i, 7, 106, 114)
       _ -> roll_in(i, 7, 128, 140)
@@ -366,7 +454,7 @@ mod Ur.Scene do
         end
     end
   end
-  pfn place_clouds(sky : Strata.Weather.Sky, hour : Float, offset : (Float, Float), i : Int, out : NativeF32Arr, n : Int) : (NativeF32Arr, Int) do
+  pfn place_clouds(sky : Strata.Weather.Sky, hour : Float, offset : (Float, Float), peaks : List(Peak), i : Int, out : NativeF32Arr, n : Int) : (NativeF32Arr, Int) do
     if i == cloud_bodies() do (out, n) else
       let slot = cloud_slot(i)
       let formed = presence(i, sky, hour)
@@ -376,23 +464,26 @@ mod Ur.Scene do
         -- a forming cloud grows from a third of its size about its own middle
         let voxel = cloud_voxel(i) *. (0.35 +. 0.65 *. formed)
         let heading = cloud_heading(i)
-        let (mx, mz) = cloud_middle(i, offset)
+        let y = cloud_height(i)
+        let (drift_x, drift_z) = cloud_middle(i, offset)
+        let speed = math_sqrt(sky.wind_x *. sky.wind_x +. sky.wind_z *. sky.wind_z)
+        let (mx, mz) = if speed < 0.1 do (drift_x, drift_z)
+          else around(peaks, drift_x, drift_z, y +. 4.0 *. voxel, 12.0 *. voxel, sky.wind_x /. speed, sky.wind_z /. speed) end
         let half = 16.0 *. voxel
         let x = mx -. half *. (Math.cos(heading) +. Math.sin(heading))
         let z = mz -. half *. (Math.cos(heading) -. Math.sin(heading))
-        let y = cloud_height(i)
         Vk.slot_voxel(slot, voxel)
         Vk.slot_pose(slot, x, y, z, 0.0, Math.sin(heading *. 0.5), 0.0, Math.cos(heading *. 0.5))
         let (blobs, count) = if cloud_type(i) <= 5 do cloud_blobs(cloud_puffs(i), x, y, z, voxel, heading, out, n, 3) else (out, n) end
-        place_clouds(sky, hour, offset, i + 1, blobs, count)
-      else place_clouds(sky, hour, offset, i + 1, out, n) end
+        place_clouds(sky, hour, offset, peaks, i + 1, blobs, count)
+      else place_clouds(sky, hour, offset, peaks, i + 1, out, n) end
     end
   end
   -- Show and place the clouds for the weather drawn now and the time of day
-  -- ([phase], the day's clock), and cast the low ones' shadows.
-  fn clouds(w : Strata.Weather.Weather, phase : Float, offset : (Float, Float)) : Unit do
+  -- ([phase], the day's clock), parted round [peaks], and cast the low ones' shadows.
+  fn clouds(w : Strata.Weather.Weather, phase : Float, offset : (Float, Float), peaks : List(Peak)) : Unit do
     let hour = (phase -. Math.floor(phase /. S.day_seconds()) *. S.day_seconds()) *. 24.0 /. S.day_seconds()
-    let (blobs, n) = place_clouds(Strata.Weather.now(w), hour, offset, 0, NativeArray.make_f32(64 * 4, 0.0), 0)
+    let (blobs, n) = place_clouds(Strata.Weather.now(w), hour, offset, peaks, 0, NativeArray.make_f32(64 * 4, 0.0), 0)
     Vk.set_cloud_shadows(blobs, n, Strata.Weather.shadow_darkness(w))
   end
   fn setup() : Unit do
