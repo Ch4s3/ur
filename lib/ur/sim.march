@@ -5839,6 +5839,100 @@ mod Ur.Sim do
   end
   fn rain_tank_capacity() : Int do 2400 end
 
+  -- Runoff (docs/superpowers/specs/2026-11-23-local-rain-design.md, Runoff).
+  -- A watch's rain on each parcel, less what its ground absorbs, runs down the
+  -- steepest way until it reaches the sea, a storm drain, or a hollow with no
+  -- lower neighbour. A hollow holds water up to its rim (its lowest
+  -- neighbour); what it cannot hold spills over the rim and runs on. Water is
+  -- counted in rain units (one hour of a rain level of one on one parcel);
+  -- runoff_scale() of them stand a quarter metre deep in a hollow.
+  type Runoff = { rained : Int, absorbed : Int, drained : Int, to_sea : Int, pooled : Int }
+  fn runoff_scale() : Int do 4 end
+  -- rain units a parcel's ground takes in a watch
+  pfn watch_absorption(c : City, lot : Int) : Int do soil_absorption(c, lot) * 2 end
+  -- rain units a storm drain carries to sea in a watch: about the 10 quarter
+  -- metres it keeps off a street in today's daily rule
+  pfn drain_capacity() : Int do 10 * runoff_scale() end
+  -- the lowest neighbour strictly lower than [lot] (sea or off the map counts
+  -- as -2), other than [skip]; -1 when there is none
+  pfn downhill(c : City, lot : Int, skip : Int, arm : Int, best : Int, best_h : Int) : Int do
+    if arm >= 4 do best else
+      let n = neighbour(lot, arm)
+      let h = if valid(n) do get(c.heights, n) else 0 end
+      let target = if !valid(n) || h <= 0 do -2 else n end
+      if n == skip || h >= best_h do downhill(c, lot, skip, arm + 1, best, best_h)
+      else downhill(c, lot, skip, arm + 1, target, h) end
+    end
+  end
+  -- the lowest neighbour of all four other than [skip], and its height
+  pfn rim_of(c : City, lot : Int, skip : Int, arm : Int, best : Int, best_h : Int) : (Int, Int) do
+    if arm >= 4 do (best, best_h) else
+      let n = neighbour(lot, arm)
+      let h = if valid(n) do get(c.heights, n) else 0 end
+      if n == skip || h >= best_h do rim_of(c, lot, skip, arm + 1, best, best_h)
+      else rim_of(c, lot, skip, arm + 1, if valid(n) && h > 0 do n else -2 end, h) end
+    end
+  end
+  type Flow = { water : NativeIntArr, pools : NativeIntArr, drains : NativeIntArr, report : Runoff }
+  -- carry [units] of water from [lot] downhill; [from] the parcel it came
+  -- from (so a spill does not run straight back); at most [hops] more steps
+  pfn carry(c : City, f : Flow, lot : Int, from : Int, units : Int, hops : Int) : Flow do
+    if units <= 0 do f else
+      if lot == -2 do { f with report: { f.report with to_sea: f.report.to_sea + units } } else
+        let drain_left = if get(c.storm_drains, lot) > 0 && get(c.roads, lot) > 0 do get(f.drains, lot) else 0 end
+        let taken = if drain_left < units do drain_left else units end
+        let f = if taken > 0 do { f with drains: NativeArray.set_int(f.drains, lot, drain_left - taken), report: { f.report with drained: f.report.drained + taken } } else f end
+        let left = units - taken
+        let next = downhill(c, lot, from, 0, -1, get(c.heights, lot))
+        if left <= 0 do f else
+          if next != -1 && hops > 0 do carry(c, f, next, lot, left, hops - 1) else
+            fill_hollow(c, f, lot, left, hops)
+          end
+        end
+      end
+    end
+  end
+  -- a hollow: fill to the rim, spill the rest over it
+  pfn fill_hollow(c : City, f : Flow, lot : Int, units : Int, hops : Int) : Flow do
+    let (rim, rim_h) = rim_of(c, lot, -1, 0, -1, 1000000)
+    let room = clamp(clamp(rim_h - get(c.heights, lot), 0, 16) * runoff_scale() - get(f.pools, lot), 0, 1000000)
+    let kept = if room < units do room else units end
+    let f = if kept > 0 do { f with pools: NativeArray.set_int(f.pools, lot, get(f.pools, lot) + kept), report: { f.report with pooled: f.report.pooled + kept } } else f end
+    -- water that wanders flat ground without finding a way down spreads thin and soaks in
+    if kept >= units do f
+    else if hops <= 0 || rim == -1 do { f with report: { f.report with absorbed: f.report.absorbed + units - kept } }
+    else carry(c, f, rim, lot, units - kept, hops - 1) end end
+  end
+  pfn route_all(c : City, amounts : NativeIntArr, order : List(Int), f : Flow) : Flow do
+    match order do
+      Nil -> f
+      Cons(lot, rest) ->
+        let rain = get(amounts, lot)
+        if rain <= 0 || get(c.heights, lot) <= 0 do route_all(c, amounts, rest, f) else
+          let absorb = watch_absorption(c, lot)
+          let kept = if absorb < rain do absorb else rain end
+          let f = { f with report: { f.report with rained: f.report.rained + rain, absorbed: f.report.absorbed + kept } }
+          route_all(c, amounts, rest, carry(c, f, lot, -1, rain - kept, 64))
+        end
+    end
+  end
+  pfn settle_pools(c : City, pools : NativeIntArr, lot : Int, water : NativeIntArr) : NativeIntArr do
+    if lot >= count() do water else
+      -- a hollow's own soil and its neighbours' soak up some of what stands in it, as floodplain_depth assumes
+      let depth = if get(pools, lot) <= 0 do 0 else clamp(get(pools, lot) / runoff_scale() - soil_absorption(c, lot) - nearby_absorption(c, lot, 0, 0), 0, 16) end
+      let water = if depth > get(water, lot) do NativeArray.set_int(water, lot, depth) else water end
+      settle_pools(c, pools, lot + 1, water)
+    end
+  end
+  doc "Route a watch's rain ([amounts]: each parcel's rain units) downhill; hollows' standing water rises to what pools in them. Answers the city and where the water went: rained = absorbed + drained + to_sea + pooled."
+  fn route_runoff(c : City, amounts : NativeIntArr) : (City, Runoff) do
+    let order = List.sort_by(List.range(0, count()), fn (a, b) -> get(c.heights, a) > get(c.heights, b) || (get(c.heights, a) == get(c.heights, b) && a < b))
+    let start = { water: c.surface_water, pools: NativeArray.make_int(count(), 0), drains: NativeArray.make_int(count(), drain_capacity()),
+      report: { rained: 0, absorbed: 0, drained: 0, to_sea: 0, pooled: 0 } }
+    let f = route_all(c, amounts, order, start)
+    ({ c with surface_water: settle_pools(c, f.pools, 0, c.surface_water) }, f.report)
+  end
+
   -- Standing water is measured in quarter metres. Each day the water level
   -- falls by gravity where it has a route to sea, and by absorption and evaporation elsewhere.
   pfn surface_day(c : City, lot : Int, storm : Bool, evaporation : Int, active : Bool) : City do

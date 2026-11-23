@@ -1282,7 +1282,56 @@ mod UrTest do
     Test.assert_true(S.floodplain_depth(bowls, under) > 0 && S.floodplain_depth(bowls, beside) > 0, "both parcels are hollows")
     Test.assert_true(S.surface_flood(bowls, under) > 0 && S.surface_flood(bowls, beside) == 0, "live flooding follows the storm")
   end
+  -- a plateau 25 m high with a slope down to a hollow: A (20,20) 15 m, B (21,20) 12.5 m, C (22,20) 10 m
+  pfn slope_city(extra : List((Int, Int))) : Ur.Sim.City do
+    let base = S.new()
+    let heights = List.fold_left(Cons((S.index(20, 20), 60), Cons((S.index(21, 20), 50), Cons((S.index(22, 20), 40), extra))),
+      NativeArray.make_int(2640, 100), fn (a, pair) -> match pair do (lot, h) -> NativeArray.set_int(a, lot, h) end)
+    { base with heights: heights, soil_moisture: 100, roads: NativeArray.make_int(2640, 0), buildings: NativeArray.make_int(2640, 0),
+      surface_water: NativeArray.make_int(2640, 0), storm_drains: NativeArray.make_int(2640, 0) }
+  end
+  pfn rain_on(lots : List(Int), amount : Int) : NativeIntArr do
+    List.fold_left(lots, NativeArray.make_int(2640, 0), fn (a, lot) -> NativeArray.set_int(a, lot, amount))
+  end
+  pfn conserved(r : Ur.Sim.Runoff) : Bool do r.rained == r.absorbed + r.drained + r.to_sea + r.pooled end
+  pfn runoff_checks() : Unit do
+    let a = S.index(20, 20)
+    let b = S.index(21, 20)
+    let hollow = S.index(22, 20)
+    let (valley, flow) = S.route_runoff(slope_city(Nil), rain_on([a], 32))
+    Test.assert_true(S.get(valley.surface_water, hollow) > 0 && S.get(valley.surface_water, a) == 0 && S.get(valley.surface_water, b) == 0,
+      "water runs to the valley")
+    Test.assert_true(conserved(flow) && flow.rained == 32, "water is conserved")
+    let (open, to_sea) = S.route_runoff(slope_city([(S.index(23, 20), 0)]), rain_on([a], 32))
+    Test.assert_true(to_sea.to_sea > 0 && S.get(open.surface_water, hollow) == 0 && conserved(to_sea), "a hollow open to the sea does not pool")
+    let rim = S.index(22, 21)
+    let beyond = S.index(22, 22)
+    -- paved, so nothing soaks in and the hollow shows exactly what it holds
+    let paved = slope_city([(rim, 44), (beyond, 30)])
+    let (full, spill) = S.route_runoff({ paved with roads: NativeArray.make_int(2640, 1) }, rain_on([a, b], 32))
+    Test.assert_true(S.get(full.surface_water, hollow) == 4 && S.get(full.surface_water, beyond) > 0 && conserved(spill),
+      "a full hollow spills over its rim")
+    let drained_city = slope_city(Nil)
+    let drained_city = { drained_city with roads: NativeArray.set_int(drained_city.roads, b, 1), storm_drains: NativeArray.set_int(drained_city.storm_drains, b, 1) }
+    let (with_drain, drained) = S.route_runoff(drained_city, rain_on([a], 32))
+    Test.assert_true(drained.drained > 0 && S.get(with_drain.surface_water, hollow) < S.get(valley.surface_water, hollow) && conserved(drained),
+      "storm drains carry water away")
+    let plateau = slope_city(Nil)
+    let flat = { plateau with heights: NativeArray.make_int(2640, 100) }
+    let (dry_flat, spread) = S.route_runoff(flat, rain_on(List.range(0, S.count()), 32))
+    Test.assert_true(List.all(List.range(0, S.count()), fn i -> S.get(dry_flat.surface_water, i) == 0) && conserved(spread),
+      "rain on flat ground spreads thin instead of pooling")
+    -- hollows 1 m and 1.5 m deep in a 6 m plateau
+    let bowls = [(S.index(12, 12), 20), (S.index(30, 20), 18), (S.index(40, 30), 20), (S.index(20, 33), 18)]
+    let island = { plateau with heights: List.fold_left(bowls, NativeArray.make_int(2640, 24), fn (acc, pair) -> match pair do (lot, h) -> NativeArray.set_int(acc, lot, h) end) }
+    let everywhere = List.fold_left(List.range(0, S.count()), NativeArray.make_int(2640, 0), fn (acc, i) -> if S.get(island.heights, i) > 0 do NativeArray.set_int(acc, i, 32) else acc end)
+    let (soaked, _) = S.route_runoff(island, everywhere)
+    let inland = List.range(0, S.count())
+    let mismatched = List.filter(inland, fn i -> (S.get(soaked.surface_water, i) > 0) != (S.floodplain_depth(island, i) > 0) || int_abs(S.get(soaked.surface_water, i) - S.floodplain_depth(island, i)) > 4)
+    Test.assert_true(List.is_empty(mismatched), "uniform severe rain floods the same places as today")
+  end
   fn main(_cap : Cap(IO)) : Unit do
+    runoff_checks()
     rain_reader_checks()
     rain_cell_checks()
     rain_state_checks()
