@@ -1,0 +1,92 @@
+-- The sea state: how the wind and the weather work the ocean. Pure, so the
+-- tests can reach it; Ur.Scene hands it to Strata (Vk.set_sea, set_sea_map).
+mod Ur.Sea do
+  alias Ur.Sim as S
+  alias Ur.Ocean as O
+
+  -- The sea now: the wind's direction (unit, x and z), its speed over open water in km/h, the open sea's wave height in metres, and whitecaps 0..1.
+  type State = { wind_x : Float, wind_z : Float, speed : Float, height : Float, whitecaps : Float }
+
+  doc "Wave height in metres of a sea the wind has worked fully, at [speed] km/h over open water, before any storm."
+  fn calm_height(speed : Float) : Float do
+    let h = 0.0012 *. speed *. speed
+    if h < 0.2 do 0.2 else if h > 3.5 do 3.5 else h end end
+  end
+  pfn smooth(a : Float, b : Float, x : Float) : Float do
+    let t = (x -. a) /. (b -. a)
+    let t = if t < 0.0 do 0.0 else if t > 1.0 do 1.0 else t end end
+    t *. t *. (3.0 -. 2.0 *. t)
+  end
+  pfn storm(weather : Int) : Float do if weather == 4 do 1.6 else if weather == 3 do 1.25 else 1.0 end end end
+  -- One day's sea: its wind (as the heading it blows toward), speed, height and whitecaps.
+  pfn day_sea(c : Ur.Sim.City, day : Int) : (Float, Float, Float, Float) do
+    let on = { c with month: day / S.days_per_month(), calendar_day: day % S.days_per_month() }
+    let wind = S.regional_wind(on)
+    let speed = int_to_float(wind.speed) *. 1.5
+    let roughen = storm(S.weather_on(c, on.month, on.calendar_day))
+    let caps = smooth(25.0, 55.0, speed) *. roughen
+    (wind.heading, speed, calm_height(speed) *. roughen, if caps > 1.0 do 1.0 else caps end)
+  end
+
+  doc "The sea [phase] seconds into the current day (0..S.day_seconds()): today's, easing into tomorrow's over the day's last 30%, so the wind never jumps."
+  fn state_at(c : Ur.Sim.City, phase : Float) : State do
+    let day = S.absolute_day(c)
+    let (h0, s0, w0, k0) = day_sea(c, day)
+    let (h1, s1, w1, k1) = day_sea(c, day + 1)
+    let t = smooth(0.7, 1.0, phase /. S.day_seconds())
+    -- turn the shorter way round
+    let turn = Math.atan2(Math.sin(h1 -. h0), Math.cos(h1 -. h0))
+    let heading = h0 +. turn *. t
+    { wind_x: Math.cos(heading), wind_z: Math.sin(heading), speed: s0 +. (s1 -. s0) *. t,
+      height: w0 +. (w1 -. w0) *. t, whitecaps: k0 +. (k1 -. k0) *. t }
+  end
+
+  doc "Which of 16 compass sectors a heading (radians, the way the wind blows) falls in: 0 centred on east, 4 on south, 8 on west."
+  fn sector(heading : Float) : Int do
+    int_mod_euclid(float_to_int(Math.floor(heading /. 0.392699082 +. 0.5)), 16)
+  end
+  doc "The heading at the centre of [sector]."
+  fn sector_heading(sector : Int) : Float do int_to_float(sector) *. 0.392699082 end
+
+  -- Water at each padded parcel's centre, from the coast field.
+  pfn water_mask(f : Ur.Ocean.Field, a : NativeIntArr, cell : Int) : NativeIntArr do
+    if cell >= O.ring_cells() do a else
+      let px = cell % O.padded_width() - O.ring()
+      let pz = cell / O.padded_width() - O.ring()
+      water_mask(f, NativeArray.set_int(a, cell, if O.depth(f, px * 32 + 16, pz * 32 + 16) > 0 do 1 else 0 end), cell + 1)
+    end
+  end
+  -- Metres of open water upwind of a padded parcel's centre, stepping a parcel at a time
+  -- against the wind (dx, dz); leaving the grid over water is the open ocean, 5 km.
+  pfn fetch(mask : NativeIntArr, x : Float, z : Float, dx : Float, dz : Float, steps : Int) : Float do
+    if steps >= 100 do 5000.0 else
+      let x = x -. dx
+      let z = z -. dz
+      let px = float_to_int(Math.floor(x))
+      let pz = float_to_int(Math.floor(z))
+      if px < 0 || pz < 0 || px >= O.padded_width() || pz >= O.padded_depth() do 5000.0
+      else if NativeArray.get_int(mask, pz * O.padded_width() + px) == 0 do int_to_float(steps + 1) *. 8.0
+      else fetch(mask, x, z, dx, dz, steps + 1) end end
+    end
+  end
+  pfn exposed(fetched : Float) : Float do
+    let e = Math.sqrt(fetched /. 5000.0)
+    if e < 0.15 do 0.15 else if e > 1.0 do 1.0 else e end end
+  end
+  pfn fill(mask : NativeIntArr, heading : Float, a : NativeF32Arr, cell : Int) : NativeF32Arr do
+    if cell >= O.ring_cells() do a else
+      let value = if NativeArray.get_int(mask, cell) == 0 do 0.0 else
+        let x = int_to_float(cell % O.padded_width()) +. 0.5
+        let z = int_to_float(cell / O.padded_width()) +. 0.5
+        let ray = fn (h : Float) -> exposed(fetch(mask, x, z, Math.cos(h), Math.sin(h), 0))
+        (ray(heading -. 0.19634954) +. ray(heading) +. ray(heading +. 0.19634954)) /. 3.0
+      end
+      fill(mask, heading, NativeArray.set_f32(a, cell, value), cell + 1)
+    end
+  end
+  doc "How exposed each padded parcel's water is to a wind blowing toward [sector], 0..1, row-major over the map and its ring (Ur.Ocean.padded_cell): the square root of the open water upwind over 5 km, at least 0.15, averaged across the sector; land is 0."
+  fn exposure(f : Ur.Ocean.Field, sector : Int) : NativeF32Arr do
+    let mask = water_mask(f, NativeArray.make_int(O.ring_cells(), 0), 0)
+    fill(mask, sector_heading(sector), NativeArray.make_f32(O.ring_cells(), 0.0), 0)
+  end
+end
