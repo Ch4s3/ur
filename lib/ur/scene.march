@@ -207,7 +207,9 @@ mod Ur.Scene do
   -- the heaped clouds, the hour: cumulus build after mid-morning and melt
   -- in the evening. A cloud forming or clearing grows or shrinks in place.
   fn cloud_bodies() : Int do 32 end
-  fn chunk_slots() : Int do citizen_chunk_slots() + cloud_bodies() end
+  fn chunk_slots() : Int do citizen_chunk_slots() + cloud_bodies() + S.count() * 2 end
+  -- a parcel's fifth and sixth layers of terrain (32 to 48 m), for the tallest mountains
+  pfn high_slot(i : Int, layer : Int) : Int do citizen_chunk_slots() + cloud_bodies() + i * 2 + layer - 4 end
   pfn cloud_slot(i : Int) : Int do citizen_chunk_slots() + i end
   -- the type of body i, and which of its type it is (0 the first to form)
   pfn cloud_type(i : Int) : Int do
@@ -678,9 +680,9 @@ mod Ur.Scene do
     else Ur.AppError.stop("Strata refused a world mesh upload") end
   end
   pfn layers(i : Int, x : Int, z : Int, hs : NativeIntArr, peak : Int, parts : List(Ur.Architecture.Piece), probe : FloodProbe, layer : Int) : Unit do
-    if layer >= 4 do () else
+    if layer >= 6 do () else
       let y = layer * 32
-      let slot = i * 4 + layer
+      let slot = if layer < 4 do i * 4 + layer else high_slot(i, layer) end
       let flood = probe.high >= y && probe.low < y + 32
       if peak > y || occupied(parts, y) || flood do
         let m = surface(empty(), hs, x, z, y, 0)

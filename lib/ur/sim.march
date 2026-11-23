@@ -221,7 +221,8 @@ mod Ur.Sim do
   fn terrain(x : Int, z : Int) : Int do
     let a = 100 - (x - 12) * (x - 12) - (z - 14) * (z - 14)
     let b = 30 - (x - 28) * (x - 28) - (z - 13) * (z - 13)
-    let hill = clamp(70 - (x - 10) * (x - 10) * 3 - (z - 9) * (z - 9) * 2, 0, 70)
+    -- a mountain about 42 m high, on the same footprint as the old 22 m hill
+    let hill = clamp((70 - (x - 10) * (x - 10) * 3 - (z - 9) * (z - 9) * 2) * 23 / 10, 0, 161)
     if a > 0 do 4 + a / 10 + hill else if b > 0 do 4 + b / 3 else 0 end end
   end
   pfn farm_contour(x : Int, z : Int) : Int do
@@ -236,7 +237,8 @@ mod Ur.Sim do
     let main = float_to_int(900.0 -. 3.0 *. dx *. dx -. 4.0 *. dz *. dz)
     let hx = x -. 15.0
     let hz = z -. 13.0
-    let hill = clamp(float_to_int(74.0 -. 2.0 *. hx *. hx -. 3.0 *. hz *. hz), 0, 74)
+    -- the island's mountain, about 43 m at its peak, steep enough to stay clear of the coast
+    let hill = clamp(float_to_int(160.0 -. 4.0 *. hx *. hx -. 5.0 *. hz *. hz), 0, 160)
     if main > 0 do (4 + main / 100 + hill, main, 130) else (0, 0, 0) end
   end
   pfn outer_profile(x : Int, z : Int) : (Int, Int, Int) do
@@ -282,7 +284,7 @@ mod Ur.Sim do
       let bite = (NativeArray.get_f32(shore, i) +. 0.3) *. int_to_float(band)
       let height = if base == 0 || int_to_float(margin) <= bite do 0 else
         let delta = clamp(float_to_int(NativeArray.get_f32(relief, i) *. 7.0), -4, 4)
-        clamp(base + delta, 4, if base <= 18 do 18 else 96 end)
+        clamp(base + delta, 4, if base <= 18 do 18 else 176 end)
       end
       let height = if shape.river && x < 38 && z >= 18 do
         let bank = int_abs(x - river_column(shape, z))
