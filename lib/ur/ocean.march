@@ -85,6 +85,12 @@ mod Ur.Ocean do
     cell_depth(f, cx, cz)
   end
 
+  pfn least4(a : Int, b : Int, c : Int, d : Int) : Int do least(least(a, b), least(c, d)) end
+  doc "The water's depth at a cell corner (x, z on the 4-voxel grid): the shallowest of the four cells that meet there, so a shoreline vertex is dry from whichever side it is seen."
+  fn corner_depth(f : Field, x : Int, z : Int) : Int do
+    least4(depth(f, x - 2, z - 2), depth(f, x + 2, z - 2), depth(f, x - 2, z + 2), depth(f, x + 2, z + 2))
+  end
+
   doc "The seabed's height in voxels at (x, z): below sea level (0) by the water's depth."
   fn seabed(f : Field, x : Int, z : Int) : Int do 0 - depth(f, x, z) end
 

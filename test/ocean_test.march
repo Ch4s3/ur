@@ -18,6 +18,9 @@ mod OceanTest do
   pfn first_water(f : Ur.Ocean.Field, x : Int, z : Int) : Int do
     if O.depth(f, x, z) > 0 do x else first_water(f, x + 4, z) end
   end
+  pfn first_water_west(f : Ur.Ocean.Field, x : Int, z : Int) : Int do
+    if O.depth(f, x, z) > 0 do x else first_water_west(f, x - 4, z) end
+  end
   pfn never_shallower(f : Ur.Ocean.Field, x : Int, z : Int, last : Int, steps : Int) : Bool do
     if steps == 0 do true else
       let d = O.depth(f, x, z)
@@ -92,6 +95,13 @@ mod OceanTest do
       Test.assert_true(!O.parcel_changed(f, g, O.padded_cell(px - 15, pz)) || px - 15 < -13, "a parcel 15 away does not change")
     else Test.assert_true(false, "raising a water parcel to 8 should make land") end
     Test.assert_true(!O.parcel_changed(f, f, O.padded_cell(px, pz)), "a field equals itself")
+    -- corner_depth: a vertex on the shoreline is dry from either side
+    let cz = int_div_euclid(lz, 4) * 4
+    let east = int_div_euclid(first_water(f, lx, lz), 4) * 4
+    let west = int_div_euclid(first_water_west(f, lx, lz), 4) * 4 + 4
+    Test.assert_eq_int(O.corner_depth(f, east, cz), 0, "the shore vertex east of the land is dry")
+    Test.assert_eq_int(O.corner_depth(f, west, cz), 0, "the shore vertex west of the land is dry")
+    Test.assert_eq_int(O.corner_depth(f, -12 * 32, -12 * 32), 63, "open sea corners are deep")
     -- coast_touched: only edits that move the shoreline count
     Test.assert_true(!O.coast_touched(c, c), "an unchanged city leaves the coast alone")
     Test.assert_true(O.coast_touched(c, raised), "raising a water parcel moves the coast")

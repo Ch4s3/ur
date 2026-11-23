@@ -467,8 +467,8 @@ mod Ur.Scene do
       let wet = Ur.Ocean.depth(f, x + u + 2, z + v + 2) > 0 || Ur.Ocean.depth(f, x + u + 6, z + v + 2) > 0 ||
         Ur.Ocean.depth(f, x + u + 2, z + v + 6) > 0 || Ur.Ocean.depth(f, x + u + 6, z + v + 6) > 0
       let m = if !wet do m else
-        ocean_quad(m, u, v, 8, Ur.Ocean.depth(f, x + u, z + v), Ur.Ocean.depth(f, x + u + 8, z + v),
-          Ur.Ocean.depth(f, x + u, z + v + 8), Ur.Ocean.depth(f, x + u + 8, z + v + 8))
+        ocean_quad(m, u, v, 8, Ur.Ocean.corner_depth(f, x + u, z + v), Ur.Ocean.corner_depth(f, x + u + 8, z + v),
+          Ur.Ocean.corner_depth(f, x + u, z + v + 8), Ur.Ocean.corner_depth(f, x + u + 8, z + v + 8))
       end
       patches(m, f, x, z, i + 1)
     end
