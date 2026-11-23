@@ -134,6 +134,12 @@ mod Ur.Ocean do
   doc "Whether any ground cell turned from land to water or back between [a] and [b]: the edits (heights, buildings, roads, grading) after which the ocean must be rebuilt."
   fn coast_touched(a : Ur.Sim.City, b : Ur.Sim.City) : Bool do touched_from(a, b, 0) end
 
+  pfn walls_from(a : Ur.Sim.City, b : Ur.Sim.City, i : Int) : Bool do
+    if i >= S.count() do false else if S.get(a.seawalls, i) != S.get(b.seawalls, i) do true else walls_from(a, b, i + 1) end end
+  end
+  doc "Whether any seawall was built or removed between [a] and [b]: the swell must be refracted again round the new breakwaters, though the coast is the same."
+  fn walls_touched(a : Ur.Sim.City, b : Ur.Sim.City) : Bool do walls_from(a, b, 0) end
+
   -- A rebuilt coast: the new field and the padded parcels whose water changed.
   type Rebuild = { field : Field, changed : List(Int) }
   pfn changed_from(a : Field, b : Field, cell : Int, acc : List(Int)) : List(Int) do
@@ -141,11 +147,12 @@ mod Ur.Ocean do
       changed_from(a, b, cell - 1, if parcel_changed(a, b, cell) do Cons(cell, acc) else acc end)
     end
   end
-  doc "The coast job: None when no ground turned between land and water from [old] to [c] (field [f] was built for [old]), else the new field and the padded parcels whose water changed. Pure, so it runs on a worker; drawing the changes stays on the main thread (Ur.Scene.ocean_apply)."
+  doc "The coast job: None when no ground turned between land and water and no seawall changed from [old] to [c] (field [f] was built for [old]), else the new field and the padded parcels whose water changed (the same field and none, when only seawalls changed: the swell is refracted again all the same). Pure, so it runs on a worker; drawing the changes stays on the main thread (Ur.Scene.ocean_apply)."
   fn rebuild(f : Field, old : Ur.Sim.City, c : Ur.Sim.City) : Option(Rebuild) do
-    if !coast_touched(old, c) do None else
+    if coast_touched(old, c) do
       let g = field(c)
       Some({ field: g, changed: changed_from(f, g, ring_cells() - 1, Nil) })
-    end
+    else if walls_touched(old, c) do Some({ field: f, changed: Nil })
+    else None end end
   end
 end

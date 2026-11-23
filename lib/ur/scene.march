@@ -1158,10 +1158,10 @@ mod Ur.Scene do
         if i == route.island do progress else 1.0 -. progress end
     end end
   end
-  pfn ferry_slot(c : Ur.Sim.City, i : Int, time : Float, clock : Float, refresh : Bool) : Unit do
-    let slot = rotor_slot(i)
+  -- Where ferry [i]'s boat is: its mesh's low corner in voxels and whether it runs along x, or None when [i] is not the lower end of a crossing.
+  pfn ferry_spot(c : Ur.Sim.City, i : Int, time : Float, clock : Float) : Option((Int, Int, Bool)) do
     let peer = S.get(c.ferries, i) - 1
-    if !S.valid(peer) || peer <= i do (if refresh do Vk.chunk_free(slot) else () end) else
+    if !S.valid(peer) || peer <= i do None else
       let phase = time *. 0.25 +. int_to_float(i % 11) *. 0.17
       let fraction = phase -. Math.floor(phase)
       let sweep = if fraction < 0.5 do fraction *. 2.0 else (1.0 -. fraction) *. 2.0 end
@@ -1172,9 +1172,82 @@ mod Ur.Scene do
       let z1 = peer / S.width()
       let x = x0 * 32 + 9 + float_to_int(int_to_float((x1 - x0) * 32) *. t)
       let z = z0 * 32 + 9 + float_to_int(int_to_float((z1 - z0) * 32) *. t)
-      let mesh = vessel_mesh(false, int_abs(x1 - x0) >= int_abs(z1 - z0))
-      if Vk.chunk_begin(slot, x, 1, z, 0) && Vk.chunk_part(0, mesh.words, mesh.quads) && Vk.chunk_commit() do ()
-      else Ur.AppError.stop("Ferry upload failed") end
+      Some((x, z, int_abs(x1 - x0) >= int_abs(z1 - z0)))
+    end
+  end
+  -- A ferry is a body, posed every frame on the swell (float_ferries); a refresh uploads its mesh and sets it level.
+  pfn ferry_slot(c : Ur.Sim.City, i : Int, time : Float, clock : Float, refresh : Bool) : Unit do
+    let slot = rotor_slot(i)
+    match ferry_spot(c, i, time, clock) do
+      None -> if refresh do Vk.chunk_free(slot) else () end
+      Some((x, z, east)) ->
+        if refresh do
+          let mesh = vessel_mesh(false, east)
+          if Vk.body_begin(slot) && Vk.chunk_part(0, mesh.words, mesh.quads) && Vk.chunk_commit() do () else Ur.AppError.stop("Ferry upload failed") end
+        else () end
+        Vk.slot_pose(slot, int_to_float(x) *. 0.25, 0.25, int_to_float(z) *. 0.25, 0.0, 0.0, 0.0, 1.0)
+    end
+  end
+  -- (x, y, z) turned by the unit quaternion (qx, qy, qz, qw)
+  pfn turn(qx : Float, qy : Float, qz : Float, qw : Float, x : Float, y : Float, z : Float) : (Float, Float, Float) do
+    let tx = 2.0 *. (qy *. z -. qz *. y)
+    let ty = 2.0 *. (qz *. x -. qx *. z)
+    let tz = 2.0 *. (qx *. y -. qy *. x)
+    (x +. qw *. tx +. (qy *. tz -. qz *. ty), y +. qw *. ty +. (qz *. tx -. qx *. tz), z +. qw *. tz +. (qx *. ty -. qy *. tx))
+  end
+  pfn exposure_at(exposure : NativeF32Arr, x : Float, z : Float) : Float do
+    let px = float_to_int(Math.floor(x /. 8.0))
+    let pz = float_to_int(Math.floor(z /. 8.0))
+    let r = Ur.Ocean.ring()
+    if px < 0 - r || pz < 0 - r || px >= S.width() + r || pz >= S.depth() + r do 1.0 else
+      let cell = Ur.Ocean.padded_cell(px, pz)
+      if cell < NativeArray.length_f32(exposure) do NativeArray.get_f32(exposure, cell) else 1.0 end
+    end
+  end
+  doc "Pose each ferry on the sea (Strata.Waves' query of the waves the ocean shader draws): it rises and falls with the water under its middle and pitches and rolls with the sea's slope along and across its hull, from the heights at its bow, stern and sides, so it rides a long swell and shrugs off ripples shorter than itself. On a calm day it barely moves; in a storm it heaves and tips, never past 20 degrees. [waves] is this frame's sea state (Strata.Waves.sea_state), [field] the swell refracted round the coast that Strata draws, [exposure] the sea map handed to it (Ur.Sea.exposure), [water_time] the water's clock; [time] and [clock] place the boats as `vehicles` does."
+  fn float_ferries(c : Ur.Sim.City, waves : Strata.Waves.SeaWaves, field : Option(Strata.Waves.Swell), exposure : NativeF32Arr, water_time : Float, time : Float, clock : Float, i : Int) : Unit do
+    if i >= S.count() do () else
+      if S.get(c.ferries, i) > 0 && !S.wind_turbine(S.get(c.plants, i)) do
+        match ferry_spot(c, i, time, clock) do
+          None -> ()
+          Some((x, z, east)) ->
+            -- the hull's middle at the waterline, its half length and half breadth, in metres
+            let half_l = 19.0 *. 0.125
+            let half_b = 8.0 *. 0.125
+            let (lx, lz) = if east do (half_l, half_b) else (half_b, half_l) end
+            let cx = int_to_float(x) *. 0.25 +. lx
+            let cz = int_to_float(z) *. 0.25 +. lz
+            let e = exposure_at(exposure, cx, cz)
+            let sea = fn (px : Float, pz : Float) -> Strata.Waves.height(waves, field, e, px, pz, water_time)
+            let mid = sea(cx, cz)
+            let (ax, az) = if east do (1.0, 0.0) else (0.0, 1.0) end
+            let bow = sea(cx +. ax *. half_l, cz +. az *. half_l)
+            let stern = sea(cx -. ax *. half_l, cz -. az *. half_l)
+            let port = sea(cx +. az *. half_b, cz +. ax *. half_b)
+            let star = sea(cx -. az *. half_b, cz -. ax *. half_b)
+            let along = (bow -. stern) /. (2.0 *. half_l)
+            let across = (port -. star) /. (2.0 *. half_b)
+            let (gx, gz) = if east do (along, across) else (across, along) end
+            -- no steeper than 20 degrees
+            let steep = Math.sqrt(gx *. gx +. gz *. gz)
+            let limit = 0.364
+            let (gx, gz) = if steep > limit do (gx *. limit /. steep, gz *. limit /. steep) else (gx, gz) end
+            let heave = (2.0 *. mid +. bow +. stern +. port +. star) /. 6.0
+            -- the turn that takes up (0, 1, 0) to the sea's normal (-gx, 1, -gz): half way, as a quaternion (u x n, 1 + u . n)
+            let nl = Math.sqrt(gx *. gx +. 1.0 +. gz *. gz)
+            let nx = 0.0 -. gx /. nl
+            let ny = 1.0 /. nl
+            let nz = 0.0 -. gz /. nl
+            let ql = Math.sqrt(nz *. nz +. nx *. nx +. (1.0 +. ny) *. (1.0 +. ny))
+            let qx = nz /. ql
+            let qz = 0.0 -. nx /. ql
+            let qw = (1.0 +. ny) /. ql
+            -- the low corner, so the hull's middle stays at (cx, heave, cz)
+            let (ox, oy, oz) = turn(qx, 0.0, qz, qw, lx, 0.0, lz)
+            Vk.slot_pose(rotor_slot(i), cx -. ox, 0.25 +. heave -. oy, cz -. oz, qx, 0.0, qz, qw)
+        end
+      else () end
+      float_ferries(c, waves, field, exposure, water_time, time, clock, i + 1)
     end
   end
   pfn rotor_mesh(step : Int, m : Mesh) : Mesh do

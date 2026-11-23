@@ -122,6 +122,16 @@ mod OceanTest do
         Test.assert_true(!O.parcel_changed(r.field, g, O.padded_cell(px, pz)), "the rebuilt field is the new coast's")
       None -> Test.assert_true(false, "raising a water parcel needs a rebuild")
     end
+    -- a seawall leaves the coast alone but changes the swell: the coast job answers the same field, nothing to redraw
+    let walled = { c with seawalls: NativeArray.set_int(c.seawalls, S.index(5, 5), 1) }
+    Test.assert_true(O.walls_touched(c, walled) && O.walls_touched(walled, c), "building or removing a seawall counts")
+    Test.assert_true(!O.walls_touched(c, raised), "raising ground is not a seawall edit")
+    match O.rebuild(f, c, walled) do
+      Some(r) ->
+        Test.assert_true(List.is_empty(r.changed), "a seawall redraws no seabed")
+        Test.assert_true(!O.parcel_changed(r.field, f, O.padded_cell(5, 5)), "and keeps the coast's field")
+      None -> Test.assert_true(false, "a seawall needs the swell refracted again")
+    end
     Authority.must(println("Ocean checks passed"))
   end
 end

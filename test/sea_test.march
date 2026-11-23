@@ -37,6 +37,21 @@ mod SeaTest do
     end
   end
 
+  pfn open_water(c : Ur.Sim.City, f : Ur.Ocean.Field, px : Int, pz : Int) : Bool do
+    px >= 0 && pz >= 0 && px < S.width() && pz < S.depth() && S.get(c.heights, S.index(px, pz)) == 0 && O.depth(f, px * 32 + 16, pz * 32 + 16) >= 12
+  end
+  pfn open_run(c : Ur.Sim.City, f : Ur.Ocean.Field, px : Int, pz : Int, k : Int) : Bool do
+    if k > 4 do true else if !open_water(c, f, px - 2 + k, pz) do false else open_run(c, f, px, pz, k + 1) end end
+  end
+  -- A parcel of open water with open water a parcel either side along z and two parcels either side along x: a seawall site.
+  pfn wall_site(c : Ur.Sim.City, f : Ur.Ocean.Field, i : Int) : Int do
+    if i >= S.count() do panic("no open water for a seawall") else
+      let px = i % S.width()
+      let pz = i / S.width()
+      if open_run(c, f, px, pz, 0) && open_water(c, f, px, pz - 1) && open_water(c, f, px, pz + 1) do i else wall_site(c, f, i + 1) end
+    end
+  end
+
   fn main(_cap : Cap(IO)) : Unit do
     let c = S.new()
     let day = S.day_seconds()
@@ -85,7 +100,7 @@ mod SeaTest do
     Test.assert_true(edge_ok(W.exposure(f, 4), 0 - O.ring()), "no jumps along the ring's outer row")
     Test.assert_true(near(at(east, lx - 1, lz), 0.0, 0.0), "land has no exposure")
     -- the swell refracted round the coast: one 2 m cell a quarter-parcel over the map and its ring
-    let sw = W.swell(f, 0.0, 40.0)
+    let sw = W.swell(f, c.seawalls, 0.0, 40.0)
     Test.assert_eq_int(sw.w, O.padded_width() * 4, "the swell grid spans the map and its ring across")
     let (_, open_amp) = Strata.Waves.sample(sw, 2, 2)
     Test.assert_true(open_amp > 0.8 && open_amp < 1.2, "the open sea's swell is about its deep-water size, got " ++ float_to_string(open_amp))
@@ -94,6 +109,31 @@ mod SeaTest do
     let land_cz = (lz * 8 + 4 + O.ring() * 8) / 2
     let (_, land_amp) = Strata.Waves.sample(sw, land_cx, land_cz)
     Test.assert_true(land_amp == 0.0, "land has no swell")
+    -- seawalls are breakwaters: a wall of three parcels across a swell running east casts a calm lee
+    let site = wall_site(c, f, 0)
+    let sx = site % S.width()
+    let sz = site / S.width()
+    let walls = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(c.seawalls, S.index(sx, sz - 1), 1), S.index(sx, sz), 1), S.index(sx, sz + 1), 1)
+    let d = W.swell_depths(f, walls)
+    let plain = W.swell_depths(f, c.seawalls)
+    let cx = (sx + O.ring()) * 4
+    let cz = (sz + O.ring()) * 4
+    let width = O.padded_width() * 4
+    -- a lone run of walls along z: the middle 2 m cells across (1 and 2 of 0..3) are solid, the outer ones water
+    Test.assert_true(NativeArray.get_f32(d, (cz + 1) * width + cx + 1) == 0.0 && NativeArray.get_f32(d, (cz + 1) * width + cx + 2) == 0.0, "the wall's own cells are solid")
+    Test.assert_true(NativeArray.get_f32(d, (cz + 1) * width + cx) > 0.0 && NativeArray.get_f32(d, (cz + 1) * width + cx + 3) > 0.0, "the water either side of it is not")
+    Test.assert_true(NativeArray.get_f32(d, (cz - 3) * width + cx + 1) == 0.0 && NativeArray.get_f32(d, (cz + 6) * width + cx + 2) == 0.0 && NativeArray.get_f32(d, (cz + 7) * width + cx + 2) > 0.0, "it runs from the middle of the first parcel to the middle of the last")
+    Test.assert_true(NativeArray.get_f32(plain, (cz + 1) * width + cx + 1) > 0.0, "without the walls it is open water")
+    let lee_x = cx + 8
+    let solve_start = Authority.must(System.now_ms())
+    let walled = W.swell(f, walls, 0.0, 30.0)
+    Authority.must(println("swell refracted in " ++ int_to_string(Authority.must(System.now_ms()) - solve_start) ++ " ms"))
+    let open = W.swell(f, c.seawalls, 0.0, 30.0)
+    let (_, calm) = Strata.Waves.sample(walled, lee_x, cz + 2)
+    let (_, rough) = Strata.Waves.sample(open, lee_x, cz + 2)
+    Authority.must(println("behind the seawall: " ++ float_to_string(calm) ++ ", without it: " ++ float_to_string(rough)))
+    -- a 24 m wall in 30 m waves: the swell fills its lee in from both ends (Strata.Waves spreads a lee over half a wavelength)
+    Test.assert_true(calm < 0.8 *. rough, "behind the seawall the swell is lower")
     Authority.must(println("Sea checks passed"))
   end
 end

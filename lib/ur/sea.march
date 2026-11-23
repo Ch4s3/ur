@@ -93,19 +93,51 @@ mod Ur.Sea do
     let l = 29.9 *. height
     if l < 6.0 do 6.0 else if l > 60.0 do 60.0 else l end end
   end
-  pfn depths(f : Ur.Ocean.Field, w : Int, a : NativeF32Arr, i : Int, n : Int) : NativeF32Arr do
-    if i >= n do a else
-      -- a 2 m cell's centre, in voxels from the map's corner
-      let x = (i % w) * 8 + 4 - O.ring() * 32
-      let z = (i / w) * 8 + 4 - O.ring() * 32
-      depths(f, w, NativeArray.set_f32(a, i, int_to_float(O.depth(f, x, z)) *. 0.25), i + 1, n)
+  -- Whether a seawall on parcel [lot] stands over the 2 m cell (lx, lz) of it (0..3 each way): the wall Ur.Landscape draws
+  -- (seawall_parts), 2 m thick along the parcel's middle and reaching to the walls beside it, taken as the cells it overlaps:
+  -- a solid band 4 m thick, the wall in its middle. In voxels, the wall spans [x0, x1) x [z0, z1) of the parcel's 32.
+  pfn overlaps(cell : Int, lo : Int, hi : Int) : Bool do cell * 8 < hi && cell * 8 + 8 > lo end
+  pfn wall_cell(walls : NativeIntArr, lot : Int, lx : Int, lz : Int) : Bool do
+    let west = S.get(walls, S.neighbour(lot, 0)) > 0
+    let east = S.get(walls, S.neighbour(lot, 1)) > 0
+    let north = S.get(walls, S.neighbour(lot, 2)) > 0
+    let south = S.get(walls, S.neighbour(lot, 3)) > 0
+    let across = west || east || (!north && !south)
+    let x0 = if west || (!west && !east) do 0 else 12 end
+    let x1 = if east || (!west && !east) do 32 else 20 end
+    let z0 = if north do 0 else 12 end
+    let z1 = if south do 32 else 20 end
+    (across && overlaps(lx, x0, x1) && overlaps(lz, 12, 20)) || ((north || south) && overlaps(lx, 12, 20) && overlaps(lz, z0, z1))
+  end
+  doc "Whether a seawall in [walls] (Ur.Sim.City.seawalls) stands over the 2 m swell cell (cx, cz), counted from the ring's corner: a breakwater, solid to the swell."
+  fn breakwater(walls : NativeIntArr, cx : Int, cz : Int) : Bool do
+    let px = cx / 4 - O.ring()
+    let pz = cz / 4 - O.ring()
+    if px < 0 || pz < 0 || px >= S.width() || pz >= S.depth() do false else
+      let lot = S.index(px, pz)
+      if S.get(walls, lot) > 0 do wall_cell(walls, lot, cx % 4, cz % 4) else false end
     end
   end
-  doc "The swell refracted round the coast (Strata.Waves): 2 m cells over the map and its ring, from the coast field's depths, the swell coming toward [heading] (radians) with deep-water [wavelength] metres. Pure: build it on a worker."
-  fn swell(f : Ur.Ocean.Field, heading : Float, wavelength : Float) : Strata.Waves.Swell do
+  pfn depths(f : Ur.Ocean.Field, walls : NativeIntArr, w : Int, a : NativeF32Arr, i : Int, n : Int) : NativeF32Arr do
+    if i >= n do a else
+      -- a 2 m cell's centre, in voxels from the map's corner; a seawall over it is solid (Strata.Waves: depth 0)
+      let x = (i % w) * 8 + 4 - O.ring() * 32
+      let z = (i / w) * 8 + 4 - O.ring() * 32
+      let d = if breakwater(walls, i % w, i / w) do 0.0 else int_to_float(O.depth(f, x, z)) *. 0.25 end
+      depths(f, walls, w, NativeArray.set_f32(a, i, d), i + 1, n)
+    end
+  end
+  doc "The depth grid the swell is refracted over: 2 m cells (x fastest) over the map and its ring, metres of water from the coast field, 0 on land and under the seawalls in [walls] (Ur.Sim.City.seawalls), which stand as breakwaters."
+  fn swell_depths(f : Ur.Ocean.Field, walls : NativeIntArr) : NativeF32Arr do
+    let w = O.padded_width() * 4
+    let h = O.padded_depth() * 4
+    depths(f, walls, w, NativeArray.make_f32(w * h, 0.0), 0, w * h)
+  end
+  doc "The swell refracted round the coast and the seawalls (Strata.Waves): 2 m cells over the map and its ring (`swell_depths`), the swell coming toward [heading] (radians) with deep-water [wavelength] metres. Pure: build it on a worker."
+  fn swell(f : Ur.Ocean.Field, walls : NativeIntArr, heading : Float, wavelength : Float) : Strata.Waves.Swell do
     let w = O.padded_width() * 4
     let h = O.padded_depth() * 4
     let corner = int_to_float(0 - O.ring()) *. 8.0
-    Strata.Waves.solve(depths(f, w, NativeArray.make_f32(w * h, 0.0), 0, w * h), w, h, corner, corner, 2.0, Math.cos(heading), Math.sin(heading), wavelength)
+    Strata.Waves.solve(swell_depths(f, walls), w, h, corner, corner, 2.0, Math.cos(heading), Math.sin(heading), wavelength)
   end
 end
