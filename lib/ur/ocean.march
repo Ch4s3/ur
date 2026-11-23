@@ -133,4 +133,19 @@ mod Ur.Ocean do
   end
   doc "Whether any ground cell turned from land to water or back between [a] and [b]: the edits (heights, buildings, roads, grading) after which the ocean must be rebuilt."
   fn coast_touched(a : Ur.Sim.City, b : Ur.Sim.City) : Bool do touched_from(a, b, 0) end
+
+  -- A rebuilt coast: the new field and the padded parcels whose water changed.
+  type Rebuild = { field : Field, changed : List(Int) }
+  pfn changed_from(a : Field, b : Field, cell : Int, acc : List(Int)) : List(Int) do
+    if cell < 0 do acc else
+      changed_from(a, b, cell - 1, if parcel_changed(a, b, cell) do Cons(cell, acc) else acc end)
+    end
+  end
+  doc "The coast job: None when no ground turned between land and water from [old] to [c] (field [f] was built for [old]), else the new field and the padded parcels whose water changed. Pure, so it runs on a worker; drawing the changes stays on the main thread (Ur.Scene.ocean_apply)."
+  fn rebuild(f : Field, old : Ur.Sim.City, c : Ur.Sim.City) : Option(Rebuild) do
+    if !coast_touched(old, c) do None else
+      let g = field(c)
+      Some({ field: g, changed: changed_from(f, g, ring_cells() - 1, Nil) })
+    end
+  end
 end

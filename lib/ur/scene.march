@@ -520,6 +520,16 @@ mod Ur.Scene do
       (g, true)
     else (f, false) end end
   end
+  pfn apply_cells(f : Ur.Ocean.Field, cells : List(Int)) : Unit do
+    match cells do
+      Nil -> ()
+      Cons(cell, rest) ->
+        seabed_parcel(f, cell)
+        apply_cells(f, rest)
+    end
+  end
+  doc "Draw a coast the ocean job rebuilt on a worker (Ur.Ocean.rebuild): only the padded parcels whose water changed. Main thread: it uploads chunks."
+  fn ocean_apply(r : Ur.Ocean.Rebuild) : Unit do apply_cells(r.field, r.changed) end
   doc "Hand the sea state to Strata: the ocean's swells, whitecaps and breakers follow it."
   fn sea_state(s : Ur.Sea.State) : Unit do Vk.set_sea(s.wind_x, s.wind_z, s.height, s.whitecaps) end
   doc "Hand Strata the wave exposure of the map and its ring (Ur.Sea.exposure), one value a padded parcel of 8 m."

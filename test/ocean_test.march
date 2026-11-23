@@ -113,6 +113,15 @@ mod OceanTest do
     let moved = any_parcel_changed(O.field(c), O.field(front), 0)
     Test.assert_true(O.coast_touched(c, front) == moved, "a waterfront building counts exactly when it moves the water")
     Test.assert_true(O.coast_touched(front, c) == moved, "and so does demolishing it")
+    -- rebuild: the coast job's result, built on a worker
+    Test.assert_true(Option.is_none(O.rebuild(f, c, c)), "an unchanged coast needs no rebuild")
+    match O.rebuild(f, c, raised) do
+      Some(r) ->
+        Test.assert_true(List.any(r.changed, fn cell -> cell == O.padded_cell(px, pz)), "the raised parcel is redrawn")
+        Test.assert_true(!List.any(r.changed, fn cell -> cell == O.padded_cell(px - 15, pz) && px - 15 >= -13), "a parcel 15 away is not")
+        Test.assert_true(!O.parcel_changed(r.field, g, O.padded_cell(px, pz)), "the rebuilt field is the new coast's")
+      None -> Test.assert_true(false, "raising a water parcel needs a rebuild")
+    end
     Authority.must(println("Ocean checks passed"))
   end
 end
