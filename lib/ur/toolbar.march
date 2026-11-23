@@ -19,9 +19,9 @@ mod Ur.Toolbar do
           2 -> Cons(64, Cons(65, Cons(66, Cons(63, Nil))))
           3 -> Cons(68, Cons(69, Cons(70, Cons(67, Nil))))
           1 -> Cons(29, Cons(30, Cons(31, Cons(32, Nil))))
-          _ -> Cons(2, Cons(3, Cons(28, Cons(5, Nil))))
+          _ -> [2, 3, 28, 117, 5]
         end
-        { span: 4, pages: Cons("Land use", Cons("Nuisance", Cons("Ground floors", Cons("Quiet hours", Nil)))), items: items }
+        { span: 5, pages: Cons("Land use", Cons("Nuisance", Cons("Ground floors", Cons("Quiet hours", Nil)))), items: items }
       3 ->
         let items = match page do
           1 -> Cons(35, Cons(42, Nil))
@@ -38,7 +38,7 @@ mod Ur.Toolbar do
           2 -> Cons(11, Cons(12, Cons(13, Cons(77, Nil))))
           3 -> [91, 92, 24, 25, 93, 94, 95, 96, 61]
           4 -> [86, 26, 27]
-          5 -> [97, 98]
+          5 -> [97, 98, 111]
           _ -> [26, 27, 4, 8, 20, 21, 22, 23]
         end
         { span: 8, pages: ["Power", "Water", "Food", "Waste", "Offshore", "Upgrades"], items: items }
@@ -49,21 +49,25 @@ mod Ur.Toolbar do
           3 -> Cons(44, Cons(79, Cons(80, Cons(81, Nil))))
           4 -> [82, 83, 84, 85, 107]
           5 -> [103, 104, 105, 106]
+          6 -> [108]
+          7 -> [109, 110, 112, 113, 115]
+          8 -> [114, 116]
           _ -> Cons(44, Cons(45, Cons(62, Cons(46, Cons(47, Cons(78, Nil))))))
         end
-        { span: 6, pages: ["Services", "Parks", "Street planting", "Education", "Faculties", "Worship"], items: items }
+        { span: 6, pages: ["Services", "Parks", "Street planting", "Education", "Faculties", "Worship", "Disaster", "Expansions", "Community"], items: items }
       6 -> { span: 2, pages: Nil, items: Cons(6, Cons(7, Nil)) }
       7 ->
         let items = match page do
           1 -> Cons(5, Cons(6, Cons(7, Cons(8, Nil))))
           2 -> [4, 29, 30, 32, 33]
           5 -> [25, 26, 34]
-          6 -> Cons(27, Cons(23, Cons(24, Cons(28, Nil))))
+          7 -> [11, 35]
+          6 -> Cons(27, Cons(23, Cons(24, Cons(28, Cons(36, Cons(37, Nil))))))
           4 -> Cons(19, Cons(20, Cons(21, Cons(22, Nil))))
           3 -> Cons(12, Cons(13, Cons(14, Cons(15, Cons(16, Cons(17, Cons(18, Cons(19, Nil))))))))
           _ -> [0, 1, 2, 3, 9, 10, 11, 31]
         end
-        { span: 8, pages: Cons("Networks", Cons("Resources", Cons("Environment", Cons("Livability", Cons("Emergencies", Cons("Neighborhoods", Cons("Street policies", Nil))))))), items: items }
+        { span: 8, pages: ["Networks", "Resources", "Environment", "Livability", "Emergencies", "Neighborhoods", "Street policies", "Crossings"], items: items }
       _ -> { span: 1, pages: Nil, items: Nil }
     end
   end
@@ -95,6 +99,7 @@ mod Ur.Toolbar do
       61 -> "clear"
       33 -> "path"
       40 -> "toll"
+      117 -> "plant"
       2 | 29 -> "homes"
       3 | 31 -> "jobs"
       28 | 30 -> "mixed"
@@ -136,6 +141,13 @@ mod Ur.Toolbar do
       105 -> "large_temple"
       106 -> "grand_temple"
       107 -> "seminary"
+      108 | 110 -> "clinic"
+      109 -> "school"
+      111 -> "plant"
+      112 -> "fire"
+      113 -> "police"
+      115 -> "clinic"
+      114 | 116 -> "school"
       75 | 63 | 67 -> "clear"
       64 | 70 -> "housing"
       71 | 72 | 73 | 74 -> "promenade"
@@ -151,6 +163,7 @@ mod Ur.Toolbar do
   end
   pfn layer_icon(layer : Int) : String do
     match layer do
+      35 -> "road_tunnel"
       23 | 26 -> "jobs"
       24 -> "housing"
       25 | 27 -> "road"
@@ -159,6 +172,8 @@ mod Ur.Toolbar do
       32 -> "park"
       33 -> "outfall"
       34 -> "shrine"
+      36 -> "housing"
+      37 -> "jobs"
       30 -> "waste"
       31 -> "outfall"
       12 | 13 -> "park"

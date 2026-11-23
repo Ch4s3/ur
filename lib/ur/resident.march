@@ -42,19 +42,26 @@ mod Ur.Resident do
     end
   end
 
+  pfn member_name(household : Int, member : Int) : String do
+    let id = S.member_id(household, member)
+    given(Strata.Seed.mix(id, 331)) ++ " " ++ surname(household)
+  end
+
   fn name(person : Ur.Citizens.Citizen) : String do
-    given(Strata.Seed.mix(person.id, 331)) ++ " " ++ surname(person.id)
+    member_name(person.household, person.member)
+  end
+
+  fn family_members(person : Ur.Citizens.Citizen) : List(String) do
+    let relatives = List.filter(List.range(0, person.family_size), fn member -> member != person.member)
+    List.map(relatives, fn member ->
+      let role = if person.member < 2 do (if member < 2 do "Partner " else "Child " end)
+        else if member < 2 do "Parent " else "Sibling " end end
+      role ++ member_name(person.household, member))
   end
 
   fn family(person : Ur.Citizens.Citizen) : String do
-    let first = Strata.Seed.mix(person.id, 331)
-    let relatives = Strata.Seed.mix(person.id, 641) % 4
-    match relatives do
-      0 -> "Lives alone"
-      1 -> "Partner " ++ given(first + 3)
-      2 -> "Child " ++ given(first + 7)
-      _ -> "Partner " ++ given(first + 3) ++ " · Child " ++ given(first + 7)
-    end
+    let names = family_members(person)
+    if List.is_empty(names) do "Lives alone" else String.join(names, " · ") end
   end
 
   fn role(c : Ur.Sim.City, person : Ur.Citizens.Citizen) : String do
@@ -84,6 +91,7 @@ mod Ur.Resident do
     let concerns = [
       { title: "Home unsafe · household displaced", strain: if displaced do 100 else 0 end },
       { title: "Housing and living costs exceed income", strain: financial * 2 },
+      { title: "Unreliable power, water, or sewage", strain: S.utility_strain(c, home) * 2 },
       { title: "No assigned job", strain: if unemployed do 56 else 0 end },
       { title: "Slow or difficult commute", strain: if S.valid(person.work) do 100 - S.measure(c, st, home, 2) else 0 end },
       { title: "Limited access to civic services", strain: 100 - S.measure(c, st, home, 3) },
@@ -92,7 +100,7 @@ mod Ur.Resident do
       { title: "Limited walkable park access", strain: (100 - S.measure(c, st, home, 1)) / 2 }]
     let concerns = List.filter(concerns, fn concern -> concern.strain >= 30)
     let concerns = List.take(List.sort_by(concerns, fn (a, b) -> a.strain >= b.strain), 3)
-    let score = S.measure(c, st, home, 0) - financial - (if unemployed do 8 else 0 end) - (if displaced do 32 else 0 end)
+    let score = S.measure(c, st, home, 0) - financial - S.utility_strain(c, home) - (if unemployed do 8 else 0 end) - (if displaced do 32 else 0 end)
     { score: S.clamp(score, 0, 100), money: money, concerns: concerns }
   end
 end

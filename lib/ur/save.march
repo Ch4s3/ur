@@ -178,6 +178,142 @@ mod Ur.Save do
       net: net })
     end
   end
+  pfn encode_ints(xs : List(Int)) : Json.JsonValue do Json.encode_array(List.map(xs, fn n -> Json.encode_int(n))) end
+  pfn decode_int_item(j : Json.JsonValue) : Result(Int, String) do integer(j) end
+  -- Optional fields keep older saves loading: a missing key takes the default.
+  pfn opt_int(j : Json.JsonValue, key : String, default : Int) : Result(Int, String) do
+    match Json.get(j, key) do
+      None -> Ok(default)
+      Some(raw) -> integer(raw)
+    end
+  end
+  pfn opt_bool(j : Json.JsonValue, key : String, default : Bool) : Result(Bool, String) do
+    match Json.get(j, key) do
+      None -> Ok(default)
+      Some(raw) -> boolean(raw)
+    end
+  end
+  pfn opt_parcels(j : Json.JsonValue, key : String, length : Int, limit : Int, default : NativeIntArr) : Result(NativeIntArr, String) do
+    match Json.get(j, key) do
+      None -> Ok(default)
+      Some(raw) -> array(raw, length, limit)
+    end
+  end
+  pfn opt_ints(j : Json.JsonValue, key : String, limit : Int) : Result(List(Int), String) do
+    match Json.get(j, key) do
+      None -> Ok(Nil)
+      Some(raw) -> items(raw, decode_int_item, limit)
+    end
+  end
+  pfn encode_debt(d : Ur.Sim.Debt) : Json.JsonValue do
+    Json.encode_object(Cons(("id", Json.encode_int(d.id)), Cons(("kind", Json.encode_int(d.kind)), Cons(("principal", Json.encode_int(d.principal)),
+      Cons(("rate", Json.encode_int(d.rate)), Cons(("months", Json.encode_int(d.months)), Cons(("resident", Json.encode_int(d.resident)), Nil)))))))
+  end
+  pfn decode_debt(j : Json.JsonValue) : Result(Ur.Sim.Debt, String) do
+    let? id = opt_int(j, "id", 0)
+    let? kind = opt_int(j, "kind", 0)
+    let? principal = opt_int(j, "principal", 0)
+    let? rate = opt_int(j, "rate", 0)
+    let? months = opt_int(j, "months", 0)
+    let? resident = opt_int(j, "resident", 0)
+    Ok({ id: id, kind: S.clamp(kind, 0, 2), principal: S.clamp(principal, 0, 100000000), rate: S.clamp(rate, 0, 1000), months: S.clamp(months, 0, 600), resident: S.clamp(resident, 0, principal) })
+  end
+  pfn encode_stock(s : Ur.Sim.Stock) : Json.JsonValue do
+    Json.encode_object(Cons(("id", Json.encode_int(s.id)), Cons(("lot", Json.encode_int(s.lot)), Cons(("sector", Json.encode_int(s.sector)),
+      Cons(("shares", Json.encode_int(s.shares)), Cons(("price", Json.encode_int(s.price)), Cons(("earnings", Json.encode_int(s.earnings)),
+      Cons(("dividend", Json.encode_int(s.dividend)), Cons(("history", encode_ints(s.history)), Cons(("listed", Json.encode_int(s.listed)),
+      Cons(("delisted", Json.encode_int(s.delisted)), Nil)))))))))))
+  end
+  pfn decode_stock(j : Json.JsonValue) : Result(Ur.Sim.Stock, String) do
+    let? id = opt_int(j, "id", 0)
+    let? lot = opt_int(j, "lot", 0)
+    let? sector = opt_int(j, "sector", 0)
+    let? shares = opt_int(j, "shares", 1)
+    let? price = opt_int(j, "price", 100)
+    let? earnings = opt_int(j, "earnings", 0)
+    let? dividend = opt_int(j, "dividend", 0)
+    let? history = opt_ints(j, "history", 120)
+    let? listed = opt_int(j, "listed", 0)
+    let? delisted = opt_int(j, "delisted", -1)
+    if !S.valid(lot) do Err("Invalid stock parcel.") else
+      Ok({ id: id, lot: lot, sector: sector, shares: S.clamp(shares, 1, 100000000), price: S.clamp(price, 0, 100000000), earnings: earnings,
+        dividend: S.clamp(dividend, 0, 100000000), history: history, listed: listed, delisted: delisted })
+    end
+  end
+  pfn encode_market(m : Ur.Sim.MarketState) : Json.JsonValue do
+    Json.encode_object(Cons(("index", Json.encode_int(m.index)), Cons(("sentiment", Json.encode_int(m.sentiment)), Cons(("volatility", Json.encode_int(m.volatility)),
+      Cons(("history", encode_ints(m.history)), Cons(("base", Json.encode_int(m.base)), Cons(("next_id", Json.encode_int(m.next_id)), Nil)))))))
+  end
+  pfn decode_market(j : Json.JsonValue) : Result(Ur.Sim.MarketState, String) do
+    let? index = opt_int(j, "index", 10000)
+    let? sentiment = opt_int(j, "sentiment", 0)
+    let? volatility = opt_int(j, "volatility", 40)
+    let? history = opt_ints(j, "history", 120)
+    let? base = opt_int(j, "base", 0)
+    let? next_id = opt_int(j, "next_id", 1)
+    Ok({ index: S.clamp(index, 0, 100000000), sentiment: S.clamp(sentiment, -1000, 1000), volatility: S.clamp(volatility, 0, 1000), history: history, base: base, next_id: S.clamp(next_id, 1, 100000000) })
+  end
+  pfn decode_parcel_sample(j : Json.JsonValue) : Result(NativeIntArr, String) do array(j, 4, 1000000000) end
+  pfn encode_economy(e : Ur.Sim.Economy) : Json.JsonValue do
+    Json.encode_object(
+      Cons(("land_value", enc_array(e.land_value, S.count() - 1, Nil)),
+      Cons(("property_rate", Json.encode_int(e.property_rate)),
+      Cons(("savings", enc_array(e.savings, S.count() - 1, Nil)),
+      Cons(("wealth_history", encode_ints(e.wealth_history)),
+      Cons(("funding", enc_array(e.funding, 5, Nil)),
+      Cons(("debts", Json.encode_array(List.map(e.debts, encode_debt))),
+      Cons(("next_debt", Json.encode_int(e.next_debt)),
+      Cons(("arrears", Json.encode_int(e.arrears)),
+      Cons(("missed", encode_ints(e.missed)),
+      Cons(("administrator", Json.encode_int(e.administrator)),
+      Cons(("insolvent", Json.encode_bool(e.insolvent)),
+      Cons(("debt_history", Json.encode_array(List.map(e.debt_history, fn sample -> enc_array(sample, 3, Nil)))),
+      Cons(("bond_size", Json.encode_int(e.bond_size)),
+      Cons(("resident_arrears", Json.encode_int(e.resident_arrears)),
+      Cons(("stocks", Json.encode_array(List.map(e.stocks, encode_stock))),
+      Cons(("market", encode_market(e.market)),
+      Cons(("listing_incentive", Json.encode_bool(e.listing_incentive)),
+      Cons(("listed_tax_break", Json.encode_int(e.listed_tax_break)),
+      Cons(("profit_streak", enc_array(e.profit_streak, S.count() - 1, Nil)), Nil))))))))))))))))))))
+  end
+  pfn decode_economy(j : Json.JsonValue) : Result(Ur.Sim.Economy, String) do
+    let base = S.new_economy()
+    let? land_value = opt_parcels(j, "land_value", S.count(), 100000, base.land_value)
+    let? property_rate = opt_int(j, "property_rate", base.property_rate)
+    let? savings = opt_parcels(j, "savings", S.count(), 1000000000, base.savings)
+    let? wealth_history = opt_ints(j, "wealth_history", 24)
+    let? funding = opt_parcels(j, "funding", 6, 150, base.funding)
+    let? debts = match Json.get(j, "debts") do
+      None -> Ok(Nil)
+      Some(raw) -> items(raw, decode_debt, 200)
+    end
+    let? next_debt = opt_int(j, "next_debt", 1)
+    let? arrears = opt_int(j, "arrears", 0)
+    let? missed = opt_ints(j, "missed", 24)
+    let? administrator = opt_int(j, "administrator", -1)
+    let? insolvent = opt_bool(j, "insolvent", false)
+    let? debt_history = match Json.get(j, "debt_history") do
+      None -> Ok(Nil)
+      Some(raw) -> items(raw, decode_parcel_sample, 24)
+    end
+    let? bond_size = opt_int(j, "bond_size", base.bond_size)
+    let? resident_arrears = opt_int(j, "resident_arrears", 0)
+    let? stocks = match Json.get(j, "stocks") do
+      None -> Ok(Nil)
+      Some(raw) -> items(raw, decode_stock, S.count())
+    end
+    let? market = match Json.get(j, "market") do
+      None -> Ok(base.market)
+      Some(raw) -> decode_market(raw)
+    end
+    let? listing_incentive = opt_bool(j, "listing_incentive", false)
+    let? listed_tax_break = opt_int(j, "listed_tax_break", 0)
+    let? profit_streak = opt_parcels(j, "profit_streak", S.count(), 100000, base.profit_streak)
+    Ok({ land_value: land_value, property_rate: S.clamp(property_rate, 0, 40), savings: savings, wealth_history: wealth_history,
+      funding: funding, debts: debts, next_debt: S.clamp(next_debt, 1, 100000000), arrears: S.clamp(arrears, 0, 1000000000), missed: missed,
+      administrator: administrator, insolvent: insolvent, debt_history: debt_history, bond_size: S.clamp(bond_size, 10000, 200000), resident_arrears: S.clamp(resident_arrears, 0, 1000000000),
+      stocks: stocks, listed_lots: S.listed_flags(stocks), market: market, listing_incentive: listing_incentive, listed_tax_break: S.clamp(listed_tax_break, 0, 50), profit_streak: profit_streak })
+  end
   pfn encode_month(v : Ur.Sim.FinanceMonth) : Json.JsonValue do
     Json.encode_object(
       Cons(("month", Json.encode_int(v.month)),
@@ -185,7 +321,8 @@ mod Ur.Save do
       Cons(("expenditures", Json.encode_int(v.expenditures)),
       Cons(("construction", Json.encode_int(v.construction)),
       Cons(("property_receipts", Json.encode_int(v.property_receipts)),
-      Cons(("budget", encode_budget(v.budget)), Nil)))))))
+      Cons(("debt_service", Json.encode_int(v.debt_service)),
+      Cons(("budget", encode_budget(v.budget)), Nil))))))))
   end
   pfn decode_month(j : Json.JsonValue) : Result(Ur.Sim.FinanceMonth, String) do
     let? raw_month = field(j, "month")
@@ -202,8 +339,9 @@ mod Ur.Save do
       None -> Ok(0)
       Some(raw) -> integer(raw)
     end
+    let? debt_service = opt_int(j, "debt_service", 0)
     Ok({ month: month, revenue: revenue, expenditures: expenditures, construction: construction, property_receipts: property_receipts,
-      budget: budget })
+      budget: budget, debt_service: debt_service })
   end
   pfn encode_shipment(v : Ur.Sim.Shipment) : Json.JsonValue do
     Json.encode_object(
@@ -220,7 +358,7 @@ mod Ur.Save do
     let? raw_units = field(j, "units")
     let? units = integer(raw_units)
     let? raw_stops = field(j, "stops")
-    let? stops = items(raw_stops, parcel, 2640)
+    let? stops = items(raw_stops, parcel, S.count())
     if !(S.valid(source) && legs >= 1 && legs + 1 == List.length(stops) && units > 0) do Err("Invalid shipment values.") else
     Ok({ source: source, legs: legs, units: units, stops: stops })
     end
@@ -334,8 +472,8 @@ mod Ur.Save do
   end
   pfn optional_array(j : Json.JsonValue, name : String, limit : Int) : Result(NativeIntArr, String) do
     match Json.get(j, name) do
-      None -> Ok(NativeArray.make_int(2640, 0))
-      Some(value) -> array(value, 2640, limit)
+      None -> Ok(NativeArray.make_int(S.count(), 0))
+      Some(value) -> array(value, S.count(), limit)
     end
   end
   pfn encode_livability(sample : NativeIntArr) : Json.JsonValue do
@@ -371,8 +509,8 @@ mod Ur.Save do
         let? o = field(j, "outcome")
         let? outcome = integer(o)
         let? r = field(j, "route")
-        let? route = items(r, parcel, 2640)
-        let admitted = S.valid(facility) && bed >= 0 && bed < 4 && transport >= 2 && transport <= 121 &&
+        let? route = items(r, parcel, S.count())
+        let admitted = S.valid(facility) && bed >= 0 && bed < 8 && transport >= 2 && transport <= 121 &&
           wait >= 0 && wait <= 120 && stay >= 1 && stay <= 133 && (outcome == 1 || outcome == 2) && !List.is_empty(route)
         let unadmitted = facility == -1 && bed == -1 && transport == 0 && wait == 0 && stay == 0 && outcome == 3 && List.is_empty(route)
         if admitted || unadmitted do Ok(Some({ facility: facility, bed: bed, transport: transport, wait: wait, stay: stay, outcome: outcome, route: route }))
@@ -405,7 +543,7 @@ mod Ur.Save do
     let? raw_travel = field(j, "travel")
     let? travel = integer(raw_travel)
     let? raw_road = field(j, "road")
-    let? road = items(raw_road, parcel, 2640)
+    let? road = items(raw_road, parcel, S.count())
     let? spread = match Json.get(j, "spread") do
       None -> Ok(Nil)
       Some(data) -> items(data, parcel, 24)
@@ -416,7 +554,8 @@ mod Ur.Save do
     end
     let answered = S.valid(station) && response >= 0 && response <= 45 && travel >= 2 && travel <= response && !List.is_empty(road)
     let unanswered = station == -1 && response == -1 && travel == 0 && List.is_empty(road)
-    if kind < 1 || kind > 4 || reported < 0 || reported > 100 || !(answered || unanswered) do Err("Invalid incident data.")
+    let valid_time = reported >= 0 && (reported <= 100 || (kind == 3 && S.incident_day(reported) < S.days_per_month()))
+    if kind < 1 || kind > 4 || !valid_time || !(answered || unanswered) do Err("Invalid incident data.")
     else Ok({ lot: lot, kind: kind, reported: reported, station: station, response: response, travel: travel, road: road, spread: spread, medical: medical }) end
   end
   pfn encode_crime(v : Ur.Sim.CrimeMonth) : Json.JsonValue do
@@ -426,7 +565,7 @@ mod Ur.Save do
     let? raw_month = field(j, "month")
     let? month = integer(raw_month)
     let? raw_calls = field(j, "calls")
-    let? calls = items(raw_calls, decode_incident, 2640)
+    let? calls = items(raw_calls, decode_incident, S.count())
     if month < 0 do Err("Invalid incident month.") else Ok({ month: month, calls: calls }) end
   end
   pfn rule_or(j : Json.JsonValue, key : String, default : Int) : Result(Int, String) do
@@ -458,7 +597,7 @@ mod Ur.Save do
     let? raw_pickup_leg = field(j, "pickup_leg")
     let? pickup_leg = integer(raw_pickup_leg)
     let? raw = field(j, "route")
-    let? route = items(raw, parcel, 2640)
+    let? route = items(raw, parcel, S.count())
     if (kind != 15 && kind != 17 && (kind < 34 || kind > 36)) || units <= 0 || units > 48 ||
        pickup_leg < 1 || pickup_leg >= List.length(route) - 1 do Err("Invalid trash route.")
     else Ok({ depot: depot, pickup: pickup, site: site, kind: kind, units: units, pickup_leg: pickup_leg, route: route }) end
@@ -491,16 +630,16 @@ mod Ur.Save do
         Json.encode_int(r.curse.site + 1),
         Json.encode_int(r.wrath_god)
       ])),
-      ("festival_feedback", enc_array(r.festival_feedback, 2639, Nil)),
-      ("festival_absence", enc_array(r.festival_absence, 2639, Nil)),
-      ("festival_attending", enc_array(r.festival_attending, 2639, Nil))
+      ("festival_feedback", enc_array(r.festival_feedback, S.count() - 1, Nil)),
+      ("festival_absence", enc_array(r.festival_absence, S.count() - 1, Nil)),
+      ("festival_attending", enc_array(r.festival_attending, S.count() - 1, Nil))
     ])
   end
   pfn decode_religion(j : Json.JsonValue) : Result(Ur.Sim.Religion, String) do
     let? raw = field(j, "state")
     let? state = array(raw, 24, 2147483647)
     let? feedback = optional_array(j, "festival_feedback", 20300)
-    let? absence = optional_array(j, "festival_absence", 2640)
+    let? absence = optional_array(j, "festival_absence", S.count())
     let? attending = optional_array(j, "festival_attending", 12)
     if S.get(state, 0) > 5 ||
         S.get(state, 1) > 5 ||
@@ -509,14 +648,14 @@ mod Ur.Save do
         S.get(state, 4) > 2 ||
         S.get(state, 6) > 4200 ||
         S.get(state, 9) > 5 ||
-        S.get(state, 12) > 2640 ||
+        S.get(state, 12) > S.count() ||
         S.get(state, 14) > 5 ||
         S.get(state, 15) > 1000000 ||
-        S.get(state, 16) > 2640 ||
+        S.get(state, 16) > S.count() ||
         S.get(state, 17) > 5 ||
-        S.get(state, 19) > 2640 ||
+        S.get(state, 19) > S.count() ||
         S.get(state, 20) > 5 ||
-        S.get(state, 22) > 2640 || S.get(state, 23) > 5 do Err("Invalid public religion state.") else
+        S.get(state, 22) > S.count() || S.get(state, 23) > 5 do Err("Invalid public religion state.") else
       Ok({ patron: S.get(state, 0), chosen: S.get(state, 1), unlocked: S.get(state, 2),
         festival_policy: S.get(state, 3), offering_policy: S.get(state, 4), offering_year: S.get(state, 5),
         offering_spend: S.get(state, 6), petition_day: S.get(state, 7), rolls: S.get(state, 8),
@@ -528,21 +667,67 @@ mod Ur.Save do
         wrath_god: S.get(state, 23), festival_feedback: feedback, festival_absence: absence, festival_attending: attending })
     end
   end
+  pfn encode_households(book : Ur.Sim.Households) : Json.JsonValue do
+    let addresses = Map.fold(book.addresses, Nil, fn (entries, lot, keys) ->
+      let entry = Json.encode_array(Cons(Json.encode_int(lot), List.map(keys, Json.encode_int)))
+      Cons(entry, entries))
+    Json.encode_object([("next", Json.encode_int(book.next)), ("addresses", Json.encode_array(addresses))])
+  end
+  pfn decode_household_keys(values : List(Json.JsonValue), keys : List(Int), limit : Int) : Result(List(Int), String) do
+    match values do
+      Nil -> Ok(List.reverse(keys))
+      Cons(raw, rest) ->
+        if limit <= 0 do Err("Too many households at an address.") else
+          let? key = integer(raw)
+          decode_household_keys(rest, Cons(key, keys), limit - 1)
+        end
+    end
+  end
+  pfn decode_address(value : Json.JsonValue) : Result((Int, List(Int)), String) do
+    match value do
+      Json.Array(Cons(raw_lot, keys)) ->
+        let? lot = parcel(raw_lot)
+        let? keys = decode_household_keys(keys, Nil, 64)
+        Ok((lot, keys))
+      _ -> Err("Invalid household address.")
+    end
+  end
+  pfn decode_households(value : Json.JsonValue) : Result(Ur.Sim.Households, String) do
+    let? raw_next = field(value, "next")
+    let? next = integer(raw_next)
+    let? raw_addresses = field(value, "addresses")
+    let? entries = items(raw_addresses, decode_address, S.count())
+    let addresses = List.fold_left(entries, Map.empty(), fn (book, entry) ->
+      let (lot, keys) = entry
+      Map.insert(book, lot, keys, Map.int_cmp))
+    let keys = List.sort_by(List.flat_map(entries, fn entry ->
+      let (_, keys) = entry
+      keys), fn (a, b) -> a < b)
+    let first = S.new_households()
+    let next_is_valid = next >= first.next && next <= 16777216
+    let keys_are_valid = List.fold_left(keys, (-1, next_is_valid), fn (state, key) ->
+      match state do
+        (prior, valid) -> (key, valid && key > prior && key < next)
+      end)
+    let (_, valid) = keys_are_valid
+    if valid do Ok({ next: next, addresses: addresses }) else Err("Invalid household identities.") end
+  end
   pfn encode_city(v : Ur.Sim.City) : Json.JsonValue do
     let freight = match v.freight do
       Some(route) -> [("freight", encode_freight(route))]
       None -> Nil
     end
-    Json.encode_object(List.append(Cons(("religion", encode_religion(v.religion)), freight),
+    let fields = List.append([("facility_expansion", enc_array(v.facility_expansion, S.count() - 1, Nil)), ("milestones", enc_array(v.milestones, 63, Nil)), ("facility_staff", enc_array(v.facility_staff, S.count() - 1, Nil)), ("founders", Json.encode_int(v.founders)), ("world_seed", Json.encode_int(v.world_seed)), ("world_setup", enc_array(v.setup, 6, Nil)), ("utility_service", enc_array(v.utility_service, S.count() - 1, Nil))], freight)
+    Json.encode_object(List.append(Cons(("religion", encode_religion(v.religion)), fields),
       Cons(("bus_fare", Json.encode_int(v.bus_fare)),
       Cons(("waste_live", Json.encode_bool(v.waste_live)),
-      Cons(("waste_bins", enc_array(v.waste_bins, 2639, Nil)),
-      Cons(("waste_stock", enc_array(v.waste_stock, 2639, Nil)),
-      Cons(("waste_sites", enc_array(v.waste_sites, 2639, Nil)),
-      Cons(("waste_last", enc_array(v.waste_last, 2639, Nil)),
-      Cons(("waste_log", enc_array(v.waste_log, 2639, Nil)),
+      Cons(("waste_bins", enc_array(v.waste_bins, S.count() - 1, Nil)),
+      Cons(("waste_stock", enc_array(v.waste_stock, S.count() - 1, Nil)),
+      Cons(("waste_sites", enc_array(v.waste_sites, S.count() - 1, Nil)),
+      Cons(("waste_last", enc_array(v.waste_last, S.count() - 1, Nil)),
+      Cons(("waste_log", enc_array(v.waste_log, S.count() - 1, Nil)),
       Cons(("waste_runs", Json.encode_array(List.map(v.waste_runs, encode_waste_run))),
-      Cons(("council", enc_array(v.council, 2639, Nil)),
+      Cons(("council", enc_array(v.council, S.count() - 1, Nil)),
       Cons(("construction_spend", Json.encode_int(v.construction_spend)),
       Cons(("island_exports", Json.encode_int(v.island_exports)),
       Cons(("island_crops", Json.encode_int(v.island_crops)),
@@ -564,25 +749,25 @@ mod Ur.Save do
       Cons(("shop_sales", enc_array(v.shop_sales, NativeArray.length_int(v.shop_sales) - 1, Nil)),
       Cons(("shop_delivered", enc_array(v.shop_delivered, NativeArray.length_int(v.shop_delivered) - 1, Nil)),
       Cons(("heights", enc_array(v.heights, NativeArray.length_int(v.heights) - 1, Nil)),
-      Cons(("grades", enc_array(v.grades, 2639, Nil)),
-      Cons(("grade_cover", enc_array(v.grade_cover, 2639, Nil)),
-      Cons(("park_tiers", enc_array(v.park_tiers, 2639, Nil)),
-      Cons(("sidewalk_items", enc_array(v.sidewalk_items, 2639, Nil)),
-      Cons(("streetscape", enc_array(v.streetscape, 2639, Nil)),
-      Cons(("fire_recovery", enc_array(v.fire_recovery, 2639, Nil)),
+      Cons(("grades", enc_array(v.grades, S.count() - 1, Nil)),
+      Cons(("grade_cover", enc_array(v.grade_cover, S.count() - 1, Nil)),
+      Cons(("park_tiers", enc_array(v.park_tiers, S.count() - 1, Nil)),
+      Cons(("sidewalk_items", enc_array(v.sidewalk_items, S.count() - 1, Nil)),
+      Cons(("streetscape", enc_array(v.streetscape, S.count() - 1, Nil)),
+      Cons(("fire_recovery", enc_array(v.fire_recovery, S.count() - 1, Nil)),
       Cons(("calendar_day", Json.encode_int(v.calendar_day)),
       Cons(("clock_ms", Json.encode_int(v.clock_ms)),
       Cons(("street_day", Json.encode_int(v.street_day)),
-      Cons(("car_free_days", enc_array(v.car_free_days, 2639, Nil)),
+      Cons(("car_free_days", enc_array(v.car_free_days, S.count() - 1, Nil)),
       Cons(("ground_rule", Json.encode_int(v.ground_rule)),
       Cons(("quiet_rule", Json.encode_int(v.quiet_rule)),
-      Cons(("ground_areas", enc_array(v.ground_areas, 2639, Nil)),
-      Cons(("quiet_areas", enc_array(v.quiet_areas, 2639, Nil)),
-      Cons(("storefronts", enc_array(v.storefronts, 2639, Nil)),
-      Cons(("footfall", enc_array(v.footfall, 2639, Nil)),
-      Cons(("parks", enc_array(v.parks, 2639, Nil)),
+      Cons(("ground_areas", enc_array(v.ground_areas, S.count() - 1, Nil)),
+      Cons(("quiet_areas", enc_array(v.quiet_areas, S.count() - 1, Nil)),
+      Cons(("storefronts", enc_array(v.storefronts, S.count() - 1, Nil)),
+      Cons(("footfall", enc_array(v.footfall, S.count() - 1, Nil)),
+      Cons(("parks", enc_array(v.parks, S.count() - 1, Nil)),
       Cons(("roads", enc_array(v.roads, NativeArray.length_int(v.roads) - 1, Nil)),
-      Cons(("public_parking", enc_array(v.public_parking, 2639, Nil)),
+      Cons(("public_parking", enc_array(v.public_parking, S.count() - 1, Nil)),
       Cons(("tolls", enc_array(v.tolls, NativeArray.length_int(v.tolls) - 1, Nil)),
       Cons(("transit", enc_array(v.transit, NativeArray.length_int(v.transit) - 1, Nil)),
       Cons(("stops", enc_array(v.stops, NativeArray.length_int(v.stops) - 1, Nil)),
@@ -595,47 +780,50 @@ mod Ur.Save do
       Cons(("housing_losses", enc_array(v.housing_losses, NativeArray.length_int(v.housing_losses) - 1, Nil)),
       Cons(("business_losses", enc_array(v.business_losses, NativeArray.length_int(v.business_losses) - 1, Nil)),
       Cons(("construction", enc_array(v.construction, NativeArray.length_int(v.construction) - 1, Nil)),
-      Cons(("paused_facilities", enc_array(v.paused_facilities, 2639, Nil)),
+      Cons(("paused_facilities", enc_array(v.paused_facilities, S.count() - 1, Nil)),
       Cons(("plants", enc_array(v.plants, NativeArray.length_int(v.plants) - 1, Nil)),
       Cons(("pipes", enc_array(v.pipes, NativeArray.length_int(v.pipes) - 1, Nil)),
       Cons(("grid", enc_array(v.grid, NativeArray.length_int(v.grid) - 1, Nil)),
       Cons(("pollution", enc_array(v.pollution, NativeArray.length_int(v.pollution) - 1, Nil)),
-      Cons(("air_pollution", enc_array(v.air_pollution, 2639, Nil)),
+      Cons(("air_pollution", enc_array(v.air_pollution, S.count() - 1, Nil)),
       Cons(("land_pollution", enc_array(v.land_pollution, NativeArray.length_int(v.land_pollution) - 1, Nil)),
       Cons(("founding_map", Json.encode_bool(v.founding_map)),
       Cons(("expansion", encode_expansion(v.expansion)),
       Cons(("shipments", Json.encode_array(List.map(v.shipments, encode_shipment))),
       Cons(("crime_history", Json.encode_array(List.map(v.crime_history, encode_crime))),
       Cons(("livability_history", Json.encode_array(List.map(v.livability_history, encode_livability))),
-      Cons(("property_status", enc_array(v.property_status, 2639, Nil)),
-      Cons(("property_arrears", enc_array(v.property_arrears, 2639, Nil)),
+      Cons(("property_status", enc_array(v.property_status, S.count() - 1, Nil)),
+      Cons(("property_arrears", enc_array(v.property_arrears, S.count() - 1, Nil)),
       Cons(("property_sales", Json.encode_int(v.property_sales)),
-      Cons(("business_age", enc_array(v.business_age, 2639, Nil)),
-      Cons(("campus", enc_array(v.campus, 2639, Nil)),
+      Cons(("business_age", enc_array(v.business_age, S.count() - 1, Nil)),
+      Cons(("campus", enc_array(v.campus, S.count() - 1, Nil)),
       Cons(("census", enc_array(v.census, 16, Nil)),
       Cons(("population_history", Json.encode_array(List.map(v.population_history, fn sample -> enc_array(sample, 5, Nil)))),
       Cons(("immigration", Json.encode_int(v.immigration)),
       Cons(("education", enc_array(v.education, 227, Nil)),
       Cons(("specializations", enc_array(v.specializations, NativeArray.length_int(v.specializations) - 1, Nil)),
-      Cons(("business_sector", enc_array(v.business_sector, 2639, Nil)),
-      Cons(("empty_homes", enc_array(v.empty_homes, 2639, Nil)),
-      Cons(("home_arrivals", enc_array(v.home_arrivals, 2639, Nil)),
+      Cons(("business_sector", enc_array(v.business_sector, S.count() - 1, Nil)),
+      Cons(("empty_homes", enc_array(v.empty_homes, S.count() - 1, Nil)),
+      Cons(("home_arrivals", enc_array(v.home_arrivals, S.count() - 1, Nil)),
+      Cons(("housing_search", enc_array(v.housing_search, S.count() - 1, Nil)),
+      Cons(("newcomer_grace", enc_array(v.newcomer_grace, S.count() - 1, Nil)),
       Cons(("neighborhood_rents", enc_array(v.neighborhood_rents, 79, Nil)),
       Cons(("rent_pressure", enc_array(v.rent_pressure, 4, Nil)),
       Cons(("market_history", Json.encode_array(List.map(v.market_history, fn sample -> enc_array(sample, 17, Nil)))),
       Cons(("finance_history", Json.encode_array(List.map(v.finance_history, encode_month))),
+      Cons(("economy", encode_economy(v.economy)),
       Cons(("climate_seed", Json.encode_int(v.climate_seed)),
-      Cons(("pump_orders", enc_array(v.pump_orders, 2639, Nil)),
-      Cons(("surface_water", enc_array(v.surface_water, 2639, Nil)),
-      Cons(("flood_damage", enc_array(v.flood_damage, 2639, Nil)),
+      Cons(("pump_orders", enc_array(v.pump_orders, S.count() - 1, Nil)),
+      Cons(("surface_water", enc_array(v.surface_water, S.count() - 1, Nil)),
+      Cons(("flood_damage", enc_array(v.flood_damage, S.count() - 1, Nil)),
       Cons(("flood_active", Json.encode_bool(v.flood_active)),
-      Cons(("storm_drains", enc_array(v.storm_drains, 2639, Nil)),
-      Cons(("seawalls", enc_array(v.seawalls, 2639, Nil)),
-      Cons(("rain_tanks", enc_array(v.rain_tanks, 2639, Nil)),
-      Cons(("subway_water", enc_array(v.subway_water, 2639, Nil)),
+      Cons(("storm_drains", enc_array(v.storm_drains, S.count() - 1, Nil)),
+      Cons(("seawalls", enc_array(v.seawalls, S.count() - 1, Nil)),
+      Cons(("rain_tanks", enc_array(v.rain_tanks, S.count() - 1, Nil)),
+      Cons(("subway_water", enc_array(v.subway_water, S.count() - 1, Nil)),
       Cons(("soil_moisture", Json.encode_int(v.soil_moisture)),
       Cons(("pumping_cost", Json.encode_int(v.pumping_cost)),
-      Cons(("message", Json.encode_string(v.message)), Nil))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+      Cons(("message", Json.encode_string(v.message)), Nil)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
   end
   pfn decode_city(j : Json.JsonValue) : Result(Ur.Sim.City, String) do
     let? freight = match Json.get(j, "freight") do
@@ -695,16 +883,16 @@ mod Ur.Save do
     let? raw_island_spend = field(j, "island_spend")
     let? island_spend = array(raw_island_spend, 3, 2147483647)
     let? raw_shop_stock = field(j, "shop_stock")
-    let? shop_stock = array(raw_shop_stock, 2640, 16)
+    let? shop_stock = array(raw_shop_stock, S.count(), 16)
     let? raw_shop_sales = field(j, "shop_sales")
-    let? shop_sales = array(raw_shop_sales, 2640, 8)
+    let? shop_sales = array(raw_shop_sales, S.count(), 8)
     let? raw_shop_delivered = field(j, "shop_delivered")
-    let? shop_delivered = array(raw_shop_delivered, 2640, 16)
+    let? shop_delivered = array(raw_shop_delivered, S.count(), 16)
     let? raw_heights = field(j, "heights")
-    let? heights = array(raw_heights, 2640, 200)
+    let? heights = array(raw_heights, S.count(), 200)
     let? public_parking = optional_array(j, "public_parking", 3)
     let? grades = optional_array(j, "grades", 10563)
-    let? grade_cover = optional_array(j, "grade_cover", 2640)
+    let? grade_cover = optional_array(j, "grade_cover", S.count())
     let? park_tiers = optional_array(j, "park_tiers", 2)
     let? sidewalk_items = optional_array(j, "sidewalk_items", 4095)
     let? streetscape = optional_array(j, "streetscape", 5)
@@ -728,35 +916,35 @@ mod Ur.Save do
     let? quiet_areas = optional_array(j, "quiet_areas", 3)
     let? storefronts = optional_array(j, "storefronts", 3)
     let? footfall = optional_array(j, "footfall", 48)
-    let? parks = optional_array(j, "parks", 2640)
+    let? parks = optional_array(j, "parks", S.count())
     let? raw_roads = field(j, "roads")
-    let? roads = array(raw_roads, 2640, 3)
+    let? roads = array(raw_roads, S.count(), 3)
     let? raw_tolls = field(j, "tolls")
-    let? tolls = array(raw_tolls, 2640, 1)
+    let? tolls = array(raw_tolls, S.count(), 1)
     let? raw_transit = field(j, "transit")
-    let? transit = array(raw_transit, 2640, 4)
+    let? transit = array(raw_transit, S.count(), 4)
     let? raw_stops = field(j, "stops")
-    let? stops = array(raw_stops, 2640, 4)
+    let? stops = array(raw_stops, S.count(), 4)
     let? raw_ferries = field(j, "ferries")
-    let? ferries = array(raw_ferries, 2640, 2640)
+    let? ferries = array(raw_ferries, S.count(), S.count())
     let? bus_fare = match Json.get(j, "bus_fare") do
       Some(amount) -> integer(amount)
       None -> Ok(1)
     end
     let? raw_service = field(j, "service")
-    let? service = array(raw_service, 2640, 3)
+    let? service = array(raw_service, S.count(), 3)
     let? raw_zones = field(j, "zones")
-    let? zones = array(raw_zones, 2640, 3)
+    let? zones = array(raw_zones, S.count(), 4)
     let? raw_density = field(j, "density")
-    let? density = array(raw_density, 2640, 3)
+    let? density = array(raw_density, S.count(), 3)
     let? raw_nuisance = field(j, "nuisance")
-    let? nuisance = array(raw_nuisance, 2640, 3)
+    let? nuisance = array(raw_nuisance, S.count(), 3)
     let? raw_buildings = field(j, "buildings")
-    let? buildings = array(raw_buildings, 2640, 3)
+    let? buildings = array(raw_buildings, S.count(), 3)
     let? raw_housing_losses = field(j, "housing_losses")
-    let? housing_losses = array(raw_housing_losses, 2640, 120)
+    let? housing_losses = array(raw_housing_losses, S.count(), 120)
     let? raw_business_losses = field(j, "business_losses")
-    let? business_losses = array(raw_business_losses, 2640, 120)
+    let? business_losses = array(raw_business_losses, S.count(), 120)
     let? business_age = optional_array(j, "business_age", 120)
     let? property_status = optional_array(j, "property_status", 2)
     let? property_arrears = optional_array(j, "property_arrears", 1000000)
@@ -764,7 +952,7 @@ mod Ur.Save do
       None -> Ok(0)
       Some(raw) -> integer(raw)
     end
-    let? campus = optional_array(j, "campus", 2640)
+    let? campus = optional_array(j, "campus", S.count())
     let? census = match Json.get(j, "census") do
       None -> Ok(Ur.Demography.empty())
       Some(raw) -> array(raw, 17, 1000000)
@@ -793,7 +981,10 @@ mod Ur.Save do
     end
     let? business_sector = optional_array(j, "business_sector", 7)
     let? empty_homes = optional_array(j, "empty_homes", 12)
-    let? home_arrivals = optional_array(j, "home_arrivals", 12)
+    let? home_arrivals = optional_array(j, "home_arrivals", 120)
+    let? utility_service = optional_array(j, "utility_service", 121)
+    let? housing_search = optional_array(j, "housing_search", S.housing_grace())
+    let? newcomer_grace = optional_array(j, "newcomer_grace", 100000000)
     let? neighborhood_rents = match Json.get(j, "neighborhood_rents") do
       None -> Ok(NativeArray.make_int(80, 0))
       Some(raw) -> array(raw, 80, 180)
@@ -807,17 +998,51 @@ mod Ur.Save do
       Some(samples) -> items(samples, fn sample -> array(sample, 18, 2147483647), 24)
     end
     let? raw_construction = field(j, "construction")
-    let? construction = array(raw_construction, 2640, 4)
+    let? construction = array(raw_construction, S.count(), 4)
     let? paused_facilities = optional_array(j, "paused_facilities", 1)
     let? raw_plants = field(j, "plants")
-    let? plants = array(raw_plants, 2640, 41)
+    let? plants = array(raw_plants, S.count(), 44)
     let? raw_pipes = field(j, "pipes")
-    let? pipes = array(raw_pipes, 2640, 2)
+    let? pipes = array(raw_pipes, S.count(), 2)
     let? raw_grid = field(j, "grid")
-    let? grid = array(raw_grid, 2640, 2)
+    let? grid = array(raw_grid, S.count(), 2)
     let? raw_pollution = field(j, "pollution")
-    let? pollution = array(raw_pollution, 2640, 2147483647)
+    let? pollution = array(raw_pollution, S.count(), 2147483647)
     let? air_pollution = optional_array(j, "air_pollution", 100)
+    let? milestones = match Json.get(j, "milestones") do
+      None -> Ok(NativeArray.make_int(64, 0))
+      Some(value) -> array(value, 64, 1)
+    end
+    let? facility_expansion = optional_array(j, "facility_expansion", 6)
+    let? facility_staff = match Json.get(j, "facility_staff") do
+      None -> Ok(NativeArray.make_int(S.count(), 0))
+      Some(value) -> array(value, S.count(), 1000000)
+    end
+    let? founders = match Json.get(j, "founders") do
+      None -> Ok(0)
+      Some(value) -> integer(value)
+    end
+    let? world_seed = match Json.get(j, "world_seed") do
+      None -> Ok(-1)
+      Some(value) -> integer(value)
+    end
+    let? setup = match Json.get(j, "world_setup") do
+      None -> Ok(S.default_setup())
+      Some(value) -> match array(value, 7, 48) do
+        Ok(settings) -> Ok(settings)
+        Err(_) ->
+          let old = match array(value, 6, 48) do
+            Ok(settings) -> Ok(settings)
+            Err(_) -> array(value, 5, 48)
+          end
+          let? previous = old
+          let settings = S.default_setup()
+          let settings = NativeArray.set_int(NativeArray.set_int(settings, 0, S.get(previous, 0)), 1, S.get(previous, 1))
+          let settings = NativeArray.set_int(NativeArray.set_int(settings, 2, S.get(previous, 2)), 3, S.get(previous, 3))
+          let wet = if NativeArray.length_int(previous) >= 6 do S.get(previous, 5) else S.get(previous, 2) end
+          Ok(NativeArray.set_int(NativeArray.set_int(settings, 4, S.get(previous, 4)), 5, wet))
+      end
+    end
     let? climate_seed = match Json.get(j, "climate_seed") do
       None -> Ok(0)
       Some(value) -> integer(value)
@@ -842,15 +1067,19 @@ mod Ur.Save do
       Some(value) -> integer(value)
     end
     let? raw_land_pollution = field(j, "land_pollution")
-    let? land_pollution = array(raw_land_pollution, 2640, 2147483647)
+    let? land_pollution = array(raw_land_pollution, S.count(), 2147483647)
     let? raw_founding_map = field(j, "founding_map")
     let? founding_map = boolean(raw_founding_map)
     let? raw_expansion = field(j, "expansion")
     let? expansion = decode_expansion(raw_expansion)
     let? raw_shipments = field(j, "shipments")
-    let? shipments = items(raw_shipments, decode_shipment, 2640)
+    let? shipments = items(raw_shipments, decode_shipment, S.count())
     let? raw_finance_history = field(j, "finance_history")
     let? finance_history = items(raw_finance_history, decode_month, 24)
+    let? economy = match Json.get(j, "economy") do
+      None -> Ok(S.new_economy())
+      Some(raw) -> decode_economy(raw)
+    end
     let? crime_history = match Json.get(j, "crime_history") do
       None -> Ok(Nil)
       Some(samples) -> items(samples, decode_crime, 24)
@@ -862,7 +1091,7 @@ mod Ur.Save do
     let? raw_message = field(j, "message")
     let? message = string(raw_message)
     if !((harbour == -1 || S.valid(harbour)) && (ferry_start == -1 || S.valid(ferry_start)) && month >= 0 && construction_spend >= 0 && tax >= 0 && tax <= 25 && energy >= 1 && energy <= 12) do Err("Invalid city values.") else
-    Ok({ climate_seed: S.clamp(climate_seed, 0, 2147483646), storm_drains: storm_drains, seawalls: seawalls, pump_orders: pump_orders, surface_water: surface_water, flood_damage: flood_damage, flood_active: flood_active, rain_tanks: rain_tanks, subway_water: subway_water, soil_moisture: S.clamp(soil, 0, 100), pumping_cost: S.clamp(pumping, 0, 200000),
+    Ok({ milestones: milestones, facility_staff: facility_staff, facility_expansion: facility_expansion, founders: S.clamp(founders, 0, 12), world_seed: world_seed, setup: setup, climate_seed: S.clamp(climate_seed, 0, 2147483646), storm_drains: storm_drains, seawalls: seawalls, pump_orders: pump_orders, surface_water: surface_water, flood_damage: flood_damage, flood_active: flood_active, rain_tanks: rain_tanks, subway_water: subway_water, soil_moisture: S.clamp(soil, 0, 100), pumping_cost: S.clamp(pumping, 0, 200000),
       waste_live: waste_live, waste_bins: waste_bins, waste_stock: waste_stock, waste_sites: waste_sites,
       waste_last: waste_last, waste_log: waste_log, waste_runs: waste_runs, council: council, religion: religion, construction_spend: construction_spend, island_exports: island_exports, island_crops: island_crops, island_catch: island_catch,
       shop_imports: shop_imports, harbour: harbour, ferry_start: ferry_start, trash: trash,
@@ -870,11 +1099,11 @@ mod Ur.Save do
       import_rate: import_rate, export_rate: export_rate, energy: energy, income: income,
       island_spend: island_spend, freight: freight, shop_stock: shop_stock, shop_sales: shop_sales, shop_delivered: shop_delivered,
       heights: heights, roads: roads, grades: grades, grade_cover: grade_cover, parks: parks, calendar_day: S.clamp(calendar_day, 0, S.days_per_month() - 1), clock_ms: S.clamp(clock_ms, 0, float_to_int(S.day_seconds() *. 1000.0) - 1), street_day: S.clamp(street_day, 0, 6), car_free_days: car_free_days, ground_rule: ground_rule, quiet_rule: quiet_rule, ground_areas: ground_areas, quiet_areas: quiet_areas, storefronts: storefronts, footfall: footfall, fire_recovery: fire_recovery, park_tiers: park_tiers, streetscape: streetscape, sidewalk_items: sidewalk_items, tolls: tolls, public_parking: public_parking, transit: transit,
-      stops: stops, ferries: ferries, service: service, bus_fare: S.clamp(bus_fare, 0, 6), bus_headways: NativeArray.make_int(2640, 0), zones: zones,
+      stops: stops, ferries: ferries, service: service, bus_fare: S.clamp(bus_fare, 0, 6), bus_headways: NativeArray.make_int(S.count(), 0), zones: zones,
       density: density, nuisance: nuisance, buildings: buildings, housing_losses: housing_losses,
       business_losses: business_losses, construction: construction, plants: plants, paused_facilities: paused_facilities, pipes: pipes,
       grid: grid, pollution: pollution, land_pollution: land_pollution, air_pollution: air_pollution, founding_map: founding_map,
-      expansion: expansion, shipments: shipments, finance_history: finance_history, market_history: market_history, campus: campus, census: census, population_history: population_history, immigration: S.clamp(immigration, 0, 2), education: education, specializations: specializations, business_sector: business_sector, empty_homes: empty_homes, home_arrivals: home_arrivals, neighborhood_rents: neighborhood_rents, rent_pressure: rent_pressure, business_age: business_age, property_status: property_status, property_arrears: property_arrears, property_sales: property_sales, crime_history: crime_history, livability_history: livability_history, message: message })
+      expansion: expansion, shipments: shipments, finance_history: finance_history, economy: economy, market_history: market_history, campus: campus, households: S.new_households(), utility_service: utility_service, shelter_demand: None, census: census, population_history: population_history, immigration: S.clamp(immigration, 0, 2), education: education, specializations: specializations, business_sector: business_sector, empty_homes: empty_homes, home_arrivals: home_arrivals, housing_search: housing_search, newcomer_grace: newcomer_grace, neighborhood_rents: neighborhood_rents, rent_pressure: rent_pressure, business_age: business_age, property_status: property_status, property_arrears: property_arrears, property_sales: property_sales, crime_history: crime_history, livability_history: livability_history, message: message })
     end
   end
   pfn encode_game(v : Game) : Json.JsonValue do
@@ -902,10 +1131,18 @@ mod Ur.Save do
     let? yaw = number(raw_yaw)
     let? raw_paused = field(j, "paused")
     let? paused = boolean(raw_paused)
-    if !(zoom >= 18.0 && zoom <= 380.0 && speed >= 1 && speed <= 3) do Err("Invalid game values.") else
+    if !(zoom >= 18.0 && zoom <= S.max_zoom() && speed >= 1 && speed <= 3) do Err("Invalid game values.") else
     Ok({ speed: speed, city: city, cx: cx, cz: cz,
       zoom: zoom, yaw: yaw, paused: paused })
     end
+  end
+  pfn encode_shelter_travel(v : Ur.Citizens.ShelterTravel) : Json.JsonValue do
+    Json.encode_object([
+      ("work", Json.encode_int(v.work)), ("study", Json.encode_int(v.study)),
+      ("qualification", Json.encode_int(v.qualification)), ("position", Json.encode_int(v.position)),
+      ("parking", Json.encode_int(v.parking)), ("arrival", Json.encode_int(v.arrival)),
+      ("car", Json.encode_int(v.car_phase)), ("transit", Json.encode_int(v.transit_phase)),
+      ("board", Json.encode_int(v.board)), ("alight", Json.encode_int(v.alight))])
   end
   pfn encode_evacuation(trip : Ur.Citizens.EvacuationTrip) : Json.JsonValue do
     Json.encode_object([
@@ -918,11 +1155,41 @@ mod Ur.Save do
       ("route", Json.encode_array(List.map(trip.route, Json.encode_int))),
       ("previous", Json.encode_int(trip.previous)),
       ("progress", Json.encode_number(trip.progress)),
-      ("wait", Json.encode_number(trip.wait))])
+      ("wait", Json.encode_number(trip.wait)),
+      ("travel", encode_shelter_travel(trip.travel))])
   end
   pfn evacuation_int(j : Json.JsonValue, name : String) : Result(Int, String) do
     let? raw = field(j, name)
     integer(raw)
+  end
+  pfn parking_value(j : Json.JsonValue, key : String) : Result(Int, String) do
+    let? raw = field(j, key)
+    match raw do
+      Json.Number(n) ->
+        if n >= 0.0 && n < int_to_float(S.count()) *. int_to_float(S.count()) *. int_to_float(S.count()) *. 2880.0 &&
+          Math.floor(n) == n do Ok(float_to_int(n)) else Err("Invalid evacuation parking.") end
+      _ -> Err("Missing evacuation parking.")
+    end
+  end
+  pfn decode_shelter_travel(j : Json.JsonValue) : Result(Ur.Citizens.ShelterTravel, String) do
+    let? work = evacuation_int(j, "work")
+    let? study = evacuation_int(j, "study")
+    let? qualification = evacuation_int(j, "qualification")
+    let? position = evacuation_int(j, "position")
+    let? parking = parking_value(j, "parking")
+    let? arrival = parking_value(j, "arrival")
+    let? car = evacuation_int(j, "car")
+    let? transit = evacuation_int(j, "transit")
+    let? board = evacuation_int(j, "board")
+    let? alight = evacuation_int(j, "alight")
+    if List.all([work, board, alight], fn lot -> lot == -1 || S.valid(lot)) &&
+      study >= -1 && study <= 8 && qualification >= 0 && qualification <= 8 && position >= 0 &&
+      car >= 0 && car <= 3 && (car == 0 || (parking > 0 && arrival > 0)) &&
+      transit >= 0 && transit <= 4 && transit != 3 && (transit == 0 || (S.valid(board) && S.valid(alight))) &&
+      (car == 0 || transit == 0) do
+      Ok({ work: work, study: study, qualification: qualification, position: position,
+        parking: parking, arrival: arrival, car_phase: car, transit_phase: transit, board: board, alight: alight })
+    else Err("Invalid shelter commute.") end
   end
   pfn decode_evacuation(j : Json.JsonValue) : Result(Ur.Citizens.EvacuationTrip, String) do
     let? id = evacuation_int(j, "id")
@@ -938,31 +1205,49 @@ mod Ur.Save do
     let? progress = number(raw_progress)
     let? raw_wait = field(j, "wait")
     let? wait = number(raw_wait)
+    let? raw_travel = field(j, "travel")
+    let? travel = decode_shelter_travel(raw_travel)
+    let commute = S.valid(shelter) && ((activity == 11 && S.valid(travel.work) && target == travel.work) ||
+      (activity == 12 && target == shelter))
     let valid_phase = match route do
-      Nil -> S.valid(location) && (activity == 10 || (activity == 8 && location == shelter && target == shelter))
+      Nil -> S.valid(location) && (commute || activity == 10 || (activity == 8 && location == shelter && target == shelter))
       Cons(_, Cons(_, _)) ->
-        location == -1 && ((activity == 7 && S.valid(shelter) && target == shelter) || (activity == 9 && target == home))
+        location == -1 && (commute || (activity == 7 && S.valid(shelter) && target == shelter) || (activity == 9 && target == home))
       _ -> false
     end
     if id >= 0 && S.valid(home) && List.all([shelter, target, previous], fn lot -> lot == -1 || S.valid(lot)) &&
       progress >= 0.0 && progress <= 1.0 && valid_phase do
       Ok({ id: id, home: home, shelter: shelter, activity: activity, location: location, target: target,
-        route: route, previous: previous, progress: progress, wait: wait })
+        previous: previous, route: route, progress: progress, wait: wait, travel: travel })
     else Err("Invalid evacuation trip.") end
   end
   fn encode_session(session : Session) : String do
     let extra = if List.is_empty(session.evacuation) do Nil
       else [("evacuation", Json.encode_array(List.map(session.evacuation, encode_evacuation)))] end
-    Json.to_string(Json.encode_object(Cons(("version", Json.encode_int(1)), Cons(("game", encode_game(session.game)), extra))))
+    let fields = [("version", Json.encode_int(2)), ("map", Json.encode_array([Json.encode_int(S.width()), Json.encode_int(S.depth())])),
+      ("game", encode_game(session.game)), ("households", encode_households(session.game.city.households))]
+    Json.to_string(Json.encode_object(List.append(fields, extra)))
   end
   fn encode(game : Game) : String do encode_session({ game: game, evacuation: Nil }) end
   fn decode_session(text : String) : Result(Session, String) do
     let? json = Json.parse(text)
     let? tag = field(json, "version")
     let? version = integer(tag)
-    if version == 1 do
+    if version == 2 do
+      -- The map size the save was made on: a save from before the field is 60 x 44.
+      let (w, d) = match field(json, "map") do
+        Ok(m) -> match m do
+            Json.Array(Cons(a, Cons(b, Nil))) -> (match integer(a) do Ok(v) -> v | Err(_) -> -1 end, match integer(b) do Ok(v) -> v | Err(_) -> -1 end)
+            _ -> (-1, -1)
+          end
+        Err(_) -> (60, 44)
+      end
+      let? _ = if w == S.width() && d == S.depth() do Ok(()) else Err("This city was saved on a " ++ int_to_string(w) ++ " x " ++ int_to_string(d) ++ " map; this build's map is " ++ int_to_string(S.width()) ++ " x " ++ int_to_string(S.depth()) ++ ".") end
       let? raw_game = field(json, "game")
       let? game = decode_game(raw_game)
+      let? raw_households = field(json, "households")
+      let? households = decode_households(raw_households)
+      let game = { game with city: { game.city with households: households } }
       let? evacuation = match Json.get(json, "evacuation") do
         None -> Ok(Nil)
         Some(raw) -> items(raw, decode_evacuation, S.population(game.city))
@@ -998,6 +1283,36 @@ mod Ur.Save do
         _ -> Err("Could not replace the saved city.")
       end
       _ -> Err("Could not write the saved city.")
+    end
+  end
+  -- The lighting settings live beside the saved city, a JSON array of each row's step.
+  fn lighting_path() : String do path() ++ ".lighting" end
+  pfn lighting_rows(l : NativeIntArr, xs : List(Int), row : Int) : NativeIntArr do
+    match xs do
+      Nil -> l
+      Cons(v, rest) -> lighting_rows(Ur.Lighting.set(l, row, v), rest, row + 1)
+    end
+  end
+  fn load_lighting() : NativeIntArr do
+    let found = match File.read(lighting_path()) do
+      Ok(Ok(text)) -> (match Json.parse(text) do
+        Ok(j) -> items(j, integer, 8)
+        Err(_) -> Err("unreadable")
+      end)
+      _ -> Err("missing")
+    end
+    match found do
+      Ok(xs) -> lighting_rows(Ur.Lighting.defaults(), xs, 0)
+      Err(_) -> Ur.Lighting.defaults()
+    end
+  end
+  pfn lighting_list(l : NativeIntArr, row : Int) : List(Json.JsonValue) do
+    if row >= Ur.Lighting.rows() do Nil else Cons(Json.encode_int(Ur.Lighting.get(l, row)), lighting_list(l, row + 1)) end
+  end
+  fn save_lighting(l : NativeIntArr) : Bool do
+    match File.write(lighting_path(), Json.to_string(Json.encode_array(lighting_list(l, 0)))) do
+      Ok(Ok(_)) -> true
+      _ -> false
     end
   end
   fn save(path : String, game : Game) : Result(Unit, String) do

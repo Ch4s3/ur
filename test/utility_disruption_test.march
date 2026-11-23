@@ -1,0 +1,82 @@
+mod UtilityDisruptionTest do
+  needs IO
+  needs IO.Console
+  alias Ur.Sim as S
+
+  pfn days(city : Ur.Sim.City, remaining : Int) : Ur.Sim.City do
+    if remaining == 0 do city else days(Ur.Clock.day(city), remaining - 1) end
+  end
+
+  pfn reload(city : Ur.Sim.City) : Ur.Sim.City do
+    let game = { city: city, cx: 78.0, cz: 151.0, zoom: 52.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(game)) do
+      Ok(loaded) -> loaded.city
+      Err(error) -> panic(error)
+    end
+  end
+
+  pfn disruption_checks() : Unit do
+    let base = S.new()
+    let home = S.index(10, 18)
+    let vacant = S.index(10, 20)
+    let business = S.index(10, 19)
+    let employer = S.index(10, 22)
+    let feeder = S.index(9, 19)
+    let zero = NativeArray.make_int(S.count(), 0)
+    let spine = List.fold_left(List.range(18, 23), zero, fn (out, z) -> NativeArray.set_int(out, S.index(9, z), 1))
+    let zones = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(zero,
+      home, 1), vacant, 1), business, 2), employer, 2)
+    let buildings = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(zero,
+      home, 1), vacant, 1), business, 1), employer, 2)
+    let plants = NativeArray.set_int(NativeArray.set_int(zero, S.index(8, 21), 1), S.index(8, 20), 3)
+    let town = { base with heights: NativeArray.make_int(S.count(), 24), roads: spine, grid: spine, pipes: spine,
+      zones: zones, buildings: buildings, empty_homes: NativeArray.set_int(zero, vacant, 4), plants: plants,
+      tax: 0, energy: 2, immigration: 0 }
+    let healthy = days(town, S.utility_sample_days())
+    Test.assert_eq_int(S.get(healthy.utility_service, business), 1, "an operating firm has a service history")
+    Test.assert_eq_int(S.get(healthy.utility_service, home), 1, "occupied housing has a service history")
+    let keys = S.households_at(healthy, home)
+    let cut = { healthy with grid: NativeArray.set_int(healthy.grid, feeder, 0) }
+    let short = days(cut, S.utility_sample_days() * 2)
+    Test.assert_eq_int(S.utility_disruption(short, home), 10, "a local outage accumulates even with generation elsewhere")
+    Test.assert_eq_int(S.utility_disruption(short, employer), 0, "a separate branch keeps service")
+    Test.assert_false(S.business_closed(short, business), "a short outage does not close the firm")
+    Test.assert_eq_int(S.occupied_homes(short, home), 4, "a short outage does not displace households")
+    let baseline = S.stats(healthy)
+    let stressed = S.business_accounts(short, baseline.routes, baseline.labor, baseline.people, baseline.work, business)
+    let served = S.business_accounts(healthy, baseline.routes, baseline.labor, baseline.people, baseline.work, business)
+    Test.assert_true(stressed.earnings < served.earnings, "repeated outages reduce sales before closure")
+    let pipe_cut = days({ healthy with pipes: NativeArray.set_int(healthy.pipes, feeder, 0) }, S.utility_sample_days())
+    let pipe_stats = S.stats(pipe_cut)
+    Test.assert_eq_int(S.utility_disruption(pipe_cut, business), S.utility_sample_days(), "businesses also depend on pipe service")
+    Test.assert_true(S.get(pipe_stats.utilities.electric.delivered, business) > 0 &&
+      S.get(pipe_stats.utilities.water.delivered, business) == 0 &&
+      S.get(pipe_stats.utilities.sewer.delivered, business) == 0, "a pipe cut leaves power on while interrupting water and sewage")
+    let saved = reload(short)
+    Test.assert_eq_int(S.utility_disruption(saved, business), 10, "a save retains the partial outage streak")
+    let restored = days({ saved with grid: healthy.grid }, S.utility_sample_days())
+    Test.assert_eq_int(S.utility_disruption(restored, home), 4, "one good sample halves the outage streak")
+    Test.assert_eq_int(S.utility_disruption(days(restored, S.utility_sample_days() * 3), home), 0, "steady service clears the outage streak")
+    let first_month = Ur.Clock.month(saved)
+    Test.assert_false(S.business_closed(first_month, business), "the firm survives below the sustained failure threshold")
+    let failed = Ur.Clock.month(first_month)
+    Test.assert_true(S.business_closed(failed, business), "a sustained local outage makes a business fail at settlement")
+    Test.assert_true(S.get(failed.home_arrivals, vacant) > 0, "households find a working utility connection they can afford")
+    Test.assert_true(List.any(S.households_at(failed, vacant), fn key -> List.any(keys, fn original -> key == original)),
+      "an outage relocation keeps household identities")
+    let repaired = Ur.Clock.month({ failed with grid: healthy.grid })
+    Test.assert_eq_int(S.utility_disruption(repaired, business), 0, "repairs clear the barrier to reopening")
+    let blocked = { healthy with buildings: NativeArray.set_int(healthy.buildings, vacant, 0),
+      zones: NativeArray.set_int(healthy.zones, vacant, 0), grid: cut.grid }
+    let waiting = Ur.Clock.month(Ur.Clock.month(blocked))
+    Test.assert_true(S.occupied_homes(waiting, home) > 0 && S.get(waiting.housing_search, home) > 0,
+      "families stay and search when a serviced home is unavailable")
+    let gone = Ur.Clock.advance(waiting, S.housing_grace())
+    Test.assert_eq_int(S.occupied_homes(gone, home), 0, "families leave after the search window expires")
+  end
+
+  fn main(_cap : Cap(IO)) : Unit do
+    disruption_checks()
+    Authority.must(println("Utility disruption checks passed"))
+  end
+end
