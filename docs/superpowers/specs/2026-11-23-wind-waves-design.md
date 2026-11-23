@@ -74,3 +74,33 @@ sheltered water.
   scaled by `sqrt(fetch / 5 km)` clamped to 0.15..1; storms ×1.6 (weather 4)
   and ×1.25 (weather 3). Tuned by screenshot, not physics.
 - Wave map resolution: one value per parcel (8 m), bilinear in the shader.
+
+## Revision (2026-11-23): voxel ocean, blended
+
+After a prototype (branch `spike/voxel-ocean`) modelled on a Reddit
+r/VoxelGameDev post (multi-layer Gerstner sum voxelised into a height field),
+the wind shading becomes a **voxel ocean, blended with the clear coast**:
+
+- **Waves:** a seeded sum of nine waves in three layers (swell, chop,
+  ripples) spread round the wind. The peak wavelength follows
+  Pierson–Moskowitz from the sea's wave height (λ ≈ 2πU²/g with
+  U²/g ≈ Hs/0.21) and shortens with low exposure (fetch). Choppiness
+  rises with the wind and sharpens the crests.
+- **Look:** the height snaps to quarter-metre steps over two-voxel columns,
+  coloured in five bands from trough navy to crest cyan with per-column
+  jitter. Risers up to a higher neighbour are shaded as dark step lines, and
+  foam clumps sit where the terraces steepen near crests. All of it animates
+  with time.
+- **Blend:** shallower than about 1 m stays clear turquoise water over the
+  visible seabed, with glints and breakers. The terraced sea takes over by
+  about 5 m. Reflections remain, toned down over the terraces.
+- **Replaces** the noise-bent swells and random whitecap blotches from the
+  first version. Breakers on windward shores stay.
+- **Unset sea state:** unchanged (viewer and goldens identical).
+- **Budget:** at most +0.5 ms GPU over the no-wind baseline in the region
+  view. The prototype costs about +1.0 to +1.3 ms. Per-wave constants move to
+  the CPU, and if that's not enough, a per-frame height tile in a compute
+  pass.
+- **Approaches considered:** replace (opaque and matte everywhere, the
+  video's look), rejected because the clear shallows and glints carry the
+  coastline the gameplay phase depends on; real moving geometry, deferred.
