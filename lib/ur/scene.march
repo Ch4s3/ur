@@ -508,17 +508,25 @@ mod Ur.Scene do
       ocean_changed(a, b, cell + 1)
     end
   end
-  doc "Keep the ocean in step with the coast, from the field [f] it was last drawn from: everything on a forced rebuild; after a structural change that turned any ground between land and water, the padded parcels whose water changed. Returns the field now drawn."
-  fn ocean(f : Ur.Ocean.Field, old : Ur.Sim.City, c : Ur.Sim.City, force : Bool, structural : Bool) : Ur.Ocean.Field do
+  doc "Keep the ocean in step with the coast, from the field [f] it was last drawn from: everything on a forced rebuild; after a structural change that turned any ground between land and water, the padded parcels whose water changed. Returns the field now drawn, and whether it was rebuilt."
+  fn ocean(f : Ur.Ocean.Field, old : Ur.Sim.City, c : Ur.Sim.City, force : Bool, structural : Bool) : (Ur.Ocean.Field, Bool) do
     if force do
       let g = Ur.Ocean.field(c)
       ocean_all(g)
-      g
+      (g, true)
     else if structural && Ur.Ocean.coast_touched(old, c) do
       let g = Ur.Ocean.field(c)
       ocean_changed(f, g, 0)
-      g
-    else f end end
+      (g, true)
+    else (f, false) end end
+  end
+  doc "Hand the sea state to Strata: the ocean's swells, whitecaps and breakers follow it."
+  fn sea_state(s : Ur.Sea.State) : Unit do Vk.set_sea(s.wind_x, s.wind_z, s.height, s.whitecaps) end
+  doc "Hand Strata the wave exposure of the map and its ring (Ur.Sea.exposure), one value a padded parcel of 8 m."
+  fn sea_map(exposure : NativeF32Arr) : Unit do
+    let corner = int_to_float(0 - Ur.Ocean.ring()) *. 8.0
+    if Vk.set_sea_map(exposure, Ur.Ocean.padded_width(), Ur.Ocean.padded_depth(), corner, corner, 8.0) do ()
+    else Ur.AppError.stop("Strata refused the sea map") end
   end
   -- One posed slab per parcel. The slot above the terrain is free on these low crossings.
   pfn deck_shadow(a : NativeU8Arr, length : Int, width : Int, i : Int) : NativeU8Arr do

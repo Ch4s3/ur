@@ -814,9 +814,19 @@ mod Ur.Sim do
   end
   type Wind = { speed : Int, heading : Float }
   fn regional_wind(c : City) : Wind do
-    let day = int_to_float(c.month * days_per_month() + c.calendar_day)
-    let swing = Math.sin(day *. 0.16)
-    { speed: 26 + float_to_int(8.0 *. swing), heading: 0.42 +. day *. 0.019 +. 0.95 *. Math.sin(day *. 0.065) }
+    let day = c.month * days_per_month() + c.calendar_day
+    { speed: wind_speed_on_day(day), heading: wind_heading_on_day(day) }
+  end
+  -- The regional wind by absolute day (month * days_per_month + day of the
+  -- month), as plain numbers: other modules can read it without a Wind record
+  -- (a Float field of a record type imported from here can reach their code
+  -- untyped and be misread; see Ur.Sea).
+  doc "The region's wind speed in km/h on absolute day [day]."
+  fn wind_speed_on_day(day : Int) : Int do 26 + float_to_int(8.0 *. Math.sin(int_to_float(day) *. 0.16)) end
+  doc "The heading the region's wind blows toward on absolute day [day], radians (0 east, pi/2 south)."
+  fn wind_heading_on_day(day : Int) : Float do
+    let d = int_to_float(day)
+    0.42 +. d *. 0.019 +. 0.95 *. Math.sin(d *. 0.065)
   end
   fn wind_at(c : City, lot : Int) : Wind do
     let wind = regional_wind(c)

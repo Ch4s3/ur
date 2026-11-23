@@ -18,27 +18,25 @@ mod Ur.Sea do
     t *. t *. (3.0 -. 2.0 *. t)
   end
   pfn storm(weather : Int) : Float do if weather == 4 do 1.6 else if weather == 3 do 1.25 else 1.0 end end end
-  -- One day's sea: its wind (as the heading it blows toward), speed, height and whitecaps.
-  pfn day_sea(c : Ur.Sim.City, day : Int) : (Float, Float, Float, Float) do
-    let on = { c with month: day / S.days_per_month(), calendar_day: day % S.days_per_month() }
-    let wind = S.regional_wind(on)
-    let speed = int_to_float(wind.speed) *. 1.5
-    let roughen = storm(S.weather_on(c, on.month, on.calendar_day))
+  -- One day's sea, its wind given as the heading it blows toward (in wind_x) rather than a direction.
+  pfn day_sea(c : Ur.Sim.City, day : Int) : State do
+    let speed = int_to_float(S.wind_speed_on_day(day)) *. 1.5
+    let roughen = storm(S.weather_on(c, day / S.days_per_month(), day % S.days_per_month()))
     let caps = smooth(25.0, 55.0, speed) *. roughen
-    (wind.heading, speed, calm_height(speed) *. roughen, if caps > 1.0 do 1.0 else caps end)
+    { wind_x: S.wind_heading_on_day(day), wind_z: 0.0, speed: speed, height: calm_height(speed) *. roughen, whitecaps: if caps > 1.0 do 1.0 else caps end }
   end
 
   doc "The sea [phase] seconds into the current day (0..S.day_seconds()): today's, easing into tomorrow's over the day's last 30%, so the wind never jumps."
   fn state_at(c : Ur.Sim.City, phase : Float) : State do
     let day = S.absolute_day(c)
-    let (h0, s0, w0, k0) = day_sea(c, day)
-    let (h1, s1, w1, k1) = day_sea(c, day + 1)
+    let a = day_sea(c, day)
+    let b = day_sea(c, day + 1)
     let t = smooth(0.7, 1.0, phase /. S.day_seconds())
     -- turn the shorter way round
-    let turn = Math.atan2(Math.sin(h1 -. h0), Math.cos(h1 -. h0))
-    let heading = h0 +. turn *. t
-    { wind_x: Math.cos(heading), wind_z: Math.sin(heading), speed: s0 +. (s1 -. s0) *. t,
-      height: w0 +. (w1 -. w0) *. t, whitecaps: k0 +. (k1 -. k0) *. t }
+    let turn = Math.atan2(Math.sin(b.wind_x -. a.wind_x), Math.cos(b.wind_x -. a.wind_x))
+    let heading = a.wind_x +. turn *. t
+    { wind_x: Math.cos(heading), wind_z: Math.sin(heading), speed: a.speed +. (b.speed -. a.speed) *. t,
+      height: a.height +. (b.height -. a.height) *. t, whitecaps: a.whitecaps +. (b.whitecaps -. a.whitecaps) *. t }
   end
 
   doc "Which of 16 compass sectors a heading (radians, the way the wind blows) falls in: 0 centred on east, 4 on south, 8 on west."
