@@ -815,6 +815,10 @@ mod Ur do
         28 -> (153.0, 153.0, 165.0)
         _ -> if channel do (180.0, 118.0, 62.0) else if region do (142.0, 105.0, 171.0) else (91.0, 143.0, 76.0) end end
       end
+      -- UR_ZOOM (metres across half the view) and UR_CENTER_X / UR_CENTER_Z frame a screenshot.
+      let zoom = int_to_float(S.clamp(Authority.must(Env.get_int("UR_ZOOM", float_to_int(zoom))), 20, 400))
+      let cx = int_to_float(Authority.must(Env.get_int("UR_CENTER_X", float_to_int(cx))))
+      let cz = int_to_float(Authority.must(Env.get_int("UR_CENTER_Z", float_to_int(cz))))
       let fleet_routes = Ur.Fleet.routes_with(c, stats.running_transit, stats.buses)
       let citizens = Ur.Citizens.refresh_with(c, Nil, stats.routes, stats.people, stats.job_matches)
       let citizens = if demo == 16 do
