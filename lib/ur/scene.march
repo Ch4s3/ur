@@ -100,7 +100,7 @@ mod Ur.Scene do
   end
   pfn sea(i : Int, m : Mesh) : Unit do
     if i >= 16 do () else
-      if Vk.chunk_begin(10561 + i, (i % 4 - 1) * 1024, -32, (i / 4 - 1) * 1024, 5) && Vk.chunk_part(0, m.words, m.quads) && Vk.chunk_commit() do sea(i + 1, m)
+      if Vk.chunk_begin(Ur.Ocean.far_sea_slot(i), (i % 4 - 1) * 1024, -32, (i / 4 - 1) * 1024, 5) && Vk.chunk_part(0, m.words, m.quads) && Vk.chunk_commit() do sea(i + 1, m)
       else Ur.AppError.stop("Sea mesh upload failed") end
     end
   end

@@ -1,0 +1,21 @@
+-- The ocean around the islands: where its chunks live and how deep it is.
+-- Pure, so the tests can reach it; Ur.Scene draws what it describes.
+mod Ur.Ocean do
+  alias Ur.Sim as S
+
+  doc "Parcels of open sea around the map on each side."
+  fn ring() : Int do 13 end
+  doc "Parcels in the map and its ring of sea, across and down."
+  fn padded_width() : Int do S.width() + 2 * ring() end
+  fn padded_depth() : Int do S.depth() + 2 * ring() end
+  fn ring_cells() : Int do padded_width() * padded_depth() end
+
+  doc "The first chunk slot the ocean owns; above every slot the city and its citizens use (Ur.Scene.citizen_chunk_slots, 216624)."
+  fn ocean_base() : Int do 220000 end
+  doc "One of the 16 coarse tiles that carry the sea out to the horizon."
+  fn far_sea_slot(i : Int) : Int do ocean_base() + i end
+  doc "Padded parcel [cell]'s seabed chunk: layer 0 is y -32..-1 (and the sea surface), layer 1 y -64..-33."
+  fn seabed_slot(cell : Int, layer : Int) : Int do ocean_base() + 16 + cell * 2 + layer end
+  doc "How many chunk slots Strata must open."
+  fn slot_count() : Int do ocean_base() + 16 + ring_cells() * 2 end
+end

@@ -730,7 +730,7 @@ mod Ur do
       let start = Authority.must(System.now_ms())
       let after = S.advance(c, bench)
       Authority.must(println("months=" ++ int_to_string(bench) ++ " elapsed_ms=" ++ int_to_string(Authority.must(System.now_ms()) - start) ++ " population=" ++ int_to_string(S.population(after)) ++ " cash=" ++ int_to_string(after.cash)))
-    else if Vk.open_slots(1440, 900, false, quad_capacity, Ur.Scene.citizen_chunk_slots()) do
+    else if Vk.open_slots(1440, 900, false, quad_capacity, Ur.Ocean.slot_count()) do
       Vk.set_vsync(!profile)
       Vk.set_offscreen(Authority.must(Env.get_int("STRATA_OFFSCREEN", 0)) > 0)
       Ur.Scene.setup()

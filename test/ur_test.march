@@ -2125,6 +2125,10 @@ mod UrTest do
     let outage = S.act(lit_street, lit_street.harbour, 27)
     Test.assert_eq_int(Ur.Landscape.lights(outage, lamp_road, 3), 0, "streetlights go dark when the grid is cut")
     Test.assert_eq_int(Ur.Landscape.lights(outage, night_shop, 3), 0, "shop lights go dark when the grid is cut")
+    Test.assert_true(Ur.Ocean.far_sea_slot(0) > 10591, "the sea's slots sit above the incident markers")
+    Test.assert_true(Ur.Ocean.far_sea_slot(0) >= 16480 + 144 + 200000, "the sea's slots sit above the citizens'")
+    Test.assert_true(Ur.Ocean.far_sea_slot(15) < Ur.Ocean.seabed_slot(0, 0), "the far sea and seabed slots do not overlap")
+    Test.assert_true(Ur.Ocean.seabed_slot(Ur.Ocean.ring_cells() - 1, 1) < Ur.Ocean.slot_count(), "every seabed slot is opened")
     Authority.must(println("Ur simulation: all assertions passed"))
   end
 end
