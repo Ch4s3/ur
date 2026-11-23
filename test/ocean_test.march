@@ -132,6 +132,19 @@ mod OceanTest do
         Test.assert_true(!O.parcel_changed(r.field, f, O.padded_cell(5, 5)), "and keeps the coast's field")
       None -> Test.assert_true(false, "a seawall needs the swell refracted again")
     end
+    -- seabed edits: a dredged parcel is deeper, a reef shallower, and either needs the ocean rebuilt
+    let deep_lot = find(c, false, S.index(16, 10))
+    let dx = deep_lot % S.width() * 32 + 16
+    let dz = deep_lot / S.width() * 32 + 16
+    let dredged = { c with seabed: NativeArray.set_int(c.seabed, deep_lot, 48) }
+    let df = O.field(dredged)
+    Test.assert_eq_int(O.depth(df, dx, dz), 48, "a parcel dredged to 48 voxels is 48 deep at its centre")
+    Test.assert_true(O.depth(df, dx + 40, dz) >= O.depth(f, dx + 40, dz), "the dredging eases into its neighbour, never making it shallower")
+    let reefed = { c with seabed: NativeArray.set_int(c.seabed, deep_lot, 64 + 4) }
+    let rf = O.field(reefed)
+    Test.assert_true(O.depth(rf, dx, dz) <= 4 && O.depth(rf, dx, dz) >= 1, "a reef's top is 4 voxels down at most, still water")
+    Test.assert_true(Option.is_some(O.rebuild(f, c, dredged)), "dredging rebuilds the ocean")
+    Test.assert_true(O.parcel_changed(f, df, O.padded_cell(deep_lot % S.width(), deep_lot / S.width())), "and redraws the dredged parcel")
     Authority.must(println("Ocean checks passed"))
   end
 end

@@ -260,6 +260,30 @@ mod Ur do
   pfn first_ferry(c : Ur.Sim.City, i : Int) : Int do
     if i >= S.count() do -1 else if S.get(c.ferries, i) - 1 > i do i else first_ferry(c, i + 1) end end
   end
+  -- the first parcel round lot (cx, cz) where [tool] does something, tried outward ring by ring, skipping [used]
+  pfn seawork_at(c : Ur.Sim.City, tool : Int, cx : Int, cz : Int, used : List(Int), r : Int, k : Int) : (Ur.Sim.City, Int) do
+    if r > 9 do (c, -1) else if k >= (2 * r + 1) * (2 * r + 1) do seawork_at(c, tool, cx, cz, used, r + 1, 0) else
+      let x = cx - r + k % (2 * r + 1)
+      let z = cz - r + k / (2 * r + 1)
+      let on_ring = x == cx - r || x == cx + r || z == cz - r || z == cz + r
+      let i = S.index(x, z)
+      if !on_ring || x < 0 || z < 0 || x >= S.width() || z >= S.depth() || List.any(used, fn u -> u == i) do seawork_at(c, tool, cx, cz, used, r, k + 1) else
+        let next = S.act(c, i, tool)
+        if next.cash < c.cash do
+          Authority.must(println("seaworks: " ++ S.tool_name(tool) ++ " at " ++ int_to_string(x) ++ "," ++ int_to_string(z)))
+          (next, i)
+        else seawork_at(c, tool, cx, cz, used, r, k + 1) end
+      end
+    end end
+  end
+  pfn seaworks_demo(c : Ur.Sim.City, tools : List(Int), used : List(Int)) : Ur.Sim.City do
+    match tools do
+      Nil -> c
+      Cons(t, rest) ->
+        let (next, i) = seawork_at(c, t, 28, 11, used, 0, 0)
+        seaworks_demo(next, rest, if i >= 0 do Cons(i, used) else used end)
+    end
+  end
   pfn clock_phase(c : Ur.Sim.City) : Float do int_to_float(c.clock_ms) /. 1000.0 end
   pfn stamp_clock(c : Ur.Sim.City, elapsed : Float) : Ur.Sim.City do
     { c with clock_ms: float_to_int(elapsed *. 1000.0) }
@@ -1246,6 +1270,8 @@ mod Ur do
         Authority.must(println("breakwater: " ++ int_to_string(wall_len) ++ " seawalls from parcel " ++ int_to_string(wall_site % S.width()) ++ "," ++ int_to_string(wall_site / S.width())))
         { c with seawalls: build_walls(c.seawalls, wall_site, wall_across_x, wall_len) }
       else c end
+      -- UR_SEAWORKS=1: a demo reclaims land, cuts a harbour, builds a reef and dredges near the channel view, to show them
+      let c = if demo > 0 && Authority.must(Env.get_int("UR_SEAWORKS", 0)) > 0 do seaworks_demo({ c with cash: c.cash + 50000 }, [120, 120, 121, 119, 119, 118], Nil) else c end
       let stats = S.stats(c)
       if metro && stats.people != Ur.Scenario.metro_people() do Ur.AppError.stop("Metropolitan benchmark: " ++ int_to_string(stats.people) ++ " residents housed, " ++ int_to_string(Ur.Scenario.metro_people()) ++ " asked for (raise UR_METRO_FLOORS)") else () end
       let ocean_start = Authority.must(System.now_ms())
