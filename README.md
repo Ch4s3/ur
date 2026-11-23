@@ -319,7 +319,7 @@ Run `./scripts/verify.sh` for all code checks, or
 ```sh
 source ../strata/scripts/env.sh
 forge check
-forge test
+for t in test/*_test.march; do forge test --release "$t"; done
 forge lint --strict
 forge build --release
 UR_BENCH=1000 .march/build/release/ur

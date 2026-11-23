@@ -89,6 +89,9 @@ mod Ur.Rain do
 
   doc "The rain level at the point (x, z) (metres) at [hour]: the larger of [base] and every active cell covering it."
   fn level_at(cells : List(Cell), base : Int, x : Float, z : Float, hour : Float) : Int do
-    List.fold_left(cells, base, fn (level, cell) -> if cell.level > level && covers(cell, x, z, hour) do cell.level else level end)
+    match cells do
+      Nil -> base
+      Cons(cell, rest) -> level_at(rest, if cell.level > base && covers(cell, x, z, hour) do cell.level else base end, x, z, hour)
+    end
   end
 end

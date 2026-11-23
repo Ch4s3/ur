@@ -1390,7 +1390,21 @@ mod UrTest do
     Test.assert_true(List.all(List.range(0, S.count()), fn i -> S.get(after.surface_water, i) == 0) && !after.flood_active && after.soil_moisture == sea.soil_moisture,
       "a storm over open sea wets no land")
   end
+  pfn same_list(a : List(Int), b : List(Int)) : Bool do
+    match (a, b) do
+      (Nil, Nil) -> true
+      (Cons(x, xs), Cons(y, ys)) -> if x == y do same_list(xs, ys) else false end
+      _ -> false
+    end
+  end
+  pfn watch_clock_checks() : Unit do
+    Test.assert_true(same_list(S.watches_crossed(7.9, 8.2), [0]), "a frame that jumps past 08:00 ends the night watch once")
+    Test.assert_true(same_list(S.watches_crossed(8.0, 8.5), Nil), "a frame starting at 08:00 does not end it again")
+    Test.assert_true(same_list(S.watches_crossed(7.0, 16.5), [0, 1]), "a long frame ends both daytime watches in order")
+    Test.assert_true(same_list(S.watches_crossed(15.0, 24.0), [1]), "midnight is left to the day's roll")
+  end
   fn main(_cap : Cap(IO)) : Unit do
+    watch_clock_checks()
     watch_checks()
     runoff_checks()
     rain_reader_checks()
