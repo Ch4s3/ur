@@ -123,10 +123,8 @@ What happens at the end of a watch:
 - **Every watch (cheap):** soil moisture recharge (from the island's mean
   watch rain, a third of today's daily recharge at the same level);
   polluted runoff from parcels whose peak was heavy or severe; standing
-  water rising to `floodplain_depth` on parcels whose peak was severe (the
-  rule `surface_day` uses today, per parcel instead of island-wide); flood
-  damage recorded from the new level straight away, so an 08:00 flood
-  counts (my call); rain collector intake and subway flooding per parcel,
+  water rising from routed runoff (see Runoff below); flood damage recorded
+  from the new level straight away, so an 08:00 flood counts (my call); rain collector intake and subway flooding per parcel,
   scaled so three watches of uniform rain add what one day does today;
   `flood_active` recomputed.
 - **Midnight only (already off the main thread):** draining of standing
@@ -134,6 +132,48 @@ What happens at the end of a watch:
   today skip draining, the per-parcel form of today's rule that nothing
   drains on a severe day (my call); repair days counting down, soil drying,
   and the work that needs the utility network (pumps, collector use).
+
+**Runoff (decided by the user).** Rain no longer floods only where it
+falls: it runs downhill. Today water never moves between parcels;
+`floodplain_depth` stands in for it with fixed rules (a parcel lower than
+three neighbours floods deeper, soil absorbs some, the coast floods low
+parcels). That was fine while rain hit every parcel at once. With local
+rain, a storm over the mountain must flood the valley below it.
+
+At every watch, after the watch's rain is known:
+
+1. Each land parcel takes the rain that fell on it in the watch (its
+   amount), keeps what its ground absorbs (`soil_absorption`, scaled to a
+   watch), and has the rest as runoff. Roads, buildings and paving absorb
+   nothing, as today.
+2. Parcels are visited from highest to lowest. Each passes its runoff,
+   plus everything that reached it from uphill, to its lowest neighbour of
+   the four. A parcel with a storm drain on a road keeps up to its drain's
+   capacity out of the flow, sent to sea. Runoff that reaches the sea
+   (height 0) is gone.
+3. A parcel with no lower neighbour is a hollow: water pools there, raising
+   its standing water up to the depth of its rim (the lowest neighbour's
+   height above it, as `basin_depth` measures), at most 16 quarter metres.
+   What a full hollow cannot hold spills on over its rim to that lowest
+   neighbour and keeps going.
+4. Standing water from this watch is the larger of what the parcel already
+   had and what pooled there. Flood damage is recorded from it at once.
+
+Water reaches the low ground in the same watch it fell (decided by the
+user); there is no water in transit between watches. The coastal part of
+`floodplain_depth` (low parcels near the shore flooding in a severe storm)
+stays, applied to coastal parcels under severe rain. Polluted runoff to the
+sea keeps today's rule.
+
+The order of parcels by height is computed once and kept until the terrain
+changes (grading); each watch is then one pass over the map's 2,640
+parcels. Uniform rain keeps today's fixed rules, so the flood scenarios are
+unchanged.
+
+Calibration: with severe rain over the whole island, routed flooding should
+land in the same range as today's (the same parcels flooding, to depths
+within a few quarter metres); the exact conversion from rain to water depth
+is the builder's, tuned against that.
 
 **Live flooding.** Today, on a severe day, `surface_flood` adds
 `floodplain_depth` to every parcel all day, and road closures, inundated
@@ -222,6 +262,8 @@ water, not only at midnight.
   alerts and evacuations happen only where heavy rain falls.
 - Idra's Unending Rain stays island-wide.
 - Older saves may break.
+- Rain runs downhill: routed runoff at every watch, reaching the low ground
+  within the same watch.
 - Ordinary cities switch to local rain; existing tests that land on rainy
   days may be re-baselined.
 
@@ -238,6 +280,9 @@ water, not only at midnight.
 - How streaks learn local rain (see Engine).
 - Tests: storms are deterministic for a seed and date; parcels outside every
   cell get only the baseline; uniform rain reproduces today's daily totals;
-  a severe cell floods the parcels it crosses and not the others; the
+  a severe cell floods the parcels it crosses and not the others; rain on
+  high ground with none in the valley still floods the valley's hollows;
+  water is conserved through routing (rain = absorbed + drained + to sea +
+  pooled); the
   flood scenario, drill and evacuation tests pass unchanged (uniform);
   other tests may be re-baselined where rain days change their numbers.
