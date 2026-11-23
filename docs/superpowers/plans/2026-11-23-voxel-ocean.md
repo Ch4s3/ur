@@ -39,7 +39,16 @@
 - [ ] Fade step lines and foam with `fwidth(v_world.xz)` once a column is under about 2 pixels.
 - [ ] Run `build_shaders.sh` and the goldens: both must pass. Commit: "Ocean: a wind-driven voxel sea of terraced, banded swells and crest foam".
 
-### Task 3: Verify and tune (Ur and Strata)
+### Task 3: Ocean work off the main thread (Ur)
+The waves are already computed on the GPU. On Ur's main thread are the exposure map (about 20 ms, on a wind-sector change) and the coast check plus ocean field rebuild (about 100 ms, on a structural change). Move them to workers with `Task.async` / `Task.poll`, as `DayPlan` does.
+
+**Files:** `lib/ur.march` (Play: `sea_job`, `ocean_job`, `ocean_dirty`), `lib/ur/scene.march` (split `ocean` into a pure job and a main-thread apply), `lib/ur/ocean.march` (a pure `rebuild(old : Field, old_city, city) : Option(Rebuild)` returning the new field and the padded cells whose water changed).
+- [ ] **Exposure.** On a sector change, start `Task.async(fn () -> Ur.Sea.exposure(ocean, sector))` and keep the current map meanwhile. Each frame, poll it; when ready, `Ur.Scene.sea_map(e)` on the main thread (copying 6,020 floats). Ignore a stale result (sector or field changed since).
+- [ ] **Coast.** On a structural change, if no ocean job is pending, start `Task.async(fn () -> Ur.Ocean.rebuild(field, old_city, city))`; otherwise set `ocean_dirty`. When it's ready, mesh and upload only the changed padded parcels on the main thread (Vk calls must stay there), store the field, force an exposure job, and start another job if `ocean_dirty`. Startup and load stay synchronous.
+- [ ] **Test** `rebuild` in `test/ocean_test.march`: None for an unchanged city; Some with exactly the changed cells for a raised parcel.
+- [ ] **Check.** `UR_PERF=1` `update_ms` max over 900 frames on the windy demo must show no spikes above the baseline's. Commit: "Build the ocean's coast field and wave exposure on workers".
+
+### Task 4: Verify and tune (Ur and Strata)
 - [ ] Take screenshots: windy, calm, storm (`UR_DEMO=22`) and night, in the region and channel views. Then a short frame sequence (8 shots, 0.25 s apart) to check that the terraces move and don't shimmer.
 - [ ] Measure the budget as above. If it's over, store the terrace height per column in a compute-built tile (a follow-up task, not in this plan); report the numbers first.
 - [ ] Run every Ur test file. Commit the tuning.
