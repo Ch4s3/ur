@@ -104,38 +104,81 @@ mod Ur.Scene do
       else Ur.AppError.stop("Sea mesh upload failed") end
     end
   end
-  -- Clouds: sixteen bodies of five kinds, each built once from a seed: small
-  -- fair-weather puffs, heaped cumulus, long rows of puffs, high flat sheets
-  -- and towering storm clouds. Each has its own size, height, heading and
-  -- place, scattered over the region and drifting with the wind, the higher
-  -- the faster. A fair day shows a few puffs and cumulus; rows and sheets
-  -- join as the sky clouds over, and the towers only in heavy rain. Every
-  -- body's largest puffs cast soft shadows on the ground.
-  fn cloud_bodies() : Int do 16 end
+  -- Clouds, after the real genera. Thirty-two bodies, each one cloud of a
+  -- given type built once from a seed, at that type's height:
+  --   0 cumulus humilis    fair-weather heaps, flat bases, wider than tall      low, 54-60 m
+  --   1 cumulus mediocris  heaped two or three tiers                           low, 54-60 m
+  --   2 cumulus congestus  tall cauliflower towers before showers              low, 52-58 m
+  --   3 cumulonimbus       storm towers with a broad flat anvil, dark beneath  low, 48-52 m
+  --   4 stratocumulus      broken layer of grey rolls with gaps                low, 60-68 m
+  --   5 nimbostratus       thick dark rain layer, ragged scud beneath          low, 44-50 m
+  --   6 altocumulus        mackerel sky: rows of small puffs                   middle, 98-108 m
+  --   7 altostratus        thin grey veil                                     middle, 106-114 m
+  --   8 cirrus             high wisps and streaks                             high, 128-140 m
+  -- How many of each type the sky holds follows the drawn weather and, for
+  -- the heaped clouds, the hour: cumulus build after mid-morning and melt
+  -- in the evening. A cloud forming or clearing grows or shrinks in place.
+  fn cloud_bodies() : Int do 32 end
   fn chunk_slots() : Int do citizen_chunk_slots() + cloud_bodies() end
   pfn cloud_slot(i : Int) : Int do citizen_chunk_slots() + i end
-  -- the kind of body i, in the order they gather: 0 puff, 1 cumulus, 2 row, 3 sheet, 4 tower
-  pfn cloud_kind(i : Int) : Int do
-    match i do
-      0 | 2 | 5 | 7 | 11 -> 1
-      1 | 3 | 4 | 8 -> 0
-      6 | 9 | 12 -> 2
-      10 | 13 -> 3
-      _ -> 4
+  -- the type of body i, and which of its type it is (0 the first to form)
+  pfn cloud_type(i : Int) : Int do
+    if i < 7 do 0 else if i < 10 do 1 else if i < 12 do 2 else if i < 14 do 3 else if i < 20 do 4
+    else if i < 25 do 5 else if i < 28 do 6 else if i < 29 do 7 else 8 end end end end end end end end
+  end
+  pfn type_first(t : Int) : Int do
+    match t do
+      0 -> 0
+      1 -> 7
+      2 -> 10
+      3 -> 12
+      4 -> 14
+      5 -> 20
+      6 -> 25
+      7 -> 28
+      _ -> 29
     end
   end
-  -- how many bodies show: four on a clear day, all sixteen in severe rain
-  pfn clouds_shown(overcast : Float) : Int do 4 + float_to_int(overcast *. 12.4) end
+  pfn unit(v : Float) : Float do if v < 0.0 do 0.0 else if v > 1.0 do 1.0 else v end end end
+  pfn smooth(a : Float, b : Float, v : Float) : Float do
+    let t = unit((v -. a) /. (b -. a))
+    t *. t *. (3.0 -. 2.0 *. t)
+  end
+  -- how much of the day's warmth is lifting cumulus: little before 9, most from noon to 5, gone by 9 at night
+  pfn convection(hour : Float) : Float do 0.15 +. 0.85 *. smooth(8.0, 12.5, hour) *. (1.0 -. smooth(17.0, 21.0, hour)) end
+  -- how many clouds of type t the sky holds, as a fraction (2.4: two whole and one forming)
+  pfn type_amount(t : Int, sky : Strata.Weather.Sky, hour : Float) : Float do
+    let o = sky.overcast
+    let r = sky.rain
+    let st = sky.storm
+    let heat = convection(hour)
+    let dry = 1.0 -. unit(2.0 *. r)
+    match t do
+      0 -> 6.5 *. heat *. dry *. (1.0 -. 0.45 *. o)
+      1 -> 3.0 *. heat *. dry *. o
+      2 -> 2.0 *. unit(r *. 1.5 -. 0.3) *. (0.6 +. 0.4 *. heat)
+      3 -> 2.4 *. st
+      4 -> 6.0 *. unit((o -. 0.3) /. 0.5) *. (1.0 -. 0.4 *. st)
+      5 -> 5.0 *. unit((r -. 0.2) /. 0.5)
+      6 -> 12.0 *. o *. (1.0 -. o) *. (1.0 -. r)
+      7 -> unit((o -. 0.5) /. 0.3) *. (1.0 -. st)
+      _ -> 3.0 *. (1.0 -. 0.8 *. o) *. (1.0 -. r)
+    end
+  end
+  -- how far body i has formed, 0..1
+  pfn presence(i : Int, sky : Strata.Weather.Sky, hour : Float) : Float do
+    let t = cloud_type(i)
+    unit(type_amount(t, sky, hour) -. int_to_float(i - type_first(t)))
+  end
   -- a puff: centre and radii, in voxels of its body's 32-cubed grid
   type Puff = { px : Int, py : Int, pz : Int, rx : Int, ry : Int, rz : Int }
   pfn cloud_roll(body : Int, k : Int) : Int do Strata.Seed.cell(919, body, k, 0, 0) % 10000 end
   pfn roll_in(body : Int, k : Int, low : Int, high : Int) : Int do low + cloud_roll(body, k) % (high - low + 1) end
   pfn puff(px : Int, py : Int, pz : Int, rx : Int, ry : Int, rz : Int) : Puff do { px: px, py: py, pz: pz, rx: rx, ry: ry, rz: rz } end
-  -- One tier of a cloud: [n] round puffs scattered [sx] and [sz] voxels either
-  -- side of the middle at about height [y], radii [low] to [high], squashed to
-  -- [flat] quarters of their height. A cloud is a few tiers heaped on a flat
-  -- base, the upper ones fewer and nearer the middle, so it reads as lumpy
-  -- cauliflower rather than one smooth shape.
+  -- One tier: [n] round puffs scattered [sx] and [sz] voxels either side of
+  -- the middle at about height [y], radii [low] to [high], squashed to [flat]
+  -- quarters of their height. Heaped clouds are tiers on a flat base, the
+  -- upper ones fewer and nearer the middle.
   pfn tier(b : Int, salt : Int, n : Int, sx : Int, sz : Int, y : Int, low : Int, high : Int, flat : Int, k : Int, acc : List(Puff)) : List(Puff) do
     if k >= n do acc else
       let r = roll_in(b, salt + k * 5, low, high)
@@ -147,20 +190,51 @@ mod Ur.Scene do
   pfn tiers(b : Int, salt : Int, n : Int, sx : Int, sz : Int, y : Int, low : Int, high : Int, flat : Int) : List(Puff) do
     tier(b, salt, n, sx, sz, y, low, high, flat, 0, Nil)
   end
-  -- the base tier comes first: its puffs cast the shadows
-  pfn cloud_puffs(b : Int) : List(Puff) do
-    match cloud_kind(b) do
-      0 -> tiers(b, 100, roll_in(b, 10, 2, 4), 4, 3, 3, 3, 4, 4)
-      1 -> List.append(tiers(b, 100, roll_in(b, 10, 6, 8), 10, 7, 4, 4, 6, 4),
-             List.append(tiers(b, 200, roll_in(b, 11, 4, 5), 6, 4, 8, 4, 5, 4), tiers(b, 300, roll_in(b, 12, 2, 3), 3, 2, 12, 3, 5, 4)))
-      2 -> List.append(tiers(b, 100, roll_in(b, 10, 9, 11), 13, 2, 3, 3, 4, 4), tiers(b, 200, 4, 10, 2, 6, 2, 3, 4))
-      3 -> tiers(b, 100, 14, 13, 11, 3, 4, 6, 2)
-      _ -> List.append(tiers(b, 100, 8, 9, 8, 5, 5, 6, 4),
-             List.append(tiers(b, 200, 6, 6, 5, 10, 5, 6, 4),
-               List.append(tiers(b, 300, 5, 5, 4, 15, 4, 5, 4),
-                 List.append(tiers(b, 400, 4, 4, 3, 20, 4, 5, 4), tiers(b, 500, 7, 12, 9, 26, 4, 6, 2)))))
+  -- altocumulus: small puffs in rows a few voxels apart, the rows a little wavy
+  pfn mackerel(b : Int, k : Int, acc : List(Puff)) : List(Puff) do
+    if k >= 30 do acc else
+      let row = k / 6
+      let x = 3 + (k % 6) * 5 + roll_in(b, 100 + k, -1, 1) + row % 2 * 2
+      let z = 4 + row * 6 + roll_in(b, 140 + k, -1, 1)
+      let keep = cloud_roll(b, 180 + k) % 10 < 8
+      mackerel(b, k + 1, if keep do List.append(acc, Cons(puff(x, 2, z, roll_in(b, 220 + k, 2, 3), 1, 2), Nil)) else acc end)
     end
   end
+  -- cirrus: long thin streaks across the wind, each with a hooked end
+  pfn streaks(b : Int, k : Int, n : Int, acc : List(Puff)) : List(Puff) do
+    if k >= n do acc else
+      let z = 4 + k * 24 / n + roll_in(b, 100 + k, -1, 1)
+      let x = 16 + roll_in(b, 120 + k, -4, 4)
+      let len = roll_in(b, 140 + k, 9, 14)
+      let streak = puff(x, 2 + k % 2, z, len, 1, 1)
+      let hook = puff(x + len - 1, 3 + k % 2, z + 1, 2, 1, 2)
+      streaks(b, k + 1, n, List.append(acc, Cons(streak, Cons(hook, Nil))))
+    end
+  end
+  -- the base tier comes first: its puffs cast the shadows
+  pfn cloud_puffs(b : Int) : List(Puff) do
+    match cloud_type(b) do
+      0 -> List.append(tiers(b, 100, roll_in(b, 10, 3, 5), 7, 5, 3, 3, 5, 3), tiers(b, 200, roll_in(b, 11, 1, 2), 3, 2, 5, 2, 3, 4))
+      1 -> List.append(tiers(b, 100, roll_in(b, 10, 5, 7), 9, 7, 4, 4, 5, 4),
+             List.append(tiers(b, 200, roll_in(b, 11, 3, 4), 5, 4, 8, 4, 5, 4), tiers(b, 300, roll_in(b, 12, 1, 2), 3, 2, 11, 3, 4, 4)))
+      2 -> List.append(tiers(b, 100, 6, 8, 7, 5, 5, 5, 4),
+             List.append(tiers(b, 200, 5, 7, 6, 9, 4, 5, 4),
+               List.append(tiers(b, 300, 4, 5, 5, 14, 4, 5, 4),
+                 List.append(tiers(b, 400, 3, 4, 3, 19, 4, 5, 4), tiers(b, 500, 2, 2, 2, 23, 3, 4, 4)))))
+      3 -> List.append(tiers(b, 100, 8, 10, 9, 5, 5, 6, 4),
+             List.append(tiers(b, 600, 10, 14, 11, 27, 4, 6, 1),
+               List.append(tiers(b, 200, 6, 6, 5, 10, 5, 6, 4),
+                 List.append(tiers(b, 300, 5, 5, 4, 15, 4, 5, 4), tiers(b, 400, 4, 4, 3, 21, 4, 5, 4)))))
+      4 -> List.append(tiers(b, 100, 18, 14, 13, 3, 3, 5, 2), tiers(b, 200, 7, 12, 11, 5, 3, 4, 2))
+      5 -> List.append(tiers(b, 100, 22, 14, 14, 5, 5, 7, 2), tiers(b, 200, 6, 13, 13, 2, 1, 2, 4))
+      6 -> mackerel(b, 0, Nil)
+      7 -> tiers(b, 100, 11, 12, 12, 2, 4, 7, 1)
+      _ -> streaks(b, 0, roll_in(b, 10, 3, 5), Nil)
+    end
+  end
+  -- how a type's faces are drawn: thin (0..15, how much light gets through) and dark (0..15)
+  pfn type_thin(t : Int) : Int do if t == 6 do 4 else if t == 7 do 9 else if t == 8 do 14 else 0 end end end end
+  pfn type_dark(t : Int) : Int do if t == 3 do 7 else if t == 4 do 3 else if t == 5 do 9 else if t == 7 do 2 else 0 end end end end end
   pfn in_puff(x : Int, y : Int, z : Int, p : Puff) : Bool do
     let dx = int_to_float(x - p.px) /. int_to_float(p.rx)
     let dy = int_to_float(y - p.py) /. int_to_float(p.ry)
@@ -185,37 +259,39 @@ mod Ur.Scene do
   pfn cloud_solid(g : NativeU8Arr, x : Int, y : Int, z : Int) : Bool do
     x >= 0 && x < 32 && y >= 0 && y < 32 && z >= 0 && z < 32 && NativeArray.get_u8(g, x + 32 * y + 1024 * z) != 0
   end
-  -- A face carries how high up the cloud it is (0..255 of [top], in the
-  -- shade byte) and how far out from the middle (0..255, in the texture
-  -- field): the shader darkens the base and thins the outskirts.
-  pfn cloud_face(m : Mesh, x : Int, y : Int, z : Int, direction : Int, top : Int) : Mesh do
+  -- A face carries how high up its cloud it is (0..255 of [top], the shade
+  -- byte), how far out from the middle (the texture's low byte), and its
+  -- type's thinness and darkness (the texture's high byte): Strata darkens
+  -- the base, thins the outskirts and veils, and greys rain clouds.
+  pfn cloud_face(m : Mesh, x : Int, y : Int, z : Int, direction : Int, top : Int, look : Int) : Mesh do
     let n = m.quads * 2
     let height = S.clamp(y * 255 / (if top < 1 do 1 else top end), 0, 255)
     let out = S.clamp(float_to_int(math_sqrt(int_to_float((x - 16) * (x - 16) + (z - 16) * (z - 16))) *. 16.0), 0, 255)
     let words = NativeArray.set_i32(m.words, n, Q.pack0(x, y, z, 1, 1, direction))
-    { words: NativeArray.set_i32(words, n + 1, Q.pack1(out, height, 250)), quads: m.quads + 1 }
+    { words: NativeArray.set_i32(words, n + 1, Q.pack1(out + 256 * look, height, 250)), quads: m.quads + 1 }
   end
-  pfn cloud_mesh(g : NativeU8Arr, top : Int, i : Int, m : Mesh) : Mesh do
+  pfn cloud_mesh(g : NativeU8Arr, top : Int, look : Int, i : Int, m : Mesh) : Mesh do
     if i == 32768 do m else
       let x = i % 32
       let y = i / 32 % 32
       let z = i / 1024
-      if !cloud_solid(g, x, y, z) do cloud_mesh(g, top, i + 1, m) else
-        let m = if cloud_solid(g, x, y + 1, z) do m else cloud_face(m, x, y, z, 0, top) end
-        let m = if cloud_solid(g, x, y - 1, z) do m else cloud_face(m, x, y, z, 1, top) end
-        let m = if cloud_solid(g, x + 1, y, z) do m else cloud_face(m, x, y, z, 2, top) end
-        let m = if cloud_solid(g, x - 1, y, z) do m else cloud_face(m, x, y, z, 3, top) end
-        let m = if cloud_solid(g, x, y, z + 1) do m else cloud_face(m, x, y, z, 4, top) end
-        let m = if cloud_solid(g, x, y, z - 1) do m else cloud_face(m, x, y, z, 5, top) end
-        cloud_mesh(g, top, i + 1, m)
+      if !cloud_solid(g, x, y, z) do cloud_mesh(g, top, look, i + 1, m) else
+        let m = if cloud_solid(g, x, y + 1, z) do m else cloud_face(m, x, y, z, 0, top, look) end
+        let m = if cloud_solid(g, x, y - 1, z) do m else cloud_face(m, x, y, z, 1, top, look) end
+        let m = if cloud_solid(g, x + 1, y, z) do m else cloud_face(m, x, y, z, 2, top, look) end
+        let m = if cloud_solid(g, x - 1, y, z) do m else cloud_face(m, x, y, z, 3, top, look) end
+        let m = if cloud_solid(g, x, y, z + 1) do m else cloud_face(m, x, y, z, 4, top, look) end
+        let m = if cloud_solid(g, x, y, z - 1) do m else cloud_face(m, x, y, z, 5, top, look) end
+        cloud_mesh(g, top, look, i + 1, m)
       end
     end
   end
   pfn setup_clouds(i : Int) : Unit do
     if i == cloud_bodies() do () else
       let puffs = cloud_puffs(i)
-      let top = List.fold_left(puffs, 1, fn (t, p) -> if p.py + p.ry > t do p.py + p.ry else t end)
-      let m = cloud_mesh(cloud_grid(puffs), if top > 31 do 31 else top end, 0, { words: NativeArray.make_i32(65536, 0), quads: 0 })
+      let t = cloud_type(i)
+      let top = List.fold_left(puffs, 1, fn (h, p) -> if p.py + p.ry > h do p.py + p.ry else h end)
+      let m = cloud_mesh(cloud_grid(puffs), if top > 31 do 31 else top end, type_thin(t) + 16 * type_dark(t), 0, { words: NativeArray.make_i32(65536, 0), quads: 0 })
       let slot = cloud_slot(i)
       if Vk.body_begin(slot) && Vk.chunk_part(2, m.words, m.quads) && Vk.chunk_commit() do
         Vk.chunk_show(slot, false)
@@ -223,47 +299,57 @@ mod Ur.Scene do
       else Ur.AppError.stop("Cloud mesh upload failed") end
     end
   end
-  -- a body's voxel size by kind, a little larger again under heavy cloud
-  pfn cloud_voxel(i : Int, overcast : Float) : Float do
+  -- a body's voxel size, by type: so a humilis is 30-40 m across, a nimbostratus layer 90 m
+  pfn cloud_voxel(i : Int) : Float do
     let tenth = int_to_float(cloud_roll(i, 4) % 9) *. 0.1
-    let base = match cloud_kind(i) do
-      0 -> 0.8 +. tenth *. 0.6
-      1 -> 1.2 +. tenth
-      2 -> 1.1 +. tenth *. 0.7
-      3 -> 2.3 +. tenth *. 0.8
-      _ -> 1.8 +. tenth *. 0.5
+    match cloud_type(i) do
+      0 -> 1.0 +. tenth *. 0.3
+      1 -> 1.3 +. tenth *. 0.3
+      2 -> 1.6 +. tenth *. 0.3
+      3 -> 2.0 +. tenth *. 0.3
+      4 -> 2.1 +. tenth *. 0.5
+      5 -> 2.8 +. tenth *. 0.6
+      6 -> 1.6 +. tenth *. 0.4
+      7 -> 3.0 +. tenth *. 0.2
+      _ -> 1.8 +. tenth *. 0.2
     end
-    base *. (1.0 +. 0.3 *. overcast)
   end
-  -- how high a body's base floats: puffs low, sheets high above the rest
+  -- the height of a body's base: heaped clouds share about one condensation level
   pfn cloud_height(i : Int) : Float do
-    int_to_float(match cloud_kind(i) do
-      0 -> roll_in(i, 7, 50, 66)
-      1 -> roll_in(i, 7, 58, 80)
-      2 -> roll_in(i, 7, 64, 84)
-      3 -> roll_in(i, 7, 102, 124)
-      _ -> roll_in(i, 7, 46, 54)
+    int_to_float(match cloud_type(i) do
+      0 | 1 -> roll_in(i, 7, 54, 60)
+      2 -> roll_in(i, 7, 52, 58)
+      3 -> roll_in(i, 7, 48, 52)
+      4 -> roll_in(i, 7, 60, 68)
+      5 -> roll_in(i, 7, 44, 50)
+      6 -> roll_in(i, 7, 98, 108)
+      7 -> roll_in(i, 7, 106, 114)
+      _ -> roll_in(i, 7, 128, 140)
     end)
   end
-  -- which way a body faces: a turn about the vertical, in radians
-  pfn cloud_heading(i : Int) : Float do int_to_float(cloud_roll(i, 8)) /. 10000.0 *. 6.283 end
-  -- where body i's low corner is: in one of four loose groups over a 640 x 520
-  -- m field, drifting with the wind faster the higher it floats, and wrapping round
-  pfn cloud_corner(i : Int, offset : (Float, Float)) : (Float, Float, Float) do
-    let (drift_x, drift_z) = offset
-    let height = cloud_height(i)
-    let pace = 0.6 +. height /. 120.0
-    -- four drifting groups, each strung out along x like a passing front
-    let group = i % 4
-    let gx = int_to_float(Strata.Seed.cell(919, 100 + group, 1, 0, 0) % 640)
-    let gz = int_to_float(Strata.Seed.cell(919, 100 + group, 2, 0, 0) % 520)
-    let a = int_to_float(cloud_roll(i, 5)) /. 10000.0 *. 6.283
-    let reach = int_to_float(roll_in(i, 6, 10, 130))
-    let travel = gx +. Math.cos(a) *. reach *. 1.4 +. drift_x *. pace
-    let across = gz +. Math.sin(a) *. reach *. 0.6 +. drift_z *. pace
-    (travel -. 640.0 *. Math.floor(travel /. 640.0) -. 80.0, height, across -. 520.0 *. Math.floor(across /. 520.0) -. 80.0)
+  -- which way a body faces: layered and streaked clouds lie across the wind, the rest any way
+  pfn cloud_heading(i : Int) : Float do
+    let t = cloud_type(i)
+    if t == 6 || t == 8 do 1.2 +. int_to_float(cloud_roll(i, 8) % 40) /. 100.0 else int_to_float(cloud_roll(i, 8)) /. 10000.0 *. 6.283 end
   end
-  -- body i's first four (base) puffs as shadow blobs, turned as the body is turned about its low corner
+  -- where the middle of body i's footprint is, over a 640 x 520 m field, drifting
+  -- with the wind faster the higher it floats, wrapping round
+  pfn cloud_middle(i : Int, offset : (Float, Float)) : (Float, Float) do
+    let (drift_x, drift_z) = offset
+    let pace = 0.6 +. cloud_height(i) /. 120.0
+    -- heaped and high clouds gather in four loose groups; the layers spread over the whole sky
+    let t = cloud_type(i)
+    let layer = t == 4 || t == 5 || t == 7
+    let group = i % 4
+    let gx = if layer do 0.0 else int_to_float(Strata.Seed.cell(919, 100 + group, 1, 0, 0) % 640) end
+    let gz = if layer do 0.0 else int_to_float(Strata.Seed.cell(919, 100 + group, 2, 0, 0) % 520) end
+    let a = int_to_float(cloud_roll(i, 5)) /. 10000.0 *. 6.283
+    let reach = int_to_float(roll_in(i, 6, 10, 150))
+    let travel = (if layer do int_to_float(cloud_roll(i, 5) % 640) else gx +. Math.cos(a) *. reach *. 1.4 end) +. drift_x *. pace
+    let across = (if layer do int_to_float(cloud_roll(i, 6) % 520) else gz +. Math.sin(a) *. reach *. 0.6 end) +. drift_z *. pace
+    (travel -. 640.0 *. Math.floor(travel /. 640.0) -. 80.0, across -. 520.0 *. Math.floor(across /. 520.0) -. 80.0)
+  end
+  -- the first three puffs of a low cloud as shadow blobs, turned with the body
   pfn cloud_blobs(puffs : List(Puff), x : Float, y : Float, z : Float, voxel : Float, heading : Float, out : NativeF32Arr, n : Int, left : Int) : (NativeF32Arr, Int) do
     match puffs do
       Nil -> (out, n)
@@ -280,25 +366,33 @@ mod Ur.Scene do
         end
     end
   end
-  pfn place_clouds(overcast : Float, offset : (Float, Float), i : Int, out : NativeF32Arr, n : Int) : (NativeF32Arr, Int) do
+  pfn place_clouds(sky : Strata.Weather.Sky, hour : Float, offset : (Float, Float), i : Int, out : NativeF32Arr, n : Int) : (NativeF32Arr, Int) do
     if i == cloud_bodies() do (out, n) else
       let slot = cloud_slot(i)
-      let show = i < clouds_shown(overcast)
+      let formed = presence(i, sky, hour)
+      let show = formed > 0.04
       Vk.chunk_show(slot, show)
       if show do
-        let voxel = cloud_voxel(i, overcast)
+        -- a forming cloud grows from a third of its size about its own middle
+        let voxel = cloud_voxel(i) *. (0.35 +. 0.65 *. formed)
         let heading = cloud_heading(i)
-        let (x, y, z) = cloud_corner(i, offset)
+        let (mx, mz) = cloud_middle(i, offset)
+        let half = 16.0 *. voxel
+        let x = mx -. half *. (Math.cos(heading) +. Math.sin(heading))
+        let z = mz -. half *. (Math.cos(heading) -. Math.sin(heading))
+        let y = cloud_height(i)
         Vk.slot_voxel(slot, voxel)
         Vk.slot_pose(slot, x, y, z, 0.0, Math.sin(heading *. 0.5), 0.0, Math.cos(heading *. 0.5))
-        let (blobs, count) = cloud_blobs(cloud_puffs(i), x, y, z, voxel, heading, out, n, 4)
-        place_clouds(overcast, offset, i + 1, blobs, count)
-      else place_clouds(overcast, offset, i + 1, out, n) end
+        let (blobs, count) = if cloud_type(i) <= 5 do cloud_blobs(cloud_puffs(i), x, y, z, voxel, heading, out, n, 3) else (out, n) end
+        place_clouds(sky, hour, offset, i + 1, blobs, count)
+      else place_clouds(sky, hour, offset, i + 1, out, n) end
     end
   end
-  -- Show and place the clouds for the weather drawn now, and cast their shadows.
-  fn clouds(w : Strata.Weather.Weather, offset : (Float, Float)) : Unit do
-    let (blobs, n) = place_clouds((Strata.Weather.now(w)).overcast, offset, 0, NativeArray.make_f32(64 * 4, 0.0), 0)
+  -- Show and place the clouds for the weather drawn now and the time of day
+  -- ([phase], the day's clock), and cast the low ones' shadows.
+  fn clouds(w : Strata.Weather.Weather, phase : Float, offset : (Float, Float)) : Unit do
+    let hour = (phase -. Math.floor(phase /. S.day_seconds()) *. S.day_seconds()) *. 24.0 /. S.day_seconds()
+    let (blobs, n) = place_clouds(Strata.Weather.now(w), hour, offset, 0, NativeArray.make_f32(64 * 4, 0.0), 0)
     Vk.set_cloud_shadows(blobs, n, Strata.Weather.shadow_darkness(w))
   end
   fn setup() : Unit do
@@ -320,7 +414,7 @@ mod Ur.Scene do
     let speed = int_to_float(wind.speed) /. 3.6 *. gust
     let (overcast, rain, storm) = match kind do
       4 -> (1.0, 1.0, 0.85)
-      3 -> (0.95, 0.72, 0.2)
+      3 -> (0.95, 0.72, 0.4)
       2 -> (0.82, 0.38, 0.0)
       1 -> (0.58, 0.0, 0.0)
       _ -> (0.06, 0.0, 0.0)
