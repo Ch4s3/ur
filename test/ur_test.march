@@ -1192,7 +1192,38 @@ mod UrTest do
     Test.assert_true(decline == :rededicate && answer == 0, "a player can decline regardless of the treasury")
   end
 
+  pfn mid_crossing_on_map(c : Ur.Rain.Cell) : Bool do
+    let (x, z) = Ur.Rain.centre(c, (c.start +. c.stop) *. 0.5)
+    x > 0.0 && x < 480.0 && z > 0.0 && z < 352.0
+  end
+  pfn same_cells(a : List(Ur.Rain.Cell), b : List(Ur.Rain.Cell)) : Bool do
+    match (a, b) do
+      (Nil, Nil) -> true
+      (Cons(p, ps), Cons(q, qs)) -> p.x == q.x && p.z == q.z && p.vx == q.vx && p.vz == q.vz && p.radius == q.radius && p.level == q.level && p.start == q.start && p.stop == q.stop && same_cells(ps, qs)
+      _ -> false
+    end
+  end
+  pfn rain_cell_checks() : Unit do
+    let wet = Ur.Rain.cells(77, 3, 12, 4, 30, 0.6)
+    Test.assert_true(same_cells(Ur.Rain.cells(77, 3, 12, 4, 30, 0.6), wet), "the same seed and date give the same storms")
+    Test.assert_true(List.is_empty(Ur.Rain.cells(77, 3, 12, 1, 30, 0.6)) && Ur.Rain.baseline(1) == 0, "cloudy days have no rain")
+    Test.assert_true(List.length(wet) >= 2 && List.length(wet) <= 3 && List.all(wet, fn c -> c.level == 4 && c.radius >= 60.0 && c.radius <= 90.0), "severe days bring two or three storm cells")
+    Test.assert_eq_int(Ur.Rain.baseline(4), 3, "severe days rain heavily everywhere")
+    let rainy = Ur.Rain.cells(77, 3, 12, 2, 30, 0.6)
+    Test.assert_true(List.length(rainy) >= 1 && List.length(rainy) <= 2 && List.all(rainy, fn c -> c.level == 3 && c.radius >= 120.0 && c.radius <= 180.0), "rainy days bring one or two heavier bands")
+    let heavy = Ur.Rain.cells(77, 3, 12, 3, 30, 0.6)
+    Test.assert_true(List.length(heavy) == 1 && List.all(heavy, fn c -> c.level == 3 && c.radius >= 180.0 && c.radius <= 220.0), "heavy days bring one broad band")
+    Test.assert_true(List.all(wet, fn c -> c.stop -. c.start >= 6.0 && c.stop -. c.start <= 12.0), "a storm crosses the island in six to twelve hours")
+    Test.assert_true(List.all(wet, mid_crossing_on_map), "storms cross the island")
+    let first = unwrap(List.head_opt(wet))
+    let (cx, cz) = Ur.Rain.centre(first, first.start +. 1.0)
+    Test.assert_eq_int(Ur.Rain.level_at(wet, 3, cx, cz, first.start +. 1.0), 4, "under a storm cell the rain is severe")
+    Test.assert_eq_int(Ur.Rain.level_at(wet, 3, cx, cz, first.stop +. 1.0), 3, "once it has passed, only the baseline is left")
+    Test.assert_eq_int(Ur.Rain.level_at(wet, 3, -2000.0, -2000.0, first.start +. 1.0), 3, "far from every cell, the baseline")
+  end
+
   fn main(_cap : Cap(IO)) : Unit do
+    rain_cell_checks()
     check_public_religion()
     check_religious_council()
     check_religion_controls()

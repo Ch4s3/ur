@@ -1,0 +1,94 @@
+-- Ur.Rain — where a day's rain falls.
+--
+-- A day's rain is a baseline level that falls on every parcel plus a few
+-- cells: discs that cross the island in a straight line with the wind, each
+-- raining at its own level while it is active. Everything here is a pure
+-- function of the climate seed, the date, the day's regional weather kind
+-- (Ur.Sim.weather_on) and the regional wind, so the same storms cross the
+-- same parcels on every replay and after loading a save.
+--
+-- Levels use the simulation's scale: 0 none, 2 rain, 3 heavy, 4 severe.
+mod Ur.Rain do
+  -- a storm cell: its centre at hour 0 (metres), its velocity (metres a game
+  -- hour), its radius (metres), the level it rains at, and the hours it is active
+  type Cell = { x : Float, z : Float, vx : Float, vz : Float, radius : Float, level : Int, start : Float, stop : Float }
+
+  doc "The level that falls everywhere on a day of regional weather [kind]: light rain on rainy and heavy days, heavy on severe ones."
+  fn baseline(kind : Int) : Int do
+    match kind do
+      4 -> 3
+      3 -> 2
+      2 -> 2
+      _ -> 0
+    end
+  end
+
+  -- a number in 0..1 for cell [k]'s choice [what], on this date
+  pfn pick(seed : Int, month : Int, day : Int, kind : Int, k : Int, what : Int) : Float do
+    Strata.Seed.unit(Strata.Seed.cell(seed, 700 + k * 16 + what, month, day, kind))
+  end
+  pfn between(low : Float, high : Float, u : Float) : Float do low +. (high -. low) *. u end
+  pfn cell_count(seed : Int, month : Int, day : Int, kind : Int) : Int do
+    let u = pick(seed, month, day, kind, 15, 0)
+    match kind do
+      4 -> if u < 0.5 do 2 else 3 end
+      3 -> 1
+      2 -> if u < 0.5 do 1 else 2 end
+      _ -> 0
+    end
+  end
+  pfn radius_of(kind : Int, u : Float) : Float do
+    match kind do
+      4 -> between(60.0, 90.0, u)
+      3 -> between(180.0, 220.0, u)
+      _ -> between(120.0, 180.0, u)
+    end
+  end
+  pfn level_of(kind : Int) : Int do if kind == 4 do 4 else 3 end end
+
+  -- One cell. It enters the map's upwind edge at its start hour and leaves
+  -- the far edge after its crossing time; half way it passes [offset] metres
+  -- to one side of the map's middle.
+  pfn make(seed : Int, month : Int, day : Int, kind : Int, heading : Float, k : Int) : Cell do
+    let radius = radius_of(kind, pick(seed, month, day, kind, k, 1))
+    let hours = between(6.0, 12.0, pick(seed, month, day, kind, k, 2))
+    let start = between(0.0, 14.0, pick(seed, month, day, kind, k, 3))
+    let dx = Math.cos(heading)
+    let dz = Math.sin(heading)
+    let along = 240.0 *. float_abs(dx) +. 176.0 *. float_abs(dz)
+    let across = 240.0 *. float_abs(dz) +. 176.0 *. float_abs(dx)
+    let offset = (pick(seed, month, day, kind, k, 4) -. 0.5) *. 1.6 *. across
+    let travel = 2.0 *. (along +. radius)
+    let speed = travel /. hours
+    -- where it is at its start hour: upwind of the map, outside it by its radius
+    let enter_x = 240.0 -. dx *. (along +. radius) -. dz *. offset
+    let enter_z = 176.0 -. dz *. (along +. radius) +. dx *. offset
+    { x: enter_x -. dx *. speed *. start, z: enter_z -. dz *. speed *. start, vx: dx *. speed, vz: dz *. speed,
+      radius: radius, level: level_of(kind), start: start, stop: start +. hours }
+  end
+  pfn make_all(seed : Int, month : Int, day : Int, kind : Int, heading : Float, k : Int, n : Int, acc : List(Cell)) : List(Cell) do
+    if k >= n do List.reverse(acc) else make_all(seed, month, day, kind, heading, k + 1, n, Cons(make(seed, month, day, kind, heading, k), acc)) end
+  end
+
+  doc "The storm cells of a day: [kind] the regional weather (0 clear .. 4 severe), the wind as Ur.Sim.regional_wind gives it (km/h, and the heading in radians the cells move toward). Clear and cloudy days have none."
+  fn cells(seed : Int, month : Int, day : Int, kind : Int, wind_speed : Int, wind_heading : Float) : List(Cell) do
+    let _ = wind_speed
+    make_all(seed, month, day, kind, wind_heading, 0, cell_count(seed, month, day, kind), Nil)
+  end
+
+  doc "Where [cell]'s centre is at game hour [hour] (metres)."
+  fn centre(cell : Cell, hour : Float) : (Float, Float) do (cell.x +. cell.vx *. hour, cell.z +. cell.vz *. hour) end
+
+  doc "Whether [cell] rains on the point (x, z) at [hour]."
+  fn covers(cell : Cell, x : Float, z : Float, hour : Float) : Bool do
+    if hour < cell.start || hour > cell.stop do false else
+      let (cx, cz) = centre(cell, hour)
+      (x -. cx) *. (x -. cx) +. (z -. cz) *. (z -. cz) <= cell.radius *. cell.radius
+    end
+  end
+
+  doc "The rain level at the point (x, z) (metres) at [hour]: the larger of [base] and every active cell covering it."
+  fn level_at(cells : List(Cell), base : Int, x : Float, z : Float, hour : Float) : Int do
+    List.fold_left(cells, base, fn (level, cell) -> if cell.level > level && covers(cell, x, z, hour) do cell.level else level end)
+  end
+end

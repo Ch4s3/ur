@@ -3731,7 +3731,7 @@ mod Ur.Sim do
 
       5 -> { paid with density: NativeArray.set_int(c.density, i, get(c.density, i) % 3 + 1) }
 
-      6 -> { paid with heights: NativeArray.set_int(c.heights, i, clamp(h - 8, 4, 100)) }
+      6 -> { paid with heights: NativeArray.set_int(c.heights, i, clamp(h - 8, 4, 176)) }
 
       7 -> let bus = get(c.transit, i) == 2
         { paid with car_free_days: NativeArray.set_int(c.car_free_days, i, 0), storefronts: NativeArray.set_int(c.storefronts, i, 0), fire_recovery: NativeArray.set_int(c.fire_recovery, i, 0), park_tiers: NativeArray.set_int(c.park_tiers, i, 0), streetscape: NativeArray.set_int(c.streetscape, i, 0), sidewalk_items: NativeArray.set_int(c.sidewalk_items, i, 0), parks: if get(c.parks, i) > 0 do NativeArray.set_int(c.parks, i, 0) else c.parks end, transit: if bus do NativeArray.set_int(c.transit, i, 0) else c.transit end,
