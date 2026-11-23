@@ -168,7 +168,7 @@ mod Ur do
       let next = menu_action(p, action)
       let sky = Strata.Weather.step_eased(Strata.Weather.want(next.weather, Ur.Scene.sky_for(next.city, visible_weather(next))), time -. p.time, 0.0)
       if !next.boot do Ur.Scene.daylight(next.elapsed, sky) else () end
-      Ur.Scene.clouds(sky, next.elapsed, next.cloud_offset, next.peaks)
+      Ur.Scene.clouds(sky, next.elapsed, next.cloud_offset, next.peaks, next.city, next.forced_weather < 0 && !S.uniform_rain(next.city))
       Ur.Scene.camera(next.cx, next.cz, next.zoom, if h > 0.0 do w /. h else 1.6 end, next.yaw)
       if Strata.Render.draw_ui(Menu.draw(p.boot, next.saved, next.confirm, next.notice, mx, my)) do () else Ur.AppError.stop("Menu overflow") end
       if p.limit > 0 && p.frame == p.limit - 1 do Vk.request_shot() else () end
@@ -573,7 +573,7 @@ mod Ur do
       let (cloud_x, cloud_z) = p.cloud_offset
       let drift = dt *. int_to_float(wind.speed) /. 3.6
       let cloud_offset = (cloud_x +. Math.cos(wind.heading) *. drift, cloud_z +. Math.sin(wind.heading) *. drift)
-      Ur.Scene.clouds(sky, elapsed, cloud_offset, p.peaks)
+      Ur.Scene.clouds(sky, elapsed, cloud_offset, p.peaks, c, p.forced_weather < 0 && !S.uniform_rain(c))
       let hud = Ur.Hud.draw(c, st, tool, group, page, layer, hovered, inspect, mx, my, reason, sidebar_visible, sidebar_tab, finance_view, crime_focus, council_focus, religion_site, religion_choice, paused, speed, S.street_hour(elapsed), weather, weather_time, citizen_stats, Build.caption(preview), !List.is_empty(undo), activity)
       let hud = Ur.Hud.frame_rate(hud, fps.value)
       let point = Ur.Scene.tile_anchor(c, popup, w, h, cx, cz, zoom, yaw)

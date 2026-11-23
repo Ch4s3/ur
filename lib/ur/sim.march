@@ -641,6 +641,7 @@ mod Ur.Sim do
   -- weather on every parcel, as before local rain; others rain in Ur.Rain's
   -- storm cells.
   fn uniform_rain(c : City) : Bool do c.rain_uniform || curse_god(c) == 1 end
+  fn fclamp(v : Float, low : Float, high : Float) : Float do if v < low do low else if v > high do high else v end end end
   fn day_cells(c : City) : List(Ur.Rain.Cell) do
     let wind = regional_wind(c)
     Ur.Rain.cells(if c.climate_seed == 0 do 705 else c.climate_seed end, c.month, c.calendar_day, current_weather(c), wind.speed, wind.heading)

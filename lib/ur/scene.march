@@ -456,37 +456,86 @@ mod Ur.Scene do
         end
     end
   end
-  pfn place_clouds(sky : Strata.Weather.Sky, hour : Float, offset : (Float, Float), peaks : List(Peak), i : Int, out : NativeF32Arr, n : Int) : (NativeF32Arr, Int) do
+  -- where body i sits when the day's rain cells carry it: a cumulonimbus on
+  -- each storm cell, nimbostratus across the heavier bands; None when it
+  -- drifts as usual. Answers its centre and the voxel size that spans the cell.
+  pfn cell_spot(i : Int, storms : List(Ur.Rain.Cell), bands : List(Ur.Rain.Cell), hour : Float) : Option((Float, Float, Float)) do
+    let t = cloud_type(i)
+    let j = i - type_first(t)
+    if t == 3 && j < List.length(storms) do
+      let cell = unwrap(List.nth_opt(storms, j))
+      let (x, z) = Ur.Rain.centre(cell, hour)
+      Some((x, z, S.fclamp(cell.radius *. 1.7 /. 32.0, 1.6, 2.4)))
+    else if t == 5 && !List.is_empty(bands) do
+      let k = List.length(bands)
+      let cell = unwrap(List.nth_opt(bands, j % k))
+      let (x, z) = Ur.Rain.centre(cell, hour)
+      let side = int_to_float(j / k % 3 - 1) *. cell.radius *. 0.55
+      let speed = math_sqrt(cell.vx *. cell.vx +. cell.vz *. cell.vz)
+      let (px, pz) = if speed > 0.01 do (0.0 -. cell.vz /. speed, cell.vx /. speed) else (1.0, 0.0) end
+      Some((x +. px *. side, z +. pz *. side, S.fclamp(cell.radius *. 0.9 /. 32.0, 2.6, 3.4)))
+    else None end end
+  end
+  pfn place_clouds(sky : Strata.Weather.Sky, hour : Float, offset : (Float, Float), peaks : List(Peak), storms : List(Ur.Rain.Cell), bands : List(Ur.Rain.Cell), i : Int, out : NativeF32Arr, n : Int) : (NativeF32Arr, Int) do
     if i == cloud_bodies() do (out, n) else
       let slot = cloud_slot(i)
-      let formed = presence(i, sky, hour)
+      let spot = cell_spot(i, storms, bands, hour)
+      let formed = if Option.is_some(spot) do 1.0 else presence(i, sky, hour) end
       let show = formed > 0.04
       Vk.chunk_show(slot, show)
       if show do
         -- a forming cloud grows from a third of its size about its own middle
-        let voxel = cloud_voxel(i) *. (0.35 +. 0.65 *. formed)
         let heading = cloud_heading(i)
         let y = cloud_height(i)
-        let (drift_x, drift_z) = cloud_middle(i, offset)
-        let speed = math_sqrt(sky.wind_x *. sky.wind_x +. sky.wind_z *. sky.wind_z)
-        let (mx, mz) = if speed < 0.1 do (drift_x, drift_z)
-          else around(peaks, drift_x, drift_z, y +. 4.0 *. voxel, 12.0 *. voxel, sky.wind_x /. speed, sky.wind_z /. speed) end
+        let (voxel, mx, mz) = match spot do
+          Some((sx, sz, size)) -> (size, sx, sz)
+          None ->
+            let voxel = cloud_voxel(i) *. (0.35 +. 0.65 *. formed)
+            let (drift_x, drift_z) = cloud_middle(i, offset)
+            let speed = math_sqrt(sky.wind_x *. sky.wind_x +. sky.wind_z *. sky.wind_z)
+            let (mx, mz) = if speed < 0.1 do (drift_x, drift_z)
+              else around(peaks, drift_x, drift_z, y +. 4.0 *. voxel, 12.0 *. voxel, sky.wind_x /. speed, sky.wind_z /. speed) end
+            (voxel, mx, mz)
+        end
         let half = 16.0 *. voxel
         let x = mx -. half *. (Math.cos(heading) +. Math.sin(heading))
         let z = mz -. half *. (Math.cos(heading) -. Math.sin(heading))
         Vk.slot_voxel(slot, voxel)
         Vk.slot_pose(slot, x, y, z, 0.0, Math.sin(heading *. 0.5), 0.0, Math.cos(heading *. 0.5))
         let (blobs, count) = if cloud_type(i) <= 5 do cloud_blobs(cloud_puffs(i), x, y, z, voxel, heading, out, n, 3) else (out, n) end
-        place_clouds(sky, hour, offset, peaks, i + 1, blobs, count)
-      else place_clouds(sky, hour, offset, peaks, i + 1, out, n) end
+        place_clouds(sky, hour, offset, peaks, storms, bands, i + 1, blobs, count)
+      else place_clouds(sky, hour, offset, peaks, storms, bands, i + 1, out, n) end
     end
   end
   -- Show and place the clouds for the weather drawn now and the time of day
   -- ([phase], the day's clock), parted round [peaks], and cast the low ones' shadows.
-  fn clouds(w : Strata.Weather.Weather, phase : Float, offset : (Float, Float), peaks : List(Peak)) : Unit do
+  -- ([local]: the city rains in cells, not a forced or uniform weather) and
+  -- hand Strata the rain cells active now, so rain and wet streets follow them.
+  fn clouds(w : Strata.Weather.Weather, phase : Float, offset : (Float, Float), peaks : List(Peak), c : Ur.Sim.City, local : Bool) : Unit do
     let hour = (phase -. Math.floor(phase /. S.day_seconds()) *. S.day_seconds()) *. 24.0 /. S.day_seconds()
-    let (blobs, n) = place_clouds(Strata.Weather.now(w), hour, offset, peaks, 0, NativeArray.make_f32(64 * 4, 0.0), 0)
+    let active = if local do List.filter(S.day_cells(c), fn cell -> hour >= cell.start && hour <= cell.stop) else Nil end
+    let storms = List.filter(active, fn cell -> cell.level >= 4)
+    let bands = List.filter(active, fn cell -> cell.level == 3)
+    let (blobs, n) = place_clouds(Strata.Weather.now(w), hour, offset, peaks, storms, bands, 0, NativeArray.make_f32(64 * 4, 0.0), 0)
     Vk.set_cloud_shadows(blobs, n, Strata.Weather.shadow_darkness(w))
+    let (cells, count, baseline) = rain_cells_for(c, hour, active, local)
+    Vk.set_rain_cells(cells, count, baseline)
+  end
+  doc "The rain cells active at [hour], packed as Strata.Ffi.Vk.set_rain_cells takes them (rain = level / 4; the ground stays wet up to three hours back along a cell's path), their count, and the rain falling everywhere; for a city not raining locally, none and -1, so Strata's single rain holds."
+  fn rain_cells_for(c : Ur.Sim.City, hour : Float, active : List(Ur.Rain.Cell), local : Bool) : (NativeF32Arr, Int, Float) do
+    if !local do (NativeArray.make_f32(8, 0.0), 0, -1.0) else
+      let packed = List.fold_left(List.take(active, 8), (NativeArray.make_f32(64, 0.0), 0), fn (acc, cell) ->
+        match acc do (a, k) ->
+          let (x, z) = Ur.Rain.centre(cell, hour)
+          let back = S.fclamp(hour -. cell.start, 0.0, 3.0)
+          let o = k * 8
+          let a = NativeArray.set_f32(NativeArray.set_f32(NativeArray.set_f32(a, o, x), o + 1, z), o + 2, cell.radius)
+          let a = NativeArray.set_f32(NativeArray.set_f32(NativeArray.set_f32(a, o + 3, int_to_float(cell.level) /. 4.0), o + 4, 0.0 -. cell.vx *. back), o + 5, 0.0 -. cell.vz *. back)
+          (a, k + 1)
+        end)
+      let (a, k) = packed
+      (a, k, int_to_float(Ur.Rain.baseline(S.current_weather(c))) /. 4.0)
+    end
   end
   fn setup() : Unit do
     if !Vk.set_light_box(29, 2) || !Vk.textures_create(16, 32) do Ur.AppError.stop("Could not allocate Strata materials and lighting") else () end
@@ -512,6 +561,13 @@ mod Ur.Scene do
       1 -> (0.58, 0.0, 0.0)
       _ -> (0.06, 0.0, 0.0)
     end
+    -- raining locally, the rain everywhere is the day's baseline; the storm cells add the rest where they are
+    let rain = if S.uniform_rain(c) || kind != S.current_weather(c) do rain else
+      (match Ur.Rain.baseline(kind) do
+        3 -> 0.72
+        2 -> 0.38
+        _ -> 0.0
+      end) end
     { overcast: overcast, rain: rain, storm: storm, wind_x: Math.cos(wind.heading) *. speed, wind_z: Math.sin(wind.heading) *. speed }
   end
   -- Drawn weather for a city: cloud gathers over a quarter of a game day,
