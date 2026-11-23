@@ -354,6 +354,79 @@ mod Ur.Scene do
       layers(i, x, z, hs, peak, parts, probe, layer + 1)
     end
   end
+  -- The seabed: below sea level (voxel 0) under every water cell of the map
+  -- and its ring, from Ur.Ocean's coast distance field. Two layers a padded
+  -- parcel, y -32..-1 and -64..-33.
+  pfn seabed_heights(f : Ur.Ocean.Field, x : Int, z : Int, a : NativeIntArr, i : Int) : NativeIntArr do
+    if i >= 100 do a else
+      seabed_heights(f, x, z, NativeArray.set_int(a, i, Ur.Ocean.seabed(f, x + (i % 10 - 1) * 4 + 2, z + (i / 10 - 1) * 4 + 2)), i + 1)
+    end
+  end
+  pfn seabed_material(h : Int) : Int do if h >= -10 do 16 else if h >= -30 do 1 else 4 end end end
+  pfn seabed(m : Mesh, hs : NativeIntArr, y : Int, i : Int) : Mesh do
+    if i >= 64 do m else
+      let x = i % 8 * 4
+      let z = i / 8 * 4
+      let j = 11 + i % 8 + i / 8 * 10
+      let h = NativeArray.get_int(hs, j)
+      let tex = seabed_material(h)
+      let a = if h < 0 && h > y && h <= y + 32 do face(m, x, h - y - 1, z, 4, 4, 0, tex) else m end
+      let a = wall(a, x + 3, z, NativeArray.get_int(hs, j + 1), h, y, 2, tex)
+      let a = wall(a, x, z, NativeArray.get_int(hs, j - 1), h, y, 3, tex)
+      let a = wall(a, x, z + 3, NativeArray.get_int(hs, j + 10), h, y, 4, tex)
+      let a = wall(a, x, z, NativeArray.get_int(hs, j - 10), h, y, 5, tex)
+      seabed(a, hs, y, i + 1)
+    end
+  end
+  pfn any_water(hs : NativeIntArr, i : Int) : Bool do
+    if i >= 64 do false else NativeArray.get_int(hs, 11 + i % 8 + i / 8 * 10) < 0 || any_water(hs, i + 1) end
+  end
+  pfn upload_ocean(slot : Int, x : Int, y : Int, z : Int, m : Mesh, surface : Mesh, light : NativeU8Arr) : Unit do
+    if m.quads == 0 && surface.quads == 0 do Vk.chunk_free(slot)
+    else if Vk.chunk_begin(slot, x, y, z, 0) && (m.quads == 0 || Vk.chunk_part(0, m.words, m.quads)) &&
+      (surface.quads == 0 || Vk.chunk_part(2, surface.words, surface.quads)) && Vk.chunk_light(light, NativeArray.length_u8(light)) && Vk.chunk_commit() do ()
+    else Ur.AppError.stop("Strata refused a seabed mesh upload") end end
+  end
+  fn seabed_parcel(f : Ur.Ocean.Field, cell : Int) : Unit do
+    let px = cell % Ur.Ocean.padded_width() - Ur.Ocean.ring()
+    let pz = cell / Ur.Ocean.padded_width() - Ur.Ocean.ring()
+    let x = px * 32
+    let z = pz * 32
+    let hs = seabed_heights(f, x, z, NativeArray.make_int(100, 0), 0)
+    if !any_water(hs, 0) do
+      Vk.chunk_free(Ur.Ocean.seabed_slot(cell, 0))
+      Vk.chunk_free(Ur.Ocean.seabed_slot(cell, 1))
+    else
+      let top = seabed(empty(), hs, -32, 0)
+      upload_ocean(Ur.Ocean.seabed_slot(cell, 0), x, -32, z, top, { top with quads: 0 }, terrain_light(NativeArray.make_u8(32768, 0), hs, -32, 0))
+      let low = seabed(empty(), hs, -64, 0)
+      upload_ocean(Ur.Ocean.seabed_slot(cell, 1), x, -64, z, low, { low with quads: 0 }, terrain_light(NativeArray.make_u8(32768, 0), hs, -64, 0))
+    end
+  end
+  pfn ocean_from(f : Ur.Ocean.Field, cell : Int) : Unit do
+    if cell >= Ur.Ocean.ring_cells() do () else
+      seabed_parcel(f, cell)
+      ocean_from(f, cell + 1)
+    end
+  end
+  doc "Draw the whole seabed and sea surface from field [f]."
+  fn ocean_all(f : Ur.Ocean.Field) : Unit do ocean_from(f, 0) end
+  pfn ocean_changed(a : Ur.Ocean.Field, b : Ur.Ocean.Field, cell : Int) : Unit do
+    if cell >= Ur.Ocean.ring_cells() do () else
+      if Ur.Ocean.parcel_changed(a, b, cell) do seabed_parcel(b, cell) else () end
+      ocean_changed(a, b, cell + 1)
+    end
+  end
+  pfn heights_differ(a : Ur.Sim.City, b : Ur.Sim.City, i : Int) : Bool do
+    if i >= S.count() do false else S.get(a.heights, i) != S.get(b.heights, i) || heights_differ(a, b, i + 1) end
+  end
+  -- Keep the ocean in step with the coast: everything on a forced rebuild,
+  -- and on a change of the land's heights the padded parcels whose water changed.
+  pfn sync_ocean(old : Ur.Sim.City, c : Ur.Sim.City, force : Bool, structural : Bool) : Unit do
+    if force do ocean_all(Ur.Ocean.field(c))
+    else if structural && heights_differ(old, c, 0) do ocean_changed(Ur.Ocean.field(old), Ur.Ocean.field(c), 0)
+    else () end end
+  end
   -- One posed slab per parcel. The slot above the terrain is free on these low crossings.
   pfn deck_shadow(a : NativeU8Arr, length : Int, width : Int, i : Int) : NativeU8Arr do
     if i >= length * width * 4 do a else
@@ -498,6 +571,7 @@ mod Ur.Scene do
     let was_raining = S.severe_rain(old)
     let raining = S.severe_rain(c)
     let water_changed = was_raining != raining || (structural && (was_raining || raining || old.flood_active || c.flood_active))
+    if i == 0 do sync_ocean(old, c, force, structural) else () end
     sync_parcels(old, c, i, force, structural, water_changed, { hour: old_hour, electric: old_power }, { hour: hour, electric: new_power }, signals)
   end
   pfn preview_tiles(c : Ur.Sim.City, tiles : List(Int), stride : Int, index : Int, used : Int, mesh : Mesh) : Int do
