@@ -7,13 +7,15 @@ mod Ur.Menu do
 
 
   pfn left(w : Float) : Float do (w -. 344.0) *. 0.5 end
+  -- the panel grew by the Lighting row and kept its top, so the rows above it are where they were
   pfn top(h : Float) : Float do (h -. 394.0) *. 0.5 end
   pfn item(boot : Bool, row : Int) : Atom do
     if boot do
       match row do
         0 -> :new_city
         1 -> :load_city
-        2 -> :quit
+        2 -> :lighting
+        3 -> :quit
         _ -> :nothing
       end
     else
@@ -21,8 +23,9 @@ mod Ur.Menu do
         0 -> :resume
         1 -> :save_city
         2 -> :load_city
-        3 -> :new_city
-        4 -> :quit
+        3 -> :lighting
+        4 -> :new_city
+        5 -> :quit
         _ -> :nothing
       end
     end
@@ -30,7 +33,7 @@ mod Ur.Menu do
   fn at(mx : Float, my : Float, w : Float, h : Float, boot : Bool, saved : Bool) : Atom do
     let x = mx -. left(w)
     let y = my -. top(h) -. 108.0
-    if x < 22.0 || x >= 322.0 || y < 0.0 || y >= 220.0 do :nothing else
+    if x < 22.0 || x >= 322.0 || y < 0.0 || y >= 264.0 do :nothing else
       let row = float_to_int(y /. 44.0)
       if y -. int_to_float(row) *. 44.0 >= 38.0 do :nothing else
         match item(boot, row) do
@@ -46,12 +49,13 @@ mod Ur.Menu do
       :save_city -> "Save city"
       :load_city -> if confirm == :load_city do "Load and replace current city" else "Load city" end
       :new_city -> if confirm == :new_city do "Start over without saving" else "New game" end
+      :lighting -> "Lighting"
       :quit -> "Quit"
       _ -> ""
     end
   end
   pfn buttons(a : Strata.Ui.Ui, x : Float, y : Float, boot : Bool, saved : Bool, confirm : Atom, hover : Atom, row : Int) : Strata.Ui.Ui do
-    if row >= (if boot do 3 else 5 end) do a else
+    if row >= (if boot do 4 else 6 end) do a else
       let action = item(boot, row)
       let enabled = action != :load_city || saved
       let hot = action == hover
@@ -69,13 +73,13 @@ mod Ur.Menu do
     let x = left(w)
     let y = top(h)
     let a = U.rect(a, 0, 0.0, 0.0, w, h, (0.015, 0.036, 0.043, 0.43))
-    let a = U.rect(a, 0, x, y, 344.0, if boot do 318.0 else 394.0 end, (0.05, 0.10, 0.13, 0.98))
+    let a = U.rect(a, 0, x, y, 344.0, if boot do 362.0 else 438.0 end, (0.05, 0.10, 0.13, 0.98))
     let a = U.rect(a, 0, x, y, 344.0, 3.0, (0.35, 0.71, 0.67, 1.0))
     let a = T.text(a, 0, x +. 22.0, y +. 18.0, T.default_font(), 32.0, (0.93, 0.96, 0.94, 1.0), if boot do "UR" else "Game menu" end)
     let a = T.text(a, 0, x +. 23.0, y +. 68.0, T.default_font(), 13.0, (0.65, 0.79, 0.79, 1.0), if boot do "The island region" else "Manage your city" end)
     let a = buttons(a, x +. 22.0, y +. 108.0, boot, saved, confirm, at(mx, my, w, h, boot, saved), 0)
-    let a = if !boot && seed >= 0 do T.text(a, 0, x +. 22.0, y +. 370.0, T.default_font(), 11.0, (0.65, 0.79, 0.79, 1.0), "Region seed  " ++ seed_code(seed)) else a end
-    T.styled(a, 0, x +. 22.0, y +. (if boot do 254.0 else 338.0 end), T.default_font(), 12.0,
+    let a = if !boot && seed >= 0 do T.text(a, 0, x +. 22.0, y +. 414.0, T.default_font(), 11.0, (0.65, 0.79, 0.79, 1.0), "Region seed  " ++ seed_code(seed)) else a end
+    T.styled(a, 0, x +. 22.0, y +. (if boot do 298.0 else 382.0 end), T.default_font(), 12.0,
       (0.76, 0.84, 0.82, 1.0), T.with_wrap(T.style(), 300.0), notice)
   end
   fn seed_code(seed : Int) : String do Controls.base36(seed) end
@@ -149,6 +153,44 @@ mod Ur.Menu do
     let a = T.text(a, 0, x +. 48.0, y +. 515.0, T.default_font(), 14.0, (0.93, 0.96, 0.94, 1.0), "Back")
     let a = U.rect(a, 0, x +. 310.0, y +. 505.0, 180.0, 38.0, (0.23, 0.41, 0.40, 1.0))
     T.text(a, 0, x +. 329.0, y +. 515.0, T.default_font(), 14.0, (0.93, 0.96, 0.94, 1.0), "Create region")
+  end
+  -- The lighting page: a slider a row (Ur.Lighting), and Back. A click answers (row, step); row 8 is Back.
+  fn lighting_click(mx : Float, my : Float, w : Float, h : Float) : (Int, Int) do
+    let x = mx -. (w -. 520.0) *. 0.5
+    let y = my -. (h -. 560.0) *. 0.5
+    if y >= 500.0 && y < 538.0 && x >= 30.0 && x < 180.0 do (8, 0)
+    else if y >= 70.0 && y < 470.0 && x >= 250.0 && x <= 500.0 do
+      let row = float_to_int((y -. 70.0) /. 50.0)
+      (row, Controls.slider_step(x, 260.0, 230.0, Ur.Lighting.steps(row)))
+    else (-1, 0) end end
+  end
+  fn lighting_drag(mx : Float, w : Float, row : Int) : Int do
+    Controls.slider_step(mx, (w -. 520.0) *. 0.5 +. 260.0, 230.0, Ur.Lighting.steps(row))
+  end
+  pfn lighting_rows(a : Strata.Ui.Ui, l : NativeIntArr, x : Float, y : Float, i : Int) : Strata.Ui.Ui do
+    if i >= Ur.Lighting.rows() do a else
+      let value = Ur.Lighting.get(l, i)
+      let a = T.text(a, 0, x +. 30.0, y, T.default_font(), 14.0, (0.90, 0.95, 0.94, 1.0), Ur.Lighting.label(i))
+      let a = Controls.slider(a, x +. 260.0, y, 230.0, value, Ur.Lighting.steps(i),
+        (0.27, 0.38, 0.39, 1.0), (0.40, 0.78, 0.71, 1.0))
+      let a = T.text(a, 0, x +. 260.0, y +. 20.0, T.default_font(), 11.0, (0.65, 0.79, 0.79, 1.0), Ur.Lighting.value_name(i, value))
+      lighting_rows(a, l, x, y +. 50.0, i + 1)
+    end
+  end
+  fn draw_lighting(l : NativeIntArr) : Strata.Ui.Ui do
+    let a = Strata.Render.ui_begin(1.0)
+    let w = U.width(a)
+    let h = U.height(a)
+    let x = (w -. 520.0) *. 0.5
+    let y = (h -. 560.0) *. 0.5
+    let a = U.rect(a, 0, 0.0, 0.0, w, h, (0.015, 0.036, 0.043, 0.25))
+    let a = U.rect(a, 0, x, y, 520.0, 560.0, (0.05, 0.10, 0.13, 0.94))
+    let a = T.text(a, 0, x +. 30.0, y +. 20.0, T.default_font(), 25.0, (0.93, 0.96, 0.94, 1.0), "Lighting")
+    let a = lighting_rows(a, l, x, y +. 70.0, 0)
+    let a = T.text(a, 0, x +. 30.0, y +. 474.0, T.default_font(), 11.0, (0.65, 0.79, 0.79, 1.0),
+      "Changes show behind this page; building lights are rebuilt when the menu closes. Lamp shadows cost most at night.")
+    let a = U.rect(a, 0, x +. 30.0, y +. 500.0, 150.0, 38.0, (0.10, 0.20, 0.24, 1.0))
+    T.text(a, 0, x +. 48.0, y +. 510.0, T.default_font(), 14.0, (0.93, 0.96, 0.94, 1.0), "Back")
   end
 
 end

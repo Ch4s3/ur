@@ -1285,6 +1285,36 @@ mod Ur.Save do
       _ -> Err("Could not write the saved city.")
     end
   end
+  -- The lighting settings live beside the saved city, a JSON array of each row's step.
+  fn lighting_path() : String do path() ++ ".lighting" end
+  pfn lighting_rows(l : NativeIntArr, xs : List(Int), row : Int) : NativeIntArr do
+    match xs do
+      Nil -> l
+      Cons(v, rest) -> lighting_rows(Ur.Lighting.set(l, row, v), rest, row + 1)
+    end
+  end
+  fn load_lighting() : NativeIntArr do
+    let found = match File.read(lighting_path()) do
+      Ok(Ok(text)) -> (match Json.parse(text) do
+        Ok(j) -> items(j, integer, 8)
+        Err(_) -> Err("unreadable")
+      end)
+      _ -> Err("missing")
+    end
+    match found do
+      Ok(xs) -> lighting_rows(Ur.Lighting.defaults(), xs, 0)
+      Err(_) -> Ur.Lighting.defaults()
+    end
+  end
+  pfn lighting_list(l : NativeIntArr, row : Int) : List(Json.JsonValue) do
+    if row >= Ur.Lighting.rows() do Nil else Cons(Json.encode_int(Ur.Lighting.get(l, row)), lighting_list(l, row + 1)) end
+  end
+  fn save_lighting(l : NativeIntArr) : Bool do
+    match File.write(lighting_path(), Json.to_string(Json.encode_array(lighting_list(l, 0)))) do
+      Ok(Ok(_)) -> true
+      _ -> false
+    end
+  end
   fn save(path : String, game : Game) : Result(Unit, String) do
     save_session(path, { game: game, evacuation: Nil })
   end

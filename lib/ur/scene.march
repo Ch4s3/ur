@@ -271,8 +271,7 @@ mod Ur.Scene do
     let r = palette(0, Strata.Blocks.empty())
     if !Vk.textures_commit() || !Strata.Render.upload_blocks(r) do Ur.AppError.stop("Could not upload Strata materials") else () end
     sea(0, face(empty(), 0, 0, 0, 32, 32, 0, 3))
-    Vk.set_lighting(8)
-    Vk.set_quality(0, false)
+    Ur.Lighting.apply(Ur.Lighting.defaults())
     Vk.set_sun(-0.64, 0.83, 0.42, 1.18, 1.08, 0.94)
     Vk.set_fog(270.0, 650.0)
     setup_clouds(0)
@@ -335,26 +334,27 @@ mod Ur.Scene do
       terrain_light(paint(a, p, 0, high, x, z), hs, y, i + 1)
     end
   end
-  pfn pieces(m : Mesh, a : NativeU8Arr, parts : List(Ur.Architecture.Piece), y : Int, window : Bool, shop : Bool) : (Mesh, NativeU8Arr) do
+  -- [every]: each lit window and shopfront is a lamp (building light shadows on); else the first of each in the chunk stands for all.
+  pfn pieces(m : Mesh, a : NativeU8Arr, parts : List(Ur.Architecture.Piece), y : Int, window : Bool, shop : Bool, every : Bool) : (Mesh, NativeU8Arr) do
     match parts do
       Nil -> (m, a)
       Cons(p, rest) ->
         let low = S.clamp(p.y - y, 0, 32)
         let high = S.clamp(p.y + p.h - y, 0, 32)
-        if low >= high do pieces(m, a, rest, y, window, shop)
+        if low >= high do pieces(m, a, rest, y, window, shop, every)
         else
           let emissive = p.material == 20 || p.material >= 26
           let volume_piece = if emissive do { p with material: 8 } else p end
           let a = paint(a, volume_piece, low, high, p.x, p.z)
           let m = box(m, p.x, low, p.z, p.w, high - low, p.d, p.material)
-          let use_window = p.material == 26 && !window
-          let use_shop = p.material == 27 && !shop
+          let use_window = p.material == 26 && (every || !window)
+          let use_shop = p.material == 27 && (every || !shop)
           -- Write the lamp after painting the rest of the building so overlapping trim cannot erase it.
           if use_window || use_shop || p.material == 28 do
-            let (m, a) = pieces(m, a, rest, y, window || use_window, shop || use_shop)
+            let (m, a) = pieces(m, a, rest, y, window || use_window, shop || use_shop, every)
             let index = p.x + p.w / 2 + (p.z + p.d / 2) * 32 + (low + (high - low) / 2) * 1024
             (m, NativeArray.set_u8(a, index, p.material + 1))
-          else pieces(m, a, rest, y, window, shop) end
+          else pieces(m, a, rest, y, window, shop, every) end
         end
     end
   end
@@ -442,7 +442,7 @@ mod Ur.Scene do
       if peak > y || occupied(parts, y) || flood do
         let m = surface(empty(), hs, x, z, y, 0)
         let a = terrain_light(NativeArray.make_u8(32768, 0), hs, y, 0)
-        let (mesh, light) = pieces(m, a, parts, y, false, false)
+        let (mesh, light) = pieces(m, a, parts, y, false, false, Vk.lamp_shadow(27))
         let water = if flood do flood_water(hs, probe, y, 0, { words: NativeArray.make_i32(128, 0), quads: 0 }) else { mesh with quads: 0 } end
         upload(slot, x, y, z, mesh, water, light)
       else Vk.chunk_free(slot) end

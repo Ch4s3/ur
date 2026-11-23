@@ -19,7 +19,8 @@ mod Ur do
   type Play = { flood_drill : Bool, sanitation : Ur.Scene.SanitationShift, truck_selected : Bool, citizen_focus : Int, activity : List(Ur.Activity.NeighborhoodEvent), fleet : List(Ur.Fleet.Run), fleet_routes : List(Ur.Food.Trip), city : Ur.Sim.City, stats : Ur.Sim.Stats, food : List(Ur.Food.Trip), citizens : Ur.Citizens.Roster, shown : Ur.Citizens.Roster, stepping : Option(Task((Ur.Citizens.Roster, Int))), step_ms : Int, rebuilding : Option(Task(Ur.Citizens.RefreshChanges)), stale_rebuilds : List(Task(Ur.Citizens.RefreshChanges)), stats_wait : StatsWait, walk_map : Ur.Citizens.WalkMap, day_plan : Option(DayPlan), traffic_time : Float, rotor_phases : NativeF32Arr, cloud_offset : (Float, Float), cx : Float, cz : Float, zoom : Float, yaw : Float, tool : Int, group : Int, page : Int, layer : Int, sidebar_visible : Bool, sidebar_tab : Int, crime_focus : Int, council_focus : Int, finance_view : Ur.Hud.FinanceView, paused : Bool, speed : Int,
     road_draft : Ur.Build.Draft, road_bench : Int, road_pointer : (Float, Float), sidewalk_spot : Int, keys : Int, mouse : Bool, anchor : Int, stroke : List(Int), hovered : Int, parcel_focus : Int, popup : Int, religion_site : Int, religion_choice : Int, reason : String, preview : Ur.Build.Preview, preview_chunks : Int, undo : List(Ur.Sim.City), time : Float, elapsed : Float,
     frame : Int, drawn : Int, limit : Int, profile : Bool, trace_input : Bool, tick_ms : Float, fps : FrameRate,
-    setup : NativeIntArr, world_seed : Int, setup_keys : Int, seed_focus : Bool, setup_drag : Int, menu_open : Bool, boot : Bool, notice : String, confirm : Atom, save_path : String, saved : Bool, quit : Bool, dev : Strata.Devtools.Dev }
+    setup : NativeIntArr, world_seed : Int, setup_keys : Int, seed_focus : Bool, setup_drag : Int, menu_open : Bool, boot : Bool, notice : String, confirm : Atom, save_path : String, saved : Bool, quit : Bool, dev : Strata.Devtools.Dev,
+    lighting : NativeIntArr, relight : Bool }
   pfn minimum(a : Float, b : Float) : Float do if a < b do a else b end end
   pfn maximum(a : Float, b : Float) : Float do if a > b do a else b end end
   pfn frame_rate(sample : FrameRate, time : Float, drawn : Int) : FrameRate do
@@ -203,6 +204,7 @@ mod Ur do
     match action do
       :resume -> { p with menu_open: false, confirm: :nothing, notice: "" }
       :quit -> { p with quit: true }
+      :lighting -> { p with confirm: :lighting, setup_drag: -1, notice: "" }
       :save_city ->
         let game = { city: stamp_clock(p.city, p.elapsed), cx: p.cx, cz: p.cz, zoom: p.zoom, yaw: p.yaw, paused: p.paused, speed: p.speed }
         let evacuation = Ur.Citizens.evacuation_trips(Ur.Citizens.snapshot(p.citizens))
@@ -255,6 +257,13 @@ mod Ur do
     else if p.menu_open do
       let p = settle(p)
       let time = Vk.time()
+      -- devtools drives the menu too: this frame's requests (its mouse and keys among them) before the input is read
+      let (dev_taken, dev_reqs) = Strata.Devtools.take(p.dev, p.frame)
+      let menu_dev = List.fold_left(dev_reqs, dev_taken, fn (d, r) ->
+        match Strata.Devtools.handle(d, r, p.frame) do
+          Some(d2) -> d2
+          None -> dev_command(p, d, r)
+        end)
       let keys = keymask(0, 0)
       let mouse = Vk.mouse_button(0)
       let mx = Vk.mouse_x()
@@ -267,8 +276,20 @@ mod Ur do
       let (setup_row, setup_value) = if p.confirm != :setup || !mouse do (-1, 0)
         else if p.mouse && p.setup_drag >= 0 do (p.setup_drag, Menu.setup_drag(mx, w, p.setup_drag))
         else if !p.mouse do Menu.setup_click(mx, my, w, h) else (-1, 0) end end end
-      let drag = if !mouse do -1 else if !p.mouse && setup_row >= 0 && setup_row < 7 do setup_row else p.setup_drag end end
-      let p = { p with setup_drag: drag }
+      -- the lighting page: a slider a row, applied as it moves; the settings are written when the page closes
+      let was_lighting = p.confirm == :lighting
+      let (light_row, light_value) = if !was_lighting || !mouse do (-1, 0)
+        else if p.mouse && p.setup_drag >= 0 do (p.setup_drag, Menu.lighting_drag(mx, w, p.setup_drag))
+        else if !p.mouse do Menu.lighting_click(mx, my, w, h) else (-1, 0) end end end
+      let lighting = if light_row >= 0 && light_row < 8 do Ur.Lighting.set(p.lighting, light_row, light_value) else p.lighting end
+      let relit = !Ur.Lighting.same(lighting, p.lighting)
+      if relit do Ur.Lighting.apply(lighting) else () end
+      let leave_lighting = was_lighting && (light_row == 8 || pressed(keys, p.keys, 15))
+      if leave_lighting && !Ur.Save.save_lighting(lighting) do () else () end
+      let drag = if !mouse do -1 else if !p.mouse && setup_row >= 0 && setup_row < 7 do setup_row
+        else if !p.mouse && light_row >= 0 && light_row < 8 do light_row else p.setup_drag end end end
+      let p = { p with setup_drag: drag, lighting: lighting, relight: p.relight || (relit && Ur.Lighting.window_lamps(lighting) != Ur.Lighting.window_lamps(p.lighting)),
+        confirm: if leave_lighting do :nothing else p.confirm end }
       let setup = if setup_row >= 0 && setup_row < 7 do
         NativeArray.set_int(p.setup, Menu.setup_index(setup_row), if setup_row == 1 do S.clamp(setup_value + 1, 1, 4)
           else if setup_row == 5 do 16 + setup_value * 8 else setup_value end end)
@@ -280,7 +301,7 @@ mod Ur do
       let p = if setup_row == 9 do
         restore(p, { city: S.unclaimed_setup(p.world_seed, p.setup), cx: S.overview_x(), cz: S.overview_z(), zoom: S.overview_zoom(), yaw: 0.55, paused: true, speed: 1 }, Nil)
       else p end
-      let action = if was_setup || setup_row >= 0 do :nothing
+      let action = if was_setup || setup_row >= 0 || was_lighting do :nothing
         else if pressed(keys, p.keys, 15) do (if p.boot do :quit else :resume end)
         else if mouse && !p.mouse do Menu.at(mx, my, w, h, p.boot, p.saved) else :nothing end end end
       let next = menu_action(p, action)
@@ -288,11 +309,15 @@ mod Ur do
       if !next.boot do Ur.Scene.daylight(next.elapsed, weather) else () end
       Ur.Scene.clouds(weather, next.cloud_offset, 0)
       Ur.Scene.camera(next.cx, next.cz, next.zoom, if h > 0.0 do w /. h else 1.6 end, next.yaw)
-      if Strata.Render.draw_ui(if next.confirm == :setup do Menu.draw_setup(next.setup, next.world_seed, next.seed_focus) else Menu.draw(p.boot, next.saved, next.confirm, next.notice, mx, my, next.city.world_seed) end) do () else Ur.AppError.stop("Menu overflow") end
+      if Strata.Render.draw_ui(if next.confirm == :setup do Menu.draw_setup(next.setup, next.world_seed, next.seed_focus) else if next.confirm == :lighting do Menu.draw_lighting(next.lighting) else Menu.draw(p.boot, next.saved, next.confirm, next.notice, mx, my, next.city.world_seed) end end) do () else Ur.AppError.stop("Menu overflow") end
       if p.limit > 0 && p.frame == p.limit - 1 do Vk.request_shot() else () end
       let drawn = p.drawn + (if Vk.frame() do 1 else 0 end)
       let fps = if next.menu_open do next.fps else { since: Vk.time(), drawn: drawn, value: -1 } end
-      run_frames({ next with time: time, keys: keys, mouse: mouse, frame: p.frame + 1, drawn: drawn, fps: fps })
+      let menu_dev = if !Strata.Devtools.is_on(menu_dev) do menu_dev else
+        Strata.Devtools.end_frame(menu_dev, Strata.Devtools.fields([Strata.Devtools.fint("frame", p.frame), Strata.Devtools.fbool("menu", true),
+          Strata.Devtools.fbool("paused", Strata.Devtools.paused(menu_dev))]), 0.0)
+      end
+      run_frames({ next with time: time, keys: keys, mouse: mouse, frame: p.frame + 1, drawn: drawn, fps: fps, dev: menu_dev })
     else if (Vk.key(256) && !pressed(p.keys, 0, 15) && List.is_empty(p.road_draft.points)) ||
       (Vk.mouse_button(0) && !p.mouse && Ur.Hud.menu_at(Vk.mouse_x(), Vk.mouse_y(), int_to_float(Vk.win_w()))) do
       Ur.Scene.clear_preview(0, p.preview_chunks)
@@ -701,8 +726,9 @@ mod Ur do
       let signal_before = S.signal_tick(p.traffic_time)
       let signal_after = S.signal_tick(traffic_time)
       let section = { before: Ur.Scene.tunnel_view(p.layer, p.yaw), after: Ur.Scene.tunnel_view(layer, yaw) }
-      if section.before != section.after || scene_changed || S.severe_rain(c) != S.severe_rain(p.city) || old_hour != hour || signal_before != signal_after do
-        Ur.Scene.sync(p.city, c, 0, false, scene_changed, old_hour, hour,
+      -- p.relight: building light shadows were switched, and every lit building is meshed again with or without a lamp a window
+      if p.relight || section.before != section.after || scene_changed || S.severe_rain(c) != S.severe_rain(p.city) || old_hour != hour || signal_before != signal_after do
+        Ur.Scene.sync(p.city, c, 0, p.relight, scene_changed, old_hour, hour,
           { before: p.stats.junctions, after: st.junctions, before_tick: signal_before, after_tick: signal_after }, p.stats.utilities.electric, st.utilities.electric, section)
       else () end
       let refresh_preview = paint || due || building_day || (guided && day_changed)
@@ -905,7 +931,7 @@ mod Ur do
       let insolvent_now = c.economy.insolvent && !p.city.economy.insolvent
       run_frames({ flood_drill: p.flood_drill, sanitation: sanitation, truck_selected: truck_selected, citizen_focus: citizen_focus, activity: activity, fleet: fleet, fleet_routes: wanted, city: c, stats: st, food: food, citizens: next_citizens, shown: citizens, stepping: stepping, step_ms: p.step_ms, rebuilding: rebuilding, stale_rebuilds: stale_rebuilds, stats_wait: stats_wait, walk_map: walk_map, day_plan: day_plan, traffic_time: traffic_time, rotor_phases: rotor_phases, cloud_offset: cloud_offset, cx: cx, cz: cz, zoom: zoom, yaw: yaw, tool: tool, group: group, page: page, layer: layer, sidebar_visible: sidebar_visible && !S.valid(activity_lot) && !S.valid(council_lot) && !S.valid(diagnosis_lot), sidebar_tab: sidebar_tab, crime_focus: crime_focus, council_focus: council_focus, finance_view: finance_view, paused: paused, speed: speed,
         road_draft: draft, road_bench: p.road_bench, road_pointer: (mx, my), sidewalk_spot: spot, keys: keys, mouse: mouse, anchor: anchor, stroke: if mouse do stroke else Nil end, hovered: hovered, parcel_focus: parcel_focus, popup: popup, religion_site: religion_site, religion_choice: religion_choice, reason: reason, preview: preview, preview_chunks: preview_chunks, undo: undo,
-        time: time, elapsed: elapsed, frame: p.frame + 1, drawn: drawn, limit: p.limit, profile: p.profile, trace_input: p.trace_input, tick_ms: tick_ms, fps: fps, setup: p.setup, world_seed: p.world_seed, setup_keys: p.setup_keys, seed_focus: p.seed_focus, setup_drag: p.setup_drag, menu_open: insolvent_now, boot: insolvent_now, notice: if insolvent_now do insolvency_notice(c) else "" end, confirm: :nothing, save_path: p.save_path, saved: p.saved, quit: false, dev: dev })
+        time: time, elapsed: elapsed, frame: p.frame + 1, drawn: drawn, limit: p.limit, profile: p.profile, trace_input: p.trace_input, tick_ms: tick_ms, fps: fps, setup: p.setup, world_seed: p.world_seed, setup_keys: p.setup_keys, seed_focus: p.seed_focus, setup_drag: p.setup_drag, menu_open: insolvent_now, boot: insolvent_now, notice: if insolvent_now do insolvency_notice(c) else "" end, confirm: :nothing, save_path: p.save_path, saved: p.saved, quit: false, dev: dev, lighting: p.lighting, relight: false })
     end end end
   end
   pfn corridor_report(label : String, c : Ur.Sim.City) : Unit do
@@ -1049,6 +1075,10 @@ mod Ur do
       Vk.set_vsync(!profile)
       Vk.set_offscreen(Authority.must(Env.get_int("STRATA_OFFSCREEN", 0)) > 0)
       Ur.Scene.setup()
+      -- UR_LIGHTING: eight digits, a lighting row each (benchmarks); else what the player last chose
+      let lighting_digits = Authority.must(Env.get_int("UR_LIGHTING", -1))
+      let lighting = if lighting_digits >= 0 do Ur.Lighting.from_digits(lighting_digits) else Ur.Save.load_lighting() end
+      Ur.Lighting.apply(lighting)
       Ur.Scene.setup_citizens(0)
       let road_fixture = if road_demo do Some(Ur.Scenario.road_planning(
         Authority.must(Env.get_int("UR_ROAD_DEMO", 1)), Authority.must(Env.get_int("UR_ROAD_BUILT", 0)) > 0)) else None end
@@ -1151,7 +1181,7 @@ mod Ur do
       let page = if S.grade_tool(start_tool) do 1 else if layer == 35 do 7 else if layer == 4 || layer == 29 || layer == 30 || layer == 32 || layer == 33 do 2 else if layer >= 5 && layer <= 8 do 1 else if layer == 23 || layer == 24 || layer == 27 || layer == 28 do 6 else if layer >= 23 && layer != 31 do 5 else if layer >= 20 && layer != 31 do 4 else if layer >= 12 && layer != 31 do 3 else if demo == 7 && layer == 0 do 1 else if demo == 8 && layer == 0 do 2 else 0 end end end end end end end end end end
       run_frames({ flood_drill: demo == 22 && drill == 1, sanitation: Ur.Scene.empty_sanitation(), truck_selected: false, citizen_focus: -1, activity: Nil, fleet: Ur.Fleet.step(c, stats.traffic, Nil, fleet_routes, 0.0, true), fleet_routes: fleet_routes, city: c, stats: stats, food: Ur.Food.producer_traffic(c, stats), citizens: citizens, shown: citizens, stepping: None, step_ms: 0, rebuilding: None, stale_rebuilds: Nil, stats_wait: { task: None, stale: Nil, city: c, undo: false }, walk_map: Ur.Citizens.walk_map(c), day_plan: None, traffic_time: clock_phase(c), rotor_phases: NativeArray.make_f32(S.count(), 0.0), cloud_offset: (0.0, 0.0), cx: cx, cz: cz, zoom: zoom, yaw: 0.55, tool: tool, group: group, page: page, layer: layer, sidebar_visible: (demo > 0 && !road_demo && !metro && !streets_demo && demo != 11 && demo != 14 && demo != 15 && demo != 16 && demo != 18 && demo != 19 && demo != 20 && demo != 22) || details_tab >= 5, sidebar_tab: details_tab, crime_focus: -1, council_focus: -1, finance_view: { month: 0, lines: finance_lines, stock: -1 }, paused: demo == 0 || road_demo || fire_demo || demo == 13 || demo == 18 || demo == 19 || demo == 20 || demo == 21 || demo == 22 || demo == 27, speed: if metro || (demo == 22 && drill == 1) do 3 else 1 end,
         road_draft: draft, road_bench: road_bench, road_pointer: (-1.0, -1.0), sidewalk_spot: -1, keys: 0, mouse: false, anchor: -1, stroke: Nil, hovered: -1, parcel_focus: if demo == 17 do S.index(10, 17) else if details_tab == 12 do S.index(9, 19) else -1 end end, popup: if fire_demo do Ur.Scenario.fire_recovery_home() else if demo == 22 do (if evacuation_demo do Ur.Scenario.evacuation_home() else Ur.Scenario.storm_station() end) else -1 end end, religion_site: religion_site, religion_choice: 0, preview: preview, undo: Nil, reason: if c.harbour < 0 do "Choose a cyan shoreline parcel to land." else "Select a parcel to inspect development" end,
-        time: Vk.time(), elapsed: clock_phase(c), frame: 0, drawn: 0, limit: Authority.must(Env.get_int("UR_FRAMES", 0)), profile: profile, trace_input: Authority.must(Env.get_int("UR_INPUT_LOG", 0)) > 0, tick_ms: 0.0, fps: { since: Vk.time(), drawn: 0, value: -1 }, setup: S.default_setup(), world_seed: 1, setup_keys: 0, seed_focus: true, setup_drag: -1, menu_open: boot, boot: boot, notice: if saved do "" else "No saved city yet." end, confirm: :nothing, save_path: save_path, saved: saved, quit: false, preview_chunks: preview_chunks, dev: Strata.Devtools.start() })
+        time: Vk.time(), elapsed: clock_phase(c), frame: 0, drawn: 0, limit: Authority.must(Env.get_int("UR_FRAMES", 0)), profile: profile, trace_input: Authority.must(Env.get_int("UR_INPUT_LOG", 0)) > 0, tick_ms: 0.0, fps: { since: Vk.time(), drawn: 0, value: -1 }, setup: S.default_setup(), world_seed: 1, setup_keys: 0, seed_focus: true, setup_drag: -1, menu_open: boot || Authority.must(Env.get_int("UR_MENU", 0)) > 0, boot: boot, notice: if saved do "" else "No saved city yet." end, confirm: :nothing, save_path: save_path, saved: saved, quit: false, preview_chunks: preview_chunks, dev: Strata.Devtools.start(), lighting: lighting, relight: false })
     else Ur.AppError.stop("Could not open Strata renderer; check Vulkan and GLFW installation") end end end end end end end
   end
 end
