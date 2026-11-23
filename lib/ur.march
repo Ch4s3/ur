@@ -138,7 +138,7 @@ mod Ur do
         end
       :new_city ->
         if !p.boot && p.confirm != :new_city do { p with confirm: :new_city, notice: "Click New game again to start over." } else
-          restore(p, { city: S.unclaimed_seeded(unix_time_ms()), cx: 234.0, cz: 176.0, zoom: 345.0, yaw: 0.55, paused: true, speed: 1 }, Nil)
+          restore(p, { city: S.unclaimed_seeded(Authority.must(System.now_ms())), cx: 234.0, cz: 176.0, zoom: 345.0, yaw: 0.55, paused: true, speed: 1 }, Nil)
         end
       _ -> p
     end
@@ -727,9 +727,9 @@ mod Ur do
         " boarded=" ++ (if trip.boarded do "yes" else "no" end) ++ " arrived_at_work=" ++
         (if trip.arrived do "yes" else "no" end) ++ " peak_bus_occupancy=" ++ int_to_string(trip.fullest_bus)))
     else if bench > 0 do
-      let start = unix_time_ms()
+      let start = Authority.must(System.now_ms())
       let after = S.advance(c, bench)
-      Authority.must(println("months=" ++ int_to_string(bench) ++ " elapsed_ms=" ++ int_to_string(unix_time_ms() - start) ++ " population=" ++ int_to_string(S.population(after)) ++ " cash=" ++ int_to_string(after.cash)))
+      Authority.must(println("months=" ++ int_to_string(bench) ++ " elapsed_ms=" ++ int_to_string(Authority.must(System.now_ms()) - start) ++ " population=" ++ int_to_string(S.population(after)) ++ " cash=" ++ int_to_string(after.cash)))
     else if Vk.open_slots(1440, 900, false, quad_capacity, Ur.Scene.citizen_chunk_slots()) do
       Vk.set_vsync(!profile)
       Vk.set_offscreen(Authority.must(Env.get_int("STRATA_OFFSCREEN", 0)) > 0)
