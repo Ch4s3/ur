@@ -87,4 +87,25 @@ mod Ur.Sea do
     let mask = water_mask(f, NativeArray.make_int(O.ring_cells(), 0), 0)
     fill(mask, sector_heading(sector), NativeArray.make_f32(O.ring_cells(), 0.0), 0)
   end
+
+  doc "The swell's deep-water wavelength in metres for a sea [height] metres high: Pierson-Moskowitz, as Strata's sea state works it out (Vk.set_sea), kept to 6..60 m."
+  fn wavelength(height : Float) : Float do
+    let l = 29.9 *. height
+    if l < 6.0 do 6.0 else if l > 60.0 do 60.0 else l end end
+  end
+  pfn depths(f : Ur.Ocean.Field, w : Int, a : NativeF32Arr, i : Int, n : Int) : NativeF32Arr do
+    if i >= n do a else
+      -- a 2 m cell's centre, in voxels from the map's corner
+      let x = (i % w) * 8 + 4 - O.ring() * 32
+      let z = (i / w) * 8 + 4 - O.ring() * 32
+      depths(f, w, NativeArray.set_f32(a, i, int_to_float(O.depth(f, x, z)) *. 0.25), i + 1, n)
+    end
+  end
+  doc "The swell refracted round the coast (Strata.Waves): 2 m cells over the map and its ring, from the coast field's depths, the swell coming toward [heading] (radians) with deep-water [wavelength] metres. Pure: build it on a worker."
+  fn swell(f : Ur.Ocean.Field, heading : Float, wavelength : Float) : Strata.Waves.Swell do
+    let w = O.padded_width() * 4
+    let h = O.padded_depth() * 4
+    let corner = int_to_float(0 - O.ring()) *. 8.0
+    Strata.Waves.solve(depths(f, w, NativeArray.make_f32(w * h, 0.0), 0, w * h), w, h, corner, corner, 2.0, Math.cos(heading), Math.sin(heading), wavelength)
+  end
 end

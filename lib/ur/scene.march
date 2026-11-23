@@ -625,11 +625,15 @@ mod Ur.Scene do
   end
   doc "Draw a coast the ocean job rebuilt on a worker (Ur.Ocean.rebuild): only the padded parcels whose water changed. Main thread: it uploads chunks."
   fn ocean_apply(r : Ur.Ocean.Rebuild) : Unit do apply_cells(r.field, r.changed) end
-  doc "Hand the sea state and the water's clock to Strata: the ocean's swells, foam and breakers follow them."
-  fn sea_state(s : Ur.Sea.State) : Unit do
+  doc "Hand the sea state and the water's clock (seconds the city has run, at any speed) to Strata: the ocean's swells, foam and breakers follow them."
+  fn sea_state(s : Ur.Sea.State, water_time : Float) : Unit do
     Vk.set_sea(s.wind_x, s.wind_z, s.height, s.whitecaps)
-    -- the water's waves, foam and ripples run on this clock: real time, so the sea keeps moving while the city is paused
-    Vk.set_time(Vk.time())
+    -- the water's waves, foam and ripples run on this clock, which stands still while the city is paused
+    Vk.set_time(water_time)
+  end
+  doc "Hand Strata the swell refracted round the coast (Ur.Sea.swell)."
+  fn sea_field(f : Strata.Waves.Swell) : Unit do
+    if Strata.Render.set_sea_field(f) do () else Ur.AppError.stop("Strata refused the sea's swell field") end
   end
   doc "Hand Strata the wave exposure of the map and its ring (Ur.Sea.exposure), one value a padded parcel of 8 m."
   fn sea_map(exposure : NativeF32Arr) : Unit do

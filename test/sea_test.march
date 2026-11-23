@@ -84,6 +84,16 @@ mod SeaTest do
     -- exposure_continuous_at_ring_edge
     Test.assert_true(edge_ok(W.exposure(f, 4), 0 - O.ring()), "no jumps along the ring's outer row")
     Test.assert_true(near(at(east, lx - 1, lz), 0.0, 0.0), "land has no exposure")
+    -- the swell refracted round the coast: one 2 m cell a quarter-parcel over the map and its ring
+    let sw = W.swell(f, 0.0, 40.0)
+    Test.assert_eq_int(sw.w, O.padded_width() * 4, "the swell grid spans the map and its ring across")
+    let (_, open_amp) = Strata.Waves.sample(sw, 2, 2)
+    Test.assert_true(open_amp > 0.8 && open_amp < 1.2, "the open sea's swell is about its deep-water size, got " ++ float_to_string(open_amp))
+    -- the land parcel just west of the lee parcel, at its centre: metres from the ring's corner over 2 m cells
+    let land_cx = ((lx - 1) * 8 + 4 + O.ring() * 8) / 2
+    let land_cz = (lz * 8 + 4 + O.ring() * 8) / 2
+    let (_, land_amp) = Strata.Waves.sample(sw, land_cx, land_cz)
+    Test.assert_true(land_amp == 0.0, "land has no swell")
     Authority.must(println("Sea checks passed"))
   end
 end
