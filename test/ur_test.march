@@ -1298,22 +1298,22 @@ mod UrTest do
     let a = S.index(20, 20)
     let b = S.index(21, 20)
     let hollow = S.index(22, 20)
-    let (valley, flow) = S.route_runoff(slope_city(Nil), rain_on([a], 32))
+    let (valley, flow) = S.route_runoff(slope_city(Nil), rain_on([a], 64))
     Test.assert_true(S.get(valley.surface_water, hollow) > 0 && S.get(valley.surface_water, a) == 0 && S.get(valley.surface_water, b) == 0,
       "water runs to the valley")
-    Test.assert_true(conserved(flow) && flow.rained == 32, "water is conserved")
-    let (open, to_sea) = S.route_runoff(slope_city([(S.index(23, 20), 0)]), rain_on([a], 32))
+    Test.assert_true(conserved(flow) && flow.rained == 64, "water is conserved")
+    let (open, to_sea) = S.route_runoff(slope_city([(S.index(23, 20), 0)]), rain_on([a], 64))
     Test.assert_true(to_sea.to_sea > 0 && S.get(open.surface_water, hollow) == 0 && conserved(to_sea), "a hollow open to the sea does not pool")
     let rim = S.index(22, 21)
     let beyond = S.index(22, 22)
     -- paved, so nothing soaks in and the hollow shows exactly what it holds
     let paved = slope_city([(rim, 44), (beyond, 30)])
-    let (full, spill) = S.route_runoff({ paved with roads: NativeArray.make_int(2640, 1) }, rain_on([a, b], 32))
+    let (full, spill) = S.route_runoff({ paved with roads: NativeArray.make_int(2640, 1) }, rain_on([a, b], 64))
     Test.assert_true(S.get(full.surface_water, hollow) == 4 && S.get(full.surface_water, beyond) > 0 && conserved(spill),
       "a full hollow spills over its rim")
     let drained_city = slope_city(Nil)
     let drained_city = { drained_city with roads: NativeArray.set_int(drained_city.roads, b, 1), storm_drains: NativeArray.set_int(drained_city.storm_drains, b, 1) }
-    let (with_drain, drained) = S.route_runoff(drained_city, rain_on([a], 32))
+    let (with_drain, drained) = S.route_runoff(drained_city, rain_on([a], 64))
     Test.assert_true(drained.drained > 0 && S.get(with_drain.surface_water, hollow) < S.get(valley.surface_water, hollow) && conserved(drained),
       "storm drains carry water away")
     let plateau = slope_city(Nil)
@@ -1324,13 +1324,74 @@ mod UrTest do
     -- hollows 1 m and 1.5 m deep in a 6 m plateau
     let bowls = [(S.index(12, 12), 20), (S.index(30, 20), 18), (S.index(40, 30), 20), (S.index(20, 33), 18)]
     let island = { plateau with heights: List.fold_left(bowls, NativeArray.make_int(2640, 24), fn (acc, pair) -> match pair do (lot, h) -> NativeArray.set_int(acc, lot, h) end) }
-    let everywhere = List.fold_left(List.range(0, S.count()), NativeArray.make_int(2640, 0), fn (acc, i) -> if S.get(island.heights, i) > 0 do NativeArray.set_int(acc, i, 32) else acc end)
+    let everywhere = List.fold_left(List.range(0, S.count()), NativeArray.make_int(2640, 0), fn (acc, i) -> if S.get(island.heights, i) > 0 do NativeArray.set_int(acc, i, 8 * S.rain_units(4)) else acc end)
     let (soaked, _) = S.route_runoff(island, everywhere)
     let inland = List.range(0, S.count())
     let mismatched = List.filter(inland, fn i -> (S.get(soaked.surface_water, i) > 0) != (S.floodplain_depth(island, i) > 0) || int_abs(S.get(soaked.surface_water, i) - S.floodplain_depth(island, i)) > 4)
     Test.assert_true(List.is_empty(mismatched), "uniform severe rain floods the same places as today")
   end
+  -- a severe day's city on a 6 m plateau, saturated soil; [near] a parcel the
+  -- storm crosses in watch [w], [far] one it never reaches
+  type StormField = { city : Ur.Sim.City, w : Int, near : Int, far : Int }
+  -- near the summit of storm_field's pyramid, where a hollow catches only a few parcels' water
+  pfn interior(lot : Int) : Bool do lot % S.width() >= 18 && lot % S.width() < S.width() - 18 && lot / S.width() >= 18 && lot / S.width() < S.depth() - 18 end
+  pfn peak_in(peaks : NativeIntArr, level : Int, lot : Int) : Int do
+    if lot >= S.count() do -1 else if interior(lot) && NativeArray.get_int(peaks, lot) == level do lot else peak_in(peaks, level, lot + 1) end end
+  end
+  -- an interior parcel severe rain never reaches today, given each watch's peaks
+  pfn never_severe(p0 : NativeIntArr, p1 : NativeIntArr, p2 : NativeIntArr, lot : Int) : Int do
+    if lot >= S.count() do -1 else
+      if interior(lot) && NativeArray.get_int(p0, lot) < 4 && NativeArray.get_int(p1, lot) < 4 && NativeArray.get_int(p2, lot) < 4 do lot
+      else never_severe(p0, p1, p2, lot + 1) end
+    end
+  end
+  pfn storm_field(w : Int) : StormField do
+    let day = severe_day(S.new(), 0)
+    -- a pyramid island: every parcel slopes down toward the coast, so a hollow only catches what falls near it
+    let pyramid = List.fold_left(List.range(0, S.count()), NativeArray.make_int(2640, 0), fn (a, i) ->
+      let x = i % S.width()
+      let z = i / S.width()
+      let edge = List.fold_left([z, S.width() - 1 - x, S.depth() - 1 - z], x, fn (m, v) -> if v < m do v else m end)
+      NativeArray.set_int(a, i, 8 + 2 * edge))
+    let plateau = { day with heights: pyramid, soil_moisture: 100, surface_water: NativeArray.make_int(2640, 0),
+      roads: NativeArray.make_int(2640, 0), buildings: NativeArray.make_int(2640, 0), plants: NativeArray.make_int(2640, 0),
+      flood_damage: NativeArray.make_int(2640, 0), storm_drains: NativeArray.make_int(2640, 0) }
+    let (_, amounts) = S.watch_rain(plateau, w)
+    -- the parcel the storm sits over longest this watch
+    let near = List.fold_left(List.range(0, S.count()), -1, fn (best, i) ->
+      if interior(i) && NativeArray.get_int(amounts, i) > 3 * 8 && (best < 0 || NativeArray.get_int(amounts, i) > NativeArray.get_int(amounts, best)) do i else best end)
+    if S.valid(near) || w >= 2 do
+      let (p0, _) = S.watch_rain(plateau, 0)
+      let (p1, _) = S.watch_rain(plateau, 1)
+      let (p2, _) = S.watch_rain(plateau, 2)
+      let far = never_severe(p0, p1, p2, 0)
+      let hollows = NativeArray.set_int(NativeArray.set_int(plateau.heights, near, S.get(plateau.heights, near) - 16), far, S.get(plateau.heights, far) - 16)
+      { city: { plateau with heights: hollows }, w: w, near: near, far: far }
+    else storm_field(w + 1) end
+  end
+  pfn watch_checks() : Unit do
+    Test.assert_true(S.watch_recharge(2) * 3 == 24 && S.watch_recharge(3) * 3 == 39 && S.watch_recharge(4) * 3 == 54 && S.watch_recharge(0) == 0,
+      "three watches add today's recharge")
+    let f = storm_field(0)
+    Test.assert_true(S.valid(f.near) && S.valid(f.far), "the storm day has a crossed parcel and a missed one")
+    let wet = S.end_watch(f.city, f.w)
+    let (peaks, amounts) = S.watch_rain(f.city, f.w)
+    Test.assert_true(S.get(peaks, f.near) == 4 && S.get(peaks, f.far) == 3 && S.get(amounts, f.near) > S.get(amounts, f.far), "a severe cell brings more rain where it crosses")
+    Test.assert_true(S.get(wet.surface_water, f.near) > 0, "the hollow under the storm floods")
+    Test.assert_eq_int(wet.watch, (f.w + 1) % 3, "the watch moves on")
+    let built = { f.city with buildings: NativeArray.set_int(f.city.buildings, f.near, 1) }
+    let damaged = S.end_watch(built, f.w)
+    Test.assert_true(S.flood_repair_days(damaged, f.near) > 0, "a flood during the day records damage at once")
+    let standing = NativeArray.set_int(NativeArray.set_int(f.city.surface_water, f.near, 8), f.far, 8)
+    let night = S.night_drain({ f.city with surface_water: standing, flood_active: true })
+    Test.assert_true(S.get(night.surface_water, f.near) == 8 && S.get(night.surface_water, f.far) < 8, "parcels hit by severe rain do not drain that night")
+    let sea = { f.city with heights: NativeArray.make_int(2640, 0) }
+    let after = S.end_watch(S.end_watch(S.end_watch(sea, 0), 1), 2)
+    Test.assert_true(List.all(List.range(0, S.count()), fn i -> S.get(after.surface_water, i) == 0) && !after.flood_active && after.soil_moisture == sea.soil_moisture,
+      "a storm over open sea wets no land")
+  end
   fn main(_cap : Cap(IO)) : Unit do
+    watch_checks()
     runoff_checks()
     rain_reader_checks()
     rain_cell_checks()

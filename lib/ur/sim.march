@@ -5844,10 +5844,11 @@ mod Ur.Sim do
   -- steepest way until it reaches the sea, a storm drain, or a hollow with no
   -- lower neighbour. A hollow holds water up to its rim (its lowest
   -- neighbour); what it cannot hold spills over the rim and runs on. Water is
-  -- counted in rain units (one hour of a rain level of one on one parcel);
-  -- runoff_scale() of them stand a quarter metre deep in a hollow.
+  -- counted in rain units (rain_units: an hour of rain on one parcel, far
+  -- more in a storm than in a shower); runoff_scale() of them stand a quarter
+  -- metre deep in a hollow.
   type Runoff = { rained : Int, absorbed : Int, drained : Int, to_sea : Int, pooled : Int }
-  fn runoff_scale() : Int do 4 end
+  fn runoff_scale() : Int do 8 end
   -- rain units a parcel's ground takes in a watch
   pfn watch_absorption(c : City, lot : Int) : Int do soil_absorption(c, lot) * 2 end
   -- rain units a storm drain carries to sea in a watch: about the 10 quarter
@@ -5931,6 +5932,142 @@ mod Ur.Sim do
       report: { rained: 0, absorbed: 0, drained: 0, to_sea: 0, pooled: 0 } }
     let f = route_all(c, amounts, order, start)
     ({ c with surface_water: settle_pools(c, f.pools, 0, c.surface_water) }, f.report)
+  end
+
+  doc "Rain units an hour of rain at [level] brings to a parcel: a storm (4) brings far more than heavy rain (3), which brings more than rain (2)."
+  fn rain_units(level : Int) : Int do
+    match level do
+      4 -> 8
+      3 -> 3
+      2 -> 1
+      _ -> 0
+    end
+  end
+  pfn watch_fill(c : City, cells : List(Ur.Rain.Cell), base : Int, first : Int, lot : Int, peaks : NativeIntArr, amounts : NativeIntArr) : (NativeIntArr, NativeIntArr) do
+    if lot >= count() do (peaks, amounts) else
+      let (peak, amount) = List.fold_left(List.range(first, first + 8), (0, 0), fn (acc, hour) ->
+        match acc do (p, a) ->
+          let level = cell_level(c, cells, base, lot, int_to_float(hour) +. 0.5)
+          (if level > p do level else p end, a + rain_units(level))
+        end)
+      watch_fill(c, cells, base, first, lot + 1, NativeArray.set_int(peaks, lot, peak), NativeArray.set_int(amounts, lot, amount))
+    end
+  end
+  doc "Each parcel's rain over watch [watch] (0 night 00-08, 1 day 08-16, 2 evening 16-24): its peak level and its amount in rain units."
+  fn watch_rain(c : City, watch : Int) : (NativeIntArr, NativeIntArr) do
+    watch_fill(c, day_cells(c), Ur.Rain.baseline(current_weather(c)), 8 * clamp(watch, 0, 2), 0, NativeArray.make_int(count(), 0), NativeArray.make_int(count(), 0))
+  end
+  doc "Soil recharge from a watch whose rain averages [level] over the island: a third of a day of it."
+  fn watch_recharge(level : Int) : Int do if level >= 2 do (24 + 15 * (level - 2)) / 3 else 0 end end
+  pfn coastal_depth(c : City, lot : Int) : Int do
+    let h = get(c.heights, lot)
+    if h <= 0 || h >= 16 do 0 else clamp(shore_level(c, lot % width(), lot / width(), 0, 0) - h, 0, 16) end
+  end
+  -- the island's mean rain level over a watch, from its amounts
+  pfn mean_level(c : City, amounts : NativeIntArr, lot : Int, land : Int, total : Int) : Int do
+    if lot >= count() do (if land == 0 do 0 else
+      let per_hour = total / (land * 8)
+      if per_hour >= rain_units(4) do 4 else if per_hour >= rain_units(3) do 3 else if per_hour >= rain_units(2) do 2 else 0 end end end end)
+    else if get(c.heights, lot) > 0 do mean_level(c, amounts, lot + 1, land + 1, total + get(amounts, lot)) else mean_level(c, amounts, lot + 1, land, total) end end
+  end
+  -- after a watch: the standing water a storm surge leaves on the coast, flood
+  -- damage, polluted runoff, collectors and subway, per parcel
+  pfn watch_parcels(c : City, peaks : NativeIntArr, lot : Int, active : Bool) : City do
+    if lot >= count() do { c with flood_active: active } else
+      let peak = get(peaks, lot)
+      let land = get(c.heights, lot) > 0
+      let surge = if peak == 4 do coastal_depth(c, lot) else 0 end
+      let stored = get(c.surface_water, lot)
+      let level = if surge > stored do surge else stored end
+      let previous = flood_repair_days(c, lot)
+      let building = get(c.buildings, lot) > 0 || get(c.plants, lot) > 0
+      let repairs = if building && level >= 4 do clamp(2 + level / 2, previous, 10) else previous end
+      let soil = get(c.land_pollution, lot)
+      let coast = if land && peak >= 3 && soil >= 3 do runoff_outlet(c, lot, 1, 0) else -1 end
+      let old = get(c.pollution, coast)
+      let moved = if valid(coast) do clamp(soil * (peak - 1) / 30, 0, clamp(100 - old, 0, 100)) else 0 end
+      let catchment = match peak do
+        4 -> 466
+        3 -> 250
+        2 -> 120
+        _ -> 0
+      end
+      let tanks = if get(c.plants, lot) == 8 do NativeArray.set_int(c.rain_tanks, lot, clamp(get(c.rain_tanks, lot) + catchment, 0, rain_tank_capacity())) else c.rain_tanks end
+      let subway = if peak == 4 && get(c.stops, lot) == 4 && get(c.transit, lot) == 4 do NativeArray.set_int(c.subway_water, lot, clamp(get(c.subway_water, lot) + floodplain_depth(c, lot), 0, 72)) else c.subway_water end
+      let c = { c with surface_water: if level == stored do c.surface_water else NativeArray.set_int(c.surface_water, lot, level) end,
+        flood_damage: if repairs == previous do c.flood_damage else NativeArray.set_int(c.flood_damage, lot, repairs) end,
+        land_pollution: if moved > 0 do NativeArray.set_int(c.land_pollution, lot, soil - moved) else c.land_pollution end,
+        pollution: if moved > 0 do NativeArray.set_int(c.pollution, coast, old + moved) else c.pollution end,
+        rain_tanks: tanks, subway_water: subway }
+      watch_parcels(c, peaks, lot + 1, active || level > 0 || repairs > 0)
+    end
+  end
+  doc "End watch [watch] of a city raining locally: its rain soaks the soil, runs downhill into hollows, surges on the coast under storms, fills collectors and subways, and records flood damage at once. A uniform city only moves on to the next watch; its rain is applied once a day as before."
+  fn end_watch(c : City, watch : Int) : City do
+    let next = (clamp(watch, 0, 2) + 1) % 3
+    -- a dry day (clear or cloudy) has no rain to route: nothing changes
+    if uniform_rain(c) || current_weather(c) < 2 do { c with watch: next } else
+      let (peaks, amounts) = watch_rain(c, watch)
+      let soaked = { c with soil_moisture: clamp(c.soil_moisture + watch_recharge(mean_level(c, amounts, 0, 0, 0)), 0, 100) }
+      let (routed, _) = route_runoff(soaked, amounts)
+      { watch_parcels(routed, peaks, 0, false) with watch: next }
+    end
+  end
+  pfn peak_today(c : City) : NativeIntArr do
+    let (p0, _) = watch_rain(c, 0)
+    let (p1, _) = watch_rain(c, 1)
+    let (p2, _) = watch_rain(c, 2)
+    List.fold_left(List.range(0, count()), p0, fn (a, i) ->
+      let m = if get(p1, i) > get(p2, i) do get(p1, i) else get(p2, i) end
+      if m > get(a, i) do NativeArray.set_int(a, i, m) else a end)
+  end
+  pfn drain_parcels(c : City, severe : NativeIntArr, evaporation : Int, lot : Int, active : Bool) : City do
+    if lot >= count() do { c with flood_active: active } else
+      let stored = get(c.surface_water, lot)
+      let land = get(c.heights, lot)
+      let level = if land <= 0 || stored == 0 do 0
+        else if get(severe, lot) == 4 do stored
+        else
+          let coast = if land < 16 do shore_level(c, lot % width(), lot / width(), 0, 0) else 0 end
+          let outflow = if coast > 0 do 2 else 0 end
+          let gravity_drain = if get(c.storm_drains, lot) > 0 do 2 else 0 end
+          clamp(stored - outflow - gravity_drain - soil_absorption(c, lot) / 2 - evaporation, 0, 16)
+        end end
+      let previous = flood_repair_days(c, lot)
+      let building = get(c.buildings, lot) > 0 || get(c.plants, lot) > 0
+      -- today's daily rule: deep water still standing damages, dry ground lets repairs count down
+      let repairs = if !building do 0
+        else if level >= 4 do clamp(2 + level / 2, previous, 10)
+        else if level == 0 do clamp(previous - (if favor_god(c) == 3 do 2 else 1 end), 0, 10) else previous end end end
+      let c = { c with surface_water: if stored == level do c.surface_water else NativeArray.set_int(c.surface_water, lot, level) end,
+        flood_damage: if previous == repairs do c.flood_damage else NativeArray.set_int(c.flood_damage, lot, repairs) end }
+      drain_parcels(c, severe, evaporation, lot + 1, active || level > 0 || repairs > 0)
+    end
+  end
+  doc "Midnight for a city raining locally: standing water drains at the daily rates, except on parcels severe rain fell on today; repairs count down; the soil dries; pumps and collectors run."
+  fn night_drain(c : City) : City do
+    let rain = current_weather(c)
+    let dry = if curse_god(c) == 2 do 20 else if temperature(c) >= 30 do 11 else 7 end end
+    let evaporation = if rain >= 2 do 0 else if temperature(c) >= 30 do 2 else 1 end end
+    let c = { c with soil_moisture: clamp(c.soil_moisture - dry, 0, 100) }
+    let severe = if rain == 4 do peak_today(c) else NativeArray.make_int(count(), 0) end
+    let c = if c.flood_active || curse_god(c) == 4 do drain_parcels(c, severe, evaporation, 0, false) else c end
+    let sites = weather_sites(c, 0, Nil)
+    if List.is_empty(sites) do c else
+      let needs_network = List.any(sites, fn lot -> get(c.rain_tanks, lot) > 0 || (rain < 4 && (get(c.subway_water, lot) > 0 || (get(c.pump_orders, lot) > 0 && get(c.surface_water, lot) > 0))))
+      if !needs_network do c else
+        let roads = access(c)
+        let gen = generation(c, roads)
+        let report = utility_report(c, roads, gen, population(c))
+        operate_weather_sites(c, sites, roads, pipe_access(c), report, report.electric.flow, rain)
+      end
+    end
+  end
+  -- run the watches still owed today, from [watch] to the evening's
+  pfn owed_watches(c : City, watch : Int) : City do if watch > 2 do c else owed_watches(end_watch(c, watch), watch + 1) end end
+  -- a day's weather: uniform cities as before local rain, others by watches
+  pfn day_weather(c : City, sites : List(Int)) : City do
+    if uniform_rain(c) do weather_day(c, sites) else night_drain(owed_watches(c, c.watch)) end
   end
 
   -- Standing water is measured in quarter metres. Each day the water level
@@ -6147,7 +6284,7 @@ mod Ur.Sim do
   pfn roll_calendar(city : City, traffic : NativeIntArr) : City do
     let city = open_religion_day(city)
     let day_number = waste_date(city)
-    let c = weather_day(city, weather_sites(city, 0, Nil))
+    let c = day_weather(city, weather_sites(city, 0, Nil))
     let c = freight_day(sanitation_day(c, traffic, day_number), traffic, day_number)
     let day = c.calendar_day + 1
     let weekday = (c.street_day + 1) % 7
@@ -6169,7 +6306,7 @@ mod Ur.Sim do
   end
   pfn play_month(c : City, traffic : NativeIntArr, day : Int, sites : List(Int), haul : Bool) : City do
     let c = open_religion_day({ c with calendar_day: day })
-    let c = weather_day(c, sites)
+    let c = day_weather({ c with watch: 0 }, sites)
     let day_number = waste_date(c)
     let c = if haul do freight_day(sanitation_day(c, traffic, day_number), traffic, day_number) else c end
     if day + 1 == days_per_month() do c else
