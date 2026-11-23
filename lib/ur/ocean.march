@@ -33,7 +33,7 @@ mod Ur.Ocean do
   pfn land(c : Ur.Sim.City, cx : Int, cz : Int) : Bool do
     let x = (cx - ring() * 8) * 4 + 2
     let z = (cz - ring() * 8) * 4 + 2
-    x >= 0 && z >= 0 && x < S.width() * 32 && z < S.depth() * 32 && Ur.Landscape.height(c, x, z) > 0
+    if x >= 0 && z >= 0 && x < S.width() * 32 && z < S.depth() * 32 do Ur.Landscape.height(c, x, z) > 0 else false end
   end
   pfn seed(c : Ur.Sim.City, a : NativeIntArr, i : Int) : NativeIntArr do
     if i >= cells_wide() * cells_deep() do a else
@@ -92,7 +92,7 @@ mod Ur.Ocean do
     if k >= 64 do false else
       let cx = px * 8 + k % 8
       let cz = pz * 8 + k / 8
-      cell_depth(a, cx, cz) != cell_depth(b, cx, cz) || cells_differ(a, b, px, pz, k + 1)
+      if cell_depth(a, cx, cz) != cell_depth(b, cx, cz) do true else cells_differ(a, b, px, pz, k + 1) end
     end
   end
   doc "Whether padded parcel [cell] (row-major over the map and its ring) has any cell whose water depth differs between [a] and [b]."
@@ -101,4 +101,30 @@ mod Ur.Ocean do
   end
   doc "Padded parcel index of map parcel (px, pz); px, pz may lie in the ring (-13..)."
   fn padded_cell(px : Int, pz : Int) : Int do (pz + ring()) * padded_width() + px + ring() end
+
+  -- Where the shoreline can move: a parcel no higher than a grade cut (8)
+  -- or beside water, in either city.
+  pfn low_or_shore(c : Ur.Sim.City, i : Int, d : Int) : Bool do
+    if d == 0 && S.get(c.heights, i) <= 8 do true
+    else if d >= 4 do false
+    else
+      let n = S.neighbour(i, d)
+      if S.valid(n) && S.get(c.heights, n) == 0 do true else low_or_shore(c, i, d + 1) end
+    end end
+  end
+  pfn cells_wet_differ(a : Ur.Sim.City, b : Ur.Sim.City, i : Int, k : Int) : Bool do
+    if k >= 64 do false else
+      let cx = i % S.width() * 8 + k % 8 + ring() * 8
+      let cz = i / S.width() * 8 + k / 8 + ring() * 8
+      if land(a, cx, cz) != land(b, cx, cz) do true else cells_wet_differ(a, b, i, k + 1) end
+    end
+  end
+  pfn touched_from(a : Ur.Sim.City, b : Ur.Sim.City, i : Int) : Bool do
+    if i >= S.count() do false else
+      let moved = if low_or_shore(a, i, 0) do cells_wet_differ(a, b, i, 0) else if low_or_shore(b, i, 0) do cells_wet_differ(a, b, i, 0) else false end end
+      if moved do true else touched_from(a, b, i + 1) end
+    end
+  end
+  doc "Whether any ground cell turned from land to water or back between [a] and [b]: the edits (heights, buildings, roads, grading) after which the ocean must be rebuilt."
+  fn coast_touched(a : Ur.Sim.City, b : Ur.Sim.City) : Bool do touched_from(a, b, 0) end
 end

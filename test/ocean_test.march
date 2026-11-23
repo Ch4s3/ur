@@ -32,6 +32,26 @@ mod OceanTest do
     end
   end
 
+  pfn find_inland(c : Ur.Sim.City, i : Int) : Int do
+    if i >= S.count() do panic("no inland parcel") else
+      if S.get(c.heights, i) > 20 && !coastal(c, i, 0) do i else find_inland(c, i + 1) end
+    end
+  end
+  pfn coastal(c : Ur.Sim.City, i : Int, d : Int) : Bool do
+    if d >= 4 do false else
+      let n = S.neighbour(i, d)
+      if S.valid(n) && S.get(c.heights, n) == 0 do true else coastal(c, i, d + 1) end
+    end
+  end
+  pfn find_shore(c : Ur.Sim.City, i : Int) : Int do
+    if i >= S.count() do panic("no shore parcel") else
+      if S.get(c.heights, i) > 0 && S.get(c.buildings, i) == 0 && coastal(c, i, 0) do i else find_shore(c, i + 1) end
+    end
+  end
+  pfn any_parcel_changed(a : Ur.Ocean.Field, b : Ur.Ocean.Field, cell : Int) : Bool do
+    if cell >= O.ring_cells() do false else if O.parcel_changed(a, b, cell) do true else any_parcel_changed(a, b, cell + 1) end end
+  end
+
   fn main(_cap : Cap(IO)) : Unit do
     let c = S.new()
     let start = Authority.must(System.now_ms())
@@ -72,6 +92,17 @@ mod OceanTest do
       Test.assert_true(!O.parcel_changed(f, g, O.padded_cell(px - 15, pz)) || px - 15 < -13, "a parcel 15 away does not change")
     else Test.assert_true(false, "raising a water parcel to 8 should make land") end
     Test.assert_true(!O.parcel_changed(f, f, O.padded_cell(px, pz)), "a field equals itself")
+    -- coast_touched: only edits that move the shoreline count
+    Test.assert_true(!O.coast_touched(c, c), "an unchanged city leaves the coast alone")
+    Test.assert_true(O.coast_touched(c, raised), "raising a water parcel moves the coast")
+    let inland = find_inland(c, 0)
+    let built = { c with buildings: NativeArray.set_int(c.buildings, inland, 1) }
+    Test.assert_true(!O.coast_touched(c, built), "building far inland leaves the coast alone")
+    let shore = find_shore(c, 0)
+    let front = { c with buildings: NativeArray.set_int(c.buildings, shore, 1) }
+    let moved = any_parcel_changed(O.field(c), O.field(front), 0)
+    Test.assert_true(O.coast_touched(c, front) == moved, "a waterfront building counts exactly when it moves the water")
+    Test.assert_true(O.coast_touched(front, c) == moved, "and so does demolishing it")
     Authority.must(println("Ocean checks passed"))
   end
 end

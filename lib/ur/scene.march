@@ -441,7 +441,7 @@ mod Ur.Scene do
     x_walls(seabed_rows(m, hs, y, 0), hs, y, 0)
   end
   pfn any_water(hs : NativeIntArr, i : Int) : Bool do
-    if i >= 64 do false else NativeArray.get_int(hs, 11 + i % 8 + i / 8 * 10) < 0 || any_water(hs, i + 1) end
+    if i >= 64 do false else if NativeArray.get_int(hs, 11 + i % 8 + i / 8 * 10) < 0 do true else any_water(hs, i + 1) end end
   end
   pfn upload_ocean(slot : Int, x : Int, y : Int, z : Int, m : Mesh, surface : Mesh, light : NativeU8Arr) : Unit do
     if m.quads == 0 && surface.quads == 0 do Vk.chunk_free(slot)
@@ -458,7 +458,7 @@ mod Ur.Scene do
     { words: NativeArray.set_i32(words, n + 1, Q.ocean1(d00, d10, d01, d11)), quads: m.quads + 1 }
   end
   pfn all_deep(f : Ur.Ocean.Field, x : Int, z : Int, i : Int) : Bool do
-    if i >= 25 do true else Ur.Ocean.depth(f, x + i % 5 * 8, z + i / 5 * 8) == 63 && all_deep(f, x, z, i + 1) end
+    if i >= 25 do true else if Ur.Ocean.depth(f, x + i % 5 * 8, z + i / 5 * 8) != 63 do false else all_deep(f, x, z, i + 1) end end
   end
   pfn patches(m : Mesh, f : Ur.Ocean.Field, x : Int, z : Int, i : Int) : Mesh do
     if i >= 16 do m else
@@ -506,15 +506,17 @@ mod Ur.Scene do
       ocean_changed(a, b, cell + 1)
     end
   end
-  pfn heights_differ(a : Ur.Sim.City, b : Ur.Sim.City, i : Int) : Bool do
-    if i >= S.count() do false else S.get(a.heights, i) != S.get(b.heights, i) || heights_differ(a, b, i + 1) end
-  end
-  -- Keep the ocean in step with the coast: everything on a forced rebuild,
-  -- and on a change of the land's heights the padded parcels whose water changed.
-  pfn sync_ocean(old : Ur.Sim.City, c : Ur.Sim.City, force : Bool, structural : Bool) : Unit do
-    if force do ocean_all(Ur.Ocean.field(c))
-    else if structural && heights_differ(old, c, 0) do ocean_changed(Ur.Ocean.field(old), Ur.Ocean.field(c), 0)
-    else () end end
+  doc "Keep the ocean in step with the coast, from the field [f] it was last drawn from: everything on a forced rebuild; after a structural change that turned any ground between land and water, the padded parcels whose water changed. Returns the field now drawn."
+  fn ocean(f : Ur.Ocean.Field, old : Ur.Sim.City, c : Ur.Sim.City, force : Bool, structural : Bool) : Ur.Ocean.Field do
+    if force do
+      let g = Ur.Ocean.field(c)
+      ocean_all(g)
+      g
+    else if structural && Ur.Ocean.coast_touched(old, c) do
+      let g = Ur.Ocean.field(c)
+      ocean_changed(f, g, 0)
+      g
+    else f end end
   end
   -- One posed slab per parcel. The slot above the terrain is free on these low crossings.
   pfn deck_shadow(a : NativeU8Arr, length : Int, width : Int, i : Int) : NativeU8Arr do
@@ -660,7 +662,6 @@ mod Ur.Scene do
     let was_raining = S.severe_rain(old)
     let raining = S.severe_rain(c)
     let water_changed = was_raining != raining || (structural && (was_raining || raining || old.flood_active || c.flood_active))
-    if i == 0 do sync_ocean(old, c, force, structural) else () end
     sync_parcels(old, c, i, force, structural, water_changed, { hour: old_hour, electric: old_power }, { hour: hour, electric: new_power }, signals)
   end
   pfn preview_tiles(c : Ur.Sim.City, tiles : List(Int), stride : Int, index : Int, used : Int, mesh : Mesh) : Int do
