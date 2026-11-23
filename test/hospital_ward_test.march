@@ -1,0 +1,37 @@
+mod HospitalWardTest do
+  needs IO
+  needs IO.Console
+  needs IO.Clock
+  needs IO.Process
+  needs IO.FileRead
+  needs IO.FileWrite
+  alias Ur.Sim as S
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let base = S.new()
+    let hospital = S.index(20, 21)
+    let patient = S.index(22, 21)
+    let roads = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(base.roads, S.index(20, 22), 1), S.index(21, 22), 1), S.index(22, 22), 1)
+    let c = { base with heights: NativeArray.make_int(S.count(), 16), roads: roads, cash: 10000,
+      plants: NativeArray.set_int(base.plants, hospital, 22) }
+    let ward = S.act(c, hospital, 115)
+    Test.assert_eq_int(S.get(ward.facility_expansion, hospital), 6, "Hospital ward can be added")
+    Test.assert_eq_int(S.operating_beds(ward, hospital), 6, "Hospital ward increases patient capacity")
+    Test.assert_eq_int(S.job_slots(ward, hospital), S.job_slots(c, hospital) + 2, "Extra hospital beds require more workers")
+    let beds = List.fold_left(List.range(0, 4), NativeArray.make_int(S.count() * 8, 0), fn (out, bed) -> NativeArray.set_int(out, S.hospital_bed_slot(hospital, bed), 100))
+    let traffic = NativeArray.make_int(S.count() * 4, 0)
+    let busy = NativeArray.make_int(S.count() * 2, 0)
+    let call = { lot: patient, kind: 4, reported: 0, station: -1, response: -1, travel: 0, road: Nil, spread: Nil, medical: None }
+    let (ambulance, busy) = S.run_emergency(ward, traffic, [hospital], busy, call)
+    let (admitted, _, _) = S.transfer_patient(ward, traffic, [hospital], busy, beds, ambulance)
+    match admitted.medical do
+      Some(transfer) -> Test.assert_true(transfer.facility == hospital && transfer.bed >= 4 && transfer.wait == 0, "Patients use new beds when original ward is full")
+      None -> Test.assert_true(false, "Patient must be transferred")
+    end
+    let game = { city: { ward with crime_history: [{ month: 0, calls: [admitted] }] }, cx: 78.0, cz: 151.0, zoom: 52.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(game)) do
+      Ok(loaded) -> Test.assert_true(S.get(loaded.city.facility_expansion, hospital) == 6 && List.length(loaded.city.crime_history) == 1, "Expanded ward and admitted patient survive save and load")
+      Err(error) -> panic(error)
+    end
+  end
+end

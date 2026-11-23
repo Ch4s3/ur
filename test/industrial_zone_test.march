@@ -1,0 +1,72 @@
+mod IndustrialZoneTest do
+  needs IO
+  needs IO.Console
+  needs IO.Clock
+  needs IO.Process
+  needs IO.FileRead
+  needs IO.FileWrite
+  alias Ur.Sim as S
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let base = S.new()
+    let lot = S.index(10, 19)
+    let clear = { base with buildings: NativeArray.set_int(base.buildings, lot, 0),
+      zones: NativeArray.set_int(base.zones, lot, 0), nuisance: NativeArray.set_int(base.nuisance, lot, 3), cash: 10000 }
+    let zoned = S.act(clear, lot, 117)
+    Test.assert_eq_int(S.get(zoned.zones, lot), 4, "Industrial zoning is placed")
+    let restricted = S.act({ clear with nuisance: NativeArray.set_int(clear.nuisance, lot, 0) }, lot, 117)
+    Test.assert_eq_int(S.get(restricted.zones, lot), 0, "Nuisance policy prevents incompatible industry")
+    let neighborhood = S.act({ clear with nuisance: NativeArray.set_int(clear.nuisance, lot, 1) }, lot, 117)
+    Test.assert_eq_int(S.get(neighborhood.zones, lot), 4, "Neighborhood limits allow low-nuisance workshops")
+    let equipped = { zoned with cash: 100000, tax: 0, business_rate: 0, energy: 1,
+      heights: NativeArray.make_int(S.count(), 10), plants: NativeArray.set_int(zoned.plants, S.index(8, 18), 11),
+      buildings: NativeArray.set_int(zoned.buildings, S.index(8, 20), 0),
+      zones: NativeArray.set_int(zoned.zones, S.index(8, 20), 0) }
+    -- One parcel wins investment each month and housing claims the early turns.
+    let grown = Ur.Clock.advance(equipped, 16)
+    Test.assert_true(S.get(grown.buildings, lot) > 0 || S.get(grown.construction, lot) > 0, "A serviced industrial parcel attracts construction")
+    let food_site = S.index(8, 18)
+    let food_city = { zoned with plants: NativeArray.set_int(zoned.plants, food_site, 5) }
+    Test.assert_eq_int(S.choose_industry(food_city, S.access(food_city), lot), 1, "Nearby connected food production attracts processors")
+    let quiet_food = { food_city with nuisance: NativeArray.set_int(food_city.nuisance, lot, 1) }
+    Test.assert_eq_int(S.choose_industry(quiet_food, S.access(quiet_food), lot), 0, "Neighborhood limits prevent a processor from opening")
+    let factory_lot = lot - lot % 3
+    let skilled = { zoned with education: NativeArray.set_int(zoned.education, 2, 6) }
+    Test.assert_eq_int(S.choose_industry(skilled, S.access(skilled), factory_lot), 2, "Skilled labor enables manufacturers")
+    let manufacturer = { zoned with zones: NativeArray.set_int(zoned.zones, lot, 4),
+      buildings: NativeArray.set_int(zoned.buildings, lot, 1), business_sector: NativeArray.set_int(zoned.business_sector, lot, 2) }
+    Test.assert_eq_int(S.job_requirement(manufacturer, lot), 2, "Manufacturers hire trade graduates")
+    Test.assert_true(S.industrial_power(manufacturer, lot) > S.industrial_power(zoned, lot), "Manufacturers demand more electricity than workshops")
+    Test.assert_eq_str(S.building_name(manufacturer, lot), "Manufacturer", "Inspector identifies the manufacturer")
+    let built = { zoned with buildings: NativeArray.set_int(zoned.buildings, lot, 1) }
+    let office = { built with zones: NativeArray.set_int(built.zones, lot, 2) }
+    let rezoned = S.act(built, lot, 2)
+    Test.assert_eq_int(S.get(rezoned.zones, lot), 4, "Occupied industry must be cleared before rezoning")
+    let industry = S.stats(built)
+    let ordinary = S.stats(office)
+    Test.assert_true(S.job_slots(built, lot) > 0 && S.homes_at(built, lot) == 0, "Industrial parcels provide jobs without housing")
+    Test.assert_true(S.get(industry.utilities.electric.demand, lot) > S.get(ordinary.utilities.electric.demand, lot), "Industry consumes more electricity")
+    let no_workers = { built with facility_staff: NativeArray.set_int(built.facility_staff, lot, 1) }
+    let all_workers = { built with facility_staff: NativeArray.set_int(built.facility_staff, lot, 9) }
+    Test.assert_eq_int(S.industrial_staffing(no_workers, lot), 0, "Unstaffed industry has no operating workforce")
+    Test.assert_eq_int(S.industrial_staffing(all_workers, lot), 100, "Assigned workers staff industry")
+    let idle_accounts = S.business_accounts(no_workers, industry.routes, industry.labor, industry.people, industry.work, lot)
+    let staffed_accounts = S.business_accounts(all_workers, industry.routes, industry.labor, industry.people, industry.work, lot)
+    Test.assert_true(staffed_accounts.earnings > idle_accounts.earnings, "Industrial earnings depend on assigned workers")
+    let low_energy = S.business_accounts({ built with energy: 1 }, industry.routes, industry.labor, industry.people, industry.work, lot)
+    let high_energy = S.business_accounts({ built with energy: 5 }, industry.routes, industry.labor, industry.people, industry.work, lot)
+    Test.assert_true(high_energy.costs > low_energy.costs, "Industrial energy prices affect operating costs")
+    Test.assert_true(S.street_noise(built, lot) > S.street_noise(office, lot), "Industry adds local noise")
+    let traffic = NativeArray.make_int(S.count() * 4, 0)
+    let industrial_air = S.drift_pollution(built, traffic)
+    let office_air = S.drift_pollution(office, traffic)
+    Test.assert_true(S.get(industrial_air.air_pollution, lot) > S.get(office_air.air_pollution, lot), "Industry emits air pollution")
+    let game = { city: manufacturer, cx: 78.0, cz: 151.0, zoom: 52.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(game)) do
+      Ok(loaded) ->
+        Test.assert_eq_int(S.get(loaded.city.zones, lot), 4, "Industrial zoning survives save and load")
+        Test.assert_eq_int(S.get(loaded.city.business_sector, lot), 2, "Industrial specialization survives save and load")
+      Err(error) -> panic(error)
+    end
+  end
+end

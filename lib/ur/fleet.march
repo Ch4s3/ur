@@ -96,7 +96,7 @@ mod Ur.Fleet do
     if !S.valid(c.harbour) do Nil else
       let depots = F.yard_routes(c, 23, 2)
       let harbour = F.fleet_search(c, c.harbour, 2)
-      let buses = bus_lines(c, running, depots, harbour.next, NativeArray.make_int(2640, 0), 0, Nil)
+      let buses = bus_lines(c, running, depots, harbour.next, NativeArray.make_int(S.count(), 0), 0, Nil)
       let scheduled = List.flat_map(buses, fn bus ->
         let (_, terminal) = F.leg(bus.stops, bus.legs - 1)
         match S.bus_line_at(network, terminal) do

@@ -1,0 +1,137 @@
+mod OceanTest do
+  needs IO
+  needs IO.Console
+  needs IO.Clock
+  alias Ur.Sim as S
+  alias Ur.Ocean as O
+
+  -- The first parcel, scanning row by row from (x0, z0), whose centre is land (or water).
+  pfn find(c : Ur.Sim.City, want_land : Bool, i : Int) : Int do
+    if i >= S.count() do panic("no such parcel on the founding map") else
+      let x = i % S.width() * 32 + 16
+      let z = i / S.width() * 32 + 16
+      let is_land = Ur.Landscape.height(c, x, z) > 0
+      if is_land == want_land && i % S.width() >= 16 && i % S.width() < S.width() - 16 do i else find(c, want_land, i + 1) end
+    end
+  end
+  -- From voxel (x, z), step outward along +x until the next cell is water; return that water cell's x.
+  pfn first_water(f : Ur.Ocean.Field, x : Int, z : Int) : Int do
+    if O.depth(f, x, z) > 0 do x else first_water(f, x + 4, z) end
+  end
+  pfn first_water_west(f : Ur.Ocean.Field, x : Int, z : Int) : Int do
+    if O.depth(f, x, z) > 0 do x else first_water_west(f, x - 4, z) end
+  end
+  pfn never_shallower(f : Ur.Ocean.Field, x : Int, z : Int, last : Int, steps : Int) : Bool do
+    if steps == 0 do true else
+      let d = O.depth(f, x, z)
+      if d > 0 && d < last - 2 do false else never_shallower(f, x - 4, z, if d > last do d else last end, steps - 1) end
+    end
+  end
+  pfn edge_ok(f : Ur.Ocean.Field, z : Int) : Bool do
+    if z >= S.depth() * 32 do true else
+      let inside = O.depth(f, 2, z)
+      let outside = O.depth(f, -2, z)
+      if int_abs(inside - outside) > 3 do false else edge_ok(f, z + 4) end
+    end
+  end
+
+  pfn find_inland(c : Ur.Sim.City, i : Int) : Int do
+    if i >= S.count() do panic("no inland parcel") else
+      if S.get(c.heights, i) > 20 && !coastal(c, i, 0) do i else find_inland(c, i + 1) end
+    end
+  end
+  pfn coastal(c : Ur.Sim.City, i : Int, d : Int) : Bool do
+    if d >= 4 do false else
+      let n = S.neighbour(i, d)
+      if S.valid(n) && S.get(c.heights, n) == 0 do true else coastal(c, i, d + 1) end
+    end
+  end
+  pfn find_shore(c : Ur.Sim.City, i : Int) : Int do
+    if i >= S.count() do panic("no shore parcel") else
+      if S.get(c.heights, i) > 0 && S.get(c.buildings, i) == 0 && coastal(c, i, 0) do i else find_shore(c, i + 1) end
+    end
+  end
+  pfn any_parcel_changed(a : Ur.Ocean.Field, b : Ur.Ocean.Field, cell : Int) : Bool do
+    if cell >= O.ring_cells() do false else if O.parcel_changed(a, b, cell) do true else any_parcel_changed(a, b, cell + 1) end end
+  end
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let c = S.new()
+    let start = Authority.must(System.now_ms())
+    let f = O.field(c)
+    let took = Authority.must(System.now_ms()) - start
+    Authority.must(println("ocean field built in " ++ int_to_string(took) ++ " ms"))
+
+    -- land_is_dry
+    let land = find(c, true, 0)
+    let lx = land % S.width() * 32 + 16
+    let lz = land / S.width() * 32 + 16
+    Test.assert_eq_int(O.depth(f, lx, lz), 0, "land has no water over it")
+
+    -- shore_is_shallow
+    let wx = first_water(f, lx, lz)
+    let shore = O.depth(f, wx, lz)
+    Test.assert_true(shore >= 2 && shore <= 3, "the first water off the shore is 2-3 voxels deep, got " ++ int_to_string(shore))
+
+    -- open_sea_is_deep
+    Test.assert_eq_int(O.depth(f, -12 * 32, -12 * 32), 63, "the open sea in the ring's corner is deep")
+    Test.assert_eq_int(O.depth(f, -5000, 99999), 63, "off the field is deep")
+
+    -- depth_never_drops_away_from_shore: west from the open-sea corner of the map, x keeps falling
+    Test.assert_true(never_shallower(f, 0, 2, 0, 100), "depth grows steadily walking out from the map's western edge")
+
+    -- depth_continuous_across_map_edge
+    Test.assert_true(edge_ok(f, 2), "no step bigger than 3 voxels across the map's western edge")
+
+    -- field_changes_when_land_added
+    let water = find(c, false, S.index(16, 10))
+    let raised = { c with heights: NativeArray.set_int(c.heights, water, 8) }
+    let g = O.field(raised)
+    let px = water % S.width()
+    let pz = water / S.width()
+    if Ur.Landscape.height(raised, px * 32 + 16, pz * 32 + 16) > 0 do
+      Test.assert_true(O.parcel_changed(f, g, O.padded_cell(px, pz)), "the raised parcel itself changes")
+      Test.assert_true(O.parcel_changed(f, g, O.padded_cell(px + 1, pz)), "its neighbour changes")
+      Test.assert_true(!O.parcel_changed(f, g, O.padded_cell(px - 15, pz)) || px - 15 < -13, "a parcel 15 away does not change")
+    else Test.assert_true(false, "raising a water parcel to 8 should make land") end
+    Test.assert_true(!O.parcel_changed(f, f, O.padded_cell(px, pz)), "a field equals itself")
+    -- corner_depth: a vertex on the shoreline is dry from either side
+    let cz = int_div_euclid(lz, 4) * 4
+    let east = int_div_euclid(first_water(f, lx, lz), 4) * 4
+    let west = int_div_euclid(first_water_west(f, lx, lz), 4) * 4 + 4
+    Test.assert_eq_int(O.corner_depth(f, east, cz), 0, "the shore vertex east of the land is dry")
+    Test.assert_eq_int(O.corner_depth(f, west, cz), 0, "the shore vertex west of the land is dry")
+    Test.assert_eq_int(O.corner_depth(f, -12 * 32, -12 * 32), 63, "open sea corners are deep")
+    -- coast_touched: only edits that move the shoreline count
+    Test.assert_true(!O.coast_touched(c, c), "an unchanged city leaves the coast alone")
+    Test.assert_true(O.coast_touched(c, raised), "raising a water parcel moves the coast")
+    let inland = find_inland(c, 0)
+    let built = { c with buildings: NativeArray.set_int(c.buildings, inland, 1) }
+    Test.assert_true(!O.coast_touched(c, built), "building far inland leaves the coast alone")
+    let shore = find_shore(c, 0)
+    let front = { c with buildings: NativeArray.set_int(c.buildings, shore, 1) }
+    let moved = any_parcel_changed(O.field(c), O.field(front), 0)
+    Test.assert_true(O.coast_touched(c, front) == moved, "a waterfront building counts exactly when it moves the water")
+    Test.assert_true(O.coast_touched(front, c) == moved, "and so does demolishing it")
+    -- rebuild: the coast job's result, built on a worker
+    Test.assert_true(Option.is_none(O.rebuild(f, c, c)), "an unchanged coast needs no rebuild")
+    match O.rebuild(f, c, raised) do
+      Some(r) ->
+        Test.assert_true(List.any(r.changed, fn cell -> cell == O.padded_cell(px, pz)), "the raised parcel is redrawn")
+        Test.assert_true(!List.any(r.changed, fn cell -> cell == O.padded_cell(px - 15, pz) && px - 15 >= -13), "a parcel 15 away is not")
+        Test.assert_true(!O.parcel_changed(r.field, g, O.padded_cell(px, pz)), "the rebuilt field is the new coast's")
+      None -> Test.assert_true(false, "raising a water parcel needs a rebuild")
+    end
+    -- a seawall leaves the coast alone but changes the swell: the coast job answers the same field, nothing to redraw
+    let walled = { c with seawalls: NativeArray.set_int(c.seawalls, S.index(5, 5), 1) }
+    Test.assert_true(O.walls_touched(c, walled) && O.walls_touched(walled, c), "building or removing a seawall counts")
+    Test.assert_true(!O.walls_touched(c, raised), "raising ground is not a seawall edit")
+    match O.rebuild(f, c, walled) do
+      Some(r) ->
+        Test.assert_true(List.is_empty(r.changed), "a seawall redraws no seabed")
+        Test.assert_true(!O.parcel_changed(r.field, f, O.padded_cell(5, 5)), "and keeps the coast's field")
+      None -> Test.assert_true(false, "a seawall needs the swell refracted again")
+    end
+    Authority.must(println("Ocean checks passed"))
+  end
+end

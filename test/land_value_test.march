@@ -1,0 +1,54 @@
+mod LandValueTest do
+  needs IO
+  needs IO.Console
+  needs IO.Clock
+  needs IO.Process
+  needs IO.FileRead
+  needs IO.FileWrite
+  alias Ur.Sim as S
+
+  pfn target(c : Ur.Sim.City, lot : Int) : Int do
+    let st = S.stats(c)
+    S.land_target(c, st.routes, st.commutes, st.civic, st.park_walk, lot)
+  end
+  fn main(_cap : Cap(IO)) : Unit do
+    let c = S.new()
+    let home = S.index(10, 20)
+    let polluted = { c with land_pollution: NativeArray.set_int(c.land_pollution, home, 80) }
+    Test.assert_true(target(polluted, home) < target(c, home), "Pollution lowers land value")
+    Test.assert_eq_int(target(c, S.index(0, 0)), 0, "Open water has no land value")
+
+    let settled = Ur.Clock.advance(c, 1)
+    let valued = S.land_value(settled, home)
+    Test.assert_true(valued > 0, "Settlement values land")
+    let cleaner = { settled with land_pollution: NativeArray.make_int(S.count(), 0) }
+    let dirtier = Ur.Clock.advance({ settled with land_pollution: NativeArray.set_int(settled.land_pollution, home, 90) }, 1)
+    Test.assert_true(S.land_value(dirtier, home) < valued, "Values fall toward a lower target")
+    Test.assert_true(S.land_value(dirtier, home) > target({ dirtier with land_pollution: NativeArray.set_int(dirtier.land_pollution, home, 90) }, home) || target(cleaner, home) == valued,
+      "Values move only part of the way in a month")
+
+    let st = S.stats(settled)
+    let people = S.population(settled)
+    let old_tax = people * 2 / 3
+    Test.assert_true(st.budget.property_tax * 10 >= old_tax * 9 && st.budget.property_tax * 10 <= old_tax * 11, "Default property tax stays near the old per-resident tax")
+    let higher = S.adjust_policy(settled, 10, 20)
+    Test.assert_eq_int(higher.economy.property_rate, S.default_property_rate() + 20, "The property tax rate can be raised")
+    let before = S.household_accounts(settled, st.routes, st.commutes, st.labor, home)
+    let after = S.household_accounts(higher, st.routes, st.commutes, st.labor, home)
+    Test.assert_true(after.rent > before.rent, "Landlords pass a higher property tax on in rent")
+    Test.assert_true((S.stats(higher)).budget.property_tax > st.budget.property_tax, "A higher rate collects more")
+
+    let empty_lot = S.index(10, 18)
+    let zoned = S.act({ settled with cash: 10000 }, empty_lot, 2)
+    Test.assert_true(S.land_value(Ur.Clock.advance(zoned, 1), empty_lot) > 0, "Undeveloped land keeps a value")
+    Test.assert_eq_int(S.property_tax_at(zoned, empty_lot), 0, "Undeveloped land pays no property tax")
+
+    let game = { city: higher, cx: 78.0, cz: 151.0, zoom: 52.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(game)) do
+      Ok(loaded) ->
+        Test.assert_eq_int(S.land_value(loaded.city, home), S.land_value(higher, home), "Land values survive save and load")
+        Test.assert_eq_int(loaded.city.economy.property_rate, higher.economy.property_rate, "The property tax rate survives save and load")
+      Err(error) -> panic(error)
+    end
+  end
+end

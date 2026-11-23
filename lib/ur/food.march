@@ -5,8 +5,13 @@ mod Ur.Food do
 
   fn walkable(c : Ur.Sim.City, i : Int) : Bool do S.pedestrian_tile(c, i) end
 
+  -- The fields are read out before the sets, so a Routes handed over whole leaves each array
+  -- one reference and the sets write in place instead of copying the arrays.
   pfn enqueue(r : Routes, i : Int, next : Int) : Routes do
-    { next: NativeArray.set_int(r.next, i, next), queue: NativeArray.set_int(r.queue, r.tail, i), tail: r.tail + 1 }
+    let links = r.next
+    let queue = r.queue
+    let tail = r.tail
+    { next: NativeArray.set_int(links, i, next), queue: NativeArray.set_int(queue, tail, i), tail: tail + 1 }
   end
 
   pfn visit(c : Ur.Sim.City, r : Routes, i : Int, d : Int, mode : Int) : Routes do
@@ -45,17 +50,17 @@ mod Ur.Food do
   end
 
   fn destinations(c : Ur.Sim.City, destination : (Int) -> Bool) : NativeIntArr do
-    let r = { next: NativeArray.make_int(2640, -1), queue: NativeArray.make_int(2640, 0), tail: 0 }
+    let r = { next: NativeArray.make_int(S.count(), -1), queue: NativeArray.make_int(S.count(), 0), tail: 0 }
     flood(c, seed(c, destination, r, 0), 0, 0)
   end
   fn campus_destinations(c : Ur.Sim.City, destination : (Int) -> Bool) : NativeIntArr do
-    let r = { next: NativeArray.make_int(2640, -1), queue: NativeArray.make_int(2640, 0), tail: 0 }
+    let r = { next: NativeArray.make_int(S.count(), -1), queue: NativeArray.make_int(S.count(), 0), tail: 0 }
     flood(c, seed(c, destination, r, 0), 0, 4)
   end
   fn driving_destinations_avoiding(c : Ur.Sim.City, target : Int, blocked : Int) : NativeIntArr do
-    let next = NativeArray.make_int(2640, -1)
+    let next = NativeArray.make_int(S.count(), -1)
     let next = if S.valid(blocked) do NativeArray.set_int(next, blocked, blocked) else next end
-    let r = { next: next, queue: NativeArray.make_int(2640, 0), tail: 0 }
+    let r = { next: next, queue: NativeArray.make_int(S.count(), 0), tail: 0 }
     flood(c, enqueue(r, target, target), 0, 1)
   end
   fn driving_destinations(c : Ur.Sim.City, target : Int) : NativeIntArr do
@@ -63,7 +68,7 @@ mod Ur.Food do
   end
 
   fn fleet_search(c : Ur.Sim.City, seed_lot : Int, mode : Int) : Routes do
-    let r = { next: NativeArray.make_int(2640, -1), queue: NativeArray.make_int(2640, 0), tail: 0 }
+    let r = { next: NativeArray.make_int(S.count(), -1), queue: NativeArray.make_int(S.count(), 0), tail: 0 }
     let start = enqueue(r, seed_lot, seed_lot)
     expand(c, start, 0, mode)
   end
@@ -82,7 +87,7 @@ mod Ur.Food do
   end
 
   fn yard_routes(c : Ur.Sim.City, kind : Int, mode : Int) : NativeIntArr do
-    let r = { next: NativeArray.make_int(2640, -1), queue: NativeArray.make_int(2640, 0), tail: 0 }
+    let r = { next: NativeArray.make_int(S.count(), -1), queue: NativeArray.make_int(S.count(), 0), tail: 0 }
     flood(c, yard_seeds(c, kind, 0, r), 0, mode)
   end
 

@@ -1,0 +1,34 @@
+mod EmergencyExpansionTest do
+  needs IO
+  needs IO.Console
+  needs IO.Clock
+  needs IO.Process
+  needs IO.FileRead
+  needs IO.FileWrite
+  alias Ur.Sim as S
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let base = S.new()
+    let station = S.index(20, 21)
+    let victim = S.index(22, 21)
+    let roads = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(base.roads, S.index(20, 22), 1), S.index(21, 22), 1), S.index(22, 22), 1)
+    let city = { base with roads: roads, heights: NativeArray.make_int(S.count(), 16), cash: 10000,
+      plants: NativeArray.set_int(base.plants, station, 20) }
+    let improved = S.act(city, station, 112)
+    Test.assert_eq_int(S.get(improved.facility_expansion, station), 4, "A fire station gains an extra vehicle bay")
+    Test.assert_eq_int(S.job_slots(improved, station), S.job_slots(city, station) + 1, "An extra responder is needed")
+    let call = { lot: victim, kind: 3, reported: 0, station: -1, response: -1, travel: 0, road: Nil, spread: Nil, medical: None }
+    let traffic = NativeArray.make_int(S.count() * 4, 0)
+    let empty = NativeArray.make_int(S.count() * 2, 0)
+    let (_, busy) = S.run_emergency(city, traffic, [station], empty, call)
+    let (queued, _) = S.run_emergency(city, traffic, [station], busy, call)
+    let (_, upgraded_busy) = S.run_emergency(improved, traffic, [station], empty, call)
+    let (parallel, _) = S.run_emergency(improved, traffic, [station], upgraded_busy, call)
+    Test.assert_true(parallel.response >= 0 && (queued.response < 0 || parallel.response < queued.response), "Second fire engine responds while the first is busy")
+    let game = { city: improved, cx: 78.0, cz: 151.0, zoom: 52.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(game)) do
+      Ok(loaded) -> Test.assert_eq_int(S.get(loaded.city.facility_expansion, station), 4, "Vehicle bays survive save and load")
+      Err(error) -> panic(error)
+    end
+  end
+end

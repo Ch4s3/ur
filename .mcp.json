@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "strata": {
+      "command": "node",
+      "args": ["../strata/tools/strata-mcp/server.mjs"],
+      "env": {
+        "STRATA_MCP_APP_BIN": ".march/build/release/ur",
+        "STRATA_MCP_APP_CWD": "."
+      }
+    }
+  }
+}

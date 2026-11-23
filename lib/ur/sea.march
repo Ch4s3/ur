@@ -1,0 +1,143 @@
+-- The sea state: how the wind and the weather work the ocean. Pure, so the
+-- tests can reach it; Ur.Scene hands it to Strata (Vk.set_sea, set_sea_map).
+mod Ur.Sea do
+  alias Ur.Sim as S
+  alias Ur.Ocean as O
+
+  -- The sea now: the wind's direction (unit, x and z), its speed over open water in km/h, the open sea's wave height in metres, and whitecaps 0..1.
+  type State = { wind_x : Float, wind_z : Float, speed : Float, height : Float, whitecaps : Float }
+
+  doc "Wave height in metres of a sea the wind has worked fully, at [speed] km/h over open water, before any storm."
+  fn calm_height(speed : Float) : Float do
+    let h = 0.0012 *. speed *. speed
+    if h < 0.2 do 0.2 else if h > 3.5 do 3.5 else h end end
+  end
+  pfn smooth(a : Float, b : Float, x : Float) : Float do
+    let t = (x -. a) /. (b -. a)
+    let t = if t < 0.0 do 0.0 else if t > 1.0 do 1.0 else t end end
+    t *. t *. (3.0 -. 2.0 *. t)
+  end
+  pfn storm(weather : Int) : Float do if weather == 4 do 1.6 else if weather == 3 do 1.25 else 1.0 end end end
+  -- One day's sea, its wind given as the heading it blows toward (in wind_x) rather than a direction.
+  pfn day_sea(c : Ur.Sim.City, day : Int) : State do
+    let speed = int_to_float(S.wind_speed_on_day(day)) *. 1.5
+    let roughen = storm(S.weather_on(c, day / S.days_per_month(), day % S.days_per_month()))
+    let caps = smooth(25.0, 55.0, speed) *. roughen
+    { wind_x: S.wind_heading_on_day(day), wind_z: 0.0, speed: speed, height: calm_height(speed) *. roughen, whitecaps: if caps > 1.0 do 1.0 else caps end }
+  end
+
+  doc "The sea [phase] seconds into the current day (0..S.day_seconds()): today's, easing into tomorrow's over the day's last 30%, so the wind never jumps."
+  fn state_at(c : Ur.Sim.City, phase : Float) : State do
+    let day = S.absolute_day(c)
+    let a = day_sea(c, day)
+    let b = day_sea(c, day + 1)
+    let t = smooth(0.7, 1.0, phase /. S.day_seconds())
+    -- turn the shorter way round
+    let turn = Math.atan2(Math.sin(b.wind_x -. a.wind_x), Math.cos(b.wind_x -. a.wind_x))
+    let heading = a.wind_x +. turn *. t
+    { wind_x: Math.cos(heading), wind_z: Math.sin(heading), speed: a.speed +. (b.speed -. a.speed) *. t,
+      height: a.height +. (b.height -. a.height) *. t, whitecaps: a.whitecaps +. (b.whitecaps -. a.whitecaps) *. t }
+  end
+
+  doc "Which of 16 compass sectors a heading (radians, the way the wind blows) falls in: 0 centred on east, 4 on south, 8 on west."
+  fn sector(heading : Float) : Int do
+    int_mod_euclid(float_to_int(Math.floor(heading /. 0.392699082 +. 0.5)), 16)
+  end
+  doc "The heading at the centre of [sector]."
+  fn sector_heading(sector : Int) : Float do int_to_float(sector) *. 0.392699082 end
+
+  -- Water at each padded parcel's centre, from the coast field.
+  pfn water_mask(f : Ur.Ocean.Field, a : NativeIntArr, cell : Int) : NativeIntArr do
+    if cell >= O.ring_cells() do a else
+      let px = cell % O.padded_width() - O.ring()
+      let pz = cell / O.padded_width() - O.ring()
+      water_mask(f, NativeArray.set_int(a, cell, if O.depth(f, px * 32 + 16, pz * 32 + 16) > 0 do 1 else 0 end), cell + 1)
+    end
+  end
+  -- Metres of open water upwind of a padded parcel's centre, stepping a parcel at a time
+  -- against the wind (dx, dz); leaving the grid over water is the open ocean, 5 km.
+  pfn fetch(mask : NativeIntArr, x : Float, z : Float, dx : Float, dz : Float, steps : Int) : Float do
+    if steps >= 100 do 5000.0 else
+      let x = x -. dx
+      let z = z -. dz
+      let px = float_to_int(Math.floor(x))
+      let pz = float_to_int(Math.floor(z))
+      if px < 0 || pz < 0 || px >= O.padded_width() || pz >= O.padded_depth() do 5000.0
+      else if NativeArray.get_int(mask, pz * O.padded_width() + px) == 0 do int_to_float(steps + 1) *. 8.0
+      else fetch(mask, x, z, dx, dz, steps + 1) end end
+    end
+  end
+  pfn exposed(fetched : Float) : Float do
+    let e = Math.sqrt(fetched /. 5000.0)
+    if e < 0.15 do 0.15 else if e > 1.0 do 1.0 else e end end
+  end
+  pfn fill(mask : NativeIntArr, heading : Float, a : NativeF32Arr, cell : Int) : NativeF32Arr do
+    if cell >= O.ring_cells() do a else
+      let value = if NativeArray.get_int(mask, cell) == 0 do 0.0 else
+        let x = int_to_float(cell % O.padded_width()) +. 0.5
+        let z = int_to_float(cell / O.padded_width()) +. 0.5
+        let ray = fn (h : Float) -> exposed(fetch(mask, x, z, Math.cos(h), Math.sin(h), 0))
+        (ray(heading -. 0.19634954) +. ray(heading) +. ray(heading +. 0.19634954)) /. 3.0
+      end
+      fill(mask, heading, NativeArray.set_f32(a, cell, value), cell + 1)
+    end
+  end
+  doc "How exposed each padded parcel's water is to a wind blowing toward [sector], 0..1, row-major over the map and its ring (Ur.Ocean.padded_cell): the square root of the open water upwind over 5 km, at least 0.15, averaged across the sector; land is 0."
+  fn exposure(f : Ur.Ocean.Field, sector : Int) : NativeF32Arr do
+    let mask = water_mask(f, NativeArray.make_int(O.ring_cells(), 0), 0)
+    fill(mask, sector_heading(sector), NativeArray.make_f32(O.ring_cells(), 0.0), 0)
+  end
+
+  doc "The swell's deep-water wavelength in metres for a sea [height] metres high: Pierson-Moskowitz, as Strata's sea state works it out (Vk.set_sea), kept to 6..60 m."
+  fn wavelength(height : Float) : Float do
+    let l = 29.9 *. height
+    if l < 6.0 do 6.0 else if l > 60.0 do 60.0 else l end end
+  end
+  -- Whether a seawall on parcel [lot] stands over the 2 m cell (lx, lz) of it (0..3 each way): the wall Ur.Landscape draws
+  -- (seawall_parts), 2 m thick along the parcel's middle and reaching to the walls beside it, taken as the cells it overlaps:
+  -- a solid band 4 m thick, the wall in its middle. In voxels, the wall spans [x0, x1) x [z0, z1) of the parcel's 32.
+  pfn overlaps(cell : Int, lo : Int, hi : Int) : Bool do cell * 8 < hi && cell * 8 + 8 > lo end
+  pfn wall_cell(walls : NativeIntArr, lot : Int, lx : Int, lz : Int) : Bool do
+    let west = S.get(walls, S.neighbour(lot, 0)) > 0
+    let east = S.get(walls, S.neighbour(lot, 1)) > 0
+    let north = S.get(walls, S.neighbour(lot, 2)) > 0
+    let south = S.get(walls, S.neighbour(lot, 3)) > 0
+    let across = west || east || (!north && !south)
+    let x0 = if west || (!west && !east) do 0 else 12 end
+    let x1 = if east || (!west && !east) do 32 else 20 end
+    let z0 = if north do 0 else 12 end
+    let z1 = if south do 32 else 20 end
+    (across && overlaps(lx, x0, x1) && overlaps(lz, 12, 20)) || ((north || south) && overlaps(lx, 12, 20) && overlaps(lz, z0, z1))
+  end
+  doc "Whether a seawall in [walls] (Ur.Sim.City.seawalls) stands over the 2 m swell cell (cx, cz), counted from the ring's corner: a breakwater, solid to the swell."
+  fn breakwater(walls : NativeIntArr, cx : Int, cz : Int) : Bool do
+    let px = cx / 4 - O.ring()
+    let pz = cz / 4 - O.ring()
+    if px < 0 || pz < 0 || px >= S.width() || pz >= S.depth() do false else
+      let lot = S.index(px, pz)
+      if S.get(walls, lot) > 0 do wall_cell(walls, lot, cx % 4, cz % 4) else false end
+    end
+  end
+  pfn depths(f : Ur.Ocean.Field, walls : NativeIntArr, w : Int, a : NativeF32Arr, i : Int, n : Int) : NativeF32Arr do
+    if i >= n do a else
+      -- a 2 m cell's centre, in voxels from the map's corner; a seawall over it is solid (Strata.Waves: depth 0)
+      let x = (i % w) * 8 + 4 - O.ring() * 32
+      let z = (i / w) * 8 + 4 - O.ring() * 32
+      let d = if breakwater(walls, i % w, i / w) do 0.0 else int_to_float(O.depth(f, x, z)) *. 0.25 end
+      depths(f, walls, w, NativeArray.set_f32(a, i, d), i + 1, n)
+    end
+  end
+  doc "The depth grid the swell is refracted over: 2 m cells (x fastest) over the map and its ring, metres of water from the coast field, 0 on land and under the seawalls in [walls] (Ur.Sim.City.seawalls), which stand as breakwaters."
+  fn swell_depths(f : Ur.Ocean.Field, walls : NativeIntArr) : NativeF32Arr do
+    let w = O.padded_width() * 4
+    let h = O.padded_depth() * 4
+    depths(f, walls, w, NativeArray.make_f32(w * h, 0.0), 0, w * h)
+  end
+  doc "The swell refracted round the coast and the seawalls (Strata.Waves): 2 m cells over the map and its ring (`swell_depths`), the swell coming toward [heading] (radians) with deep-water [wavelength] metres. Pure: build it on a worker."
+  fn swell(f : Ur.Ocean.Field, walls : NativeIntArr, heading : Float, wavelength : Float) : Strata.Waves.Swell do
+    let w = O.padded_width() * 4
+    let h = O.padded_depth() * 4
+    let corner = int_to_float(0 - O.ring()) *. 8.0
+    Strata.Waves.solve(swell_depths(f, walls), w, h, corner, corner, 2.0, Math.cos(heading), Math.sin(heading), wavelength)
+  end
+end
