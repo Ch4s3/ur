@@ -28,6 +28,7 @@ mod Ur.Sim do
     census : NativeIntArr, population_history : List(NativeIntArr), immigration : Int,
     council : NativeIntArr, religion : Religion,
     climate_seed : Int,
+    rain_uniform : Bool, watch : Int, rain_now : NativeIntArr,
     storm_drains : NativeIntArr, seawalls : NativeIntArr,
     pump_orders : NativeIntArr, surface_water : NativeIntArr, flood_damage : NativeIntArr, flood_active : Bool,
     rain_tanks : NativeIntArr, subway_water : NativeIntArr, soil_moisture : Int, pumping_cost : Int,
@@ -325,7 +326,7 @@ mod Ur.Sim do
   end
   pfn unclaimed_with_heights(heights : NativeIntArr) : City do
     let zero = NativeArray.make_int(2640, 0)
-    { census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(2640, 0), religion: new_religion(), climate_seed: 0, storm_drains: zero, seawalls: zero, pump_orders: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, soil_moisture: 70, pumping_cost: 0, grades: NativeArray.make_int(2640, 0), grade_cover: NativeArray.make_int(2640, 0), parks: NativeArray.make_int(2640, 0), park_tiers: NativeArray.make_int(2640, 0), streetscape: NativeArray.make_int(2640, 0), sidewalk_items: NativeArray.make_int(2640, 0), campus: NativeArray.make_int(2640, 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(2640, 0), empty_homes: NativeArray.make_int(2640, 0), home_arrivals: NativeArray.make_int(2640, 0), neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(2640, 0), property_status: NativeArray.make_int(2640, 0), property_arrears: NativeArray.make_int(2640, 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(2640, 0), calendar_day: 0, clock_ms: 675, street_day: 0, car_free_days: NativeArray.make_int(2640, 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(2640, 0), quiet_areas: NativeArray.make_int(2640, 0), storefronts: NativeArray.make_int(2640, 0), footfall: NativeArray.make_int(2640, 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, freight: None, shop_stock: zero, shop_sales: zero, shop_delivered: zero, shop_imports: 0, shipments: Nil, harbour: -1, founding_map: true, heights: heights, roads: zero, tolls: zero, public_parking: zero,
+    { census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(2640, 0), religion: new_religion(), climate_seed: 0, rain_uniform: false, watch: 0, rain_now: NativeArray.make_int(2640, 0), storm_drains: zero, seawalls: zero, pump_orders: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, soil_moisture: 70, pumping_cost: 0, grades: NativeArray.make_int(2640, 0), grade_cover: NativeArray.make_int(2640, 0), parks: NativeArray.make_int(2640, 0), park_tiers: NativeArray.make_int(2640, 0), streetscape: NativeArray.make_int(2640, 0), sidewalk_items: NativeArray.make_int(2640, 0), campus: NativeArray.make_int(2640, 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(2640, 0), empty_homes: NativeArray.make_int(2640, 0), home_arrivals: NativeArray.make_int(2640, 0), neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(2640, 0), property_status: NativeArray.make_int(2640, 0), property_arrears: NativeArray.make_int(2640, 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(2640, 0), calendar_day: 0, clock_ms: 675, street_day: 0, car_free_days: NativeArray.make_int(2640, 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(2640, 0), quiet_areas: NativeArray.make_int(2640, 0), storefronts: NativeArray.make_int(2640, 0), footfall: NativeArray.make_int(2640, 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, freight: None, shop_stock: zero, shop_sales: zero, shop_delivered: zero, shop_imports: 0, shipments: Nil, harbour: -1, founding_map: true, heights: heights, roads: zero, tolls: zero, public_parking: zero,
       transit: zero, stops: zero, ferries: zero, ferry_start: -1, service: NativeArray.make_int(2640, 1), bus_headways: NativeArray.make_int(2640, 0), bus_fare: 1,
       zones: zero, density: NativeArray.make_int(2640, 3), nuisance: NativeArray.make_int(2640, 3),
       buildings: zero, housing_losses: zero, business_losses: zero, construction: zero, plants: zero, paused_facilities: zero, pipes: zero, grid: zero, pollution: zero, land_pollution: zero, air_pollution: zero,
@@ -359,7 +360,7 @@ mod Ur.Sim do
   end
   fn new() : City do
     let zero = NativeArray.make_int(2640, 0)
-    seed({ census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(2640, 0), religion: new_religion(), climate_seed: 0, storm_drains: zero, seawalls: zero, pump_orders: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, soil_moisture: 70, pumping_cost: 0, grades: NativeArray.make_int(2640, 0), grade_cover: NativeArray.make_int(2640, 0), parks: NativeArray.make_int(2640, 0), park_tiers: NativeArray.make_int(2640, 0), streetscape: NativeArray.make_int(2640, 0), sidewalk_items: NativeArray.make_int(2640, 0), campus: NativeArray.make_int(2640, 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(2640, 0), empty_homes: NativeArray.make_int(2640, 0), home_arrivals: NativeArray.make_int(2640, 0), neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(2640, 0), property_status: NativeArray.make_int(2640, 0), property_arrears: NativeArray.make_int(2640, 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(2640, 0), calendar_day: 0, clock_ms: 0, street_day: 0, car_free_days: NativeArray.make_int(2640, 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(2640, 0), quiet_areas: NativeArray.make_int(2640, 0), storefronts: NativeArray.make_int(2640, 0), footfall: NativeArray.make_int(2640, 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, freight: None, shop_stock: NativeArray.make_int(2640, 0), shop_sales: NativeArray.set_int(NativeArray.make_int(2640, 0), index(8, 20), 8), shop_delivered: NativeArray.make_int(2640, 0), shop_imports: 0, shipments: Nil, harbour: index(9, 21), founding_map: false, heights: terrain_fill(NativeArray.make_int(2640, 0), 0), roads: NativeArray.make_int(2640, 0), tolls: NativeArray.make_int(2640, 0), public_parking: NativeArray.make_int(2640, 0), transit: NativeArray.make_int(2640, 0), stops: NativeArray.make_int(2640, 0), ferries: NativeArray.make_int(2640, 0), ferry_start: -1, service: NativeArray.make_int(2640, 1), bus_headways: NativeArray.make_int(2640, 0), bus_fare: 1,
+    seed({ census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(2640, 0), religion: new_religion(), climate_seed: 0, rain_uniform: false, watch: 0, rain_now: NativeArray.make_int(2640, 0), storm_drains: zero, seawalls: zero, pump_orders: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, soil_moisture: 70, pumping_cost: 0, grades: NativeArray.make_int(2640, 0), grade_cover: NativeArray.make_int(2640, 0), parks: NativeArray.make_int(2640, 0), park_tiers: NativeArray.make_int(2640, 0), streetscape: NativeArray.make_int(2640, 0), sidewalk_items: NativeArray.make_int(2640, 0), campus: NativeArray.make_int(2640, 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(2640, 0), empty_homes: NativeArray.make_int(2640, 0), home_arrivals: NativeArray.make_int(2640, 0), neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(2640, 0), property_status: NativeArray.make_int(2640, 0), property_arrears: NativeArray.make_int(2640, 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(2640, 0), calendar_day: 0, clock_ms: 0, street_day: 0, car_free_days: NativeArray.make_int(2640, 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(2640, 0), quiet_areas: NativeArray.make_int(2640, 0), storefronts: NativeArray.make_int(2640, 0), footfall: NativeArray.make_int(2640, 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, freight: None, shop_stock: NativeArray.make_int(2640, 0), shop_sales: NativeArray.set_int(NativeArray.make_int(2640, 0), index(8, 20), 8), shop_delivered: NativeArray.make_int(2640, 0), shop_imports: 0, shipments: Nil, harbour: index(9, 21), founding_map: false, heights: terrain_fill(NativeArray.make_int(2640, 0), 0), roads: NativeArray.make_int(2640, 0), tolls: NativeArray.make_int(2640, 0), public_parking: NativeArray.make_int(2640, 0), transit: NativeArray.make_int(2640, 0), stops: NativeArray.make_int(2640, 0), ferries: NativeArray.make_int(2640, 0), ferry_start: -1, service: NativeArray.make_int(2640, 1), bus_headways: NativeArray.make_int(2640, 0), bus_fare: 1,
       zones: NativeArray.make_int(2640, 0), density: NativeArray.make_int(2640, 3), nuisance: NativeArray.make_int(2640, 3), buildings: NativeArray.make_int(2640, 0), housing_losses: NativeArray.make_int(2640, 0), business_losses: NativeArray.make_int(2640, 0), construction: NativeArray.make_int(2640, 0),
       plants: NativeArray.set_int(NativeArray.set_int(NativeArray.make_int(2640, 0), index(8, 21), 1), index(9, 22), 3),
       paused_facilities: NativeArray.make_int(2640, 0), pipes: NativeArray.set_int(NativeArray.make_int(2640, 0), index(9, 21), 1), grid: NativeArray.make_int(2640, 0), pollution: NativeArray.make_int(2640, 0), land_pollution: NativeArray.make_int(2640, 0), air_pollution: NativeArray.make_int(2640, 0), trash: 0, waste_live: false, waste_bins: NativeArray.make_int(count(), 0), waste_stock: NativeArray.make_int(count(), 0), waste_sites: NativeArray.make_int(count(), 0), waste_last: NativeArray.make_int(count(), 0), waste_log: NativeArray.make_int(count(), 0), waste_runs: Nil,
@@ -635,6 +636,53 @@ mod Ur.Sim do
     if curse == 1 do 4 else if curse == 2 do 0 else weather_pattern(c.climate_seed, climate_rain(c), month, day) end end
   end
   fn current_weather(c : City) : Int do weather_on(c, c.month, c.calendar_day) end
+  -- Local rain (docs/superpowers/specs/2026-11-23-local-rain-design.md).
+  -- A uniform city, or one under Idra's Unending Rain, rains today's regional
+  -- weather on every parcel, as before local rain; others rain in Ur.Rain's
+  -- storm cells.
+  fn uniform_rain(c : City) : Bool do c.rain_uniform || curse_god(c) == 1 end
+  fn day_cells(c : City) : List(Ur.Rain.Cell) do
+    let wind = regional_wind(c)
+    Ur.Rain.cells(if c.climate_seed == 0 do 705 else c.climate_seed end, c.month, c.calendar_day, current_weather(c), wind.speed, wind.heading)
+  end
+  pfn lot_centre(lot : Int) : (Float, Float) do (int_to_float(lot % width() * 8 + 4), int_to_float(lot / width() * 8 + 4)) end
+  pfn cell_level(c : City, cells : List(Ur.Rain.Cell), base : Int, lot : Int, hour : Float) : Int do
+    if get(c.heights, lot) <= 0 do 0 else
+      let (x, z) = lot_centre(lot)
+      Ur.Rain.level_at(cells, base, x, z, hour)
+    end
+  end
+  -- the rain level on [lot] at game [hour] (0..24, fractions allowed)
+  fn rain_level(c : City, lot : Int, hour : Float) : Int do
+    if uniform_rain(c) do (if get(c.heights, lot) > 0 do current_weather(c) else 0 end)
+    else cell_level(c, day_cells(c), Ur.Rain.baseline(current_weather(c)), lot, hour) end
+  end
+  pfn fill_rain(c : City, cells : List(Ur.Rain.Cell), base : Int, hour : Float, a : NativeIntArr, lot : Int) : NativeIntArr do
+    if lot >= count() do a else
+      let level = if uniform_rain(c) do (if get(c.heights, lot) > 0 do base else 0 end) else cell_level(c, cells, base, lot, hour) end
+      fill_rain(c, cells, base, hour, NativeArray.set_int(a, lot, level), lot + 1)
+    end
+  end
+  doc "Fill each parcel's rain at game hour [hour] (0..23), as rain_here reads it."
+  fn set_rain_hour(c : City, hour : Int) : City do
+    let cells = if uniform_rain(c) do Nil else day_cells(c) end
+    let base = if uniform_rain(c) do current_weather(c) else Ur.Rain.baseline(current_weather(c)) end
+    { c with rain_now: fill_rain(c, cells, base, int_to_float(hour) +. 0.5, NativeArray.make_int(count(), 0), 0) }
+  end
+  doc "The rain falling on [lot] this hour: 0 none, 2 rain, 3 heavy, 4 severe (a uniform city's cloudy day reads 1)."
+  -- A uniform city reads today's regional weather directly, so it behaves
+  -- exactly as before local rain whatever its stored hour says.
+  fn rain_here(c : City, lot : Int) : Int do
+    if !valid(lot) do 0 else if uniform_rain(c) do (if get(c.heights, lot) > 0 do current_weather(c) else 0 end) else get(c.rain_now, lot) end end
+  end
+  pfn any_severe(c : City, lot : Int) : Bool do if lot >= count() do false else if get(c.rain_now, lot) == 4 do true else any_severe(c, lot + 1) end end end
+  doc "Whether severe rain is falling on any parcel this hour."
+  fn severe_now(c : City) : Bool do if uniform_rain(c) do severe_rain(c) else any_severe(c, 0) end end
+  fn watch_of(hour : Int) : Int do clamp(hour / 8, 0, 2) end
+  -- a day starts in the night watch, with the new day's rain
+  pfn fresh_day(c : City) : City do set_rain_hour({ c with watch: 0 }, 0) end
+  doc "A loaded city's rain, rebuilt from its date and stamped clock."
+  fn restore_rain(c : City) : City do set_rain_hour(c, street_hour(int_to_float(c.clock_ms) /. 1000.0)) end
   fn weather_name(kind : Int) : String do
     match kind do
       4 -> "Severe rain"
@@ -6001,7 +6049,8 @@ mod Ur.Sim do
     end
   end
 
-  fn advance_day_with_traffic(city : City, traffic : NativeIntArr) : City do
+  fn advance_day_with_traffic(city : City, traffic : NativeIntArr) : City do fresh_day(roll_calendar(city, traffic)) end
+  pfn roll_calendar(city : City, traffic : NativeIntArr) : City do
     let city = open_religion_day(city)
     let day_number = waste_date(city)
     let c = weather_day(city, weather_sites(city, 0, Nil))
@@ -6052,7 +6101,7 @@ mod Ur.Sim do
     -- weather, cargo, and sanitation state still advances through every day.
     let month_end = if patron(c) > 0 do c.calendar_day else snapshot_day end
     let monthly = settle_month({ c with calendar_day: month_end, street_day: snapshot_weekday })
-    open_religion_day({ monthly with calendar_day: 0, clock_ms: 0, street_day: snapshot_weekday })
+    fresh_day(open_religion_day({ monthly with calendar_day: 0, clock_ms: 0, street_day: snapshot_weekday }))
   end
   fn advance(c : City, months : Int) : City do if months <= 0 do c else advance(tick(c), months - 1) end end
 end

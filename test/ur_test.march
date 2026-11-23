@@ -966,6 +966,7 @@ mod UrTest do
     let final_day = today + 29
     let expiry = today + 30
     Test.assert_eq_int(S.current_weather(cursed), 4, "the curse controls today's weather")
+    Test.assert_true(S.uniform_rain(cursed), "Idra's curse rains everywhere")
     Test.assert_eq_int(S.weather_on(cursed, final_day / 30, final_day % 30), 4, "the future forecast includes the active curse")
     Test.assert_eq_int(S.weather_on(cursed, expiry / 30, expiry % 30), S.weather_on(base, expiry / 30, expiry % 30), "normal weather resumes at expiry")
     let again = S.make_offering(cursed, S.stats(cursed), S.index(8, 19), 3)
@@ -1199,7 +1200,7 @@ mod UrTest do
   pfn same_cells(a : List(Ur.Rain.Cell), b : List(Ur.Rain.Cell)) : Bool do
     match (a, b) do
       (Nil, Nil) -> true
-      (Cons(p, ps), Cons(q, qs)) -> p.x == q.x && p.z == q.z && p.vx == q.vx && p.vz == q.vz && p.radius == q.radius && p.level == q.level && p.start == q.start && p.stop == q.stop && same_cells(ps, qs)
+      (Cons(p, ps), Cons(q, qs)) -> if p.x == q.x && p.z == q.z && p.vx == q.vx && p.vz == q.vz && p.radius == q.radius && p.level == q.level && p.start == q.start && p.stop == q.stop do same_cells(ps, qs) else false end
       _ -> false
     end
   end
@@ -1222,8 +1223,50 @@ mod UrTest do
     Test.assert_eq_int(Ur.Rain.level_at(wet, 3, -2000.0, -2000.0, first.start +. 1.0), 3, "far from every cell, the baseline")
   end
 
+  pfn same_ints(a : NativeIntArr, b : NativeIntArr, i : Int) : Bool do
+    if i >= S.count() do true else if NativeArray.get_int(a, i) == NativeArray.get_int(b, i) do same_ints(a, b, i + 1) else false end end
+  end
+  -- the first day from [k] with severe regional weather, as a date on [c]
+  pfn severe_day(c : Ur.Sim.City, k : Int) : Ur.Sim.City do
+    if k >= 720 || S.weather_on(c, k / 30, k % 30) == 4 do { c with month: k / 30, calendar_day: k % 30 } else severe_day(c, k + 1) end
+  end
+  pfn local_spread(c : Ur.Sim.City, hour : Int) : Bool do
+    if hour >= 24 do false else
+      let now = S.set_rain_hour(c, hour)
+      let severe = List.any(List.range(0, S.count()), fn i -> S.rain_here(now, i) == 4)
+      let lighter = List.any(List.range(0, S.count()), fn i -> S.get(now.heights, i) > 0 && S.rain_here(now, i) == 3)
+      if severe && lighter do true else local_spread(c, hour + 1) end
+    end
+  end
+  pfn rain_state_checks() : Unit do
+    let storm = severe_day(S.new(), 0)
+    Test.assert_eq_int(S.current_weather(storm), 4, "a severe day was found")
+    Test.assert_false(storm.rain_uniform, "ordinary cities rain locally")
+    let next = S.advance_day(S.set_rain_hour({ storm with watch: 2 }, 20))
+    Test.assert_eq_int(next.watch, 0, "a new day starts in the night watch")
+    Test.assert_true(same_ints(next.rain_now, (S.set_rain_hour(next, 0)).rain_now, 0), "rain_now resets at midnight")
+    let uniform = S.set_rain_hour({ storm with rain_uniform: true }, 10)
+    Test.assert_true(List.all(List.range(0, S.count()), fn i -> S.get(uniform.heights, i) == 0 || S.rain_here(uniform, i) == 4),
+      "uniform rain is today's weather everywhere")
+    Test.assert_true(local_spread(storm, 0), "local rain differs across the island")
+    let ten = float_to_int(10.0 /. 24.0 *. S.day_seconds() *. 1000.0)
+    let mid_watch = { storm with watch: 1, rain_uniform: true, clock_ms: ten }
+    let game = { city: mid_watch, cx: 78.0, cz: 151.0, zoom: 52.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(game)) do
+      Ok(saved) ->
+        Test.assert_eq_int(saved.city.watch, 1, "save keeps the watch")
+        Test.assert_true(saved.city.rain_uniform, "save keeps uniform rain")
+        Test.assert_true(same_ints(saved.city.rain_now, (S.set_rain_hour(saved.city, 10)).rain_now, 0), "loading rebuilds rain_now from the clock")
+      Err(error) -> Test.assert_true(false, error)
+    end
+    let site = Ur.Scenario.storm_site()
+    let backup = Ur.Scenario.flood_backup_start()
+    let shelter = Ur.Scenario.evacuation_site()
+    Test.assert_true(site.rain_uniform && backup.rain_uniform && shelter.rain_uniform, "the flood scenarios rain uniformly")
+  end
   fn main(_cap : Cap(IO)) : Unit do
     rain_cell_checks()
+    rain_state_checks()
     check_public_religion()
     check_religious_council()
     check_religion_controls()
