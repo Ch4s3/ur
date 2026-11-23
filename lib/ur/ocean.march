@@ -82,11 +82,7 @@ mod Ur.Ocean do
   fn depth(f : Field, x : Int, z : Int) : Int do
     let cx = int_div_euclid(x, 4) + ring() * 8
     let cz = int_div_euclid(z, 4) + ring() * 8
-    let d = cell_depth(f, cx, cz)
-    if d == 0 || d == 63 do d else
-      let ripple = int_mod_euclid(int_div_euclid(x * 7 + z * 13, 4), 3) - 1
-      S.clamp(d + ripple, 2, 63)
-    end
+    cell_depth(f, cx, cz)
   end
 
   doc "The seabed's height in voxels at (x, z): below sea level (0) by the water's depth."

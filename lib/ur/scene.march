@@ -98,9 +98,30 @@ mod Ur.Scene do
       end
     end
   end
-  pfn sea(i : Int, m : Mesh) : Unit do
+  -- The far sea: 16 coarse tiles (a voxel is a parcel) of deep ocean out to
+  -- the horizon, open where the map and its ring carry their own water.
+  pfn near_water(px : Int, pz : Int) : Bool do
+    px >= 0 - Ur.Ocean.ring() && px < S.width() + Ur.Ocean.ring() && pz >= 0 - Ur.Ocean.ring() && pz < S.depth() + Ur.Ocean.ring()
+  end
+  pfn far_row(m : Mesh, ox : Int, oz : Int, v : Int, u : Int, start : Int) : Mesh do
+    let open = u < 32 && !near_water(ox + u, oz + v)
+    if open && start < 0 do far_row(m, ox, oz, v, u + 1, u)
+    else if open do far_row(m, ox, oz, v, u + 1, start)
+    else
+      let n = m.quads * 2
+      let m = if start < 0 do m else
+        { words: NativeArray.set_i32(NativeArray.set_i32(m.words, n, Q.pack0(start, 0, v, u - start, 1, 0)), n + 1, Q.ocean1(63, 63, 63, 63)), quads: m.quads + 1 }
+      end
+      if u >= 32 do m else far_row(m, ox, oz, v, u + 1, -1) end
+    end end
+  end
+  pfn far_sea(ox : Int, oz : Int, v : Int, m : Mesh) : Mesh do
+    if v >= 32 do m else far_sea(ox, oz, v + 1, far_row(m, ox, oz, v, 0, -1)) end
+  end
+  pfn sea(i : Int) : Unit do
     if i >= 16 do () else
-      if Vk.chunk_begin(Ur.Ocean.far_sea_slot(i), (i % 4 - 1) * 1024, -32, (i / 4 - 1) * 1024, 5) && Vk.chunk_part(0, m.words, m.quads) && Vk.chunk_commit() do sea(i + 1, m)
+      let m = far_sea((i % 4 - 1) * 32, (i / 4 - 1) * 32, 0, empty())
+      if Vk.chunk_begin(Ur.Ocean.far_sea_slot(i), (i % 4 - 1) * 1024, -32, (i / 4 - 1) * 1024, 5) && (m.quads == 0 || Vk.chunk_part(2, m.words, m.quads)) && Vk.chunk_commit() do sea(i + 1)
       else Ur.AppError.stop("Sea mesh upload failed") end
     end
   end
@@ -175,7 +196,7 @@ mod Ur.Scene do
     if !Vk.set_light_box(29, 2) || !Vk.textures_create(16, 32) do Ur.AppError.stop("Could not allocate Strata materials and lighting") else () end
     let r = palette(0, Strata.Blocks.empty())
     if !Vk.textures_commit() || !Strata.Render.upload_blocks(r) do Ur.AppError.stop("Could not upload Strata materials") else () end
-    sea(0, face(empty(), 0, 0, 0, 32, 32, 0, 3))
+    sea(0)
     Vk.set_lighting(8)
     Vk.set_quality(0, false)
     Vk.set_sun(-0.64, 0.83, 0.42, 1.18, 1.08, 0.94)
@@ -363,20 +384,61 @@ mod Ur.Scene do
     end
   end
   pfn seabed_material(h : Int) : Int do if h >= -10 do 16 else if h >= -30 do 1 else 4 end end end
-  pfn seabed(m : Mesh, hs : NativeIntArr, y : Int, i : Int) : Mesh do
+  pfn floor_limit() : Int do -20 end
+  pfn sea_h(hs : NativeIntArr, u : Int, v : Int) : Int do NativeArray.get_int(hs, 11 + u + v * 10) end
+  -- A face run along x from cell u0 to u1 (exclusive) of row v.
+  pfn sea_wall(m : Mesh, u0 : Int, u1 : Int, v : Int, bottom : Int, top : Int, y : Int, dir : Int) : Mesh do
+    let low = S.clamp(bottom - y, 0, 32)
+    let high = S.clamp(top - y, 0, 32)
+    if low >= high do m else face(m, u0 * 4, low, v * 4 + (if dir == 4 do 3 else 0 end), (u1 - u0) * 4, high - low, dir, seabed_material(top)) end
+  end
+  -- What a cell offers to a run of tops (its height, or 1 when it draws none)
+  -- and to a run of walls facing +z or -z (its height and its neighbour's).
+  pfn top_key(hs : NativeIntArr, u : Int, v : Int, y : Int) : Int do
+    let h = sea_h(hs, u, v)
+    if h < 0 && h > floor_limit() && h > y && h <= y + 32 do h else 1 end
+  end
+  pfn wall_key(hs : NativeIntArr, u : Int, v : Int, dv : Int) : Int do
+    let h = sea_h(hs, u, v)
+    if h <= floor_limit() do 1000000 else h * 1000 + sea_h(hs, u, v + dv) end
+  end
+  pfn top_runs(m : Mesh, hs : NativeIntArr, y : Int, v : Int, u : Int, start : Int) : Mesh do
+    let key = if start < 8 do top_key(hs, start, v, y) else 1 end
+    if u < 8 && top_key(hs, u, v, y) == key do top_runs(m, hs, y, v, u + 1, start) else
+      let m = if start < 8 && key != 1 do face(m, start * 4, key - y - 1, v * 4, (u - start) * 4, 4, 0, seabed_material(key)) else m end
+      if u >= 8 do m else top_runs(m, hs, y, v, u + 1, u) end
+    end
+  end
+  pfn z_runs(m : Mesh, hs : NativeIntArr, y : Int, v : Int, dv : Int, dir : Int, u : Int, start : Int) : Mesh do
+    let key = if start < 8 do wall_key(hs, start, v, dv) else 1000000 end
+    if u < 8 && wall_key(hs, u, v, dv) == key do z_runs(m, hs, y, v, dv, dir, u + 1, start) else
+      let m = if start < 8 && key != 1000000 do sea_wall(m, start, u, v, sea_h(hs, start, v + dv), sea_h(hs, start, v), y, dir) else m end
+      if u >= 8 do m else z_runs(m, hs, y, v, dv, dir, u + 1, u) end
+    end
+  end
+  pfn x_walls(m : Mesh, hs : NativeIntArr, y : Int, i : Int) : Mesh do
     if i >= 64 do m else
       let x = i % 8 * 4
       let z = i / 8 * 4
       let j = 11 + i % 8 + i / 8 * 10
       let h = NativeArray.get_int(hs, j)
-      let tex = seabed_material(h)
-      let a = if h < 0 && h > y && h <= y + 32 do face(m, x, h - y - 1, z, 4, 4, 0, tex) else m end
-      let a = wall(a, x + 3, z, NativeArray.get_int(hs, j + 1), h, y, 2, tex)
-      let a = wall(a, x, z, NativeArray.get_int(hs, j - 1), h, y, 3, tex)
-      let a = wall(a, x, z + 3, NativeArray.get_int(hs, j + 10), h, y, 4, tex)
-      let a = wall(a, x, z, NativeArray.get_int(hs, j - 10), h, y, 5, tex)
-      seabed(a, hs, y, i + 1)
+      let m = if h <= floor_limit() do m else
+        wall(wall(m, x + 3, z, NativeArray.get_int(hs, j + 1), h, y, 2, seabed_material(h)), x, z, NativeArray.get_int(hs, j - 1), h, y, 3, seabed_material(h))
+      end
+      x_walls(m, hs, y, i + 1)
     end
+  end
+  pfn seabed_rows(m : Mesh, hs : NativeIntArr, y : Int, v : Int) : Mesh do
+    if v >= 8 do m else
+      let m = top_runs(m, hs, y, v, 0, 0)
+      let m = z_runs(m, hs, y, v, 1, 4, 0, 0)
+      seabed_rows(z_runs(m, hs, y, v, -1, 5, 0, 0), hs, y, v + 1)
+    end
+  end
+  -- The seabed in layer [y]: tops and +-z walls merged along each row, +-x walls a cell at a time.
+  -- Nothing deeper than 5 m is drawn: the water there is nine-tenths opaque.
+  pfn seabed(m : Mesh, hs : NativeIntArr, y : Int, i : Int) : Mesh do
+    x_walls(seabed_rows(m, hs, y, 0), hs, y, 0)
   end
   pfn any_water(hs : NativeIntArr, i : Int) : Bool do
     if i >= 64 do false else NativeArray.get_int(hs, 11 + i % 8 + i / 8 * 10) < 0 || any_water(hs, i + 1) end
@@ -386,6 +448,33 @@ mod Ur.Scene do
     else if Vk.chunk_begin(slot, x, y, z, 0) && (m.quads == 0 || Vk.chunk_part(0, m.words, m.quads)) &&
       (surface.quads == 0 || Vk.chunk_part(2, surface.words, surface.quads)) && Vk.chunk_light(light, NativeArray.length_u8(light)) && Vk.chunk_commit() do ()
     else Ur.AppError.stop("Strata refused a seabed mesh upload") end end
+  end
+  -- The sea's surface over a padded parcel: ocean quads (Strata.Quad.ocean1)
+  -- at sea level, the top of layer y -32. Each 8-voxel patch with water
+  -- carries the depth at its corners; a parcel deep all over is one quad.
+  pfn ocean_quad(m : Mesh, x : Int, z : Int, size : Int, d00 : Int, d10 : Int, d01 : Int, d11 : Int) : Mesh do
+    let n = m.quads * 2
+    let words = NativeArray.set_i32(m.words, n, Q.pack0(x, 31, z, size, size, 0))
+    { words: NativeArray.set_i32(words, n + 1, Q.ocean1(d00, d10, d01, d11)), quads: m.quads + 1 }
+  end
+  pfn all_deep(f : Ur.Ocean.Field, x : Int, z : Int, i : Int) : Bool do
+    if i >= 25 do true else Ur.Ocean.depth(f, x + i % 5 * 8, z + i / 5 * 8) == 63 && all_deep(f, x, z, i + 1) end
+  end
+  pfn patches(m : Mesh, f : Ur.Ocean.Field, x : Int, z : Int, i : Int) : Mesh do
+    if i >= 16 do m else
+      let u = i % 4 * 8
+      let v = i / 4 * 8
+      let wet = Ur.Ocean.depth(f, x + u + 2, z + v + 2) > 0 || Ur.Ocean.depth(f, x + u + 6, z + v + 2) > 0 ||
+        Ur.Ocean.depth(f, x + u + 2, z + v + 6) > 0 || Ur.Ocean.depth(f, x + u + 6, z + v + 6) > 0
+      let m = if !wet do m else
+        ocean_quad(m, u, v, 8, Ur.Ocean.depth(f, x + u, z + v), Ur.Ocean.depth(f, x + u + 8, z + v),
+          Ur.Ocean.depth(f, x + u, z + v + 8), Ur.Ocean.depth(f, x + u + 8, z + v + 8))
+      end
+      patches(m, f, x, z, i + 1)
+    end
+  end
+  pfn sea_surface(f : Ur.Ocean.Field, x : Int, z : Int) : Mesh do
+    if all_deep(f, x, z, 0) do ocean_quad(empty(), 0, 0, 32, 63, 63, 63, 63) else patches(empty(), f, x, z, 0) end
   end
   fn seabed_parcel(f : Ur.Ocean.Field, cell : Int) : Unit do
     let px = cell % Ur.Ocean.padded_width() - Ur.Ocean.ring()
@@ -398,9 +487,9 @@ mod Ur.Scene do
       Vk.chunk_free(Ur.Ocean.seabed_slot(cell, 1))
     else
       let top = seabed(empty(), hs, -32, 0)
-      upload_ocean(Ur.Ocean.seabed_slot(cell, 0), x, -32, z, top, { top with quads: 0 }, terrain_light(NativeArray.make_u8(32768, 0), hs, -32, 0))
-      let low = seabed(empty(), hs, -64, 0)
-      upload_ocean(Ur.Ocean.seabed_slot(cell, 1), x, -64, z, low, { low with quads: 0 }, terrain_light(NativeArray.make_u8(32768, 0), hs, -64, 0))
+      upload_ocean(Ur.Ocean.seabed_slot(cell, 0), x, -32, z, top, sea_surface(f, x, z), terrain_light(NativeArray.make_u8(32768, 0), hs, -32, 0))
+      -- below a layer of water the sea is too dark to see a floor: nothing is drawn deeper
+      Vk.chunk_free(Ur.Ocean.seabed_slot(cell, 1))
     end
   end
   pfn ocean_from(f : Ur.Ocean.Field, cell : Int) : Unit do
