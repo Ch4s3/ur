@@ -155,10 +155,12 @@ mod Ur.Scene do
       else Ur.AppError.stop("Cloud mesh upload failed") end
     end
   end
-  fn clouds(kind : Int, offset : (Float, Float), i : Int) : Unit do
+  -- More of the seven cloud bodies gather as the sky clouds over: two on a
+  -- clear day, all of them under full cloud.
+  fn clouds(overcast : Float, offset : (Float, Float), i : Int) : Unit do
     if i == 7 do () else
       let slot = cloud_slot(i)
-      let show = i < (if kind == 0 do 2 else if kind == 1 do 4 else 7 end end)
+      let show = i < 2 + float_to_int(overcast *. 5.6)
       Vk.chunk_show(slot, show)
       if show do
         let (drift_x, drift_z) = offset
@@ -168,7 +170,7 @@ mod Ur.Scene do
         let z = across -. 485.0 *. Math.floor(across /. 485.0) -. 35.0
         Vk.slot_pose(slot, x, 42.0 +. int_to_float(i % 4) *. 5.0, z, 0.0, 0.0, 0.0, 1.0)
       else () end
-      clouds(kind, offset, i + 1)
+      clouds(overcast, offset, i + 1)
     end
   end
   fn setup() : Unit do
@@ -182,7 +184,28 @@ mod Ur.Scene do
     Vk.set_fog(270.0, 650.0)
     setup_clouds(0)
   end
-  fn daylight(phase : Float, weather : Int) : Unit do
+  -- What the sky does in each kind of simulated weather (Ur.Sim.weather_name),
+  -- with rain slanted by the regional wind (km/h to m/s). Storms gust harder.
+  fn sky_for(c : Ur.Sim.City, kind : Int) : Strata.Weather.Sky do
+    let wind = S.regional_wind(c)
+    let gust = if kind >= 4 do 1.6 else if kind == 3 do 1.25 else 1.0 end end
+    let speed = int_to_float(wind.speed) /. 3.6 *. gust
+    let (overcast, rain, storm) = match kind do
+      4 -> (1.0, 1.0, 0.85)
+      3 -> (0.95, 0.72, 0.2)
+      2 -> (0.82, 0.38, 0.0)
+      1 -> (0.58, 0.0, 0.0)
+      _ -> (0.06, 0.0, 0.0)
+    end
+    { overcast: overcast, rain: rain, storm: storm, wind_x: Math.cos(wind.heading) *. speed, wind_z: Math.sin(wind.heading) *. speed }
+  end
+  -- Drawn weather for a city: cloud gathers over a quarter of a game day,
+  -- rain over an eighth, and soaked streets dry over most of a day (24 real
+  -- seconds a day at 1x).
+  fn new_weather(c : Ur.Sim.City, kind : Int) : Strata.Weather.Weather do
+    Strata.Weather.paced(Strata.Weather.settled(if c.climate_seed == 0 do 705 else c.climate_seed end, sky_for(c, kind)), 6.0, 3.0, 40.0)
+  end
+  fn daylight(phase : Float, w : Strata.Weather.Weather) : Unit do
     let angle = phase /. S.day_seconds() *. 6.283185307 - 1.570796327
     let elevation = Math.sin(angle)
     let light = (elevation +. 0.04) *. 2.5
@@ -191,10 +214,12 @@ mod Ur.Scene do
     -- Keep enough scattered light to read buildings and streets after sunset.
     let sky_elevation = if elevation < -0.035 do -0.035 else 0.93 *. elevation end
     let horizon = 0.38 +. 0.35 *. warmth
-    let sun = brightness *. (if weather >= 4 do 0.32 else if weather == 3 do 0.43 else if weather == 2 do 0.55 else if weather == 1 do 0.83 else 1.0 end end end end)
-    Vk.set_fog(if weather >= 3 do 135.0 else if weather == 2 do 210.0 else 270.0 end end, if weather >= 3 do 420.0 else if weather == 2 do 535.0 else 650.0 end end)
+    let sun = brightness *. Strata.Weather.light(w)
+    let (near, far) = Strata.Weather.fog(w, 270.0, 650.0)
+    Vk.set_fog(near, far)
     Vk.set_sun(0.82 *. Math.cos(angle), sky_elevation, horizon,
       1.18 *. sun, (1.08 -. 0.24 *. warmth) *. sun, (0.94 -. 0.43 *. warmth) *. sun)
+    Strata.Weather.apply(w)
   end
   pfn heights(c : Ur.Sim.City, x : Int, z : Int, a : NativeIntArr, i : Int) : NativeIntArr do
     if i >= 100 do a else
