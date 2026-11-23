@@ -432,25 +432,24 @@ mod Ur do
       let start = Vk.time()
       -- The 08:00 and 16:00 watches carry the rain since the last one into the
       -- water simulation; midnight's is part of the day's roll.
-      let hours_before = phase /. S.day_seconds() *. 24.0
-      let hours_after = elapsed /. S.day_seconds() *. 24.0
-      let crossed = if midnight do Nil else S.watches_crossed(hours_before, hours_after) end
-      let watched = !List.is_empty(crossed)
+      -- a city whose watch fell behind its clock catches up; none runs twice
+      let after_watch = if midnight do c else S.catch_up_watches(c, S.street_hour(elapsed)) end
+      let watched = !midnight && after_watch.watch != c.watch
+      let watch_flooded = watched && S.flood_differs(c, after_watch)
       -- An edit invalidates speculative work. Only the current frame can commit a day.
       -- A watch changes the city, so the prepared day starts again from it.
       let day_plan = if policy_changed || click || release || undone || watched do None else p.day_plan end
       let (day, day_ready) = if midnight do
         complete_day(day_plan, c, p.stats.traffic, p.sanitation.completed, p.flood_drill)
       else
-        let rained = List.fold_left(crossed, c, fn (city, w) -> S.end_watch(city, w))
-        let rained = if watched || S.street_hour(phase) != S.street_hour(elapsed) do S.set_rain_hour(rained, S.street_hour(elapsed)) else rained end
+        let rained = if watched || S.street_hour(phase) != S.street_hour(elapsed) do S.set_rain_hour(after_watch, S.street_hour(elapsed)) else after_watch end
         let stats = if paint || undone || policy_changed do S.stats(rained) else p.stats end
         ({ city: rained, stats: stats }, false)
       end
       -- what follows a watch (stats: closed roads, offline utilities) is worked
       -- out in the background and applied when ready, like the prepared day
       let watch_plan = if midnight || paint || undone || policy_changed do None
-        else if watched do (match Task.async(fn () -> S.stats(day.city)) do
+        else if watch_flooded do (match Task.async(fn () -> S.stats(day.city)) do
           Ok(task) -> Some(task)
           Err(_) -> None
         end) else p.watch_plan end end
@@ -479,11 +478,11 @@ mod Ur do
       let paused = paused || campaign_opened || council_voted
       let sidebar_tab = if campaign_opened || council_voted do 8 else sidebar_tab end
       let sidebar_visible = sidebar_visible || campaign_opened || council_voted
-      let flood_day = (midnight || watch_ready) && (p.city.flood_active || c.flood_active || S.severe_now(c) || S.severe_now(p.city))
+      let flood_day = (midnight && (p.city.flood_active || c.flood_active || S.severe_now(c) || S.severe_now(p.city))) || watch_ready
       let religion_event = S.last_festival(c) != S.last_festival(p.city) || S.favor_god(c) != S.favor_god(p.city) ||
         S.curse_god(c) != S.curse_god(p.city) || S.curse_stamp(c) != S.curse_stamp(p.city) || S.patron(c) != S.patron(p.city)
       let activity = if undone do Nil
-        else if due || paint || policy_changed || day_changed || flood_day || religion_event do Ur.Activity.record(p.city, c, p.activity)
+        else if due || paint || policy_changed || day_changed || flood_day || watch_flooded || religion_event do Ur.Activity.record(p.city, c, p.activity)
         else p.activity end end
       let tick_ms = if due do (Vk.time() -. start) *. 1000.0 else p.tick_ms end
       let hint_appeared = st.startup_step > 0 && st.startup_step != p.stats.startup_step

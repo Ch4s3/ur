@@ -326,7 +326,7 @@ mod Ur.Sim do
   end
   pfn unclaimed_with_heights(heights : NativeIntArr) : City do
     let zero = NativeArray.make_int(2640, 0)
-    { census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(2640, 0), religion: new_religion(), climate_seed: 0, rain_uniform: false, watch: 0, rain_now: NativeArray.make_int(2640, 0), storm_drains: zero, seawalls: zero, pump_orders: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, soil_moisture: 70, pumping_cost: 0, grades: NativeArray.make_int(2640, 0), grade_cover: NativeArray.make_int(2640, 0), parks: NativeArray.make_int(2640, 0), park_tiers: NativeArray.make_int(2640, 0), streetscape: NativeArray.make_int(2640, 0), sidewalk_items: NativeArray.make_int(2640, 0), campus: NativeArray.make_int(2640, 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(2640, 0), empty_homes: NativeArray.make_int(2640, 0), home_arrivals: NativeArray.make_int(2640, 0), neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(2640, 0), property_status: NativeArray.make_int(2640, 0), property_arrears: NativeArray.make_int(2640, 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(2640, 0), calendar_day: 0, clock_ms: 675, street_day: 0, car_free_days: NativeArray.make_int(2640, 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(2640, 0), quiet_areas: NativeArray.make_int(2640, 0), storefronts: NativeArray.make_int(2640, 0), footfall: NativeArray.make_int(2640, 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, freight: None, shop_stock: zero, shop_sales: zero, shop_delivered: zero, shop_imports: 0, shipments: Nil, harbour: -1, founding_map: true, heights: heights, roads: zero, tolls: zero, public_parking: zero,
+    { census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(2640, 0), religion: new_religion(), climate_seed: 0, rain_uniform: false, watch: 1, rain_now: NativeArray.make_int(2640, 0), storm_drains: zero, seawalls: zero, pump_orders: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, soil_moisture: 70, pumping_cost: 0, grades: NativeArray.make_int(2640, 0), grade_cover: NativeArray.make_int(2640, 0), parks: NativeArray.make_int(2640, 0), park_tiers: NativeArray.make_int(2640, 0), streetscape: NativeArray.make_int(2640, 0), sidewalk_items: NativeArray.make_int(2640, 0), campus: NativeArray.make_int(2640, 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(2640, 0), empty_homes: NativeArray.make_int(2640, 0), home_arrivals: NativeArray.make_int(2640, 0), neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(2640, 0), property_status: NativeArray.make_int(2640, 0), property_arrears: NativeArray.make_int(2640, 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(2640, 0), calendar_day: 0, clock_ms: 675, street_day: 0, car_free_days: NativeArray.make_int(2640, 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(2640, 0), quiet_areas: NativeArray.make_int(2640, 0), storefronts: NativeArray.make_int(2640, 0), footfall: NativeArray.make_int(2640, 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, freight: None, shop_stock: zero, shop_sales: zero, shop_delivered: zero, shop_imports: 0, shipments: Nil, harbour: -1, founding_map: true, heights: heights, roads: zero, tolls: zero, public_parking: zero,
       transit: zero, stops: zero, ferries: zero, ferry_start: -1, service: NativeArray.make_int(2640, 1), bus_headways: NativeArray.make_int(2640, 0), bus_fare: 1,
       zones: zero, density: NativeArray.make_int(2640, 3), nuisance: NativeArray.make_int(2640, 3),
       buildings: zero, housing_losses: zero, business_losses: zero, construction: zero, plants: zero, paused_facilities: zero, pipes: zero, grid: zero, pollution: zero, land_pollution: zero, air_pollution: zero,
@@ -680,6 +680,17 @@ mod Ur.Sim do
   doc "Whether severe rain is falling on any parcel this hour."
   fn severe_now(c : City) : Bool do if uniform_rain(c) do severe_rain(c) else any_severe(c, 0) end end
   fn watch_of(hour : Int) : Int do clamp(hour / 8, 0, 2) end
+  doc "End every watch the clock at [hour] has passed that [c] has not ended yet: never one twice, and a city whose watch fell behind its clock catches up."
+  fn catch_up_watches(c : City, hour : Int) : City do
+    if c.watch < watch_of(hour) do catch_up_watches(end_watch(c, c.watch), hour) else c end
+  end
+  doc "Whether standing water or flood damage differs between [a] and [b] anywhere."
+  fn flood_differs(a : City, b : City) : Bool do flood_differs_at(a, b, 0) end
+  pfn flood_differs_at(a : City, b : City, lot : Int) : Bool do
+    if lot >= count() do false
+    else if get(a.surface_water, lot) != get(b.surface_water, lot) || get(a.flood_damage, lot) != get(b.flood_damage, lot) do true
+    else flood_differs_at(a, b, lot + 1) end end
+  end
   doc "The watches a frame's clock passing from [before] to [after] hours ends: 0 at 08:00, 1 at 16:00. Midnight's watch is left to the day's roll."
   fn watches_crossed(before : Float, after : Float) : List(Int) do
     List.filter([0, 1], fn w -> before < int_to_float(8 * (w + 1)) && after >= int_to_float(8 * (w + 1)))
@@ -5901,7 +5912,11 @@ mod Ur.Sim do
   -- a hollow: fill to the rim, spill the rest over it
   pfn fill_hollow(c : City, f : Flow, lot : Int, units : Int, hops : Int) : Flow do
     let (rim, rim_h) = rim_of(c, lot, -1, 0, -1, 1000000)
-    let room = clamp(clamp(rim_h - get(c.heights, lot), 0, 16) * runoff_scale() - get(f.pools, lot), 0, 1000000)
+    -- water already standing here (and what its ground soaks up) counts against the room
+    let standing = get(c.surface_water, lot)
+    let held = if standing > 0 do (standing + soil_absorption(c, lot) + nearby_absorption(c, lot, 0, 0)) * runoff_scale() else 0 end
+    let used = if held > get(f.pools, lot) do held else get(f.pools, lot) end
+    let room = clamp(clamp(rim_h - get(c.heights, lot), 0, 16) * runoff_scale() - used, 0, 1000000)
     let kept = if room < units do room else units end
     let f = if kept > 0 do { f with pools: NativeArray.set_int(f.pools, lot, get(f.pools, lot) + kept), report: { f.report with pooled: f.report.pooled + kept } } else f end
     -- water that wanders flat ground without finding a way down spreads thin and soaks in
@@ -6031,16 +6046,13 @@ mod Ur.Sim do
   fn watch_rain(c : City, watch : Int) : (NativeIntArr, NativeIntArr) do rain_span(c, 8 * clamp(watch, 0, 2), 8) end
   doc "Soil recharge from a watch whose rain averages [level] over the island: a third of a day of it."
   fn watch_recharge(level : Int) : Int do if level >= 2 do (24 + 15 * (level - 2)) / 3 else 0 end end
-  pfn coastal_depth(c : City, lot : Int) : Int do
+  doc "How deep a storm surge stands on coastal [lot], quarter metres: low land near the shore, less 10 on a street with a storm drain, as floodplain_depth reckons it."
+  fn coastal_depth(c : City, lot : Int) : Int do
     let h = get(c.heights, lot)
-    if h <= 0 || h >= 16 do 0 else clamp(shore_level(c, lot % width(), lot / width(), 0, 0) - h, 0, 16) end
-  end
-  -- the island's mean rain level over a watch, from its amounts
-  pfn mean_level(c : City, amounts : NativeIntArr, share : Int, lot : Int, land : Int, total : Int) : Int do
-    if lot >= count() do (if land == 0 do 0 else
-      let per_hour = total / (land * 8 * share)
-      if per_hour >= rain_units(4) do 4 else if per_hour >= rain_units(3) do 3 else if per_hour >= rain_units(2) do 2 else 0 end end end end)
-    else if get(c.heights, lot) > 0 do mean_level(c, amounts, share, lot + 1, land + 1, total + get(amounts, lot)) else mean_level(c, amounts, share, lot + 1, land, total) end end
+    if h <= 0 || h >= 16 do 0 else
+      let surge = clamp(shore_level(c, lot % width(), lot / width(), 0, 0) - h, 0, 16)
+      clamp(surge - (if get(c.storm_drains, lot) > 0 && get(c.roads, lot) > 0 do 10 else 0 end), 0, 16)
+    end
   end
   -- after a watch: the standing water a storm surge leaves on the coast, flood
   -- damage, polluted runoff, collectors and subway, per parcel. The arrays it
@@ -6087,7 +6099,8 @@ mod Ur.Sim do
   -- [share] watches of rain from hour [first]: soil, runoff, surge, collectors, subway, damage
   pfn rain_hours(c : City, first : Int, share : Int) : City do
     let (peaks, amounts) = rain_span(c, first, 8 * share)
-    let soaked = { c with soil_moisture: clamp(c.soil_moisture + watch_recharge(mean_level(c, amounts, share, 0, 0, 0)) * share, 0, 100) }
+    -- the soil takes the day's regional rain, as it always has: storms move water about, not the total
+    let soaked = { c with soil_moisture: clamp(c.soil_moisture + watch_recharge(current_weather(c)) * share, 0, 100) }
     let (routed, _) = route_runoff(soaked, amounts)
     let arrays = { water: routed.surface_water, damage: routed.flood_damage, soil: routed.land_pollution, sea: routed.pollution, tanks: routed.rain_tanks, subway: routed.subway_water }
     watch_parcels(routed, peaks, share, 0, arrays, false)
@@ -6104,14 +6117,17 @@ mod Ur.Sim do
     if lot >= count() do { c with surface_water: water, flood_damage: damage, flood_active: active } else
       let stored = get(water, lot)
       let land = get(c.heights, lot)
-      let level = if land <= 0 || stored == 0 do 0
+      let tide = tide_depth(c, lot)
+      let level = if land <= 0 do 0
+        else if tide > 0 do (if tide > stored do tide else stored end)
+        else if stored == 0 do 0
         else if get(severe, lot) == 4 do stored
         else
           let coast = if land < 16 do shore_level(c, lot % width(), lot / width(), 0, 0) else 0 end
           let outflow = if coast > 0 do 2 else 0 end
           let gravity_drain = if get(c.storm_drains, lot) > 0 do 2 else 0 end
           clamp(stored - outflow - gravity_drain - soil_absorption(c, lot) / 2 - evaporation, 0, 16)
-        end end
+        end end end end
       let previous = get(damage, lot)
       let building = get(c.buildings, lot) > 0 || get(c.plants, lot) > 0
       -- today's daily rule: deep water still standing damages, dry ground lets repairs count down

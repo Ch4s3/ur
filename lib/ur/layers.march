@@ -108,14 +108,17 @@ mod Ur.Layers do
   -- Rainfall: today's peak on a parcel, blue severe, cyan heavy, gray rain;
   -- plus 1000 when that peak is still to come (drawn as an outline)
   pfn rain_color(level : Int) : Int do if level >= 4 do 12 else if level == 3 do 20 else if level == 2 do 17 else -1 end end end end
-  pfn rain_today_material(c : Ur.Sim.City, i : Int) : Int do
+  -- each parcel's Rainfall material, worked out once per draw: today's three watches
+  fn rain_today(c : Ur.Sim.City) : NativeIntArr do
     let (p0, _) = S.watch_rain(c, 0)
     let (p1, _) = S.watch_rain(c, 1)
     let (p2, _) = S.watch_rain(c, 2)
-    let peak_of = fn (w : Int) -> S.get(if w == 0 do p0 else if w == 1 do p1 else p2 end end, i)
-    let past = List.fold_left(List.range(0, c.watch), 0, fn (m, w) -> if peak_of(w) > m do peak_of(w) else m end)
-    let ahead = List.fold_left(List.range(c.watch, 3), 0, fn (m, w) -> if peak_of(w) > m do peak_of(w) else m end)
-    if past >= ahead && past >= 2 do rain_color(past) else if ahead >= 2 do 1000 + rain_color(ahead) else -1 end end
+    List.fold_left(List.range(0, S.count()), NativeArray.make_int(S.count(), -1), fn (codes, i) ->
+      let peak_of = fn (w : Int) -> S.get(if w == 0 do p0 else if w == 1 do p1 else p2 end end, i)
+      let past = List.fold_left(List.range(0, c.watch), 0, fn (m, w) -> if peak_of(w) > m do peak_of(w) else m end)
+      let ahead = List.fold_left(List.range(c.watch, 3), 0, fn (m, w) -> if peak_of(w) > m do peak_of(w) else m end)
+      let code = if S.get(c.heights, i) == 0 do -1 else if past >= ahead && past >= 2 do rain_color(past) else if ahead >= 2 do 1000 + rain_color(ahead) else -1 end end end
+      NativeArray.set_int(codes, i, code))
   end
   fn heat_color(temperature : Int) : Int do
     if temperature < 250 do 12 else if temperature < 280 do 11 else if temperature < 330 do 10 else 6 end end end
@@ -123,7 +126,7 @@ mod Ur.Layers do
   fn material(c : Ur.Sim.City, st : Ur.Sim.Stats, layer : Int, i : Int) : Int do
     let land = S.get(c.heights, i) > 0
     match layer do
-      35 -> if !land do -1 else rain_today_material(c, i) end
+      35 -> -1
       34 ->
         if !land do -1
         else if S.temple_tier(c, i) > 0 do

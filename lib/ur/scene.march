@@ -893,7 +893,9 @@ mod Ur.Scene do
     signals : Signals, old_power : Ur.Sim.UtilityDelivery, new_power : Ur.Sim.UtilityDelivery) : Unit do
     let was_raining = S.severe_now(old)
     let raining = S.severe_now(c)
-    let water_changed = was_raining != raining || (structural && (was_raining || raining || old.flood_active || c.flood_active))
+    -- a watch moves standing water, and a storm crossing the island moves its live flooding hour by hour
+    let water_changed = was_raining != raining || old.watch != c.watch || (!S.uniform_rain(c) && old_hour != hour && (raining || was_raining)) ||
+      (structural && (was_raining || raining || old.flood_active || c.flood_active))
     sync_parcels(old, c, i, force, structural, water_changed, { hour: old_hour, electric: old_power }, { hour: hour, electric: new_power }, signals)
   end
   pfn preview_tiles(c : Ur.Sim.City, tiles : List(Int), stride : Int, index : Int, used : Int, mesh : Mesh) : Int do
@@ -2422,9 +2424,9 @@ mod Ur.Scene do
       heat_tiles(c, x, z, floor, color, n + 1, mesh)
     end
   end
-  pfn layer_tiles(c : Ur.Sim.City, st : Ur.Sim.Stats, layer : Int, i : Int) : Unit do
+  pfn layer_tiles(c : Ur.Sim.City, st : Ur.Sim.Stats, layer : Int, rain : NativeIntArr, i : Int) : Unit do
     if i >= S.count() do () else
-      let tex = Ur.Layers.material(c, st, layer, i)
+      let tex = if layer == 35 do NativeArray.get_int(rain, i) else Ur.Layers.material(c, st, layer, i) end
       let slot = 13240 + i
       if tex < 0 do Vk.chunk_free(slot) else if layer == 29 do wind_arrow(c, i, slot, tex) else
         let x = i % S.width() * 32
@@ -2448,7 +2450,7 @@ mod Ur.Scene do
         if mesh.quads == 0 do Vk.chunk_free(slot) else if Vk.chunk_begin(slot, x, floor, z, 0) && Vk.chunk_part(if layer == 9 do 2 else 0 end, mesh.words, mesh.quads) && Vk.chunk_commit() do ()
         else Ur.AppError.stop("Map layer upload failed") end end
       end end
-      layer_tiles(c, st, layer, i + 1)
+      layer_tiles(c, st, layer, rain, i + 1)
     end
   end
   type FloodFields = { live : NativeIntArr, potential : NativeIntArr }
@@ -2509,7 +2511,7 @@ mod Ur.Scene do
       let zero = NativeArray.make_int(2640, 0)
       flood_map(c, flood_fields(c, 0, { live: zero, potential: zero }), 0)
     else if tag > 0 do gradient_tiles(c, Ur.OverlayField.field(c, layer), tag, 0)
-    else layer_tiles(c, st, layer, 0) end end
+    else layer_tiles(c, st, layer, if layer == 35 do Ur.Layers.rain_today(c) else NativeArray.make_int(1, 0) end, 0) end end
   end
   fn camera(cx : Float, cz : Float, zoom : Float, aspect : Float, yaw : Float) : Unit do
     let x = cx +. Math.sin(yaw) *. 194.0

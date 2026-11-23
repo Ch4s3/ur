@@ -1403,7 +1403,39 @@ mod UrTest do
     Test.assert_true(same_list(S.watches_crossed(7.0, 16.5), [0, 1]), "a long frame ends both daytime watches in order")
     Test.assert_true(same_list(S.watches_crossed(15.0, 24.0), [1]), "midnight is left to the day's roll")
   end
+  pfn review_fix_checks() : Unit do
+    -- I3: a hollow already full spills new water over its rim
+    let a = S.index(20, 20)
+    let hollow = S.index(22, 20)
+    let rim = S.index(22, 21)
+    let beyond = S.index(22, 22)
+    let paved = slope_city([(rim, 44), (beyond, 30)])
+    let brimming = { paved with roads: NativeArray.make_int(2640, 1), surface_water: NativeArray.set_int(paved.surface_water, hollow, 4) }
+    let (spilled, report) = S.route_runoff(brimming, rain_on([a], 24))
+    Test.assert_true(S.get(spilled.surface_water, beyond) > 0 && S.get(spilled.surface_water, hollow) == 4 && conserved(report), "a full hollow spills new water over its rim")
+    -- I4: a storm drain keeps a coastal road clear of the surge
+    let site = { Ur.Scenario.storm_site() with rain_uniform: false }
+    let coast = Ur.Scenario.storm_station()
+    let drained = { site with roads: NativeArray.set_int(site.roads, coast, 1), storm_drains: NativeArray.set_int(site.storm_drains, coast, 1) }
+    Test.assert_true(S.coastal_depth(site, coast) > 0 && S.coastal_depth(drained, coast) == S.clamp(S.coastal_depth(site, coast) - 10, 0, 16), "storm drains hold back the coastal surge")
+    -- I5: Namar's king tide still floods low coasts in a city raining locally
+    let tide = { site with surface_water: NativeArray.make_int(2640, 0), religion: { site.religion with curse: { god: 4, until_day: S.absolute_day(site) + 3, site: -1 } } }
+    let after_tide = S.night_drain(tide)
+    Test.assert_true(S.get(after_tide.surface_water, coast) > 0, "the king tide leaves water on the coast overnight")
+    -- I6: a severe day recharges the soil as one always has, local or not
+    let storm = { severe_day(S.new(), 0) with soil_moisture: 20 }
+    let soaked = S.end_watch(S.end_watch(S.end_watch(storm, 0), 1), 2)
+    Test.assert_eq_int(soaked.soil_moisture, 20 + 54, "three watches of a severe day recharge 54")
+    -- I7: watches follow the clock, whatever the stored index says
+    let morning = S.catch_up_watches({ storm with watch: 0 }, 10)
+    Test.assert_eq_int(morning.watch, 1, "by 10:00 the night watch has ended")
+    Test.assert_eq_int((S.catch_up_watches(morning, 10)).watch, 1, "it does not end again")
+    Test.assert_eq_int((S.catch_up_watches(morning, 17)).watch, 2, "by 17:00 the day watch has ended")
+    let fresh = S.unclaimed()
+    Test.assert_eq_int(fresh.watch, S.watch_of(S.street_hour(int_to_float(fresh.clock_ms) /. 1000.0)), "a new game starts in the watch its clock is in")
+  end
   fn main(_cap : Cap(IO)) : Unit do
+    review_fix_checks()
     watch_clock_checks()
     watch_checks()
     runoff_checks()
