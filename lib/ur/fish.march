@@ -36,9 +36,11 @@ mod Ur.Fish do
     let k = O.kind(f, x, z)
     if d <= 0 do 0
     else if k == 1 do (if f.reef_type == 2 do 100 else if f.reef_type == 1 do 85 else 70 end end)
+    -- a reef the city built counts as a mixed reef, whatever the map's own
+    else if k == 3 do 85
     else if d > O.shelf_depth(f, x, z) do 10
     else if d >= 60 do 10
-    else 35 end end end end
+    else 35 end end end end end
   end
   pfn parcel_cells(f : Ur.Ocean.Field, px : Int, pz : Int, k : Int, sum : Int, lo : Int, hi : Int, wet : Int) : (Int, Int, Int, Int) do
     if k >= 64 do (sum, lo, hi, wet) else

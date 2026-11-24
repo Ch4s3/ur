@@ -75,7 +75,7 @@ mod Ur.Sand do
     end
   end
 
-  doc "City [c] once its storm has moved the sand over sea floor [f]: the storm's peak sea refracted from its sector, `Strata.Seabed.rework` one step a storm day (at most 6) over the floor as it stands, the changes kept against the floor without storms, the ferries' shoals measured again, and a notice. Pure: it runs on the day roll's worker."
+  doc "City [c] once its storm has moved the sand: the storm's peak sea refracted from its sector over sea floor [f], `Strata.Seabed.rework` one step a storm day (at most 6) over the city's own floor as it stands (built afresh, so an edit [f] has not caught up with is kept), the changes kept against the floor without storms, the ferries' shoals measured again, and a notice. Pure: it runs on the day roll's worker."
   fn storm(c : Ur.Sim.City, f : Ur.Ocean.Field) : Ur.Sim.City do
     let height = int_to_float(c.sand_peak) /. 100.0
     let heading = Ur.Sea.sector_heading(c.sand_sector)
@@ -83,7 +83,9 @@ mod Ur.Sand do
     let h = O.padded_depth() * 4
     let corner = int_to_float(0 - O.ring()) *. 8.0
     let sw = Strata.Waves.solve_sea(Ur.Sea.swell_depths(f, c.seawalls), w, h, corner, corner, 2.0, Math.cos(heading), Math.sin(heading), Ur.Sea.wavelength(height), height)
-    let now = { floor: { depth: f.floor, w: O.cells_wide(), h: O.cells_deep() }, kind: f.kind }
+    -- the city's own floor, not [f], which may be from before its latest edit
+    let own = O.field(c)
+    let now = { floor: { depth: own.floor, w: O.cells_wide(), h: O.cells_deep() }, kind: own.kind }
     let steps = S.clamp(c.sea_run, 1, 6)
     let after = Strata.Seabed.rework(now, sw, height, steps, 1.0, 0.25, corner, corner, 24, 4)
     let base = O.unsanded(c)

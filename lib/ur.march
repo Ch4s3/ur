@@ -311,7 +311,9 @@ mod Ur do
     let fleet_routes = Ur.Fleet.routes_with(c, stats.running_transit, stats.buses)
     Ur.Scene.sync(p.city, c, 0, false, true, S.street_hour(p.elapsed), S.street_hour(clock_phase(c)),
       { before: p.stats.junctions, after: stats.junctions, before_tick: S.signal_tick(p.traffic_time), after_tick: S.signal_tick(clock_phase(c)) }, p.stats.utilities.electric, stats.utilities.electric, { before: Ur.Scene.tunnel_view(p.layer, p.yaw), after: 0 })
-    let (ocean, _) = Ur.Scene.ocean(p.ocean, p.city, c, false, true)
+    -- a loaded or new city may stand on another floor even where the coast matches: rebuild it whole, and measure its shoals
+    let (ocean, _) = Ur.Scene.ocean(p.ocean, p.city, c, Ur.Ocean.floor_differs(p.city, c), true)
+    let c = Ur.Ocean.with_shoals(c, ocean)
     Ur.Scene.map_layer(c, stats, layer)
     Ur.Scene.clear_preview(0, p.preview_chunks)
     Ur.Scene.sidewalk_marker(c, -1, -1, true)
@@ -1069,7 +1071,8 @@ mod Ur do
       else hud end end end end
       if Strata.Render.draw_ui(hud) do () else Ur.AppError.stop("HUD overflow") end
       if pressed(keys, p.keys, 13) || (p.limit > 0 && p.frame == p.limit - 1) do Vk.request_shot() else () end
-      let day_plan = if midnight do None else
+      -- a new sea floor drops a day planned on the old one: its shoals, fish and storms read the floor
+      let day_plan = if midnight || rebuilt do None else
         if steps > 0 && !paused && Option.is_none(day_plan) && Option.is_none(c.shelter_demand) &&
           (List.is_empty(c.waste_runs) || S.street_hour(elapsed) >= 21) do
           start_day_plan(c, st.traffic, sanitation.completed, p.flood_drill, { exposure: sea_exposure, swell: sea_field, ocean: ocean })

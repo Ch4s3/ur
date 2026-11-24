@@ -902,7 +902,7 @@ mod Ur.Scene do
   end
   -- a cell's floor: reef rock under the corals, pale sand on a bar, else by depth
   pfn bed_material(f : Ur.Ocean.Field, h : Int, kind : Int, u : Int, v : Int) : Int do
-    if kind == 1 do 37 else if kind == 2 do 5 else seabed_material(h) end end
+    if kind == 1 || kind == 3 do 37 else if kind == 2 do 5 else seabed_material(h) end end
   end
 
   -- ── Corals on the reefs (Strata.Corals, built with the field: Ur.Ocean.Field.corals) ──
@@ -1080,13 +1080,17 @@ mod Ur.Scene do
   pfn any_water(hs : NativeIntArr, i : Int) : Bool do
     if i >= 64 do false else if NativeArray.get_int(hs, 11 + i % 8 + i / 8 * 10) < 0 do true else any_water(hs, i + 1) end end
   end
-  pfn upload_ocean(slot : Int, x : Int, y : Int, z : Int, m : Mesh, surface : Mesh, light : NativeU8Arr) : Unit do
-    if m.quads == 0 && surface.quads == 0 do Vk.chunk_free(slot)
-    else if Vk.chunk_begin(slot, x, y, z, 0) && (m.quads == 0 || Vk.chunk_part(0, m.words, m.quads)) &&
+  pfn try_upload_ocean(slot : Int, x : Int, y : Int, z : Int, m : Mesh, surface : Mesh, light : NativeU8Arr) : Bool do
+    if m.quads == 0 && surface.quads == 0 do
+      Vk.chunk_free(slot)
+      true
+    else Vk.chunk_begin(slot, x, y, z, 0) && (m.quads == 0 || Vk.chunk_part(0, m.words, m.quads)) &&
       (surface.quads == 0 || Vk.chunk_part(2, surface.words, surface.quads)) &&
       -- a chunk of sea surface alone has no floor to shade or block light: it takes no light-volume page
-      (m.quads == 0 || Vk.chunk_light(light, NativeArray.length_u8(light))) && Vk.chunk_commit() do ()
-    else Ur.AppError.stop("Strata refused a seabed mesh upload") end end
+      (m.quads == 0 || Vk.chunk_light(light, NativeArray.length_u8(light))) && Vk.chunk_commit() end
+  end
+  pfn upload_ocean(slot : Int, x : Int, y : Int, z : Int, m : Mesh, surface : Mesh, light : NativeU8Arr) : Unit do
+    if try_upload_ocean(slot, x, y, z, m, surface, light) do () else Ur.AppError.stop("Strata refused a seabed mesh upload") end
   end
   -- The sea's surface over a padded parcel: ocean quads (Strata.Quad.ocean1)
   -- at sea level, the top of layer y -32. Each 8-voxel patch with water
@@ -1126,8 +1130,14 @@ mod Ur.Scene do
       Vk.chunk_free(Ur.Ocean.seabed_slot(cell, 1))
     else
       let ks = seabed_kinds(f, x, z, NativeArray.make_int(100, 0), 0)
-      let top = with_corals(seabed(empty(), f, hs, ks, -32), f, x, z)
-      upload_ocean(Ur.Ocean.seabed_slot(cell, 0), x, -32, z, top, sea_surface(f, x, z), terrain_light(NativeArray.make_u8(32768, 0), hs, -32, 0))
+      let bed = seabed(empty(), f, hs, ks, -32)
+      let top = with_corals(bed, f, x, z)
+      let surface = sea_surface(f, x, z)
+      let light = terrain_light(NativeArray.make_u8(32768, 0), hs, -32, 0)
+      -- corals are many small faces: where Strata has no room left for them, the reef is drawn bare rather than the game stopping
+      if top.quads != bed.quads && !try_upload_ocean(Ur.Ocean.seabed_slot(cell, 0), x, -32, z, top, surface, light) do
+        upload_ocean(Ur.Ocean.seabed_slot(cell, 0), x, -32, z, bed, surface, light)
+      else if top.quads == bed.quads do upload_ocean(Ur.Ocean.seabed_slot(cell, 0), x, -32, z, bed, surface, light) else () end end
       -- below a layer of water the sea is too dark to see a floor, so the second slot holds the dry sand above it instead
       let sand = dry_sand(empty(), hs, 0)
       if sand.quads == 0 do Vk.chunk_free(Ur.Ocean.seabed_slot(cell, 1))
