@@ -1397,9 +1397,6 @@ mod UrTest do
   type StormField = { city : Ur.Sim.City, w : Int, near : Int, far : Int }
   -- near the summit of storm_field's pyramid, where a hollow catches only a few parcels' water
   pfn interior(lot : Int) : Bool do lot % S.width() >= 18 && lot % S.width() < S.width() - 18 && lot / S.width() >= 18 && lot / S.width() < S.depth() - 18 end
-  pfn peak_in(peaks : NativeIntArr, level : Int, lot : Int) : Int do
-    if lot >= S.count() do -1 else if interior(lot) && NativeArray.get_int(peaks, lot) == level do lot else peak_in(peaks, level, lot + 1) end end
-  end
   -- an interior parcel severe rain never reaches today, given each watch's peaks
   pfn never_severe(p0 : NativeIntArr, p1 : NativeIntArr, p2 : NativeIntArr, lot : Int) : Int do
     if lot >= S.count() do -1 else
