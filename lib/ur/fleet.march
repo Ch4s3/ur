@@ -181,7 +181,7 @@ mod Ur.Fleet do
     let road = if outbound do a else b end
     let on_road = trip.mode == 2 || trip.mode == 6
     let blocked = (on_road && S.storm_road_closed(c, peer)) || (trip.mode == 6 && S.car_free_now(c, peer) && !S.car_free_now(c, road))
-    let pace = if on_road do S.rain_road_pace(c) else 1.0 end
+    let pace = if on_road do S.rain_road_pace(c, peer) else 1.0 end
     let delay = S.delay_for(c, road, S.road_load(traffic, road))
     let speed = if trip.mode == 2 do 0.65 else 0.85 end
     let step = if blocked do 0.0 else dt *. speed *. pace *. S.traffic_pace(c.street_day, S.street_hour(time)) /. (1.0 +. int_to_float(delay) *. 0.08) end

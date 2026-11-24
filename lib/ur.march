@@ -1,5 +1,6 @@
 mod Ur do
   needs IO
+  needs IO.Clock
   needs IO.Foreign
   needs IO.Process
   needs IO.Spawn
@@ -21,11 +22,13 @@ mod Ur do
   -- city the frame's current stats describe; [undo] and [edit] carry an undo or edit made
   -- while they were pending; [stale] are superseded tasks, polled until they finish.
   type StatsWait = { task : Option(Task(Ur.Sim.Stats)), stale : List(Task(Ur.Sim.Stats)), city : Ur.Sim.City, undo : Bool }
-  type Play = { water_time : Float, ocean : Ur.Ocean.Field, ocean_city : Ur.Sim.City, ocean_job : Option(OceanJob), ocean_dirty : Bool, sea_job : Option(SeaJob), sea_sector : Int, sea_lam : Float, sea_stale : Bool, sea_field : Option(Strata.Waves.Swell), sea_exposure : NativeF32Arr, flood_drill : Bool, sanitation : Ur.Scene.SanitationShift, truck_selected : Bool, citizen_focus : Int, activity : List(Ur.Activity.NeighborhoodEvent), fleet : List(Ur.Fleet.Run), fleet_routes : List(Ur.Food.Trip), city : Ur.Sim.City, stats : Ur.Sim.Stats, food : List(Ur.Food.Trip), citizens : Ur.Citizens.Roster, shown : Ur.Citizens.Roster, stepping : Option(Task((Ur.Citizens.Roster, Int))), step_ms : Int, rebuilding : Option(Task(Ur.Citizens.RefreshChanges)), stale_rebuilds : List(Task(Ur.Citizens.RefreshChanges)), stats_wait : StatsWait, walk_map : Ur.Citizens.WalkMap, day_plan : Option(DayPlan), traffic_time : Float, rotor_phases : NativeF32Arr, cloud_offset : (Float, Float), cx : Float, cz : Float, zoom : Float, yaw : Float, tool : Int, group : Int, page : Int, layer : Int, sidebar_visible : Bool, sidebar_tab : Int, crime_focus : Int, council_focus : Int, finance_view : Ur.Hud.FinanceView, paused : Bool, speed : Int,
+  type Play = { water_time : Float, ocean : Ur.Ocean.Field, ocean_city : Ur.Sim.City, ocean_job : Option(OceanJob), ocean_dirty : Bool, sea_job : Option(SeaJob), sea_sector : Int, sea_lam : Float, sea_stale : Bool, sea_field : Option(Strata.Waves.Swell), sea_exposure : NativeF32Arr, flood_drill : Bool, sanitation : Ur.Scene.SanitationShift, truck_selected : Bool, citizen_focus : Int, activity : List(Ur.Activity.NeighborhoodEvent), fleet : List(Ur.Fleet.Run), fleet_routes : List(Ur.Food.Trip), city : Ur.Sim.City, stats : Ur.Sim.Stats, food : List(Ur.Food.Trip), citizens : Ur.Citizens.Roster, shown : Ur.Citizens.Roster, stepping : Option(Task((Ur.Citizens.Roster, Int))), step_ms : Int, rebuilding : Option(Task(Ur.Citizens.RefreshChanges)), stale_rebuilds : List(Task(Ur.Citizens.RefreshChanges)), stats_wait : StatsWait, walk_map : Ur.Citizens.WalkMap, day_plan : Option(DayPlan), traffic_time : Float, rotor_phases : NativeF32Arr, cloud_offset : (Float, Float), peaks : List(Ur.Scene.Peak), weather : Strata.Weather.Weather, forced_weather : Int, watch_pending : Bool, cx : Float, cz : Float, zoom : Float, yaw : Float, tool : Int, group : Int, page : Int, layer : Int, sidebar_visible : Bool, sidebar_tab : Int, crime_focus : Int, council_focus : Int, finance_view : Ur.Hud.FinanceView, paused : Bool, speed : Int,
     road_draft : Ur.Build.Draft, road_bench : Int, road_pointer : (Float, Float), sidewalk_spot : Int, keys : Int, mouse : Bool, anchor : Int, stroke : List(Int), hovered : Int, parcel_focus : Int, popup : Int, religion_site : Int, religion_choice : Int, reason : String, preview : Ur.Build.Preview, preview_chunks : Int, undo : List(Ur.Sim.City), time : Float, elapsed : Float,
     frame : Int, drawn : Int, limit : Int, profile : Bool, trace_input : Bool, tick_ms : Float, fps : FrameRate,
     setup : NativeIntArr, world_seed : Int, setup_keys : Int, seed_focus : Bool, setup_drag : Int, menu_open : Bool, boot : Bool, notice : String, confirm : Atom, save_path : String, saved : Bool, quit : Bool, dev : Strata.Devtools.Dev,
     lighting : NativeIntArr, relight : Bool }
+  -- The weather the city is drawn in: the simulation's, unless UR_WEATHER holds it.
+  pfn visible_weather(p : Play) : Int do if p.forced_weather >= 0 do p.forced_weather else S.current_weather(p.city) end end
   pfn minimum(a : Float, b : Float) : Float do if a < b do a else b end end
   pfn maximum(a : Float, b : Float) : Float do if a > b do a else b end end
   pfn frame_rate(sample : FrameRate, time : Float, drawn : Int) : FrameRate do
@@ -312,7 +315,7 @@ mod Ur do
     { p with ocean: ocean, ocean_city: c, ocean_job: None, ocean_dirty: false, sea_job: None, sea_sector: -1, sea_lam: 0.0, sea_stale: false, flood_drill: false, sanitation: Ur.Scene.empty_sanitation(), truck_selected: false, citizen_focus: -1, activity: Nil, fleet: Ur.Fleet.step(c, stats.traffic, Nil, fleet_routes, 0.0, true), fleet_routes: fleet_routes, city: c, stats: stats, food: food, citizens: citizens, shown: citizens, stepping: None, step_ms: 0, rebuilding: None, stale_rebuilds: retire_rebuild(p.rebuilding, p.stale_rebuilds), stats_wait: { task: None, stale: retire_stats(p.stats_wait), city: c, undo: false }, walk_map: walk_map, day_plan: None, cx: game.cx, cz: game.cz, zoom: game.zoom, yaw: game.yaw,
       paused: game.paused, speed: game.speed, menu_open: false, boot: false, confirm: :nothing,
       notice: "", layer: layer, group: 1, page: 0, tool: 1, anchor: -1, stroke: Nil, hovered: -1, parcel_focus: -1, popup: -1, religion_site: -1, religion_choice: 0, sidewalk_spot: -1, undo: Nil,
-      preview: Build.preview(c, 0, -1, -1), road_draft: Build.new_draft(), preview_chunks: 0, elapsed: clock_phase(c), traffic_time: clock_phase(c), rotor_phases: rotor_phases, cloud_offset: (0.0, 0.0), sidebar_tab: 0, crime_focus: -1, council_focus: -1,
+      preview: Build.preview(c, 0, -1, -1), road_draft: Build.new_draft(), preview_chunks: 0, elapsed: clock_phase(c), traffic_time: clock_phase(c), rotor_phases: rotor_phases, cloud_offset: (0.0, 0.0), peaks: Ur.Scene.mountains(c), weather: Ur.Scene.new_weather(c, if p.forced_weather >= 0 do p.forced_weather else S.current_weather(c) end), watch_pending: false, sidebar_tab: 0, crime_focus: -1, council_focus: -1,
       sidebar_visible: false, finance_view: { month: 0, lines: false, stock: -1 },
       reason: if c.harbour < 0 do "Choose a cyan shoreline parcel to land." else "Select a parcel to inspect development" end }
   end
@@ -421,10 +424,10 @@ mod Ur do
         else if pressed(keys, p.keys, 15) do (if p.boot do :quit else :resume end)
         else if mouse && !p.mouse do Menu.at(mx, my, w, h, p.boot, p.saved) else :nothing end end end
       let next = menu_action(p, action)
-      let weather = S.current_weather(next.city)
-      if !next.boot do Ur.Scene.daylight(next.elapsed, weather) else () end
+      let sky = Strata.Weather.step_eased(Strata.Weather.want(next.weather, Ur.Scene.sky_for(next.city, visible_weather(next))), time -. p.time, 0.0)
+      if !next.boot do Ur.Scene.daylight(next.elapsed, sky) else () end
       Ur.Scene.sea_state(Ur.Sea.state_at(next.city, next.elapsed), next.water_time)
-      Ur.Scene.clouds(weather, next.cloud_offset, 0)
+      Ur.Scene.clouds(sky, next.elapsed, next.cloud_offset, next.peaks, next.city, next.forced_weather < 0 && !S.uniform_rain(next.city))
       Ur.Scene.camera(next.cx, next.cz, next.zoom, if h > 0.0 do w /. h else 1.6 end, next.yaw)
       if Strata.Render.draw_ui(if next.confirm == :setup do Menu.draw_setup(next.setup, next.world_seed, next.seed_focus) else if next.confirm == :lighting do Menu.draw_lighting(next.lighting) else Menu.draw(p.boot, next.saved, next.confirm, next.notice, mx, my, next.city.world_seed) end end) do () else Ur.AppError.stop("Menu overflow") end
       if p.limit > 0 && p.frame == p.limit - 1 do Vk.request_shot() else () end
@@ -434,7 +437,7 @@ mod Ur do
         Strata.Devtools.end_frame(menu_dev, Strata.Devtools.fields([Strata.Devtools.fint("frame", p.frame), Strata.Devtools.fbool("menu", true),
           Strata.Devtools.fbool("paused", Strata.Devtools.paused(menu_dev))]), 0.0)
       end
-      run_frames({ next with time: time, keys: keys, mouse: mouse, frame: p.frame + 1, drawn: drawn, fps: fps, dev: menu_dev })
+      run_frames({ next with time: time, keys: keys, mouse: mouse, frame: p.frame + 1, drawn: drawn, fps: fps, dev: menu_dev, weather: sky })
     else if (Vk.key(256) && !pressed(p.keys, 0, 15) && List.is_empty(p.road_draft.points)) ||
       (Vk.mouse_button(0) && !p.mouse && Ur.Hud.menu_at(Vk.mouse_x(), Vk.mouse_y(), int_to_float(Vk.win_w()))) do
       Ur.Scene.clear_preview(0, p.preview_chunks)
@@ -768,9 +771,16 @@ mod Ur do
       let motion_time = if undone || just_landed do phase else p.traffic_time end
       let traffic_time = motion_time +. game_dt
       let start = Vk.time()
+      -- The 08:00 and 16:00 watches carry the rain since the last one into the
+      -- water simulation; midnight's is part of the day's roll. A city whose
+      -- watch fell behind its clock catches up; none runs twice.
+      let after_watch = if midnight do c else S.catch_up_watches(c, S.street_hour(elapsed)) end
+      let watched = !midnight && after_watch.watch != c.watch
+      let watch_flooded = watched && S.flood_differs(c, after_watch)
+      let c = if !midnight && (watched || S.street_hour(phase) != S.street_hour(elapsed)) do S.set_rain_hour(after_watch, S.street_hour(elapsed)) else after_watch end
       -- Shelter arrivals can change between speculative planning and midnight.
       let evacuation = midnight && Ur.Citizens.has_evacuation(p.citizens)
-      let day_plan = if policy_changed || click || release || undone || evacuation do None else p.day_plan end
+      let day_plan = if policy_changed || click || release || undone || evacuation || watched do None else p.day_plan end
       let c = if midnight && evacuation do
         let trips = Ur.Citizens.evacuation_trips(Ur.Citizens.snapshot(p.citizens))
         { c with shelter_demand: Ur.Citizens.shelter_demand(trips) }
@@ -783,7 +793,8 @@ mod Ur do
       -- in the rebuild. Midnight's own stats supersede a pending task.
       let wait = p.stats_wait
       -- (a facility paused or resumed rebuilds the roster on its own frame, so it keeps its stats there)
-      let want_stats = (paint || undone || policy_changed) && !midnight
+      -- a watch that moved water wants fresh stats (closed roads, offline utilities) too, worked out the same way
+      let want_stats = (paint || undone || policy_changed || watch_flooded) && !midnight
       let defer_stats = want_stats && !operation_changed
       let (pending_stats, stale_stats) = if want_stats || midnight do (None, retire_stats(wait)) else (wait.task, wait.stale) end
       let stale_stats = List.filter(stale_stats, fn task -> Option.is_none(Task.poll(task)))
@@ -814,6 +825,9 @@ mod Ur do
       let stats_wait = { task: if defer_stats do launched else pending_stats end, stale: stale_stats,
         city: if midnight || Option.is_some(arrived) || sync_stats do day.city else wait.city end,
         undo: if stats_landed || midnight do false else wait.undo || undone end }
+      -- stats a flooding watch asked for: when they land, the frame handles the flood as midnight would
+      let watch_ready = stats_landed && p.watch_pending
+      let watch_pending = if watch_flooded do true else if stats_landed || midnight do false else p.watch_pending end end
       let next = day.city
       let due = next.month != c.month
       let day_changed = next.street_day != c.street_day && (next.street_day >= 5 || c.street_day >= 5)
@@ -827,11 +841,11 @@ mod Ur do
       let paused = paused || campaign_opened || council_voted
       let sidebar_tab = if campaign_opened || council_voted do 8 else sidebar_tab end
       let sidebar_visible = sidebar_visible || campaign_opened || council_voted
-      let flood_day = midnight && (p.city.flood_active || c.flood_active || S.severe_rain(c) || S.severe_rain(p.city))
+      let flood_day = (midnight && (p.city.flood_active || c.flood_active || S.severe_now(c) || S.severe_now(p.city))) || watch_ready
       let religion_event = S.last_festival(c) != S.last_festival(p.city) || S.favor_god(c) != S.favor_god(p.city) ||
         S.curse_god(c) != S.curse_god(p.city) || S.curse_stamp(c) != S.curse_stamp(p.city) || S.patron(c) != S.patron(p.city)
       let activity = if undone do Nil
-        else if due || paint || policy_changed || day_changed || flood_day || religion_event do Ur.Activity.record(p.city, c, p.activity)
+        else if due || paint || policy_changed || day_changed || flood_day || watch_flooded || religion_event do Ur.Activity.record(p.city, c, p.activity)
         else p.activity end end
       let tick_ms = if due do (Vk.time() -. start) *. 1000.0 else p.tick_ms end
       let hint_appeared = st.startup_step > 0 && st.startup_step != p.stats.startup_step
@@ -844,7 +858,7 @@ mod Ur do
       let signal_after = S.signal_tick(traffic_time)
       let section = { before: Ur.Scene.tunnel_view(p.layer, p.yaw), after: Ur.Scene.tunnel_view(layer, yaw) }
       -- p.relight: building light shadows were switched, and every lit building is meshed again with or without a lamp a window
-      if p.relight || section.before != section.after || scene_changed || S.severe_rain(c) != S.severe_rain(p.city) || old_hour != hour || signal_before != signal_after do
+      if p.relight || section.before != section.after || scene_changed || S.severe_now(c) != S.severe_now(p.city) || old_hour != hour || signal_before != signal_after do
         Ur.Scene.sync(p.city, c, 0, p.relight, scene_changed, old_hour, hour,
           { before: p.stats.junctions, after: st.junctions, before_tick: signal_before, after_tick: signal_after }, p.stats.utilities.electric, st.utilities.electric, section)
       else () end
@@ -984,7 +998,8 @@ mod Ur do
       Ur.Scene.camera(cx, cz, zoom, if h > 0.0 do w /. h else 1.6 end, yaw)
       let weather = S.current_weather(c)
       let weather_time = int_to_float(c.month * S.days_per_month() + c.calendar_day) *. S.day_seconds() +. elapsed
-      Ur.Scene.daylight(elapsed, weather)
+      let sky = Strata.Weather.step_eased(Strata.Weather.want(p.weather, Ur.Scene.sky_for(c, visible_weather({ p with city: c }))), dt, game_dt)
+      Ur.Scene.daylight(elapsed, sky)
       let sea = Ur.Sea.state_at(c, elapsed)
       -- the water runs on real seconds while the city runs, whatever its speed, and stands still while it is paused
       let water_time = if paused do p.water_time else p.water_time +. dt end
@@ -1005,7 +1020,7 @@ mod Ur do
       let (cloud_x, cloud_z) = p.cloud_offset
       let drift = dt *. int_to_float(wind.speed) /. 3.6
       let cloud_offset = (cloud_x +. Math.cos(wind.heading) *. drift, cloud_z +. Math.sin(wind.heading) *. drift)
-      Ur.Scene.clouds(weather, cloud_offset, 0)
+      Ur.Scene.clouds(sky, elapsed, cloud_offset, p.peaks, c, p.forced_weather < 0 && !S.uniform_rain(c))
       let hud = Ur.Hud.draw(c, st, tool, group, page, layer, hovered, inspect, mx, my, reason, sidebar_visible, sidebar_tab, finance_view, crime_focus, council_focus, religion_site, religion_choice, paused, speed, S.street_hour(elapsed), weather, weather_time, citizen_stats, if guided do "" else Build.caption(preview, preview_tool) end, !List.is_empty(undo), activity)
       let hud = if c.harbour >= 0 && !sidebar_visible && (Build.street(tool) || S.grade_tool(tool)) do Ur.Hud.planner(hud, draft, preview, tool) else hud end
       let hud = Ur.Hud.frame_rate(hud, fps.value)
@@ -1066,7 +1081,7 @@ mod Ur do
           Strata.Devtools.fint("walking", citizen_stats.walking), Strata.Devtools.fbool("paused", Strata.Devtools.paused(dev))]), dt)
       end
       let insolvent_now = c.economy.insolvent && !p.city.economy.insolvent
-      run_frames({ water_time: water_time, ocean: ocean, ocean_city: ocean_city, ocean_job: ocean_job, ocean_dirty: ocean_dirty, sea_job: sea_job, sea_sector: sea_sector, sea_lam: sea_lam, sea_stale: sea_stale, sea_field: sea_field, sea_exposure: sea_exposure, flood_drill: p.flood_drill, sanitation: sanitation, truck_selected: truck_selected, citizen_focus: citizen_focus, activity: activity, fleet: fleet, fleet_routes: wanted, city: c, stats: st, food: food, citizens: next_citizens, shown: citizens, stepping: stepping, step_ms: p.step_ms, rebuilding: rebuilding, stale_rebuilds: stale_rebuilds, stats_wait: stats_wait, walk_map: walk_map, day_plan: day_plan, traffic_time: traffic_time, rotor_phases: rotor_phases, cloud_offset: cloud_offset, cx: cx, cz: cz, zoom: zoom, yaw: yaw, tool: tool, group: group, page: page, layer: layer, sidebar_visible: sidebar_visible && !S.valid(activity_lot) && !S.valid(council_lot) && !S.valid(diagnosis_lot), sidebar_tab: sidebar_tab, crime_focus: crime_focus, council_focus: council_focus, finance_view: finance_view, paused: paused, speed: speed,
+      run_frames({ water_time: water_time, ocean: ocean, ocean_city: ocean_city, ocean_job: ocean_job, ocean_dirty: ocean_dirty, sea_job: sea_job, sea_sector: sea_sector, sea_lam: sea_lam, sea_stale: sea_stale, sea_field: sea_field, sea_exposure: sea_exposure, flood_drill: p.flood_drill, sanitation: sanitation, truck_selected: truck_selected, citizen_focus: citizen_focus, activity: activity, fleet: fleet, fleet_routes: wanted, city: c, stats: st, food: food, citizens: next_citizens, shown: citizens, stepping: stepping, step_ms: p.step_ms, rebuilding: rebuilding, stale_rebuilds: stale_rebuilds, stats_wait: stats_wait, walk_map: walk_map, day_plan: day_plan, traffic_time: traffic_time, rotor_phases: rotor_phases, cloud_offset: cloud_offset, peaks: p.peaks, weather: sky, forced_weather: p.forced_weather, watch_pending: watch_pending, cx: cx, cz: cz, zoom: zoom, yaw: yaw, tool: tool, group: group, page: page, layer: layer, sidebar_visible: sidebar_visible && !S.valid(activity_lot) && !S.valid(council_lot) && !S.valid(diagnosis_lot), sidebar_tab: sidebar_tab, crime_focus: crime_focus, council_focus: council_focus, finance_view: finance_view, paused: paused, speed: speed,
         road_draft: draft, road_bench: p.road_bench, road_pointer: (mx, my), sidewalk_spot: spot, keys: keys, mouse: mouse, anchor: anchor, stroke: if mouse do stroke else Nil end, hovered: hovered, parcel_focus: parcel_focus, popup: popup, religion_site: religion_site, religion_choice: religion_choice, reason: reason, preview: preview, preview_chunks: preview_chunks, undo: undo,
         time: time, elapsed: elapsed, frame: p.frame + 1, drawn: drawn, limit: p.limit, profile: p.profile, trace_input: p.trace_input, tick_ms: tick_ms, fps: fps, setup: p.setup, world_seed: p.world_seed, setup_keys: p.setup_keys, seed_focus: p.seed_focus, setup_drag: p.setup_drag, menu_open: insolvent_now, boot: insolvent_now, notice: if insolvent_now do insolvency_notice(c) else "" end, confirm: :nothing, save_path: p.save_path, saved: p.saved, quit: false, dev: dev, lighting: p.lighting, relight: false })
     end end end
@@ -1147,6 +1162,25 @@ mod Ur do
       " | south " ++ Ur.Council.issue_name(Ur.Council.leading_issue(south)) ++ " (pollution " ++ int_to_string(Ur.Council.share(south, 7)) ++ "%)" ++
       " | " ++ Ur.Council.agenda_title_for(city) ++ " | months verified=" ++ int_to_string(Ur.Council.verified_months(city))))
   end
+  -- UR_RAIN_REPLAY: each watch of [days] days, how much of the island stands under water
+  pfn rain_line(c : Ur.Sim.City, day : Int, watch : Int) : Unit do
+    let flooded = List.length(List.filter(List.range(0, S.count()), fn i -> S.get(c.surface_water, i) > 0))
+    let deepest = List.fold_left(List.range(0, S.count()), 0, fn (m, i) -> if S.get(c.surface_water, i) > m do S.get(c.surface_water, i) else m end)
+    Authority.must(println("day=" ++ int_to_string(day) ++ " watch=" ++ int_to_string(watch) ++ " kind=" ++ int_to_string(S.current_weather(c)) ++
+      " flooded=" ++ int_to_string(flooded) ++ " deepest=" ++ int_to_string(deepest)))
+  end
+  pfn rain_report(c : Ur.Sim.City, remaining : Int) : Unit do
+    if remaining <= 0 do () else
+      let day = c.month * S.days_per_month() + c.calendar_day
+      let night = S.end_watch(c, 0)
+      rain_line(night, day, 0)
+      let noon = S.end_watch(night, 1)
+      rain_line(noon, day, 1)
+      let evening = S.night_drain(S.end_watch(noon, 2))
+      rain_line(evening, day, 2)
+      rain_report(Ur.Clock.day({ noon with watch: 2 }), remaining - 1)
+    end
+  end
   pfn flood_backup_report(c : Ur.Sim.City, remaining : Int) : Unit do
     let st = S.stats(c)
     Authority.must(println("day=" ++ int_to_string(c.calendar_day + 1) ++
@@ -1172,7 +1206,9 @@ mod Ur do
     -- quads scale with the map's area (the metro's towers fill about 1.1M of 4M on the original map)
     let lots = S.count() / 2640
     let quad_capacity = S.clamp(Authority.must(Env.get_int("UR_QUAD_CAPACITY", (if metro do 4194304 else 1048576 end) * Math.max_int(1, lots))), 524288, 4194304 * Math.max_int(1, lots) * 2)
-    if drill == 2 do flood_backup_report(Ur.Scenario.flood_backup_start(), 9)
+    let rain_replay = Authority.must(Env.get_int("UR_RAIN_REPLAY", 0))
+    if rain_replay > 0 do rain_report(S.new(), rain_replay)
+    else if drill == 2 do flood_backup_report(Ur.Scenario.flood_backup_start(), 9)
     else if council > 0 do
       let base = Ur.Scenario.council_outcome_baseline()
       council_replay("before plume", Ur.Council.advance(base, S.population(base)))
@@ -1208,7 +1244,7 @@ mod Ur do
       let start = Authority.must(System.now_ms())
       let after = Ur.Clock.advance(c, bench)
       Authority.must(println("months=" ++ int_to_string(bench) ++ " elapsed_ms=" ++ int_to_string(Authority.must(System.now_ms()) - start) ++ " population=" ++ int_to_string(S.population(after)) ++ " cash=" ++ int_to_string(after.cash)))
-    else if Vk.open_slots(1440, 900, false, quad_capacity, Ur.Ocean.slot_count()) do
+    else if Vk.open_slots(1440, 900, false, quad_capacity, Ur.Scene.chunk_slots()) do
       Vk.set_vsync(!profile)
       Vk.set_offscreen(Authority.must(Env.get_int("STRATA_OFFSCREEN", 0)) > 0)
       Ur.Scene.setup()
@@ -1251,12 +1287,22 @@ mod Ur do
         else if demo > 0 && !road_demo do Ur.Clock.advance(Ur.Scenario.civic_region(Ur.Scenario.connected_region()), 480) else Ur.Sim.unclaimed() end end end end end end end end end end end end end end end end end end end end end end end end end
       let c = match road_fixture do Some(setup) -> setup.city | None -> c end
       let demo_hour = Authority.must(Env.get_int("UR_CLOCK_HOUR", -1))
+      -- UR_WEATHER (0 clear .. 4 severe rain) holds the drawn weather, for screenshots; the simulation keeps its own.
+      let forced_weather = S.clamp(Authority.must(Env.get_int("UR_WEATHER", -1)), -1, 4)
+      -- UR_CLOUD_DRIFT starts the clouds that many metres downwind, for screenshots of them on the move.
+      let drift = int_to_float(Authority.must(Env.get_int("UR_CLOUD_DRIFT", 0)))
+      let start_wind = S.regional_wind(c)
+      let start_drift = (Math.cos(start_wind.heading) *. drift, Math.sin(start_wind.heading) *. drift)
+      -- UR_DAY (days since the city began) starts a demo on that date, for screenshots of its weather
+      let demo_day = Authority.must(Env.get_int("UR_DAY", -1))
+      let c = if demo > 0 && demo_day >= 0 do { c with month: demo_day / S.days_per_month(), calendar_day: demo_day % S.days_per_month() } else c end
       let c = if demo > 0 && demo_hour >= 0 && demo_hour < 24 do
-        { c with clock_ms: float_to_int(int_to_float(demo_hour) *. S.day_seconds() *. 1000.0 /. 24.0) }
+        { c with clock_ms: float_to_int(int_to_float(demo_hour) *. S.day_seconds() *. 1000.0 /. 24.0), watch: S.watch_of(demo_hour) }
       else c end
       -- a demo may be set on another day, for its wind and sea (Ur.Sea)
       let sea_day = Authority.must(Env.get_int("UR_SEA_DAY", -1))
       let c = if demo > 0 && sea_day >= 0 do { c with month: sea_day / S.days_per_month(), calendar_day: sea_day % S.days_per_month() } else c end
+      let c = S.restore_rain(c)
       let landing_x = Authority.must(Env.get_int("UR_LAND_X", -1))
       let landing_z = Authority.must(Env.get_int("UR_LAND_Z", -1))
       let c = if landing_x >= 0 && landing_x < S.width() && landing_z >= 0 && landing_z < S.depth() do S.land(c, S.index(landing_x, landing_z)) else c end
@@ -1294,7 +1340,7 @@ mod Ur do
       let preview_chunks = if road_demo do Ur.Scene.road_preview(c, preview, draft, start_tool, 0) else 0 end
       let region = Authority.must(Env.get_int("UR_REGION_VIEW", 0)) > 0
       let channel = Authority.must(Env.get_int("UR_CHANNEL_VIEW", 0)) > 0
-      let layer = S.clamp(Authority.must(Env.get_int("UR_LAYER", if S.grade_tool(start_tool) do 11 else if fire_demo do 22 else if demo == 14 do 4 else if demo == 13 || demo == 21 do 28 else if demo == 19 do 2 else if c.harbour < 0 do 8 else 0 end end end end end end)), 0, 37)
+      let layer = S.clamp(Authority.must(Env.get_int("UR_LAYER", if S.grade_tool(start_tool) do 11 else if fire_demo do 22 else if demo == 14 do 4 else if demo == 13 || demo == 21 do 28 else if demo == 19 do 2 else if c.harbour < 0 do 8 else 0 end end end end end end)), 0, 38)
       let signal_tick = S.signal_tick(clock_phase(c))
       Ur.Scene.sync(c, c, 0, true, false, 0, S.street_hour(clock_phase(c)),
         { before: stats.junctions, after: stats.junctions, before_tick: signal_tick, after_tick: signal_tick }, stats.utilities.electric, stats.utilities.electric, { before: 0, after: Ur.Scene.tunnel_view(layer, 0.55) })
@@ -1344,6 +1390,10 @@ mod Ur do
         let wz = int_to_float(wall_site / S.width()) *. 8.0 +. 4.0
         if wall_across_x do (wx, wz +. half, 70.0) else (wx +. half, wz, 70.0) end
       else (cx, cz, zoom) end end
+      -- UR_ZOOM (metres across half the view) and UR_CENTER_X / UR_CENTER_Z frame a screenshot.
+      let zoom = int_to_float(S.clamp(Authority.must(Env.get_int("UR_ZOOM", float_to_int(zoom))), 20, 400))
+      let cx = int_to_float(Authority.must(Env.get_int("UR_CENTER_X", float_to_int(cx))))
+      let cz = int_to_float(Authority.must(Env.get_int("UR_CENTER_Z", float_to_int(cz))))
       let fleet_routes = Ur.Fleet.routes_with(c, stats.running_transit, stats.buses)
       let citizens = Ur.Citizens.refresh_with(c, Nil, stats.routes, stats.people, stats.job_matches)
       let citizens = if demo == 16 do
@@ -1356,9 +1406,9 @@ mod Ur do
       let tool = if road_demo do start_tool else if layer > 0 || civic_demo || demo == 2 || demo == 15 || demo == 16 || demo == 17 || demo == 18 || demo == 20 || demo == 22 || demo == 27 do 0 else 1 end end
       let group = if road_demo do 1 else if layer > 0 && demo != 14 do 7 else if civic_demo || demo == 8 do 5 else if demo == 2 do 3 else if demo == 14 || demo == 15 do 0 else 1 end end end end end
       let page = if S.grade_tool(start_tool) do 1 else if layer == 35 do 7 else if layer == 4 || layer == 29 || layer == 30 || layer == 32 || layer == 33 do 2 else if layer >= 5 && layer <= 8 do 1 else if layer == 23 || layer == 24 || layer == 27 || layer == 28 do 6 else if layer >= 23 && layer != 31 do 5 else if layer >= 20 && layer != 31 do 4 else if layer >= 12 && layer != 31 do 3 else if demo == 7 && layer == 0 do 1 else if demo == 8 && layer == 0 do 2 else 0 end end end end end end end end end end
-      run_frames({ water_time: 0.0, ocean: ocean, ocean_city: c, ocean_job: None, ocean_dirty: true, sea_job: sea_job, sea_sector: sea_sector, sea_lam: sea_lam, sea_stale: false, sea_field: None, sea_exposure: NativeArray.make_f32(Ur.Ocean.ring_cells(), 1.0), flood_drill: demo == 22 && drill == 1, sanitation: Ur.Scene.empty_sanitation(), truck_selected: false, citizen_focus: -1, activity: Nil, fleet: Ur.Fleet.step(c, stats.traffic, Nil, fleet_routes, 0.0, true), fleet_routes: fleet_routes, city: c, stats: stats, food: Ur.Food.producer_traffic(c, stats), citizens: citizens, shown: citizens, stepping: None, step_ms: 0, rebuilding: None, stale_rebuilds: Nil, stats_wait: { task: None, stale: Nil, city: c, undo: false }, walk_map: Ur.Citizens.walk_map(c), day_plan: None, traffic_time: clock_phase(c), rotor_phases: NativeArray.make_f32(S.count(), 0.0), cloud_offset: (0.0, 0.0), cx: cx, cz: cz, zoom: zoom, yaw: 0.55, tool: tool, group: group, page: page, layer: layer, sidebar_visible: (demo > 0 && !road_demo && !metro && !streets_demo && demo != 11 && demo != 14 && demo != 15 && demo != 16 && demo != 18 && demo != 19 && demo != 20 && demo != 22 && wall_site < 0 && ferry < 0) || details_tab >= 5, sidebar_tab: details_tab, crime_focus: -1, council_focus: -1, finance_view: { month: 0, lines: finance_lines, stock: -1 }, paused: demo == 0 || road_demo || fire_demo || demo == 13 || demo == 18 || demo == 19 || demo == 20 || demo == 21 || demo == 22 || demo == 27, speed: if metro || (demo == 22 && drill == 1) do 3 else 1 end,
+      run_frames({ water_time: 0.0, ocean: ocean, ocean_city: c, ocean_job: None, ocean_dirty: true, sea_job: sea_job, sea_sector: sea_sector, sea_lam: sea_lam, sea_stale: false, sea_field: None, sea_exposure: NativeArray.make_f32(Ur.Ocean.ring_cells(), 1.0), flood_drill: demo == 22 && drill == 1, sanitation: Ur.Scene.empty_sanitation(), truck_selected: false, citizen_focus: -1, activity: Nil, fleet: Ur.Fleet.step(c, stats.traffic, Nil, fleet_routes, 0.0, true), fleet_routes: fleet_routes, city: c, stats: stats, food: Ur.Food.producer_traffic(c, stats), citizens: citizens, shown: citizens, stepping: None, step_ms: 0, rebuilding: None, stale_rebuilds: Nil, stats_wait: { task: None, stale: Nil, city: c, undo: false }, walk_map: Ur.Citizens.walk_map(c), day_plan: None, traffic_time: clock_phase(c), rotor_phases: NativeArray.make_f32(S.count(), 0.0), cloud_offset: start_drift, peaks: Ur.Scene.mountains(c), weather: Ur.Scene.new_weather(c, if forced_weather >= 0 do forced_weather else S.current_weather(c) end), forced_weather: forced_weather, watch_pending: false, cx: cx, cz: cz, zoom: zoom, yaw: 0.55, tool: tool, group: group, page: page, layer: layer, sidebar_visible: (demo > 0 && !road_demo && !metro && !streets_demo && demo != 11 && demo != 14 && demo != 15 && demo != 16 && demo != 18 && demo != 19 && demo != 20 && demo != 22 && wall_site < 0 && ferry < 0) || details_tab >= 5, sidebar_tab: details_tab, crime_focus: -1, council_focus: -1, finance_view: { month: 0, lines: finance_lines, stock: -1 }, paused: demo == 0 || road_demo || fire_demo || demo == 13 || demo == 18 || demo == 19 || demo == 20 || demo == 21 || demo == 22 || demo == 27, speed: if metro || (demo == 22 && drill == 1) do 3 else 1 end,
         road_draft: draft, road_bench: road_bench, road_pointer: (-1.0, -1.0), sidewalk_spot: -1, keys: 0, mouse: false, anchor: -1, stroke: Nil, hovered: -1, parcel_focus: if demo == 17 do S.index(10, 17) else if details_tab == 12 do S.index(9, 19) else -1 end end, popup: if fire_demo do Ur.Scenario.fire_recovery_home() else if demo == 22 do (if evacuation_demo do Ur.Scenario.evacuation_home() else Ur.Scenario.storm_station() end) else -1 end end, religion_site: religion_site, religion_choice: 0, preview: preview, undo: Nil, reason: if c.harbour < 0 do "Choose a cyan shoreline parcel to land." else "Select a parcel to inspect development" end,
         time: Vk.time(), elapsed: clock_phase(c), frame: 0, drawn: 0, limit: Authority.must(Env.get_int("UR_FRAMES", 0)), profile: profile, trace_input: Authority.must(Env.get_int("UR_INPUT_LOG", 0)) > 0, tick_ms: 0.0, fps: { since: Vk.time(), drawn: 0, value: -1 }, setup: S.default_setup(), world_seed: 1, setup_keys: 0, seed_focus: true, setup_drag: -1, menu_open: boot || Authority.must(Env.get_int("UR_MENU", 0)) > 0, boot: boot, notice: if saved do "" else "No saved city yet." end, confirm: :nothing, save_path: save_path, saved: saved, quit: false, preview_chunks: preview_chunks, dev: Strata.Devtools.start(), lighting: lighting, relight: false })
-    else Ur.AppError.stop("Could not open Strata renderer; check Vulkan and GLFW installation") end end end end end end end
+    else Ur.AppError.stop("Could not open Strata renderer; check Vulkan and GLFW installation") end end end end end end end end
   end
 end

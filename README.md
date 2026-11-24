@@ -398,7 +398,7 @@ Run `./scripts/verify.sh` for all code checks, or
 ```sh
 source ../strata/scripts/env.sh
 forge check
-for suite in test/*_test.march; do forge test "$suite"; done
+for suite in test/*_test.march; do forge test --release "$suite"; done
 forge lint --strict
 forge build --release
 UR_BENCH=1000 .march/build/release/ur

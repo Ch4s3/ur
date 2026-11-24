@@ -643,7 +643,7 @@ mod Ur.Scenario do
       transit: NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(c.transit, station, 4),
         S.index(9, 17), 4), S.index(9, 18), 4), inland, 4),
       land_pollution: NativeArray.set_int(c.land_pollution, station, 90),
-      month: date / 30, calendar_day: date % 30 }
+      month: date / 30, calendar_day: date % 30, rain_uniform: true }
   end
 
   fn flood_backup_tie() : Int do S.index(8, 19) end

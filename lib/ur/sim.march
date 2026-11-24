@@ -32,6 +32,7 @@ mod Ur.Sim do
     census : NativeIntArr, population_history : List(NativeIntArr), immigration : Int,
     council : NativeIntArr, religion : Religion,
     climate_seed : Int, world_seed : Int, setup : NativeIntArr, founders : Int,
+    rain_uniform : Bool, watch : Int, rain_now : NativeIntArr,
     storm_drains : NativeIntArr, seawalls : NativeIntArr,
     -- seabed edits a parcel (Ur.Ocean): 0 none, 1..63 dredged to that many voxels deep, 64 + d a reef whose top is d voxels down
     seabed : NativeIntArr,
@@ -285,7 +286,8 @@ mod Ur.Sim do
   fn terrain(x : Int, z : Int) : Int do
     let a = 100 - (x - 12) * (x - 12) - (z - 14) * (z - 14)
     let b = 30 - (x - 28) * (x - 28) - (z - 13) * (z - 13)
-    let hill = clamp(70 - (x - 10) * (x - 10) * 3 - (z - 9) * (z - 9) * 2, 0, 70)
+    -- a mountain about 42 m high, on the same footprint as the old 22 m hill
+    let hill = clamp((70 - (x - 10) * (x - 10) * 3 - (z - 9) * (z - 9) * 2) * 23 / 10, 0, 161)
     if a > 0 do 4 + a / 10 + hill else if b > 0 do 4 + b / 3 else 0 end end
   end
   pfn farm_contour(x : Int, z : Int) : Int do
@@ -300,7 +302,8 @@ mod Ur.Sim do
     let main = float_to_int(900.0 -. 3.0 *. dx *. dx -. 4.0 *. dz *. dz)
     let hx = x -. 15.0
     let hz = z -. 13.0
-    let hill = clamp(float_to_int(74.0 -. 2.0 *. hx *. hx -. 3.0 *. hz *. hz), 0, 74) * (if phase < 0.0 do 100 else 40 + clamp(mountains, 0, 4) * 30 end) / 100
+    -- the island's mountain, about 43 m at its peak at the usual setting, steep enough to stay clear of the coast
+    let hill = clamp(float_to_int(160.0 -. 4.0 *. hx *. hx -. 5.0 *. hz *. hz), 0, 160) * (if phase < 0.0 do 100 else 40 + clamp(mountains, 0, 4) * 30 end) / 100
     let hx2 = x -. (24.0 +. 2.0 *. Math.sin(phase))
     let hz2 = z -. (16.0 +. 2.0 *. Math.cos(phase))
     let ridge1 = clamp(float_to_int(66.0 -. 1.3 *. hx2 *. hx2 -. 2.2 *. hz2 *. hz2), 0, 66)
@@ -311,6 +314,8 @@ mod Ur.Sim do
     let hz4 = z -. (28.0 +. 1.5 *. Math.cos(phase *. 1.3))
     let ridge3 = clamp(float_to_int(48.0 -. 1.5 *. hx4 *. hx4 -. 1.8 *. hz4 *. hz4), 0, 48)
     let highland = hill + (if phase < 0.0 do 0 else (ridge1 + ridge2 + ridge3) * clamp(mountains, 0, 4) / 4 end)
+    -- terrain draws up to 48 m: keep the peaks under it
+    let highland = clamp(highland, 0, 168)
     if main > 0 do (4 + main / 100 + highland, main, 130) else (0, 0, 0) end
   end
   pfn outer_profile(x : Int, z : Int) : (Int, Int, Int) do
@@ -407,7 +412,7 @@ mod Ur.Sim do
       let bite = (NativeArray.get_f32(shore, i) +. 0.3) *. int_to_float(band)
       let height = if base == 0 || int_to_float(margin) <= bite do 0 else
         let delta = clamp(float_to_int(NativeArray.get_f32(relief, i) *. 7.0), -4, 4)
-        clamp(base + delta, 4, if base <= 18 do 18 else 96 end)
+        clamp(base + delta, 4, if base <= 18 do 18 else 176 end)
       end
       let height = if shape.river && x < 38 && z >= 18 do
         let bank = int_abs(x - river_column(shape, z))
@@ -455,7 +460,7 @@ mod Ur.Sim do
   end
   pfn unclaimed_with_heights(heights : NativeIntArr) : City do
     let zero = NativeArray.make_int(count(), 0)
-    { households: new_households(), economy: new_economy(), utility_service: zero, milestones: NativeArray.make_int(64, 0), facility_staff: NativeArray.make_int(count(), 0), facility_expansion: NativeArray.make_int(count(), 0), shelter_demand: None, census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(count(), 0), religion: new_religion(), climate_seed: 0, world_seed: -1, setup: default_setup(), founders: 0, storm_drains: zero, seawalls: zero, seabed: NativeArray.make_int(count(), 0), pump_orders: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, soil_moisture: 70, pumping_cost: 0, grades: NativeArray.make_int(count(), 0), grade_cover: NativeArray.make_int(count(), 0), parks: NativeArray.make_int(count(), 0), park_tiers: NativeArray.make_int(count(), 0), streetscape: NativeArray.make_int(count(), 0), sidewalk_items: NativeArray.make_int(count(), 0), campus: NativeArray.make_int(count(), 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(count(), 0), empty_homes: NativeArray.make_int(count(), 0), home_arrivals: NativeArray.make_int(count(), 0), housing_search: zero, newcomer_grace: zero, neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(count(), 0), property_status: NativeArray.make_int(count(), 0), property_arrears: NativeArray.make_int(count(), 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(count(), 0), calendar_day: 0, clock_ms: 675, street_day: 0, car_free_days: NativeArray.make_int(count(), 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(count(), 0), quiet_areas: NativeArray.make_int(count(), 0), storefronts: NativeArray.make_int(count(), 0), footfall: NativeArray.make_int(count(), 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, freight: None, shop_stock: zero, shop_sales: zero, shop_delivered: zero, shop_imports: 0, shipments: Nil, harbour: -1, founding_map: true, heights: heights, roads: zero, tolls: zero, public_parking: zero,
+    { households: new_households(), economy: new_economy(), utility_service: zero, milestones: NativeArray.make_int(64, 0), facility_staff: NativeArray.make_int(count(), 0), facility_expansion: NativeArray.make_int(count(), 0), shelter_demand: None, census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(count(), 0), religion: new_religion(), climate_seed: 0, rain_uniform: false, watch: 1, rain_now: NativeArray.make_int(count(), 0), world_seed: -1, setup: default_setup(), founders: 0, storm_drains: zero, seawalls: zero, seabed: NativeArray.make_int(count(), 0), pump_orders: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, soil_moisture: 70, pumping_cost: 0, grades: NativeArray.make_int(count(), 0), grade_cover: NativeArray.make_int(count(), 0), parks: NativeArray.make_int(count(), 0), park_tiers: NativeArray.make_int(count(), 0), streetscape: NativeArray.make_int(count(), 0), sidewalk_items: NativeArray.make_int(count(), 0), campus: NativeArray.make_int(count(), 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(count(), 0), empty_homes: NativeArray.make_int(count(), 0), home_arrivals: NativeArray.make_int(count(), 0), housing_search: zero, newcomer_grace: zero, neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(count(), 0), property_status: NativeArray.make_int(count(), 0), property_arrears: NativeArray.make_int(count(), 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(count(), 0), calendar_day: 0, clock_ms: 675, street_day: 0, car_free_days: NativeArray.make_int(count(), 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(count(), 0), quiet_areas: NativeArray.make_int(count(), 0), storefronts: NativeArray.make_int(count(), 0), footfall: NativeArray.make_int(count(), 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, freight: None, shop_stock: zero, shop_sales: zero, shop_delivered: zero, shop_imports: 0, shipments: Nil, harbour: -1, founding_map: true, heights: heights, roads: zero, tolls: zero, public_parking: zero,
       transit: zero, stops: zero, ferries: zero, ferry_start: -1, service: NativeArray.make_int(count(), 1), bus_headways: NativeArray.make_int(count(), 0), bus_fare: 1,
       zones: zero, density: NativeArray.make_int(count(), 3), nuisance: NativeArray.make_int(count(), 3),
       buildings: zero, housing_losses: zero, business_losses: zero, construction: zero, plants: zero, paused_facilities: zero, pipes: zero, grid: zero, pollution: zero, land_pollution: zero, air_pollution: zero,
@@ -489,7 +494,7 @@ mod Ur.Sim do
   end
   fn new() : City do
     let zero = NativeArray.make_int(count(), 0)
-    seed({ households: new_households(), economy: new_economy(), utility_service: zero, milestones: NativeArray.make_int(64, 0), facility_staff: NativeArray.make_int(count(), 0), facility_expansion: NativeArray.make_int(count(), 0), shelter_demand: None, census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(count(), 0), religion: new_religion(), climate_seed: 0, world_seed: -1, setup: default_setup(), founders: 0, storm_drains: zero, seawalls: zero, seabed: NativeArray.make_int(count(), 0), pump_orders: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, soil_moisture: 70, pumping_cost: 0, grades: NativeArray.make_int(count(), 0), grade_cover: NativeArray.make_int(count(), 0), parks: NativeArray.make_int(count(), 0), park_tiers: NativeArray.make_int(count(), 0), streetscape: NativeArray.make_int(count(), 0), sidewalk_items: NativeArray.make_int(count(), 0), campus: NativeArray.make_int(count(), 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(count(), 0), empty_homes: NativeArray.make_int(count(), 0), home_arrivals: NativeArray.make_int(count(), 0), housing_search: zero, newcomer_grace: zero, neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(count(), 0), property_status: NativeArray.make_int(count(), 0), property_arrears: NativeArray.make_int(count(), 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(count(), 0), calendar_day: 0, clock_ms: 0, street_day: 0, car_free_days: NativeArray.make_int(count(), 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(count(), 0), quiet_areas: NativeArray.make_int(count(), 0), storefronts: NativeArray.make_int(count(), 0), footfall: NativeArray.make_int(count(), 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, freight: None, shop_stock: NativeArray.make_int(count(), 0), shop_sales: NativeArray.set_int(NativeArray.make_int(count(), 0), index(8, 20), 8), shop_delivered: NativeArray.make_int(count(), 0), shop_imports: 0, shipments: Nil, harbour: index(9, 21), founding_map: false, heights: terrain_fill(NativeArray.make_int(count(), 0), 0), roads: NativeArray.make_int(count(), 0), tolls: NativeArray.make_int(count(), 0), public_parking: NativeArray.make_int(count(), 0), transit: NativeArray.make_int(count(), 0), stops: NativeArray.make_int(count(), 0), ferries: NativeArray.make_int(count(), 0), ferry_start: -1, service: NativeArray.make_int(count(), 1), bus_headways: NativeArray.make_int(count(), 0), bus_fare: 1,
+    seed({ households: new_households(), economy: new_economy(), utility_service: zero, milestones: NativeArray.make_int(64, 0), facility_staff: NativeArray.make_int(count(), 0), facility_expansion: NativeArray.make_int(count(), 0), shelter_demand: None, census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(count(), 0), religion: new_religion(), climate_seed: 0, rain_uniform: false, watch: 0, rain_now: NativeArray.make_int(count(), 0), world_seed: -1, setup: default_setup(), founders: 0, storm_drains: zero, seawalls: zero, seabed: NativeArray.make_int(count(), 0), pump_orders: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, soil_moisture: 70, pumping_cost: 0, grades: NativeArray.make_int(count(), 0), grade_cover: NativeArray.make_int(count(), 0), parks: NativeArray.make_int(count(), 0), park_tiers: NativeArray.make_int(count(), 0), streetscape: NativeArray.make_int(count(), 0), sidewalk_items: NativeArray.make_int(count(), 0), campus: NativeArray.make_int(count(), 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(count(), 0), empty_homes: NativeArray.make_int(count(), 0), home_arrivals: NativeArray.make_int(count(), 0), housing_search: zero, newcomer_grace: zero, neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(count(), 0), property_status: NativeArray.make_int(count(), 0), property_arrears: NativeArray.make_int(count(), 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(count(), 0), calendar_day: 0, clock_ms: 0, street_day: 0, car_free_days: NativeArray.make_int(count(), 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(count(), 0), quiet_areas: NativeArray.make_int(count(), 0), storefronts: NativeArray.make_int(count(), 0), footfall: NativeArray.make_int(count(), 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, freight: None, shop_stock: NativeArray.make_int(count(), 0), shop_sales: NativeArray.set_int(NativeArray.make_int(count(), 0), index(8, 20), 8), shop_delivered: NativeArray.make_int(count(), 0), shop_imports: 0, shipments: Nil, harbour: index(9, 21), founding_map: false, heights: terrain_fill(NativeArray.make_int(count(), 0), 0), roads: NativeArray.make_int(count(), 0), tolls: NativeArray.make_int(count(), 0), public_parking: NativeArray.make_int(count(), 0), transit: NativeArray.make_int(count(), 0), stops: NativeArray.make_int(count(), 0), ferries: NativeArray.make_int(count(), 0), ferry_start: -1, service: NativeArray.make_int(count(), 1), bus_headways: NativeArray.make_int(count(), 0), bus_fare: 1,
       zones: NativeArray.make_int(count(), 0), density: NativeArray.make_int(count(), 3), nuisance: NativeArray.make_int(count(), 3), buildings: NativeArray.make_int(count(), 0), housing_losses: NativeArray.make_int(count(), 0), business_losses: NativeArray.make_int(count(), 0), construction: NativeArray.make_int(count(), 0),
       plants: NativeArray.set_int(NativeArray.set_int(NativeArray.make_int(count(), 0), index(8, 21), 1), index(9, 22), 3),
       paused_facilities: NativeArray.make_int(count(), 0), pipes: NativeArray.set_int(NativeArray.make_int(count(), 0), index(9, 21), 1), grid: NativeArray.make_int(count(), 0), pollution: NativeArray.make_int(count(), 0), land_pollution: NativeArray.make_int(count(), 0), air_pollution: NativeArray.make_int(count(), 0), trash: 0, waste_live: false, waste_bins: NativeArray.make_int(count(), 0), waste_stock: NativeArray.make_int(count(), 0), waste_sites: NativeArray.make_int(count(), 0), waste_last: NativeArray.make_int(count(), 0), waste_log: NativeArray.make_int(count(), 0), waste_runs: Nil,
@@ -766,6 +771,69 @@ mod Ur.Sim do
     if curse == 1 do 4 else if curse == 2 do 0 else weather_pattern(c.climate_seed, climate_rain(c), month, day) end end
   end
   fn current_weather(c : City) : Int do weather_on(c, c.month, c.calendar_day) end
+  -- Local rain (docs/superpowers/specs/2026-11-23-local-rain-design.md).
+  -- A uniform city, or one under Idra's Unending Rain, rains today's regional
+  -- weather on every parcel, as before local rain; others rain in Ur.Rain's
+  -- storm cells.
+  fn uniform_rain(c : City) : Bool do c.rain_uniform || curse_god(c) == 1 end
+  fn fclamp(v : Float, low : Float, high : Float) : Float do if v < low do low else if v > high do high else v end end end
+  fn day_cells(c : City) : List(Ur.Rain.Cell) do
+    let wind = regional_wind(c)
+    Ur.Rain.cells(if c.climate_seed == 0 do 705 else c.climate_seed end, c.month, c.calendar_day, current_weather(c), wind.speed, wind.heading)
+  end
+  pfn lot_centre(lot : Int) : (Float, Float) do (int_to_float(lot % width() * 8 + 4), int_to_float(lot / width() * 8 + 4)) end
+  pfn cell_level(c : City, cells : List(Ur.Rain.Cell), base : Int, lot : Int, hour : Float) : Int do
+    if get(c.heights, lot) <= 0 do 0 else
+      let (x, z) = lot_centre(lot)
+      Ur.Rain.level_at(cells, base, x, z, hour)
+    end
+  end
+  -- the rain level on [lot] at game [hour] (0..24, fractions allowed)
+  fn rain_level(c : City, lot : Int, hour : Float) : Int do
+    if uniform_rain(c) do (if get(c.heights, lot) > 0 do current_weather(c) else 0 end)
+    else cell_level(c, day_cells(c), Ur.Rain.baseline(current_weather(c)), lot, hour) end
+  end
+  pfn fill_rain(c : City, cells : List(Ur.Rain.Cell), base : Int, hour : Float, a : NativeIntArr, lot : Int) : NativeIntArr do
+    if lot >= count() do a else
+      let level = if uniform_rain(c) do (if get(c.heights, lot) > 0 do base else 0 end) else cell_level(c, cells, base, lot, hour) end
+      fill_rain(c, cells, base, hour, NativeArray.set_int(a, lot, level), lot + 1)
+    end
+  end
+  doc "Fill each parcel's rain at game hour [hour] (0..23), as rain_here reads it."
+  fn set_rain_hour(c : City, hour : Int) : City do
+    let cells = if uniform_rain(c) do Nil else day_cells(c) end
+    let base = if uniform_rain(c) do current_weather(c) else Ur.Rain.baseline(current_weather(c)) end
+    { c with rain_now: fill_rain(c, cells, base, int_to_float(hour) +. 0.5, NativeArray.make_int(count(), 0), 0) }
+  end
+  doc "The rain falling on [lot] this hour: 0 none, 2 rain, 3 heavy, 4 severe (a uniform city's cloudy day reads 1)."
+  -- A uniform city reads today's regional weather directly, so it behaves
+  -- exactly as before local rain whatever its stored hour says.
+  fn rain_here(c : City, lot : Int) : Int do
+    if !valid(lot) do 0 else if uniform_rain(c) do (if get(c.heights, lot) > 0 do current_weather(c) else 0 end) else get(c.rain_now, lot) end end
+  end
+  pfn any_severe(c : City, lot : Int) : Bool do if lot >= count() do false else if get(c.rain_now, lot) == 4 do true else any_severe(c, lot + 1) end end end
+  doc "Whether severe rain is falling on any parcel this hour."
+  fn severe_now(c : City) : Bool do if uniform_rain(c) do severe_rain(c) else any_severe(c, 0) end end
+  fn watch_of(hour : Int) : Int do clamp(hour / 8, 0, 2) end
+  doc "End every watch the clock at [hour] has passed that [c] has not ended yet: never one twice, and a city whose watch fell behind its clock catches up."
+  fn catch_up_watches(c : City, hour : Int) : City do
+    if c.watch < watch_of(hour) do catch_up_watches(end_watch(c, c.watch), hour) else c end
+  end
+  doc "Whether standing water or flood damage differs between [a] and [b] anywhere."
+  fn flood_differs(a : City, b : City) : Bool do flood_differs_at(a, b, 0) end
+  pfn flood_differs_at(a : City, b : City, lot : Int) : Bool do
+    if lot >= count() do false
+    else if get(a.surface_water, lot) != get(b.surface_water, lot) || get(a.flood_damage, lot) != get(b.flood_damage, lot) do true
+    else flood_differs_at(a, b, lot + 1) end end
+  end
+  doc "The watches a frame's clock passing from [before] to [after] hours ends: 0 at 08:00, 1 at 16:00. Midnight's watch is left to the day's roll."
+  fn watches_crossed(before : Float, after : Float) : List(Int) do
+    List.filter([0, 1], fn w -> before < int_to_float(8 * (w + 1)) && after >= int_to_float(8 * (w + 1)))
+  end
+  -- a day starts in the night watch, with the new day's rain
+  pfn fresh_day(c : City) : City do set_rain_hour({ c with watch: 0 }, 0) end
+  doc "A loaded city's rain, rebuilt from its date and stamped clock."
+  fn restore_rain(c : City) : City do set_rain_hour(c, street_hour(int_to_float(c.clock_ms) /. 1000.0)) end
   fn weather_name(kind : Int) : String do
     match kind do
       4 -> "Severe rain"
@@ -826,8 +894,8 @@ mod Ur.Sim do
     1.0 -. int_to_float(clamp(heat - 280, 0, 90)) *. 0.004
   end
   fn walk_pace(c : City, lot : Int) : Float do walk_pace_at(c, lot, temperature(c)) end
-  fn rain_road_pace(c : City) : Float do
-    match current_weather(c) do
+  fn rain_road_pace(c : City, lot : Int) : Float do
+    match rain_here(c, lot) do
       4 -> 0.43
       3 -> 0.62
       2 -> 0.81
@@ -901,7 +969,7 @@ mod Ur.Sim do
   end
   fn surface_flood(c : City, lot : Int) : Int do
     let stored = get(c.surface_water, lot)
-    let storm = if severe_rain(c) do floodplain_depth(c, lot) else 0 end
+    let storm = if rain_here(c, lot) == 4 do floodplain_depth(c, lot) else 0 end
     let tide = tide_depth(c, lot)
     clamp(stored, clamp(storm, tide, 16), 16)
   end
@@ -3574,7 +3642,7 @@ mod Ur.Sim do
   fn delay_for(c : City, i : Int, demand : Int) : Int do
     let capacity = road_capacity(c, i)
     if capacity == 0 do 0 else
-      let rain = clamp(current_weather(c) - 1, 0, 3)
+      let rain = clamp(rain_here(c, i) - 1, 0, 3)
       clamp((demand - capacity) / 4, 0, 18) + rain * 2
     end
   end
@@ -4401,7 +4469,7 @@ mod Ur.Sim do
 
       5 -> { paid with density: NativeArray.set_int(c.density, i, get(c.density, i) % 3 + 1) }
 
-      6 -> { paid with heights: NativeArray.set_int(c.heights, i, clamp(h - 8, 4, 100)) }
+      6 -> { paid with heights: NativeArray.set_int(c.heights, i, clamp(h - 8, 4, 176)) }
 
       7 -> let bus = get(c.transit, i) == 2
         { paid with utility_service: NativeArray.set_int(c.utility_service, i, 0), car_free_days: NativeArray.set_int(c.car_free_days, i, 0), storefronts: NativeArray.set_int(c.storefronts, i, 0), fire_recovery: NativeArray.set_int(c.fire_recovery, i, 0), park_tiers: NativeArray.set_int(c.park_tiers, i, 0), streetscape: NativeArray.set_int(c.streetscape, i, 0), sidewalk_items: NativeArray.set_int(c.sidewalk_items, i, 0), parks: if get(c.parks, i) > 0 do NativeArray.set_int(c.parks, i, 0) else c.parks end, transit: if bus do NativeArray.set_int(c.transit, i, 0) else c.transit end,
@@ -6955,6 +7023,317 @@ mod Ur.Sim do
   end
   fn rain_tank_capacity() : Int do 2400 end
 
+  -- Runoff (docs/superpowers/specs/2026-11-23-local-rain-design.md, Runoff).
+  -- A watch's rain on each parcel, less what its ground absorbs, runs down the
+  -- steepest way until it reaches the sea, a storm drain, or a hollow with no
+  -- lower neighbour. A hollow holds water up to its rim (its lowest
+  -- neighbour); what it cannot hold spills over the rim and runs on. Water is
+  -- counted in rain units (rain_units: an hour of rain on one parcel, far
+  -- more in a storm than in a shower); runoff_scale() of them stand a quarter
+  -- metre deep in a hollow.
+  type Runoff = { rained : Int, absorbed : Int, drained : Int, to_sea : Int, pooled : Int }
+  fn runoff_scale() : Int do 8 end
+  -- rain units a parcel's ground takes in a watch
+  pfn watch_absorption(c : City, lot : Int) : Int do soil_absorption(c, lot) * 2 end
+  -- rain units a storm drain carries to sea in a watch: about the 10 quarter
+  -- metres it keeps off a street in today's daily rule
+  pfn drain_capacity() : Int do 10 * runoff_scale() end
+  -- the lowest neighbour strictly lower than [lot] (sea or off the map counts
+  -- as -2), other than [skip]; -1 when there is none
+  pfn downhill(c : City, lot : Int, skip : Int, arm : Int, best : Int, best_h : Int) : Int do
+    if arm >= 4 do best else
+      let n = neighbour(lot, arm)
+      let h = if valid(n) do get(c.heights, n) else 0 end
+      let target = if !valid(n) || h <= 0 do -2 else n end
+      if n == skip || h >= best_h do downhill(c, lot, skip, arm + 1, best, best_h)
+      else downhill(c, lot, skip, arm + 1, target, h) end
+    end
+  end
+  -- the lowest neighbour of all four other than [skip], and its height
+  pfn rim_of(c : City, lot : Int, skip : Int, arm : Int, best : Int, best_h : Int) : (Int, Int) do
+    if arm >= 4 do (best, best_h) else
+      let n = neighbour(lot, arm)
+      let h = if valid(n) do get(c.heights, n) else 0 end
+      if n == skip || h >= best_h do rim_of(c, lot, skip, arm + 1, best, best_h)
+      else rim_of(c, lot, skip, arm + 1, if valid(n) && h > 0 do n else -2 end, h) end
+    end
+  end
+  type Flow = { water : NativeIntArr, pools : NativeIntArr, drains : NativeIntArr, report : Runoff }
+  -- carry [units] of water from [lot] downhill; [from] the parcel it came
+  -- from (so a spill does not run straight back); at most [hops] more steps
+  pfn carry(c : City, f : Flow, lot : Int, from : Int, units : Int, hops : Int) : Flow do
+    if units <= 0 do f else
+      if lot == -2 do { f with report: { f.report with to_sea: f.report.to_sea + units } } else
+        let drain_left = if get(c.storm_drains, lot) > 0 && get(c.roads, lot) > 0 do get(f.drains, lot) else 0 end
+        let taken = if drain_left < units do drain_left else units end
+        let f = if taken > 0 do { f with drains: NativeArray.set_int(f.drains, lot, drain_left - taken), report: { f.report with drained: f.report.drained + taken } } else f end
+        let left = units - taken
+        let next = downhill(c, lot, from, 0, -1, get(c.heights, lot))
+        if left <= 0 do f else
+          if next != -1 && hops > 0 do carry(c, f, next, lot, left, hops - 1) else
+            fill_hollow(c, f, lot, left, hops)
+          end
+        end
+      end
+    end
+  end
+  -- a hollow: fill to the rim, spill the rest over it
+  pfn fill_hollow(c : City, f : Flow, lot : Int, units : Int, hops : Int) : Flow do
+    let (rim, rim_h) = rim_of(c, lot, -1, 0, -1, 1000000)
+    -- water already standing here (and what its ground soaks up) counts against the room
+    let standing = get(c.surface_water, lot)
+    let held = if standing > 0 do (standing + soil_absorption(c, lot) + nearby_absorption(c, lot, 0, 0)) * runoff_scale() else 0 end
+    let used = if held > get(f.pools, lot) do held else get(f.pools, lot) end
+    let room = clamp(clamp(rim_h - get(c.heights, lot), 0, 16) * runoff_scale() - used, 0, 1000000)
+    let kept = if room < units do room else units end
+    let f = if kept > 0 do { f with pools: NativeArray.set_int(f.pools, lot, get(f.pools, lot) + kept), report: { f.report with pooled: f.report.pooled + kept } } else f end
+    -- water that wanders flat ground without finding a way down spreads thin and soaks in
+    if kept >= units do f
+    else if hops <= 0 || rim == -1 do { f with report: { f.report with absorbed: f.report.absorbed + units - kept } }
+    else carry(c, f, rim, lot, units - kept, hops - 1) end end
+  end
+  -- One pass, highest parcel first: each parcel adds its own runoff to what
+  -- reached it from uphill and hands the lot on to its lowest lower
+  -- neighbour (processed later, being lower); a hollow fills, and only its
+  -- overflow walks on with carry.
+  pfn route_all(c : City, amounts : NativeIntArr, order : List(Int), inflow : NativeIntArr, f : Flow) : Flow do
+    match order do
+      Nil -> f
+      Cons(lot, rest) ->
+        let rain = get(amounts, lot)
+        let land = get(c.heights, lot) > 0
+        let own = if rain <= 0 || !land do 0 else rain end
+        let can = if own > 0 do watch_absorption(c, lot) else 0 end
+        let absorb = if can < own do can else own end
+        let f = if own > 0 do { f with report: { f.report with rained: f.report.rained + own, absorbed: f.report.absorbed + absorb } } else f end
+        let units = own - absorb + get(inflow, lot)
+        if units <= 0 || !land do route_all(c, amounts, rest, inflow, f) else
+          let drain_left = if get(c.storm_drains, lot) > 0 && get(c.roads, lot) > 0 do get(f.drains, lot) else 0 end
+          let taken = if drain_left < units do drain_left else units end
+          let f = if taken > 0 do { f with drains: NativeArray.set_int(f.drains, lot, drain_left - taken), report: { f.report with drained: f.report.drained + taken } } else f end
+          let left = units - taken
+          let next = downhill(c, lot, -1, 0, -1, get(c.heights, lot))
+          if left <= 0 do route_all(c, amounts, rest, inflow, f)
+          else if next == -2 do route_all(c, amounts, rest, inflow, { f with report: { f.report with to_sea: f.report.to_sea + left } })
+          else if next >= 0 do route_all(c, amounts, rest, NativeArray.set_int(inflow, next, get(inflow, next) + left), f)
+          else route_all(c, amounts, rest, inflow, fill_hollow(c, f, lot, left, 64)) end end end
+        end
+    end
+  end
+  pfn settle_pools(c : City, pools : NativeIntArr, lot : Int, water : NativeIntArr) : NativeIntArr do
+    if lot >= count() do water else
+      -- a hollow's own soil and its neighbours' soak up some of what stands in it, as floodplain_depth assumes
+      let depth = if get(pools, lot) <= 0 do 0 else clamp(get(pools, lot) / runoff_scale() - soil_absorption(c, lot) - nearby_absorption(c, lot, 0, 0), 0, 16) end
+      let water = if depth > get(water, lot) do NativeArray.set_int(water, lot, depth) else water end
+      settle_pools(c, pools, lot + 1, water)
+    end
+  end
+  -- parcels highest first, ties by index: a counting sort over heights
+  pfn height_counts(c : City, lot : Int, counts : NativeIntArr) : NativeIntArr do
+    if lot >= count() do counts else
+      let h = clamp(get(c.heights, lot), 0, 1023)
+      height_counts(c, lot + 1, NativeArray.set_int(counts, h, NativeArray.get_int(counts, h) + 1))
+    end
+  end
+  -- where each height's run starts, highest heights first
+  pfn height_starts(counts : NativeIntArr, h : Int, at : Int, starts : NativeIntArr) : NativeIntArr do
+    if h < 0 do starts else height_starts(counts, h - 1, at + NativeArray.get_int(counts, h), NativeArray.set_int(starts, h, at)) end
+  end
+  pfn height_place(c : City, lot : Int, starts : NativeIntArr, out : NativeIntArr) : NativeIntArr do
+    if lot >= count() do out else
+      let h = clamp(get(c.heights, lot), 0, 1023)
+      let at = NativeArray.get_int(starts, h)
+      height_place(c, lot + 1, NativeArray.set_int(starts, h, at + 1), NativeArray.set_int(out, at, lot))
+    end
+  end
+  pfn order_list(out : NativeIntArr, k : Int, acc : List(Int)) : List(Int) do
+    if k < 0 do acc else order_list(out, k - 1, Cons(NativeArray.get_int(out, k), acc)) end
+  end
+  pfn height_order(c : City) : List(Int) do
+    let starts = height_starts(height_counts(c, 0, NativeArray.make_int(1024, 0)), 1023, 0, NativeArray.make_int(1024, 0))
+    order_list(height_place(c, 0, starts, NativeArray.make_int(count(), 0)), count() - 1, Nil)
+  end
+  doc "Route a watch's rain ([amounts]: each parcel's rain units) downhill; hollows' standing water rises to what pools in them. Answers the city and where the water went: rained = absorbed + drained + to_sea + pooled."
+  fn route_runoff(c : City, amounts : NativeIntArr) : (City, Runoff) do
+    let order = height_order(c)
+    let start = { water: c.surface_water, pools: NativeArray.make_int(count(), 0), drains: NativeArray.make_int(count(), drain_capacity()),
+      report: { rained: 0, absorbed: 0, drained: 0, to_sea: 0, pooled: 0 } }
+    let f = route_all(c, amounts, order, NativeArray.make_int(count(), 0), start)
+    ({ c with surface_water: settle_pools(c, f.pools, 0, c.surface_water) }, f.report)
+  end
+
+  doc "Rain units an hour of rain at [level] brings to a parcel: a storm (4) brings far more than heavy rain (3), which brings more than rain (2)."
+  fn rain_units(level : Int) : Int do
+    match level do
+      4 -> 8
+      3 -> 3
+      2 -> 1
+      _ -> 0
+    end
+  end
+  -- the box (x0, z0, x1, z1, metres) a cell sweeps over hours [first, stop)
+  pfn swept(cell : Ur.Rain.Cell, first : Int, stop : Int) : (Float, Float, Float, Float) do
+    let from = if cell.start > int_to_float(first) do cell.start else int_to_float(first) end
+    let till = if cell.stop < int_to_float(stop) do cell.stop else int_to_float(stop) end
+    if till < from do (1.0, 1.0, -1.0, -1.0) else
+      let (ax, az) = Ur.Rain.centre(cell, from)
+      let (bx, bz) = Ur.Rain.centre(cell, till)
+      ((if ax < bx do ax else bx end) -. cell.radius, (if az < bz do az else bz end) -. cell.radius,
+       (if ax > bx do ax else bx end) +. cell.radius, (if az > bz do az else bz end) +. cell.radius)
+    end
+  end
+  pfn near_any(boxes : List((Float, Float, Float, Float)), x : Float, z : Float) : Bool do
+    match boxes do
+      Nil -> false
+      Cons((x0, z0, x1, z1), rest) -> if x >= x0 && x <= x1 && z >= z0 && z <= z1 do true else near_any(rest, x, z) end
+    end
+  end
+  pfn watch_fill(c : City, cells : List(Ur.Rain.Cell), boxes : List((Float, Float, Float, Float)), base : Int, first : Int, hours : Int, lot : Int, peaks : NativeIntArr, amounts : NativeIntArr) : (NativeIntArr, NativeIntArr) do
+    if lot >= count() do (peaks, amounts) else
+      let (x, z) = lot_centre(lot)
+      -- only parcels a cell passes near need sampling hour by hour; the rest get the baseline
+      let (peak, amount) = if get(c.heights, lot) <= 0 do (0, 0)
+        else if near_any(boxes, x, z) do watch_hours(c, cells, base, lot, first, first + hours, 0, 0)
+        else (base, rain_units(base) * hours) end end
+      watch_fill(c, cells, boxes, base, first, hours, lot + 1, NativeArray.set_int(peaks, lot, peak), NativeArray.set_int(amounts, lot, amount))
+    end
+  end
+  -- each parcel's peak and amount over hours [first, first + hours)
+  pfn rain_span(c : City, first : Int, hours : Int) : (NativeIntArr, NativeIntArr) do
+    let cells = day_cells(c)
+    watch_fill(c, cells, List.map(cells, fn cell -> swept(cell, first, first + hours)), Ur.Rain.baseline(current_weather(c)), first, hours, 0,
+      NativeArray.make_int(count(), 0), NativeArray.make_int(count(), 0))
+  end
+  pfn watch_hours(c : City, cells : List(Ur.Rain.Cell), base : Int, lot : Int, hour : Int, stop : Int, peak : Int, amount : Int) : (Int, Int) do
+    if hour >= stop do (peak, amount) else
+      let level = cell_level(c, cells, base, lot, int_to_float(hour) +. 0.5)
+      watch_hours(c, cells, base, lot, hour + 1, stop, if level > peak do level else peak end, amount + rain_units(level))
+    end
+  end
+  doc "Each parcel's rain over watch [watch] (0 night 00-08, 1 day 08-16, 2 evening 16-24): its peak level and its amount in rain units."
+  fn watch_rain(c : City, watch : Int) : (NativeIntArr, NativeIntArr) do rain_span(c, 8 * clamp(watch, 0, 2), 8) end
+  doc "Soil recharge from a watch whose rain averages [level] over the island: a third of a day of it."
+  fn watch_recharge(level : Int) : Int do if level >= 2 do (24 + 15 * (level - 2)) / 3 else 0 end end
+  doc "How deep a storm surge stands on coastal [lot], quarter metres: low land near the shore, less 10 on a street with a storm drain, as floodplain_depth reckons it."
+  fn coastal_depth(c : City, lot : Int) : Int do
+    let h = get(c.heights, lot)
+    if h <= 0 || h >= 16 do 0 else
+      let surge = clamp(shore_level(c, lot % width(), lot / width(), 0, 0) - h, 0, 16)
+      clamp(surge - (if get(c.storm_drains, lot) > 0 && get(c.roads, lot) > 0 do 10 else 0 end), 0, 16)
+    end
+  end
+  -- after a watch: the standing water a storm surge leaves on the coast, flood
+  -- damage, polluted runoff, collectors and subway, per parcel. The arrays it
+  -- changes travel together, so the city record is rebuilt once, not per parcel.
+  type WatchArrays = { water : NativeIntArr, damage : NativeIntArr, soil : NativeIntArr, sea : NativeIntArr, tanks : NativeIntArr, subway : NativeIntArr }
+  pfn watch_parcels(c : City, peaks : NativeIntArr, share : Int, lot : Int, a : WatchArrays, active : Bool) : City do
+    if lot >= count() do
+      { c with surface_water: a.water, flood_damage: a.damage, land_pollution: a.soil, pollution: a.sea, rain_tanks: a.tanks, subway_water: a.subway, flood_active: active }
+    else
+      let peak = get(peaks, lot)
+      let stored = get(a.water, lot)
+      let previous = get(a.damage, lot)
+      if peak < 2 do watch_parcels(c, peaks, share, lot + 1, a, active || stored > 0 || previous > 0) else
+        let land = get(c.heights, lot) > 0
+        let surge = if peak == 4 do coastal_depth(c, lot) else 0 end
+        let level = if surge > stored do surge else stored end
+        let building = get(c.buildings, lot) > 0 || get(c.plants, lot) > 0
+        let repairs = if building && level >= 4 do clamp(2 + level / 2, previous, 10) else previous end
+        let soil = get(a.soil, lot)
+        let coast = if land && peak >= 3 && soil >= 3 do runoff_outlet(c, lot, 1, 0) else -1 end
+        let old = if valid(coast) do get(a.sea, coast) else 0 end
+        let moved = if valid(coast) do clamp(soil * (peak - 1) * share / 30, 0, clamp(100 - old, 0, 100)) else 0 end
+        let catchment = match peak do
+          4 -> 466
+          3 -> 250
+          _ -> 120
+        end
+        let a = { water: if level == stored do a.water else NativeArray.set_int(a.water, lot, level) end,
+          damage: if repairs == previous do a.damage else NativeArray.set_int(a.damage, lot, repairs) end,
+          soil: if moved > 0 do NativeArray.set_int(a.soil, lot, soil - moved) else a.soil end,
+          sea: if moved > 0 do NativeArray.set_int(a.sea, coast, old + moved) else a.sea end,
+          tanks: if get(c.plants, lot) == 8 do NativeArray.set_int(a.tanks, lot, clamp(get(a.tanks, lot) + catchment * share, 0, rain_tank_capacity())) else a.tanks end,
+          subway: if peak == 4 && get(c.stops, lot) == 4 && get(c.transit, lot) == 4 do NativeArray.set_int(a.subway, lot, clamp(get(a.subway, lot) + floodplain_depth(c, lot) * share, 0, 72)) else a.subway end }
+        watch_parcels(c, peaks, share, lot + 1, a, active || level > 0 || repairs > 0)
+      end
+    end
+  end
+  doc "End watch [watch] of a city raining locally: its rain soaks the soil, runs downhill into hollows, surges on the coast under storms, fills collectors and subways, and records flood damage at once. A uniform city only moves on to the next watch; its rain is applied once a day as before."
+  fn end_watch(c : City, watch : Int) : City do
+    let next = (clamp(watch, 0, 2) + 1) % 3
+    -- a dry day (clear or cloudy) has no rain to route: nothing changes
+    if uniform_rain(c) || current_weather(c) < 2 do { c with watch: next } else { rain_hours(c, 8 * clamp(watch, 0, 2), 1) with watch: next } end
+  end
+  -- [share] watches of rain from hour [first]: soil, runoff, surge, collectors, subway, damage
+  pfn rain_hours(c : City, first : Int, share : Int) : City do
+    let (peaks, amounts) = rain_span(c, first, 8 * share)
+    -- the soil takes the day's regional rain, as it always has: storms move water about, not the total
+    let soaked = { c with soil_moisture: clamp(c.soil_moisture + watch_recharge(current_weather(c)) * share, 0, 100) }
+    let (routed, _) = route_runoff(soaked, amounts)
+    let arrays = { water: routed.surface_water, damage: routed.flood_damage, soil: routed.land_pollution, sea: routed.pollution, tanks: routed.rain_tanks, subway: routed.subway_water }
+    watch_parcels(routed, peaks, share, 0, arrays, false)
+  end
+  pfn peak_today(c : City) : NativeIntArr do
+    let (p0, _) = watch_rain(c, 0)
+    let (p1, _) = watch_rain(c, 1)
+    let (p2, _) = watch_rain(c, 2)
+    List.fold_left(List.range(0, count()), p0, fn (a, i) ->
+      let m = if get(p1, i) > get(p2, i) do get(p1, i) else get(p2, i) end
+      if m > get(a, i) do NativeArray.set_int(a, i, m) else a end)
+  end
+  pfn drain_parcels(c : City, severe : NativeIntArr, evaporation : Int, lot : Int, water : NativeIntArr, damage : NativeIntArr, active : Bool) : City do
+    if lot >= count() do { c with surface_water: water, flood_damage: damage, flood_active: active } else
+      let stored = get(water, lot)
+      let land = get(c.heights, lot)
+      let tide = tide_depth(c, lot)
+      let level = if land <= 0 do 0
+        else if tide > 0 do (if tide > stored do tide else stored end)
+        else if stored == 0 do 0
+        else if get(severe, lot) == 4 do stored
+        else
+          let coast = if land < 16 do shore_level(c, lot % width(), lot / width(), 0, 0) else 0 end
+          let outflow = if coast > 0 do 2 else 0 end
+          let gravity_drain = if get(c.storm_drains, lot) > 0 do 2 else 0 end
+          clamp(stored - outflow - gravity_drain - soil_absorption(c, lot) / 2 - evaporation, 0, 16)
+        end end end end
+      let previous = get(damage, lot)
+      let building = get(c.buildings, lot) > 0 || get(c.plants, lot) > 0
+      -- today's daily rule: deep water still standing damages, dry ground lets repairs count down
+      let repairs = if !building do 0
+        else if level >= 4 do clamp(2 + level / 2, previous, 10)
+        else if level == 0 do clamp(previous - (if favor_god(c) == 3 do 2 else 1 end), 0, 10) else previous end end end
+      drain_parcels(c, severe, evaporation, lot + 1,
+        if stored == level do water else NativeArray.set_int(water, lot, level) end,
+        if previous == repairs do damage else NativeArray.set_int(damage, lot, repairs) end,
+        active || level > 0 || repairs > 0)
+    end
+  end
+  doc "Midnight for a city raining locally: standing water drains at the daily rates, except on parcels severe rain fell on today; repairs count down; the soil dries; pumps and collectors run."
+  fn night_drain(c : City) : City do
+    let rain = current_weather(c)
+    let dry = if curse_god(c) == 2 do 20 else if temperature(c) >= 30 do 11 else 7 end end
+    let evaporation = if rain >= 2 do 0 else if temperature(c) >= 30 do 2 else 1 end end
+    let c = { c with soil_moisture: clamp(c.soil_moisture - dry, 0, 100) }
+    let severe = if rain == 4 do peak_today(c) else NativeArray.make_int(count(), 0) end
+    let c = if c.flood_active || curse_god(c) == 4 do drain_parcels(c, severe, evaporation, 0, c.surface_water, c.flood_damage, false) else c end
+    let sites = weather_sites(c, 0, Nil)
+    if List.is_empty(sites) do c else
+      let needs_network = List.any(sites, fn lot -> get(c.rain_tanks, lot) > 0 || (rain < 4 && (get(c.subway_water, lot) > 0 || (get(c.pump_orders, lot) > 0 && get(c.surface_water, lot) > 0))))
+      if !needs_network do c else
+        let roads = access(c)
+        let gen = generation(c, roads)
+        let report = utility_report(c, roads, gen, population(c))
+        operate_weather_sites(c, sites, roads, pipe_access(c), report, report.electric.flow, rain)
+      end
+    end
+  end
+  -- run the watches still owed today, from [watch] to the evening's
+  pfn owed_watches(c : City, watch : Int) : City do if watch > 2 do c else owed_watches(end_watch(c, watch), watch + 1) end end
+  -- a day's weather: uniform cities as before local rain, others by watches
+  pfn day_weather(c : City, sites : List(Int)) : City do
+    if uniform_rain(c) do weather_day(c, sites) else night_drain(owed_watches(c, c.watch)) end
+  end
+
   -- Standing water is measured in quarter metres. Each day the water level
   -- falls by gravity where it has a route to sea, and by absorption and evaporation elsewhere.
   pfn surface_day(c : City, lot : Int, storm : Bool, evaporation : Int, active : Bool) : City do
@@ -7191,11 +7570,12 @@ mod Ur.Sim do
       else next end
     end
   end
-  fn advance_day_with_traffic(city : City, traffic : NativeIntArr) : City do
+  fn advance_day_with_traffic(city : City, traffic : NativeIntArr) : City do fresh_day(roll_calendar(city, traffic)) end
+  pfn roll_calendar(city : City, traffic : NativeIntArr) : City do
     let city = if valid(city.harbour) && absolute_day(city) % 5 == 0 do update_facility_staff(city) else city end
     let city = open_religion_day(city)
     let day_number = waste_date(city)
-    let c = weather_day(city, weather_sites(city, 0, Nil))
+    let c = day_weather(city, weather_sites(city, 0, Nil))
     let c = freight_day(sanitation_day(c, traffic, day_number), traffic, day_number)
     let day = c.calendar_day + 1
     let weekday = (c.street_day + 1) % 7

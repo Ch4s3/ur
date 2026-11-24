@@ -15,11 +15,11 @@ run() {
 }
 run check forge check
 # `forge test` compiles only the first test file as its entry point, so run
-# each suite on its own.
+# each suite on its own, optimised (it runs far faster than it compiles unoptimised).
 for suite in test/*_test.march; do
     name=$(basename "$suite" .march)
     echo "$name"
-    run "$name" forge test "$suite"
+    run "$name" forge test --release "$suite"
 done
 run lint forge lint --strict
 run build forge build --release

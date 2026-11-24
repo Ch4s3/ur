@@ -1629,7 +1629,7 @@ mod Ur.Hud do
           end
           label(box, x, y +. 175.0, 10.0, destination, false)
         else box end
-      else if shelter > 0 && (c.flood_active || S.severe_rain(c) ||
+      else if shelter > 0 && (c.flood_active || S.severe_now(c) ||
         List.any(people, fn person -> person.shelter == lot)) do
         let open = Ur.Evacuation.open_capacity(c, st.routes, lot)
         let here = List.length(List.filter(people, fn person -> person.location == lot && person.shelter == lot && Ur.Citizens.emergency_move(person)))
