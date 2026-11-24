@@ -59,10 +59,10 @@ mod Ur.Layers do
       34 -> "Green covered · Gray uncovered · Cyan open · Red needs staff · Amber closed"
       36 -> "Land value · Red under $600 / amber to $1,000 / green to $1,600 / cyan above"
       37 -> "Savings a household · Red under $100 / amber to $400 / green to $1,200 / cyan above"
-      38 -> "Rain today · darker is heavier · faded is still to come"
+      38 -> "Rain today · deeper blue is heavier · faint is still to come"
       39 -> "Fish · pale few / deep teal rich · red: overfished (under a third of capacity)"
       33 -> "Amber: storm risk · Blue: flooded now · Green: protection"
-      32 -> "Blue <25 °C · Green 25–27.9 · Amber 28–32.9 · Red 33+ °C"
+      32 -> "Blue: cooler than 25 °C · Clear: comfortable · Amber to red: hotter than 28 °C"
       29 -> "Arrows point downwind. Gray: light / blue: moderate / amber: strong."
       28 -> "Amber: sponsor ward   Red: target parcel   Cyan/green: represented"
       27 -> "Cyan: closed to cars   Amber: scheduled   Gray: eligible street"
@@ -149,20 +149,19 @@ mod Ur.Layers do
       if live do "Within reach of a supplied pipe" else if S.valid(tap) do "Nearby pipe has no supply" else "Out of pipe reach" end end
     else "" end end end end
   end
-  -- Rainfall: today's peak on a parcel, blue severe, cyan heavy, gray rain;
-  -- plus 1000 when that peak is still to come (drawn as an outline)
-  pfn rain_color(level : Int) : Int do if level >= 4 do 12 else if level == 3 do 20 else if level == 2 do 17 else -1 end end end end
-  -- each parcel's Rainfall material, worked out once per draw: today's three watches
-  fn rain_today(c : Ur.Sim.City) : NativeIntArr do
+  -- Rainfall strength on each parcel (0..63) for the blended overlay: today's
+  -- peak where it has already fallen, deeper for heavier rain, and a faint
+  -- wash where the day's heaviest rain is still to come.
+  fn rain_strength(c : Ur.Sim.City) : NativeIntArr do
     let (p0, _) = S.watch_rain(c, 0)
     let (p1, _) = S.watch_rain(c, 1)
     let (p2, _) = S.watch_rain(c, 2)
-    List.fold_left(List.range(0, S.count()), NativeArray.make_int(S.count(), -1), fn (codes, i) ->
+    List.fold_left(List.range(0, S.count()), NativeArray.make_int(S.count(), 0), fn (field, i) ->
       let peak_of = fn (w : Int) -> S.get(if w == 0 do p0 else if w == 1 do p1 else p2 end end, i)
       let past = List.fold_left(List.range(0, c.watch), 0, fn (m, w) -> if peak_of(w) > m do peak_of(w) else m end)
-      let ahead = List.fold_left(List.range(c.watch, 3), 0, fn (m, w) -> if peak_of(w) > m do peak_of(w) else m end)
-      let code = if S.get(c.heights, i) == 0 do -1 else if past >= ahead && past >= 2 do rain_color(past) else if ahead >= 2 do 1000 + rain_color(ahead) else -1 end end end
-      NativeArray.set_int(codes, i, code))
+      let later = List.fold_left(List.range(c.watch, 3), 0, fn (m, w) -> if peak_of(w) > m do peak_of(w) else m end)
+      let strength = if past >= later && past >= 2 do past * 15 else if later >= 2 do later * 5 else 0 end end
+      NativeArray.set_int(field, i, strength))
   end
   fn heat_color(temperature : Int) : Int do
     if temperature < 250 do 12 else if temperature < 280 do 11 else if temperature < 330 do 10 else 6 end end end

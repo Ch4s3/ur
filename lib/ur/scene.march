@@ -329,9 +329,11 @@ mod Ur.Scene do
   -- the heaped clouds, the hour: cumulus build after mid-morning and melt
   -- in the evening. A cloud forming or clearing grows or shrinks in place.
   fn cloud_bodies() : Int do 32 end
-  -- Above the ocean's slots: clouds, high terrain, then rooftop electricity markers.
+  -- Above the ocean's slots: clouds, high terrain, rooftop electricity markers, then the upper band of each
+  -- lot's gradient overlay (for ground that rises more than 32 voxels across it).
   pfn power_marker_base() : Int do Ur.Ocean.slot_count() + cloud_bodies() + S.count() * 2 end
-  fn chunk_slots() : Int do power_marker_base() + S.count() end
+  pfn skin_high_slot(i : Int) : Int do power_marker_base() + S.count() + i end
+  fn chunk_slots() : Int do power_marker_base() + S.count() * 2 end
   -- a parcel's fifth and sixth layers of terrain (32 to 48 m), for the tallest mountains
   pfn high_slot(i : Int, layer : Int) : Int do Ur.Ocean.slot_count() + cloud_bodies() + i * 2 + layer - 4 end
   pfn cloud_slot(i : Int) : Int do Ur.Ocean.slot_count() + i end
@@ -3548,57 +3550,114 @@ mod Ur.Scene do
         0.0, Math.sin(yaw *. 0.5), 0.0, Math.cos(yaw *. 0.5))
     else Ur.AppError.stop("Wind arrow upload failed") end
   end
-  pfn gradient_quads(c : Ur.Sim.City, samples : NativeF32Arr, x : Int, z : Int, floor : Int, tag : Int, n : Int, m : Mesh) : Mesh do
-    if n == 16 do m else
-      let u = n % 4
-      let v = n / 4
-      let sx = x / 8 + u
-      let sz = z / 8 + v
+  -- Gradient overlays lie on the terrain as a skin: each 4-voxel column gets
+  -- a top just over two voxels above its ground (clear of road decks), and where a neighbour rises, a
+  -- wall one voxel in front of that cliff with a one-voxel lip at its top, so
+  -- the skin climbs every step without gaps. Every quad carries the field at
+  -- the corners of its column's 8-voxel cell; the shader blends them by
+  -- world position, so the colour runs on smoothly across quads.
+  pfn skin_quad(m : Mesh, x : Int, y : Int, z : Int, w : Int, h : Int, dir : Int, w1 : Int) : Mesh do
+    -- a wall's second extent is its height: the part inside this band of the chunk is drawn
+    let low = if dir >= 2 && y < 0 do 0 else y end
+    let extent = if dir >= 2 do (if y + h > 32 do 32 else y + h end) - low else h end
+    if low < 0 || low > 31 || extent < 1 do m else
+      let j = m.quads * 2
+      -- a wall cut off below the band keeps its full top, so no drop there
+      let drop = if dir >= 2 && y + h > 32 do 0 else 6 end
+      let w0 = Q.with_drop(Q.pack0(x, low, z, w, extent, dir), drop)
+      { words: NativeArray.set_i32(NativeArray.set_i32(m.words, j, w0), j + 1, w1), quads: m.quads + 1 }
+    end
+  end
+  -- the wall and lip toward a higher neighbour on side [d] (0 -x, 1 +x, 2 -z, 3 +z)
+  pfn skin_step(m : Mesh, u : Int, v : Int, h : Int, high : Int, floor : Int, d : Int, w1 : Int) : Mesh do
+    if high <= h do m else
+      let y = h - floor
+      let top = high - floor
+      let rise = high + 1 - h
+      match d do
+        0 -> skin_quad(skin_quad(m, u, y, v, 4, rise, 2, w1), u, top, v, 1, 4, 0, w1)
+        1 -> skin_quad(skin_quad(m, u + 3, y, v, 4, rise, 3, w1), u + 3, top, v, 1, 4, 0, w1)
+        2 -> skin_quad(skin_quad(m, u, y, v, 4, rise, 4, w1), u, top, v, 4, 1, 0, w1)
+        _ -> skin_quad(skin_quad(m, u, y, v + 3, 4, rise, 5, w1), u, top, v + 3, 4, 1, 0, w1)
+      end
+    end
+  end
+  pfn gradient_quads(c : Ur.Sim.City, samples : NativeF32Arr, x : Int, z : Int, floor : Int, tag : Int, dry : Bool, n : Int, m : Mesh) : Mesh do
+    if n == 64 do m else
+      let u = n % 8 * 4
+      let v = n / 8 * 4
+      let sx = (x + u) / 8
+      let sz = (z + v) / 8
       let a = Ur.OverlayField.sample(samples, sx, sz)
       let b = Ur.OverlayField.sample(samples, sx + 1, sz)
       let d = Ur.OverlayField.sample(samples, sx, sz + 1)
       let e = Ur.OverlayField.sample(samples, sx + 1, sz + 1)
-      let m = if a + b + d + e == 0 do m else
-        let ground = L.height(c, x + u * 8 + 4, z + v * 8 + 4)
-        if tag == 252 && ground == 0 do m else
-          let h = S.clamp(ground + 2 - floor, 0, 31)
-          let packed = a + 64 * b + 4096 * d + 262144 * e
-          let w0 = Q.with_drop(Q.pack0(u * 8, h, v * 8, 8, 8, 0), 6)
-          -- The data overlay tag sits above four six-bit corner samples.
-          let w1 = Q.pack1(packed % 65536, packed / 65536, tag)
-          let j = m.quads * 2
-          { words: NativeArray.set_i32(NativeArray.set_i32(m.words, j, w0), j + 1, w1), quads: m.quads + 1 }
-        end
+      let ground = L.height(c, x + u, z + v)
+      let h = ground + 2
+      let m = if a + b + d + e == 0 || (dry && ground == 0) do m else
+        let packed = a + 64 * b + 4096 * d + 262144 * e
+        -- The data overlay tag sits above four six-bit corner samples.
+        let w1 = Q.pack1(packed % 65536, packed / 65536, tag)
+        let west = L.height(c, x + u - 4, z + v) + 2
+        let east = L.height(c, x + u + 4, z + v) + 2
+        let north = L.height(c, x + u, z + v - 4) + 2
+        let south = L.height(c, x + u, z + v + 4) + 2
+        -- the top stops short of each wall, so no strip of it shows through one
+        let left = if west > h do 1 else 0 end
+        let right = if east > h do 1 else 0 end
+        let near = if north > h do 1 else 0 end
+        let far = if south > h do 1 else 0 end
+        let m = skin_quad(m, u + left, h - floor, v + near, 4 - left - right, 4 - near - far, 0, w1)
+        let m = skin_step(m, u, v, h, west, floor, 0, w1)
+        let m = skin_step(m, u, v, h, east, floor, 1, w1)
+        let m = skin_step(m, u, v, h, north, floor, 2, w1)
+        skin_step(m, u, v, h, south, floor, 3, w1)
       end
-      gradient_quads(c, samples, x, z, floor, tag, n + 1, m)
+      gradient_quads(c, samples, x, z, floor, tag, dry, n + 1, m)
     end
   end
-  pfn gradient_tiles(c : Ur.Sim.City, samples : NativeF32Arr, tag : Int, i : Int) : Unit do
+  -- the lowest ground on a parcel: the skin's chunk starts there
+  pfn skin_floor(c : Ur.Sim.City, x : Int, z : Int, n : Int, low : Int) : Int do
+    if n == 64 do low else
+      let h = L.height(c, x + n % 8 * 4, z + n / 8 * 4)
+      skin_floor(c, x, z, n + 1, if h < low do h else low end)
+    end
+  end
+  type SkinField = { samples : NativeF32Arr, tag : Int, dry : Bool }
+  pfn skin_band(c : Ur.Sim.City, fields : List(SkinField), x : Int, z : Int, floor : Int, m : Mesh) : Mesh do
+    match fields do
+      Nil -> m
+      Cons(f, rest) -> skin_band(c, rest, x, z, floor, gradient_quads(c, f.samples, x, z, floor, f.tag, f.dry, 0, m))
+    end
+  end
+  pfn skin_upload(slot : Int, x : Int, floor : Int, z : Int, mesh : Mesh) : Unit do
+    if mesh.quads == 0 do Vk.chunk_free(slot)
+    else if Vk.chunk_begin(slot, x, floor, z, 0) && Vk.chunk_part(2, mesh.words, mesh.quads) && Vk.chunk_commit() do ()
+    else Ur.AppError.stop("Gradient overlay upload failed") end end
+  end
+  pfn skin_tiles(c : Ur.Sim.City, fields : List(SkinField), i : Int) : Unit do
     if i == S.count() do () else
       let x = i % S.width() * 32
       let z = i / S.width() * 32
-      let floor = S.clamp(L.height(c, x + 16, z + 16) - 12, 0, 200)
-      let mesh = gradient_quads(c, samples, x, z, floor, tag, 0, { words: NativeArray.make_i32(32, 0), quads: 0 })
-      let slot = overlay_slot(i)
-      if mesh.quads == 0 do Vk.chunk_free(slot)
-      else if Vk.chunk_begin(slot, x, floor, z, 0) && Vk.chunk_part(2, mesh.words, mesh.quads) && Vk.chunk_commit() do ()
-      else Ur.AppError.stop("Gradient overlay upload failed") end end
-      gradient_tiles(c, samples, tag, i + 1)
+      let floor = skin_floor(c, x, z, 0, 9999)
+      let size = List.length(fields) * 64 * 9 * 2
+      skin_upload(overlay_slot(i), x, floor, z, skin_band(c, fields, x, z, floor, { words: NativeArray.make_i32(size, 0), quads: 0 }))
+      skin_upload(skin_high_slot(i), x, floor + 32, z, skin_band(c, fields, x, z, floor + 32, { words: NativeArray.make_i32(size, 0), quads: 0 }))
+      skin_tiles(c, fields, i + 1)
     end
   end
-  pfn heat_tiles(c : Ur.Sim.City, x : Int, z : Int, floor : Int, color : Int, n : Int, mesh : Mesh) : Mesh do
-    if n >= 16 do mesh else
-      let u = n % 4 * 8
-      let v = n / 4 * 8
-      let height = L.height(c, x + u + 4, z + v + 4)
-      let mesh = if height <= 0 do mesh else face(mesh, u, S.clamp(height + 2 - floor, 0, 31), v, 8, 8, 0, color) end
-      heat_tiles(c, x, z, floor, color, n + 1, mesh)
+  pfn gradient_tiles(c : Ur.Sim.City, samples : NativeF32Arr, tag : Int, i : Int) : Unit do
+    skin_tiles(c, [{ samples: samples, tag: tag, dry: tag == 252 }], i)
+  end
+  pfn clear_skin_high(i : Int) : Unit do
+    if i == S.count() do () else
+      Vk.chunk_free(skin_high_slot(i))
+      clear_skin_high(i + 1)
     end
   end
-  pfn layer_tiles(c : Ur.Sim.City, st : Ur.Sim.Stats, layer : Int, rain : NativeIntArr, i : Int) : Unit do
+  pfn layer_tiles(c : Ur.Sim.City, st : Ur.Sim.Stats, layer : Int, i : Int) : Unit do
     if i >= S.count() do () else
-      let tex = if layer == 38 do NativeArray.get_int(rain, i)
-        else if layer == 2 && S.get(c.grid, i) == 0 do -1 else Ur.Layers.material(c, st, layer, i) end end
+      let tex = if layer == 2 && S.get(c.grid, i) == 0 do -1 else Ur.Layers.material(c, st, layer, i) end
       let slot = overlay_slot(i)
       if tex < 0 do Vk.chunk_free(slot) else if layer == 29 do wind_arrow(c, i, slot, tex) else
         let x = i % S.width() * 32
@@ -3614,18 +3673,30 @@ mod Ur.Scene do
           else if Ur.Layers.is_utility(layer) && (if layer == 2 do S.get(c.grid, i) > 0 else S.get(c.pipes, i) > 0 end) do utility_mesh(c, i, floor, layer, tex)
           else if layer == 1 && tex == 12 do water_reach(tex)
           else if layer == 11 do crossing_layer(c, i, tex)
-          else if layer == 32 || (layer == 38 && tex < 1000) do heat_tiles(c, x, z, floor, tex, 0, { words: NativeArray.make_i32(32, 0), quads: 0 })
-          else if layer == 38 do layer_outline(tex - 1000, { words: NativeArray.make_i32(8, 0), quads: 0 })
           else if layer == 27 do
             let m = { words: NativeArray.make_i32(12, 0), quads: 0 }
             street_policy_mesh(c, i, tex, 0, face(m, 12, 0, 12, 8, 8, 0, tex))
           else if layer == 28 && tex != 6 do ward_outline(c, i, tex, 0, { words: NativeArray.make_i32(8, 0), quads: 0 })
-          else layer_outline(tex, { words: NativeArray.make_i32(8, 0), quads: 0 }) end end end end end end end end end
+          else layer_outline(tex, { words: NativeArray.make_i32(8, 0), quads: 0 }) end end end end end end end
         if mesh.quads == 0 do Vk.chunk_free(slot) else if Vk.chunk_begin(slot, x, floor, z, 0) && Vk.chunk_part(if layer == 9 do 2 else 0 end, mesh.words, mesh.quads) && Vk.chunk_commit() do ()
         else Ur.AppError.stop("Map layer upload failed") end end
       end end
-      layer_tiles(c, st, layer, rain, i + 1)
+      layer_tiles(c, st, layer, i + 1)
     end
+  end
+  -- Heat and Rainfall use the shader's blended gradient overlay, as the
+  -- pollution and freshwater layers do: each 8-voxel patch carries the field
+  -- at its four corners and the GPU blends colour and opacity between them,
+  -- so the layer fades smoothly between parcels and out to nothing at its edge.
+  -- Heat: cool parcels shade blue and hot ones amber to red; comfortable ground stays clear.
+  fn heat_fields(c : Ur.Sim.City) : (NativeF32Arr, NativeF32Arr) do
+    let temps = List.fold_left(List.range(0, S.count()), NativeArray.make_int(S.count(), 0), fn (t, i) ->
+      NativeArray.set_int(t, i, S.local_temperature(c, i)))
+    let cool = List.fold_left(List.range(0, S.count()), NativeArray.make_int(S.count(), 0), fn (f, i) ->
+      NativeArray.set_int(f, i, S.clamp((255 - NativeArray.get_int(temps, i)) * 63 / 100, 0, 63)))
+    let hot = List.fold_left(List.range(0, S.count()), NativeArray.make_int(S.count(), 0), fn (f, i) ->
+      NativeArray.set_int(f, i, S.clamp((NativeArray.get_int(temps, i) - 275) * 63 / 80, 0, 63)))
+    (Ur.OverlayField.from_parcels(cool), Ur.OverlayField.from_parcels(hot))
   end
   type FloodFields = { live : NativeIntArr, potential : NativeIntArr }
   pfn flood_fields(c : Ur.Sim.City, lot : Int, fields : FloodFields) : FloodFields do
@@ -3684,9 +3755,17 @@ mod Ur.Scene do
     end
     if layer == 33 do
       let zero = NativeArray.make_int(S.count(), 0)
+      clear_skin_high(0)
       flood_map(c, flood_fields(c, 0, { live: zero, potential: zero }), 0)
     else if tag > 0 do gradient_tiles(c, Ur.OverlayField.field(c, layer), tag, 0)
-    else layer_tiles(c, st, layer, if layer == 38 do Ur.Layers.rain_today(c) else NativeArray.make_int(1, 0) end, 0) end end
+    else if layer == 32 do
+      let (cool, hot) = heat_fields(c)
+      skin_tiles(c, [{ samples: cool, tag: 252, dry: true }, { samples: hot, tag: 253, dry: true }], 0)
+    else if layer == 38 do gradient_tiles(c, Ur.OverlayField.from_parcels(Ur.Layers.rain_strength(c)), 252, 0)
+    else
+      clear_skin_high(0)
+      layer_tiles(c, st, layer, 0)
+    end end end end
   end
   fn camera(cx : Float, cz : Float, zoom : Float, aspect : Float, yaw : Float) : Unit do
     let x = cx +. Math.sin(yaw) *. 194.0

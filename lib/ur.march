@@ -578,6 +578,9 @@ mod Ur do
       let tool = if (Vk.mouse_button(1) && !road_cancel) || (p.group == 7 && option >= 0) do 0 else if clicked_tool > 0 do clicked_tool
         else if (clicked_group > 0 && group > 0) || clicked_page >= 0 do 0 else p.tool end end end
       let tool = if place_shrine do 103 else if sidebar_visible && sidebar_tab >= 14 && sidebar_tab <= 16 do 0 else tool end end
+      -- Closing the tool menu puts the tool down: with nothing in hand the
+      -- pointer only inspects parcels and objects.
+      let tool = if group == 0 do 0 else tool end
       let clicked_layer = if p.group == 7 do option else -1 end
       let layer = if clicked_layer < 0 do p.layer else if clicked_layer == p.layer do 0 else clicked_layer end end
       let changed_tool = clicked_tool > 0
@@ -592,7 +595,9 @@ mod Ur do
         else if S.area_policy_tool(clicked_tool) do (if clicked_tool <= 66 do 23 else 24 end)
         else if (changed_tool || (utility_page && page != 5)) && Ur.Layers.is_utility(layer) do 0
         else if changed_tool && (layer == 11 || layer == 35 || layer == 23 || layer == 24 || layer == 27) do 0
-        else layer end end end end end end end end end end
+        -- closing the utilities menu puts its overlay away with the tool
+        else if group == 0 && p.group == 4 && Ur.Layers.is_utility(layer) do 0
+        else layer end end end end end end end end end end end
       let layer = if p.city.harbour >= 0 && pressed(keys, p.keys, 22) do (if p.layer == 35 do 0 else 35 end) else layer end
       let tool_layer = Ur.Layers.utility_tool(tool)
       let layer = if p.city.harbour >= 0 && tool_layer > 0 do tool_layer else layer end
@@ -829,10 +834,19 @@ mod Ur do
       -- [stats_landed] stands in for the edit, undo or policy change there (food, fleet, the
       -- reason line, the day plan, the roster rebuild and re-index), and [stats_undo] for undone
       -- in the rebuild. Midnight's own stats supersede a pending task.
+      -- Batteries bank spare power and give it back an hour at a time. The grid is worked
+      -- out again when the sun rises or sets over a city that has solar arrays or batteries,
+      -- and when a battery's output has gone stale (not while a refresh is already coming).
+      let hour_before = S.street_hour(phase)
+      let hour_now = S.street_hour(elapsed)
+      let hours_gone = (hour_now - hour_before + 24) % 24
+      let c = if hours_gone > 0 do S.battery_hours(c, p.stats, hours_gone) else c end
+      let power_stale = hours_gone > 0 && !midnight && Option.is_none(p.stats_wait.task) && S.power_follows_clock(c) &&
+        (S.daylight(hour_before) != S.daylight(hour_now) || S.battery_stale(c, p.stats))
       let wait = p.stats_wait
       -- (a facility paused or resumed rebuilds the roster on its own frame, so it keeps its stats there)
       -- a watch that moved water wants fresh stats (closed roads, offline utilities) too, worked out the same way
-      let want_stats = (paint || undone || policy_changed || watch_flooded) && !midnight
+      let want_stats = (paint || undone || policy_changed || watch_flooded || power_stale) && !midnight
       let defer_stats = want_stats && !operation_changed
       let (pending_stats, stale_stats) = if want_stats || midnight do (None, retire_stats(wait)) else (wait.task, wait.stale) end
       let stale_stats = List.filter(stale_stats, fn task -> Option.is_none(Task.poll(task)))

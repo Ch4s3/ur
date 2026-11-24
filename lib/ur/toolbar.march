@@ -39,9 +39,9 @@ mod Ur.Toolbar do
           3 -> [91, 92, 24, 25, 93, 94, 95, 96, 61]
           4 -> [86, 26, 27]
           5 -> [97, 98, 111]
-          _ -> [26, 27, 4, 8, 20, 21, 22, 23]
+          _ -> [26, 27, 4, 8, 20, 21, 22, 23, 150]
         end
-        { span: 8, pages: ["Power", "Water", "Food", "Waste", "Offshore", "Upgrades"], items: items }
+        { span: 9, pages: ["Power", "Water", "Food", "Waste", "Offshore", "Upgrades"], items: items }
       5 ->
         let items = match page do
           1 -> Cons(53, Cons(55, Nil))
@@ -122,6 +122,7 @@ mod Ur.Toolbar do
       22 -> "nuclear"
       23 -> "biogas"
       21 -> "solar"
+      150 -> "battery"
       20 | 86 -> "wind"
       87 -> "road"
       88 | 89 -> "avenue"

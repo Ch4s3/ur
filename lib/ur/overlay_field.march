@@ -54,6 +54,33 @@ mod Ur.OverlayField do
       layer, 0, NativeArray.make_f32(width() * depth(), 0.0))
   end
 
+  pfn parcel_value(values : NativeIntArr, x : Int, z : Int) : Int do
+    NativeArray.get_int(values, S.index(S.clamp(x, 0, S.width() - 1), S.clamp(z, 0, S.depth() - 1)))
+  end
+  -- a per-parcel value at voxel (gx, gz), blended between the four nearest parcel centres
+  pfn blended(values : NativeIntArr, gx : Int, gz : Int) : Int do
+    let sx = gx - 16
+    let sz = gz - 16
+    let ix = if sx < 0 do -1 else sx / 32 end
+    let iz = if sz < 0 do -1 else sz / 32 end
+    let u = sx - ix * 32
+    let v = sz - iz * 32
+    let a = parcel_value(values, ix, iz)
+    let b = parcel_value(values, ix + 1, iz)
+    let d = parcel_value(values, ix, iz + 1)
+    let e = parcel_value(values, ix + 1, iz + 1)
+    ((32 - u) * (32 - v) * a + u * (32 - v) * b + (32 - u) * v * d + u * v * e) / 1024
+  end
+  pfn resample(values : NativeIntArr, n : Int, samples : NativeF32Arr) : NativeF32Arr do
+    if n == width() * depth() do samples else
+      resample(values, n + 1, NativeArray.set_f32(samples, n, int_to_float(blended(values, n % width() * 8, n / width() * 8))))
+    end
+  end
+  doc "A field of per-parcel values (0..63) on the overlay's corner grid, blended between parcel centres."
+  fn from_parcels(values : NativeIntArr) : NativeF32Arr do
+    resample(values, 0, NativeArray.make_f32(width() * depth(), 0.0))
+  end
+
   fn sample(samples : NativeF32Arr, x : Int, z : Int) : Int do
     S.clamp(float_to_int(NativeArray.get_f32(samples, z * width() + x)), 0, 63)
   end
