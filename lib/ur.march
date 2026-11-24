@@ -94,6 +94,17 @@ mod Ur do
   -- shows that network through the ground while the tool is in hand.
   pfn water_network_tool(t : Int) : Bool do t == 18 || t == 19 || t == 98 || t == 9 || t == 10 || (t >= 14 && t <= 17) end
   pfn power_network_tool(t : Int) : Bool do t == 26 || t == 27 || t == 97 || t == 4 || t == 8 || (t >= 20 && t <= 23) || t == 86 end
+  -- the map layer a tool shows while it is in hand, or -1
+  pfn tool_layer(t : Int) : Int do
+    if t == 99 || t == 100 || t == 101 do 33 else if water_network_tool(t) do 1
+    else if power_network_tool(t) do 2
+    else if t == 36 || t == 43 do 3
+    else if (t >= 44 && t <= 47) || t == 62 do 10
+    else if t == 51 || t == 52 || t == 54 do 11
+    else if S.timed_street_tool(t) do 27
+    else if S.area_policy_tool(t) do (if t <= 66 do 23 else 24 end)
+    else -1 end end end end end end end end
+  end
   pfn clock_phase(c : Ur.Sim.City) : Float do int_to_float(c.clock_ms) /. 1000.0 end
   pfn stamp_clock(c : Ur.Sim.City, elapsed : Float) : Ur.Sim.City do
     { c with clock_ms: float_to_int(elapsed *. 1000.0) }
@@ -274,18 +285,17 @@ mod Ur do
       let tool = if Vk.mouse_button(1) || (p.group == 7 && option >= 0) do 0 else if clicked_tool > 0 do clicked_tool
         else if (clicked_group > 0 && group > 0) || clicked_page >= 0 do 0 else p.tool end end end
       let tool = if place_shrine do 103 else if sidebar_visible && sidebar_tab >= 14 && sidebar_tab <= 16 do 0 else tool end end
+      -- Closing the tool menu puts the tool down: with nothing in hand the
+      -- pointer only inspects parcels and objects.
+      let tool = if group == 0 do 0 else tool end
       let clicked_layer = if p.group == 7 do option else -1 end
       let layer = if clicked_layer < 0 do p.layer else if clicked_layer == p.layer do 0 else clicked_layer end end
       let changed_tool = clicked_tool > 0
-      let layer = if clicked_tool == 99 || clicked_tool == 100 || clicked_tool == 101 do 33 else if water_network_tool(clicked_tool) do 1
-        else if power_network_tool(clicked_tool) do 2
-        else if clicked_tool == 36 || clicked_tool == 43 do 3
-        else if (clicked_tool >= 44 && clicked_tool <= 47) || clicked_tool == 62 do 10
-        else if clicked_tool == 51 || clicked_tool == 52 || clicked_tool == 54 do 11
-        else if S.timed_street_tool(clicked_tool) do 27
-        else if S.area_policy_tool(clicked_tool) do (if clicked_tool <= 66 do 23 else 24 end)
+      let layer = if tool_layer(clicked_tool) >= 0 do tool_layer(clicked_tool)
         else if changed_tool && (layer == 1 || layer == 2 || layer == 11 || layer == 23 || layer == 24 || layer == 27) do 0
-        else layer end end end end end end end end end
+        -- the overlay a tool brought up goes when the tool is put down
+        else if tool == 0 && p.tool > 0 && layer == tool_layer(p.tool) do 0
+        else layer end end end
       let selected_speed = if mouse && !p.mouse do Ur.Hud.speed_at(mx, my, w) else -1 end
       let cycle_speed = pressed(keys, p.keys, 8)
       let paused = if selected_speed >= 0 do selected_speed == 0
