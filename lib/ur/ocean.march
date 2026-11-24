@@ -20,9 +20,12 @@ mod Ur.Ocean do
   fn slot_count() : Int do ocean_base() + 16 + ring_cells() * 2 end
 
   -- The sea floor on 4-voxel ground cells over the map and its ring: each
-  -- cell's water depth in voxels (0 land), a Strata.Seabed shelf from the
-  -- coast with the city's dredging and reefs (City.seabed) on top.
-  type Field = { floor : NativeIntArr }
+  -- cell's water depth in voxels (0 land, -2..-1 dry sand that is not land),
+  -- a Strata.Seabed shelf from the coast, the map's natural reefs and sand
+  -- bars, the sand storms moved (City.sand_changes), and the city's dredging
+  -- and reefs (City.seabed) on top. [kind] says what each cell is made of
+  -- (0 open floor, 1 reef, 2 sand bar); [shelf] is the bare shelf's depth.
+  type Field = { floor : NativeIntArr, kind : NativeIntArr, shelf : NativeIntArr }
 
   doc "Ground cells across and down the map and its ring (8 to a parcel)."
   fn cells_wide() : Int do padded_width() * 8 end
@@ -58,18 +61,83 @@ mod Ur.Ocean do
     end
   end
 
-  doc "The sea floor of city [c]: a shelf 2 voxels deep at the shore deepening 3 voxels in 20 to 63, with the city's dredging and reefs."
+  -- the cell at the centre of map parcel (px, pz)
+  pfn parcel_cell(px : Int, pz : Int) : (Int, Int) do (px * 8 + 4 + ring() * 8, pz * 8 + 4 + ring() * 8) end
+  -- the middle of the Fishing shoals island (Ur.Sim.food_island 2), as a cell; None on a map without one
+  pfn shoals_sum(c : Ur.Sim.City, i : Int, n : Int, sx : Int, sz : Int) : (Int, Int, Int) do
+    if i >= S.count() do (n, sx, sz)
+    else if S.food_island(c, i) == 2 do shoals_sum(c, i + 1, n + 1, sx + i % S.width(), sz + i / S.width())
+    else shoals_sum(c, i + 1, n, sx, sz) end end
+  end
+  pfn shoals_centre(c : Ur.Sim.City) : Option((Int, Int)) do
+    let (n, sx, sz) = shoals_sum(c, 0, 0, 0, 0)
+    if n == 0 do None else Some(parcel_cell(sx / n, sz / n)) end
+  end
+  -- walking south from cell (cx, cz), the first water cell
+  pfn south_shore(land : NativeIntArr, cx : Int, cz : Int) : Int do
+    if cz >= cells_deep() - 1 || NativeArray.get_int(land, cz * cells_wide() + cx) == 0 do cz else south_shore(land, cx, cz + 1) end
+  end
+  -- The classic founding map's own features: a fringing reef round the Fishing shoals island and a sand bar off the main island's south shore.
+  pfn classic_features(shelf : Strata.Seabed.Seafloor, land : NativeIntArr) : Strata.Seabed.Features do
+    let (rx0, rz0) = parcel_cell(50, 18)
+    let (rx1, rz1) = parcel_cell(59, 28)
+    let ft = Strata.Seabed.reef_band(Strata.Seabed.features(shelf), land, rx0, rz0, rx1, rz1, 6, 18, 6)
+    let (ax, az) = parcel_cell(15, 22)
+    let (bx, bz) = parcel_cell(25, 22)
+    Strata.Seabed.bar(ft, ax, south_shore(land, ax, az) + 12, bx, south_shore(land, bx, bz) + 12, 3, -1)
+  end
+  -- The map's natural reefs and sand bars: none for a city saved before them or for the old test map, the classic map's own, or the seed's.
+  pfn natural(c : Ur.Sim.City, shelf : Strata.Seabed.Seafloor, land : NativeIntArr) : Strata.Seabed.Features do
+    if c.sea_features == 0 || !c.founding_map do Strata.Seabed.features(shelf)
+    else if c.world_seed < 0 do classic_features(shelf, land)
+    else
+      let forced = match shoals_centre(c) do
+        Some(p) -> [p]
+        None -> Nil
+      end
+      Strata.Seabed.generate(shelf, land, c.world_seed, { Strata.Seabed.default_recipe() with forced: forced })
+    end end
+  end
+  -- the sand storms moved, laid over the generated floor: each entry cell * 512 + kind * 128 + depth + 2
+  pfn sand(ft : Strata.Seabed.Features, changes : NativeIntArr, i : Int) : Strata.Seabed.Features do
+    if i >= NativeArray.length_int(changes) do ft else
+      let v = NativeArray.get_int(changes, i)
+      let cell = v / 512
+      if cell < 0 || cell >= cells_wide() * cells_deep() do sand(ft, changes, i + 1) else
+        let f = ft.floor
+        sand({ floor: { f with depth: NativeArray.set_int(f.depth, cell, v % 128 - 2) }, kind: NativeArray.set_int(ft.kind, cell, v / 128 % 4) }, changes, i + 1)
+      end
+    end
+  end
+  doc "The sea floor of city [c]'s generated features alone, before storms and edits: what sand changes (City.sand_changes) are measured against."
+  fn generated(c : Ur.Sim.City) : Strata.Seabed.Features do
+    let n = cells_wide() * cells_deep()
+    let land = seed(c, NativeArray.make_int(n, 0), 0)
+    natural(c, Strata.Seabed.shelf(land, cells_wide(), cells_deep(), 4, 2, 3, 20, 63), land)
+  end
+  doc "The sea floor of city [c]: a shelf 2 voxels deep at the shore deepening 3 voxels in 20 to 63, with the map's reefs and sand bars, the sand storms moved, and the city's dredging and reefs."
   fn field(c : Ur.Sim.City) : Field do
     let n = cells_wide() * cells_deep()
-    let shelf = Strata.Seabed.shelf(seed(c, NativeArray.make_int(n, 0), 0), cells_wide(), cells_deep(), 4, 2, 3, 20, 63)
-    let edited = edits(c, shelf, 0)
-    { floor: edited.depth }
+    let land = seed(c, NativeArray.make_int(n, 0), 0)
+    let shelf = Strata.Seabed.shelf(land, cells_wide(), cells_deep(), 4, 2, 3, 20, 63)
+    let ft = sand(natural(c, shelf, land), c.sand_changes, 0)
+    let edited = edits(c, ft.floor, 0)
+    { floor: edited.depth, kind: ft.kind, shelf: shelf.depth }
   end
+
+  doc "What the floor at voxel (x, z) is made of: 0 open floor, 1 reef, 2 sand bar; open floor off the field."
+  fn kind(f : Field, x : Int, z : Int) : Int do
+    let cx = int_div_euclid(x, 4) + ring() * 8
+    let cz = int_div_euclid(z, 4) + ring() * 8
+    if cx < 0 || cz < 0 || cx >= cells_wide() || cz >= cells_deep() do 0 else NativeArray.get_int(f.kind, cz * cells_wide() + cx) end
+  end
+  doc "The bare shelf's depth in voxels at voxel (x, z), before reefs, bars, storms and edits; deep off the field."
+  fn shelf_depth(f : Field, x : Int, z : Int) : Int do at(f.shelf, int_div_euclid(x, 4) + ring() * 8, int_div_euclid(z, 4) + ring() * 8) end
 
   -- a cell's water depth in voxels; off the field the open sea is deep
   pfn cell_depth(f : Field, cx : Int, cz : Int) : Int do at(f.floor, cx, cz) end
 
-  doc "The water's depth in voxels (0..63; 0 is land, 63 deep) at voxel (x, z), in the map's voxel coordinates; anywhere off the field is deep."
+  doc "The water's depth in voxels (-2..63; 0 is land, -2..-1 dry sand, 63 deep) at voxel (x, z), in the map's voxel coordinates; anywhere off the field is deep."
   fn depth(f : Field, x : Int, z : Int) : Int do
     let cx = int_div_euclid(x, 4) + ring() * 8
     let cz = int_div_euclid(z, 4) + ring() * 8
@@ -77,9 +145,10 @@ mod Ur.Ocean do
   end
 
   pfn least4(a : Int, b : Int, c : Int, d : Int) : Int do least(least(a, b), least(c, d)) end
-  doc "The water's depth at a cell corner (x, z on the 4-voxel grid): the shallowest of the four cells that meet there, so a shoreline vertex is dry from whichever side it is seen."
+  doc "The water's depth at a cell corner (x, z on the 4-voxel grid): the shallowest of the four cells that meet there (0 where any is land or dry sand), so a shoreline vertex is dry from whichever side it is seen."
   fn corner_depth(f : Field, x : Int, z : Int) : Int do
-    least4(depth(f, x - 2, z - 2), depth(f, x + 2, z - 2), depth(f, x - 2, z + 2), depth(f, x + 2, z + 2))
+    -- dry sand is as dry as land to the sea surface
+    S.clamp(least4(depth(f, x - 2, z - 2), depth(f, x + 2, z - 2), depth(f, x - 2, z + 2), depth(f, x + 2, z + 2)), 0, 63)
   end
 
   doc "The seabed's height in voxels at (x, z): below sea level (0) by the water's depth."

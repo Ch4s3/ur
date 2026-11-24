@@ -1,0 +1,70 @@
+-- Natural reefs and sand bars in the sea floor (Ur.Ocean), and what a save keeps of them.
+mod ReefFieldTest do
+  needs IO
+  needs IO.Console
+  alias Ur.Sim as S
+  alias Ur.Ocean as O
+
+  pfn count_kind(f : Ur.Ocean.Field, kind : Int, i : Int, n : Int) : Int do
+    if i >= NativeArray.length_int(f.kind) do n else count_kind(f, kind, i + 1, if NativeArray.get_int(f.kind, i) == kind do n + 1 else n end) end
+  end
+  pfn bare_shelf(f : Ur.Ocean.Field, i : Int) : Bool do
+    if i >= NativeArray.length_int(f.floor) do true
+    else if NativeArray.get_int(f.floor, i) != NativeArray.get_int(f.shelf, i) || NativeArray.get_int(f.kind, i) != 0 do false
+    else bare_shelf(f, i + 1) end end
+  end
+  -- any reef within [r] parcels of map parcel (px, pz)
+  pfn reef_near(f : Ur.Ocean.Field, px : Int, pz : Int, r : Int, k : Int) : Bool do
+    let side = 2 * r * 8 + 8
+    if k >= side * side do false else
+      let x = (px - r) * 32 + (k % side) * 4 + 2
+      let z = (pz - r) * 32 + (k / side) * 4 + 2
+      if O.kind(f, x, z) == 1 do true else reef_near(f, px, pz, r, k + 1) end
+    end
+  end
+  pfn game_of(c : Ur.Sim.City) : Ur.Save.Session do
+    { game: { city: c, cx: 0.0, cz: 0.0, zoom: 60.0, yaw: 0.55, paused: true, speed: 1 }, evacuation: Nil }
+  end
+
+  fn main(_cap : Cap(IO)) : Unit do
+    -- a new seeded city has reefs and bars in its field
+    let seeded = S.unclaimed_seeded(7)
+    let f = O.field(seeded)
+    Test.assert_true(count_kind(f, 1, 0, 0) > 0, "seed 7 has reef")
+    Test.assert_true(count_kind(f, 2, 0, 0) > 0, "seed 7 has a sand bar")
+
+    -- a city saved before features has none
+    let old = O.field({ seeded with sea_features: 0 })
+    Test.assert_true(bare_shelf(old, 0), "no features: the floor is the bare shelf, all open floor")
+
+    -- the classic map's shoals island has a reef
+    let classic = O.field(S.unclaimed())
+    Test.assert_true(reef_near(classic, 55, 23, 7, 0), "reef within 7 parcels of the Fishing shoals island's centre (it is about 4.5 parcels in radius)")
+    Test.assert_true(count_kind(classic, 2, 0, 0) > 0, "the classic map has its sand bar")
+
+    -- the old test map has none
+    Test.assert_true(bare_shelf(O.field(S.new()), 0), "the old test map keeps a bare shelf")
+
+    -- a thin bar still breaks the swell grid: one dry 1 m cell under a 2 m swell cell
+    let wet = Ur.Sea.swell_depths(f, seeded.seawalls)
+    let w = O.padded_width() * 4
+    -- the 2 m swell cell in the open ring at (20, 20) covers field cells (40..41, 40..41)
+    Test.assert_true(NativeArray.get_f32(wet, 20 * w + 20) > 0.0, "open water before")
+    let dry = { f with floor: NativeArray.set_int(f.floor, 41 * O.cells_wide() + 40, -1) }
+    let barred = Ur.Sea.swell_depths(dry, seeded.seawalls)
+    Test.assert_true(NativeArray.get_f32(barred, 20 * w + 20) <= 0.0, "a single dry cell under it makes it dry")
+
+    -- saves keep the features version, and a save without it loads with none
+    match Ur.Save.decode_session(Ur.Save.encode_session(game_of(seeded))) do
+      Ok(s) -> Test.assert_eq_int(s.game.city.sea_features, 1, "sea_features survives a save")
+      Err(e) -> Test.assert_true(false, "save round trip failed: " ++ e)
+    end
+    let text = String.replace(Ur.Save.encode_session(game_of(seeded)), "\"sea_features\":1,", "")
+    Test.assert_false(String.contains(text, "\"sea_features\""), "the key is gone from the text")
+    match Ur.Save.decode_session(text) do
+      Ok(s) -> Test.assert_eq_int(s.game.city.sea_features, 0, "an old save has no features")
+      Err(e) -> Test.assert_true(false, "old save failed to load: " ++ e)
+    end
+    Authority.must(println("Reef field checks passed"))
+  end
+end
