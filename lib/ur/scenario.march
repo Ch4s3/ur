@@ -678,7 +678,9 @@ mod Ur.Scenario do
     let school = S.index(10, 18)
     let heights = NativeArray.set_int(NativeArray.set_int(c.heights, home, 11), next_home, 12)
     let heights = NativeArray.set_int(NativeArray.set_int(heights, S.index(11, 19), 0), S.index(11, 20), 0)
-    { c with heights: NativeArray.set_int(heights, school, 21),
+    let heights = NativeArray.set_int(heights, school, 21)
+    -- the storm's sea reaches the water cut beside the home too
+    { c with heights: heights, sea_heights: S.sea_on_water(heights, 400),
       buildings: NativeArray.set_int(c.buildings, home, 2),
       plants: NativeArray.set_int(c.plants, school, 18) }
   end
