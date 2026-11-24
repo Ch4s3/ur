@@ -1040,7 +1040,7 @@ mod Ur do
       -- the ferries ride the waves Strata draws
       Ur.Scene.float_ferries(c, Strata.Waves.sea_state(sea.wind_x, sea.wind_z, sea.height, sea.whitecaps), sea_field, sea_exposure, water_time, traffic_time, elapsed, 0)
       let (cloud_x, cloud_z) = p.cloud_offset
-      let drift = dt *. int_to_float(wind.speed) /. 3.6
+      let drift = game_dt *. int_to_float(wind.speed) /. 3.6
       let cloud_offset = (cloud_x +. Math.cos(wind.heading) *. drift, cloud_z +. Math.sin(wind.heading) *. drift)
       Ur.Scene.clouds(sky, elapsed, cloud_offset, p.peaks, c, p.forced_weather < 0 && !S.uniform_rain(c))
       let hud = Ur.Hud.draw(c, st, tool, group, page, layer, hovered, inspect, mx, my, reason, sidebar_visible, sidebar_tab, finance_view, crime_focus, council_focus, religion_site, religion_choice, paused, speed, S.street_hour(elapsed), weather, weather_time, citizen_stats, if guided do "" else Build.caption(preview, preview_tool) end, !List.is_empty(undo), activity)
