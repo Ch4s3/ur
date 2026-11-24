@@ -37,7 +37,7 @@ mod PublicConstructionTest do
     let after_day = S.advance_day_with_traffic(staffed, zero)
     Test.assert_eq_int(S.get(after_day.plants, lot), 0, "A crew needs multiple days to finish")
     Test.assert_true(remaining(after_day, lot) == remaining(staffed, lot) - 1, "An available crew makes daily progress")
-    let game = { city: after_day, cx: 0.0, cz: 0.0, zoom: 1.0, yaw: 0.0, paused: false, speed: 1 }
+    let game = { city: after_day, cx: 0.0, cz: 0.0, zoom: 52.0, yaw: 0.0, paused: false, speed: 1 }
     let loaded = match Ur.Save.decode(Ur.Save.encode(game)) do
       Ok(save) -> save.city
       Err(reason) -> panic(reason)
