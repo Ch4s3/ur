@@ -224,7 +224,8 @@ mod Ur.Hud do
       let a = label(a, x, top +. 282.0, 11.0, "Pollution " ++ int_to_string(S.land_pollution_at(c, hover)) ++ "%   ·   " ++ S.nuisance_name(S.get(c.nuisance, hover)) ++ " nuisance limit   ·   Land $" ++ int_to_string(S.land_value(c, hover)) ++
         (if zone == 3 && !S.live_work(c, hover) && S.workshop_allowed(c, hover) do " · workshop allowed" else "" end), false)
       let trip = S.commute(st.commutes, hover)
-      let travel = if S.get(c.ferries, hover) > 0 || S.get(c.transit, hover) >= 2 do
+      let travel = if S.get(c.ferries, hover) > 0 do S.ferry_summary(c, hover)
+      else if S.get(c.transit, hover) >= 2 do
         let running = S.get(c.ferries, hover) > 0 || S.get(st.running_transit, hover) > 0
         (if running do "Service running" else "Service inactive" end) ++ "   ·   Frequency " ++ int_to_string(S.frequency(c, hover)) ++ "/3"
       else if S.get(c.roads, hover) > 0 do
@@ -234,7 +235,7 @@ mod Ur.Hud do
           "Busiest direction " ++ int_to_string(load) ++ " / " ++ int_to_string(capacity) ++ "   ·   Delay +" ++ int_to_string(S.delay_for(c, hover, load)) ++ " min"
         end
       else if trip < 999 do "Nearest jobs   " ++ int_to_string(trip) ++ " min"
-      else "" end end end
+      else "" end end end end
       let a = label(a, x, top +. 304.0, 11.0, travel, false)
       let a = if zone > 0 do label(a, x, top +. 325.0, 11.0, "Storeys " ++ int_to_string(S.get(c.buildings, hover)) ++ " / " ++ int_to_string(S.get(c.density, hover)) ++ "   ·   " ++ civic_label(S.get(st.civic, hover)), false) else a end
       let homes = S.homes_at(c, hover)
@@ -1186,7 +1187,8 @@ mod Ur.Hud do
         let month = date / days
         let day = date % days
         let date_label = "M" ++ int_to_string(month) ++ " · Day " ++ int_to_string(day + 1)
-        let reading = S.weather_name(S.weather_on(c, month, day)) ++ " · " ++ int_to_string(S.temperature_on(c, month, day)) ++ " °C"
+        let reading = S.weather_name(S.weather_on(c, month, day)) ++ " · " ++ int_to_string(S.temperature_on(c, month, day)) ++ " °C" ++
+          (if forecast do " · Sea " ++ Ur.Sea.metres(Ur.Sea.counted_on(c, date)) else "" end)
         let a = label(a, x, top, 11.0, date_label, false)
         label(a, x +. width *. 0.38, top, 11.0, reading, true)
       end
@@ -1199,7 +1201,7 @@ mod Ur.Hud do
     let other = x +. column +. 8.0
     let a = label(a, x, y +. 57.0, 17.0, "Weather", true)
     let a = label(a, x, y +. 85.0, 12.0, "Today · " ++ S.weather_name(S.current_weather(c)) ++
-      " · " ++ int_to_string(S.temperature(c)) ++ " °C · Soil moisture " ++ int_to_string(c.soil_moisture) ++ "%", false)
+      " · " ++ int_to_string(S.temperature(c)) ++ " °C · Soil moisture " ++ int_to_string(c.soil_moisture) ++ "% · Sea " ++ Ur.Sea.metres(Ur.Sea.counted_on(c, today)), false)
     let wet = S.climate_rain(c)
     let heat = S.climate_heat(c)
     let wetness = if wet >= 4 do "Wetter" else if wet <= -4 do "Drier" else "Moderate rainfall" end end

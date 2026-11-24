@@ -1,0 +1,108 @@
+mod SeaRulesTest do
+  needs IO
+  needs IO.Console
+  alias Ur.Sim as S
+
+  -- the setting at [level], as counted from a day roll
+  pfn with_storms(c : Ur.Sim.City, level : Int) : Ur.Sim.City do { c with setup: NativeArray.set_int(c.setup, 7, level), sea_counted: level } end
+
+  -- two coastal land parcels with water between them along x, linked as a ferry route
+  pfn ferry_route(c : Ur.Sim.City) : (Ur.Sim.City, Int, Int) do find_route(c, 0) end
+  pfn water_run(c : Ur.Sim.City, i : Int, n : Int) : Int do
+    -- how many water parcels follow parcel i along +x before land (0 if none)
+    let x = i % S.width() + n + 1
+    if x >= S.width() do -1 else
+      let j = S.index(x, i / S.width())
+      if S.get(c.heights, j) == 0 do water_run(c, i, n + 1) else n end
+    end
+  end
+  pfn find_route(c : Ur.Sim.City, i : Int) : (Ur.Sim.City, Int, Int) do
+    if i >= S.count() do panic("no crossing on the map") else
+      let n = water_run(c, i, 0)
+      if S.get(c.heights, i) > 0 && n >= 2 && n <= 8 && i != c.harbour do
+        let b = i + n + 1
+        ({ c with ferries: NativeArray.set_int(NativeArray.set_int(c.ferries, i, b + 1), b, i + 1) }, i, b)
+      else find_route(c, i + 1) end
+    end
+  end
+  pfn fill(a : NativeIntArr, from : Int, to : Int, h : Int) : NativeIntArr do
+    if from > to do a else fill(NativeArray.set_int(a, from, h), from + 1, to, h) end
+  end
+  pfn seas_between(c : Ur.Sim.City, a : Int, b : Int, h : Int) : Ur.Sim.City do { c with sea_heights: fill(NativeArray.make_int(S.count(), 0), a + 1, b - 1, h) } end
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let c = S.new()
+    -- the Sea storms setting
+    Test.assert_eq_int(S.sea_storms(c), 2, "a new game's seas are Normal")
+    Test.assert_eq_int(S.sea_factor(with_storms(c, 0)), 50, "Calm counts half the sea")
+    Test.assert_eq_int(S.sea_factor(with_storms(c, 1)), 75, "Mild three quarters")
+    Test.assert_eq_int(S.sea_factor(c), 100, "Normal all of it")
+    Test.assert_eq_int(S.sea_factor(with_storms(c, 3)), 125, "Rough a quarter more")
+    Test.assert_eq_int(S.sea_factor(with_storms(c, 4)), 160, "Harsh 1.6 times")
+    let old = { c with setup: NativeArray.make_int(7, 2) }
+    Test.assert_eq_int(S.sea_storms(old), 2, "an old save's seven-entry setup reads Normal")
+    -- today's sea, as the city counts it
+    let lot = S.index(30, 2)
+    let seas = { c with sea_heights: NativeArray.set_int(c.sea_heights, lot, 200) }
+    Test.assert_eq_int(S.sea_at(seas, lot), 200, "Normal counts the sea as it is")
+    Test.assert_eq_int(S.sea_at(with_storms(seas, 4), lot), 320, "Harsh counts 1.6 times it")
+    Test.assert_eq_int(S.sea_at(with_storms(seas, 0), lot), 100, "Calm counts half")
+    Test.assert_eq_int(S.sea_at(S.set_sea_storms(seas, 4), lot), 200, "a change in play waits for the next day")
+    Test.assert_eq_int(S.sea_at(S.start_sea_day(S.set_sea_storms(seas, 4)), lot), 320, "and counts from it")
+    -- saved with the city
+    match Ur.Save.decode_session(Ur.Save.encode_session({ game: { city: with_storms(seas, 3), cx: 0.0, cz: 0.0, zoom: 60.0, yaw: 0.55, paused: true, speed: 1 }, evacuation: Nil })) do
+      Ok(back) ->
+        Test.assert_eq_int(S.get(back.game.city.sea_heights, lot), 200, "today's sea survives a save")
+        Test.assert_eq_int(S.sea_storms(back.game.city), 3, "and so does the Sea storms setting")
+      Err(e) -> Test.assert_true(false, "the save loads: " ++ e)
+    end
+    -- a ferry route across a stretch of water, every water parcel between at [h] cm
+    let (route, a, b) = ferry_route(c)
+    let calm = seas_between(route, a, b, 150)
+    Test.assert_eq_int(S.ferry_status(calm, a), 0, "a ferry runs in 1.5 m seas")
+    Test.assert_eq_int(S.ferry_status(seas_between(route, a, b, 180), a), 1, "it slows in 1.8 m seas (over 75% of its 2.2 m rating)")
+    let rough = seas_between(route, a, b, 240)
+    Test.assert_eq_int(S.ferry_status(rough, a), 2, "it is suspended in 2.4 m seas")
+    Test.assert_eq_int(S.ferry_peer(rough, a), -1, "a suspended route links nowhere")
+    Test.assert_eq_int(S.ferry_peer(calm, a), b, "a running one links its terminals")
+    let larger = S.act({ seas_between(route, a, b, 300) with cash: 100000 }, a, 122)
+    Test.assert_eq_int(S.ferry_status(larger, b), 1, "a larger ferry runs, slowed, in 3 m seas (rated 3.5 m)")
+    -- a protected harbour counts half the sea at its own end
+    let ends = { calm with sea_heights: NativeArray.set_int(calm.sea_heights, a + 1, 300) }
+    Test.assert_eq_int(S.ferry_status(ends, a), 2, "3 m seas beside a terminal suspend the route")
+    let sheltered = S.act({ ends with cash: 100000 }, a, 123)
+    Test.assert_true(S.ferry_status(sheltered, a) < 2, "behind a protected harbour the same seas count half")
+    -- the founding map counts a ferry as a road: a suspended route cuts the far bank off, and it reconnects when the sea drops
+    let linked = { calm with harbour: a, founding_map: true, roads: NativeArray.set_int(calm.roads, a, 1) }
+    Test.assert_true(S.get(S.access(linked), b) >= 0, "a running ferry carries the road across")
+    let cut = { linked with sea_heights: rough.sea_heights }
+    Test.assert_true(S.get(S.access(cut), b) < 0, "a suspended one cuts the far bank off")
+    Test.assert_true(S.get(S.access({ cut with sea_heights: calm.sea_heights }), b) >= 0, "and the road comes back when the sea drops")
+    -- the day roll tells the player
+    let told = S.ferry_day(cut)
+    Test.assert_true(String.contains(told.message, "suspended"), "a suspension is announced")
+    Test.assert_true(String.contains((S.ferry_day({ told with sea_heights: calm.sea_heights })).message, "running again"), "and so is the return")
+    -- surge: a low shore (1 m) facing the crossing's water
+    let low = { calm with heights: NativeArray.set_int(calm.heights, a, 4) }
+    let shore = fn (h : Int) -> { low with sea_heights: (seas_between(low, a, b, h)).sea_heights }
+    Test.assert_eq_int(S.sea_surge(shore(0), a), 0, "no sea, no surge")
+    Test.assert_eq_int(S.sea_surge(shore(190), a), 0, "ordinary seas drive no surge")
+    Test.assert_true(S.sea_surge(shore(250), a) > 0, "rough seas do")
+    Test.assert_true(S.sea_surge(shore(300), a) > S.sea_surge(shore(250), a), "and more the rougher they are")
+    let walled = { shore(350) with seawalls: NativeArray.set_int(low.seawalls, a + 1, 1) }
+    Test.assert_eq_int(S.sea_surge(walled, a), 0, "a seawall blocks it")
+    Test.assert_eq_int(S.sea_surge(with_storms(shore(350), 0), a), 0, "Calm seas drive no surge")
+    let flooded = S.surge_day(shore(350))
+    Test.assert_eq_int(S.get(flooded.surface_water, a), S.sea_surge(shore(350), a), "the day's surge stands on the shore")
+    Test.assert_true(S.ground_closed(flooded, a), "and closes it")
+    -- fishing
+    Test.assert_true(S.rough_fishing(shore(250), a), "2.5 m seas halve the catch")
+    Test.assert_true(!S.rough_fishing(shore(200), a), "2 m seas do not")
+    -- both terminals of a diagonal crossing rate it alike
+    let p = S.index(10, 10)
+    let q = S.index(15, 12)
+    let lumpy = { c with sea_heights: NativeArray.set_int(NativeArray.set_int(NativeArray.make_int(S.count(), 0), S.index(12, 10), 500), S.index(13, 12), 100) }
+    Test.assert_eq_int(S.crossing_sea(lumpy, p, q), S.crossing_sea(lumpy, q, p), "a crossing reads the same sea from either end")
+    Authority.must(println("Sea rules checks passed"))
+  end
+end

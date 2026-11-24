@@ -643,6 +643,8 @@ mod Ur.Scenario do
       transit: NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(c.transit, station, 4),
         S.index(9, 17), 4), S.index(9, 18), 4), inland, 4),
       land_pollution: NativeArray.set_int(c.land_pollution, station, 90),
+      -- a storm's sea: 4 m everywhere, a full surge on the coast
+      sea_heights: S.sea_on_water(heights, 400),
       month: date / 30, calendar_day: date % 30, rain_uniform: true }
   end
 
@@ -660,6 +662,8 @@ mod Ur.Scenario do
 
   fn flood_backup_turn(c : Ur.Sim.City) : Ur.Sim.City do
     let tie = flood_backup_tie()
+    -- the drill's sea follows its weather: a storm sea on severe days, calm after
+    let c = { c with sea_heights: S.sea_on_water(c.heights, if S.severe_rain(c) do 400 else 0 end) }
     if c.month == 0 && c.calendar_day == 19 && S.get(c.grid, tie) == 0 do
       S.act(c, tie, 26)
     else c end
@@ -674,7 +678,9 @@ mod Ur.Scenario do
     let school = S.index(10, 18)
     let heights = NativeArray.set_int(NativeArray.set_int(c.heights, home, 11), next_home, 12)
     let heights = NativeArray.set_int(NativeArray.set_int(heights, S.index(11, 19), 0), S.index(11, 20), 0)
-    { c with heights: NativeArray.set_int(heights, school, 21),
+    let heights = NativeArray.set_int(heights, school, 21)
+    -- the storm's sea reaches the water cut beside the home too
+    { c with heights: heights, sea_heights: S.sea_on_water(heights, 400),
       buildings: NativeArray.set_int(c.buildings, home, 2),
       plants: NativeArray.set_int(c.plants, school, 18) }
   end

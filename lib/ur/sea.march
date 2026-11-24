@@ -140,4 +140,42 @@ mod Ur.Sea do
     let corner = int_to_float(0 - O.ring()) *. 8.0
     Strata.Waves.solve(swell_depths(f, walls), w, h, corner, corner, 2.0, Math.cos(heading), Math.sin(heading), wavelength)
   end
+
+  -- ── Today's sea, as the city counts it ───────────────────────────────────
+  doc "The open sea's wave height in metres the day after [c]'s: the sea the next day roll counts."
+  fn next_height(c : Ur.Sim.City) : Float do
+    let s = state_at(c, S.day_seconds())
+    s.height
+  end
+  pfn amp_at(swell : Option(Strata.Waves.Swell), px : Int, pz : Int) : Float do
+    match swell do
+      None -> 1.0
+      Some(sw) ->
+        -- the parcel's centre: 2 m cells from the ring's corner
+        let (_, a) = Strata.Waves.sample(sw, (px + O.ring()) * 4 + 2, (pz + O.ring()) * 4 + 2)
+        if a < 0.0 do 0.0 else if a > 2.0 do 2.0 else a end end
+    end
+  end
+  pfn seas_go(c : Ur.Sim.City, height : Float, exposure : NativeF32Arr, swell : Option(Strata.Waves.Swell), a : NativeIntArr, i : Int) : NativeIntArr do
+    if i >= S.count() do a else
+      let px = i % S.width()
+      let pz = i / S.width()
+      let cm = if S.get(c.heights, i) > 0 do 0 else
+        let e = NativeArray.get_f32(exposure, O.padded_cell(px, pz))
+        float_to_int(height *. e *. amp_at(swell, px, pz) *. 100.0 +. 0.5)
+      end
+      seas_go(c, height, exposure, swell, NativeArray.set_int(a, i, cm), i + 1)
+    end
+  end
+  doc "Today's sea at every map parcel in centimetres (City.sea_heights): the open sea's [height] metres times the parcel's [exposure] (Ur.Sea.exposure) times the refracted swell's amplitude at its centre (1 without one); 0 on land. Pure: it runs with the day roll, on its worker."
+  fn daily_seas(c : Ur.Sim.City, height : Float, exposure : NativeF32Arr, swell : Option(Strata.Waves.Swell)) : NativeIntArr do
+    seas_go(c, height, exposure, swell, NativeArray.make_int(S.count(), 0), 0)
+  end
+  doc "The open sea on absolute day [day] as the city counts it (its Sea storms setting), in centimetres."
+  fn counted_on(c : Ur.Sim.City, day : Int) : Int do
+    let s = day_sea(c, day)
+    float_to_int(s.height *. 100.0 *. int_to_float(S.sea_factor(c)) /. 100.0 +. 0.5)
+  end
+  doc "A wave height in centimetres as metres to one place: 240 is \"2.4 m\"."
+  fn metres(cm : Int) : String do int_to_string(cm / 100) ++ "." ++ int_to_string(cm % 100 / 10) ++ " m" end
 end
