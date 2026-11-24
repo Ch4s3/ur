@@ -1,0 +1,118 @@
+-- Shaping storms: once every few years seas stay rough long enough to move
+-- the sand. Each day the counted open sea is checked; a run of 4 or more
+-- days at or above 3 m (the Sea storms setting applied, never on Calm) is a
+-- shaping storm, and on the first calm day after it Strata.Seabed.rework moves
+-- the sand under the storm's peak sea, one step a storm day (at most 6). The
+-- result is kept as changes against the floor without storms
+-- (City.sand_changes); the ferries' shoals and the fish's habitat follow the
+-- new floor. It runs with the day roll, on its worker.
+mod Ur.Sand do
+  alias Ur.Sim as S
+  alias Ur.Ocean as O
+
+  doc "The counted open sea, in cm, a shaping storm needs each day."
+  fn rough() : Int do 300 end
+  doc "How many rough days in a row make a shaping storm: 4 (tuned by UR_SAND_REPLAY over 20 years on the classic map and seeds 1..4: at Normal 0..17 storms, about one every three years on average; 3 days gave 1.3..4.5 a year)."
+  fn run_needed() : Int do 4 end
+
+  doc "City [c] after a day whose counted open sea was [cm] with the wind toward sector [sector]: the storm's run grows on a rough day; on the first calm day after a run long enough, [shape] moves the sand. Never on Calm, nor for a city saved before reefs and bars."
+  fn day_with(c : Ur.Sim.City, cm : Int, sector : Int, shape : Ur.Sim.City -> Ur.Sim.City) : Ur.Sim.City do
+    if c.sea_features == 0 || S.sea_storms(c) == 0 do { c with sea_run: 0 }
+    else if cm >= rough() do
+      if c.sea_run == 0 || cm > c.sand_peak do { c with sea_run: c.sea_run + 1, sand_peak: cm, sand_sector: sector }
+      else { c with sea_run: c.sea_run + 1 } end
+    else if c.sea_run >= run_needed() do { (shape(c)) with sea_run: 0, sand_peak: 0 }
+    else { c with sea_run: 0, sand_peak: 0 } end end end
+  end
+
+  -- the changes against [base]: every cell whose depth or kind differs
+  pfn diff_go(base : Strata.Seabed.Features, after : Strata.Seabed.Features, i : Int, out : List(Int)) : List(Int) do
+    if i < 0 do out else
+      let d = NativeArray.get_int(after.floor.depth, i) - NativeArray.get_int(base.floor.depth, i)
+      let k = NativeArray.get_int(after.kind, i)
+      let out = if d == 0 && k == NativeArray.get_int(base.kind, i) do out else Cons(i * 512 + k * 128 + S.clamp(d, -63, 63) + 64, out) end
+      diff_go(base, after, i - 1, out)
+    end
+  end
+  pfn to_array(xs : List(Int), a : NativeIntArr, i : Int) : NativeIntArr do
+    match xs do
+      Nil -> a
+      Cons(v, rest) -> to_array(rest, NativeArray.set_int(a, i, v), i + 1)
+    end
+  end
+  -- per map parcel, 1 where any of its cells changed; and the parcels' sums of x and z and their count, for the side of the map
+  pfn marks_go(changes : List(Int), a : NativeIntArr) : NativeIntArr do
+    match changes do
+      Nil -> a
+      Cons(v, rest) ->
+        let cell = v / 512
+        let px = cell % O.cells_wide() / 8 - O.ring()
+        let pz = cell / O.cells_wide() / 8 - O.ring()
+        marks_go(rest, if px >= 0 && pz >= 0 && px < S.width() && pz < S.depth() do NativeArray.set_int(a, S.index(px, pz), 1) else a end)
+    end
+  end
+  pfn side_go(marks : NativeIntArr, i : Int, n : Int, sx : Int, sz : Int) : String do
+    if i >= S.count() do
+      if n == 0 do "" else
+        let dx = sx / n - S.width() / 2
+        let dz = sz / n - S.depth() / 2
+        if int_abs(dx) >= int_abs(dz) do (if dx >= 0 do "east" else "west" end) else (if dz >= 0 do "south" else "north" end) end
+      end
+    else if S.get(marks, i) == 1 do side_go(marks, i + 1, n + 1, sx + i % S.width(), sz + i / S.width())
+    else side_go(marks, i + 1, n, sx, sz) end end
+  end
+  -- what the storm did to ferry crossings: the first whose shallowest water changed, as a clause for the notice
+  pfn crossings_go(before : Ur.Sim.City, after : Ur.Sim.City, i : Int) : String do
+    if i >= S.count() do "" else
+      let peer = S.get(before.ferries, i) - 1
+      if peer <= i do crossings_go(before, after, i + 1) else
+        let a = S.crossing_shoal(before, i, peer)
+        let b = S.crossing_shoal(after, i, peer)
+        if b < a && b < 63 do "; a ferry crossing silted to " ++ Ur.Sea.metres(S.clamp(b, 0, 63) * 25)
+        else if b > a do "; a ferry crossing deepened" ++ (if b >= 63 do " clear" else " to " ++ Ur.Sea.metres(b * 25) end)
+        else crossings_go(before, after, i + 1) end end
+      end
+    end
+  end
+
+  doc "City [c] once its storm has moved the sand over sea floor [f]: the storm's peak sea refracted from its sector, `Strata.Seabed.rework` one step a storm day (at most 6) over the floor as it stands, the changes kept against the floor without storms, the ferries' shoals measured again, and a notice. Pure: it runs on the day roll's worker."
+  fn storm(c : Ur.Sim.City, f : Ur.Ocean.Field) : Ur.Sim.City do
+    let height = int_to_float(c.sand_peak) /. 100.0
+    let heading = Ur.Sea.sector_heading(c.sand_sector)
+    let w = O.padded_width() * 4
+    let h = O.padded_depth() * 4
+    let corner = int_to_float(0 - O.ring()) *. 8.0
+    let sw = Strata.Waves.solve_sea(Ur.Sea.swell_depths(f, c.seawalls), w, h, corner, corner, 2.0, Math.cos(heading), Math.sin(heading), Ur.Sea.wavelength(height), height)
+    let now = { floor: { depth: f.floor, w: O.cells_wide(), h: O.cells_deep() }, kind: f.kind }
+    let steps = S.clamp(c.sea_run, 1, 6)
+    let after = Strata.Seabed.rework(now, sw, height, steps, 1.0, 0.25, corner, corner, 24, 4)
+    let base = O.unsanded(c)
+    let changes = diff_go(base, after, O.cells_wide() * O.cells_deep() - 1, Nil)
+    let marks = marks_go(diff_go(now, after, O.cells_wide() * O.cells_deep() - 1, Nil), NativeArray.make_int(S.count(), 0))
+    let moved = { c with sand_changes: to_array(changes, NativeArray.make_int(List.length(changes), 0), 0), sand_day: S.absolute_day(c) + 1, sand_marks: marks }
+    let moved = O.with_shoals(moved, O.field(moved))
+    let side = side_go(marks, 0, 0, 0, 0)
+    if side == "" do moved
+    else { moved with message: "The storm moved the sand: new shallows off the " ++ side ++ " coast" ++ crossings_go(c, moved, 0) ++ "." } end
+  end
+
+  pfn count_go(c : Ur.Sim.City, day : Int, last : Int, run : Int, storms : Int, cm_needed : Int, days_needed : Int) : Int do
+    if day > last do storms else
+      let cm = Ur.Sea.counted_on(c, day)
+      if cm >= cm_needed do count_go(c, day + 1, last, run + 1, storms, cm_needed, days_needed)
+      else count_go(c, day + 1, last, 0, if run >= days_needed do storms + 1 else storms end, cm_needed, days_needed) end
+    end
+  end
+  doc "As `storms_in`, for a trial threshold [cm_needed] and run [days_needed] (tuning)."
+  fn storms_with(c : Ur.Sim.City, days : Int, cm_needed : Int, days_needed : Int) : Int do
+    if S.sea_storms(c) == 0 do 0 else count_go({ c with sea_counted: S.sea_storms(c) }, 0, days - 1, 0, 0, cm_needed, days_needed) end
+  end
+  doc "How many shaping storms city [c]'s weather brings in its first [days] days at its Sea storms setting (none on Calm): the trigger of `day_with` replayed over the counted sea, for tuning."
+  fn storms_in(c : Ur.Sim.City, days : Int) : Int do storms_with(c, days, rough(), run_needed()) end
+
+  doc "City [c] after today's sea over floor [f]: `day_with` the counted open sea and its wind, moving the sand with `storm` when a shaping storm ends."
+  fn day(c : Ur.Sim.City, f : Ur.Ocean.Field) : Ur.Sim.City do
+    let s = Ur.Sea.state_at(c, 0.0)
+    day_with(c, Ur.Sea.counted_on(c, S.absolute_day(c)), Ur.Sea.sector(Math.atan2(s.wind_z, s.wind_x)), fn (x : Ur.Sim.City) -> storm(x, f))
+  end
+end

@@ -71,7 +71,7 @@ mod Ur.Layers do
       35 -> "Tunnel decks and retaining walls · Press T to restore the surface"
       11 -> "Cyan overpass / amber underpass / blue tunnel."
       9 -> "Green free flow / amber busy / red congested"
-      8 -> "Cyan: low shoreline suitable for landing · Amber: water too shallow for a ferry"
+      8 -> "Cyan: low shoreline suitable for landing, or sand a storm just moved · Amber: water too shallow for a ferry"
       _ -> "Choose a layer to inspect the map."
     end
   end
@@ -224,7 +224,7 @@ mod Ur.Layers do
           _ -> -1
         end
       -- water too shallow for a standard ferry (under 1.5 m over a reef or bar) shows amber
-      8 -> if S.can_land(c, i) do 20 else if !land && S.get(c.sea_shoals, i) < 6 do 10 else -1 end end
+      8 -> if S.can_land(c, i) do 20 else if !land && c.sand_day > 0 && S.absolute_day(c) + 1 - c.sand_day <= 30 && S.get(c.sand_marks, i) == 1 do 20 else if !land && S.get(c.sea_shoals, i) < 6 do 10 else -1 end end end
       _ -> -1
     end
   end

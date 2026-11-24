@@ -100,32 +100,36 @@ mod Ur.Ocean do
       Strata.Seabed.generate(shelf, land, c.world_seed, { Strata.Seabed.default_recipe() with forced: forced })
     end end
   end
-  -- the sand storms moved, laid over the generated floor: each entry cell * 512 + kind * 128 + depth + 2
+  -- the sand storms moved, laid over the floor with its edits: each entry cell * 512 + kind * 128 + (change + 64); a cell that
+  -- would come to 0 (land) stays a voxel under water, and nothing rises above -2 or sinks past 63
   pfn sand(ft : Strata.Seabed.Features, changes : NativeIntArr, i : Int) : Strata.Seabed.Features do
     if i >= NativeArray.length_int(changes) do ft else
       let v = NativeArray.get_int(changes, i)
       let cell = v / 512
-      if cell < 0 || cell >= cells_wide() * cells_deep() do sand(ft, changes, i + 1) else
+      if cell < 0 || cell >= cells_wide() * cells_deep() || NativeArray.get_int(ft.floor.depth, cell) == 0 do sand(ft, changes, i + 1) else
         let f = ft.floor
-        sand({ floor: { f with depth: NativeArray.set_int(f.depth, cell, v % 128 - 2) }, kind: NativeArray.set_int(ft.kind, cell, v / 128 % 4) }, changes, i + 1)
+        let d = S.clamp(NativeArray.get_int(f.depth, cell) + v % 128 - 64, -2, 63)
+        sand({ floor: { f with depth: NativeArray.set_int(f.depth, cell, if d == 0 do 1 else d end) }, kind: NativeArray.set_int(ft.kind, cell, v / 128 % 4) }, changes, i + 1)
       end
     end
   end
-  doc "The sea floor of city [c]'s generated features alone, before storms and edits: what sand changes (City.sand_changes) are measured against."
-  fn generated(c : Ur.Sim.City) : Strata.Seabed.Features do
+  doc "The sea floor of city [c] with its reefs, bars and the city's dredging and reefs but no storms: what sand changes (City.sand_changes) are measured against."
+  fn unsanded(c : Ur.Sim.City) : Strata.Seabed.Features do
     let n = cells_wide() * cells_deep()
     let land = seed(c, NativeArray.make_int(n, 0), 0)
-    natural(c, Strata.Seabed.shelf(land, cells_wide(), cells_deep(), 4, 2, 3, 20, 63), land)
+    let ft = natural(c, Strata.Seabed.shelf(land, cells_wide(), cells_deep(), 4, 2, 3, 20, 63), land)
+    { ft with floor: edits(c, ft.floor, 0) }
   end
-  doc "The sea floor of city [c]: a shelf 2 voxels deep at the shore deepening 3 voxels in 20 to 63, with the map's reefs and sand bars, the sand storms moved, and the city's dredging and reefs."
+  doc "The sea floor of city [c]: a shelf 2 voxels deep at the shore deepening 3 voxels in 20 to 63, with the map's reefs and sand bars, the city's dredging and reefs, and the sand storms moved."
   fn field(c : Ur.Sim.City) : Field do
     let n = cells_wide() * cells_deep()
     let land = seed(c, NativeArray.make_int(n, 0), 0)
     let shelf = Strata.Seabed.shelf(land, cells_wide(), cells_deep(), 4, 2, 3, 20, 63)
-    let ft = sand(natural(c, shelf, land), c.sand_changes, 0)
-    let edited = edits(c, ft.floor, 0)
+    let ft0 = natural(c, shelf, land)
+    -- the city's edits, then the sand storms moved over them: a dredged channel silts, and dredging it again digs deeper
+    let ft = sand({ ft0 with floor: edits(c, ft0.floor, 0) }, c.sand_changes, 0)
     let rt = reef_type(c)
-    { floor: edited.depth, kind: ft.kind, shelf: shelf.depth, reef_type: rt, corals: if has_reef(ft.kind, 0) do coral_set(rt) else Nil end }
+    { floor: ft.floor.depth, kind: ft.kind, shelf: shelf.depth, reef_type: rt, corals: if has_reef(ft.kind, 0) do coral_set(rt) else Nil end }
   end
 
   pfn shoal_cells(f : Field, px : Int, pz : Int, k : Int, least : Int, reef : Int) : (Int, Int) do
@@ -259,8 +263,8 @@ mod Ur.Ocean do
   pfn seabed_from(a : Ur.Sim.City, b : Ur.Sim.City, i : Int) : Bool do
     if i >= S.count() do false else if S.get(a.seabed, i) != S.get(b.seabed, i) do true else seabed_from(a, b, i + 1) end end
   end
-  doc "Whether any parcel was dredged or given a reef between [a] and [b]: the floor, and so the water and its swell, change."
-  fn seabed_touched(a : Ur.Sim.City, b : Ur.Sim.City) : Bool do seabed_from(a, b, 0) end
+  doc "Whether any parcel was dredged or given a reef, or a storm moved sand, between [a] and [b]: the floor, and so the water and its swell, change."
+  fn seabed_touched(a : Ur.Sim.City, b : Ur.Sim.City) : Bool do a.sand_day != b.sand_day || seabed_from(a, b, 0) end
   doc "Whether any seawall was built or removed between [a] and [b]: the swell must be refracted again round the new breakwaters, though the coast is the same."
   fn walls_touched(a : Ur.Sim.City, b : Ur.Sim.City) : Bool do walls_from(a, b, 0) end
 

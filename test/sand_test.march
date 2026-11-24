@@ -1,0 +1,60 @@
+-- Shaping storms: when a long storm moves the sand, what it keeps, and what it never touches.
+mod SandTest do
+  needs IO
+  needs IO.Console
+  alias Ur.Sim as S
+  alias Ur.Ocean as O
+
+  pfn marked(c : Ur.Sim.City) : Ur.Sim.City do { c with sand_day: 999 } end
+  pfn days(c : Ur.Sim.City, seas : List(Int)) : Ur.Sim.City do
+    match seas do
+      Nil -> c
+      Cons(cm, rest) -> days(Ur.Sand.day_with(c, cm, 4, marked), rest)
+    end
+  end
+  pfn year(c : Ur.Sim.City, n : Int) : Ur.Sim.City do if n <= 0 do c else year(Ur.Sand.day_with(c, if n % 5 == 0 do 100 else 400 end, 4, marked), n - 1) end end
+  pfn only_movable(a : Ur.Ocean.Field, b : Ur.Ocean.Field, i : Int) : Bool do
+    if i >= NativeArray.length_int(a.floor) do true else
+      let changed = NativeArray.get_int(a.floor, i) != NativeArray.get_int(b.floor, i)
+      let k = NativeArray.get_int(a.kind, i)
+      if changed && (k == 1 || NativeArray.get_int(a.floor, i) == 0) do false else only_movable(a, b, i + 1) end
+    end
+  end
+  pfn floors_same(a : Ur.Ocean.Field, b : Ur.Ocean.Field, i : Int) : Bool do
+    if i >= NativeArray.length_int(a.floor) do true else if NativeArray.get_int(a.floor, i) != NativeArray.get_int(b.floor, i) do false else floors_same(a, b, i + 1) end end
+  end
+  pfn arrays_same(a : NativeIntArr, b : NativeIntArr, i : Int) : Bool do
+    if i >= NativeArray.length_int(a) do NativeArray.length_int(a) == NativeArray.length_int(b) else if NativeArray.get_int(a, i) != NativeArray.get_int(b, i) do false else arrays_same(a, b, i + 1) end end
+  end
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let c = S.unclaimed_seeded(7)
+    -- four days of 3 m seas make a shaping storm, which moves the sand on the first calm day
+    let shaped = days(c, [310, 320, 305, 330, 120])
+    Test.assert_eq_int(shaped.sand_day, 999, "four rough days, then calm: the sand moves")
+    Test.assert_eq_int(shaped.sea_run, 0, "and the run starts again")
+    Test.assert_eq_int((days(c, [310, 320, 305])).sand_peak, 320, "the storm remembers its roughest sea")
+    Test.assert_eq_int((days(c, [310, 320, 305, 120])).sand_day, 0, "three rough days do not")
+    -- Calm never shapes, nor does a city saved before reefs and bars
+    Test.assert_eq_int((year({ c with setup: NativeArray.set_int(S.default_setup(), 7, 0) }, 360)).sand_day, 0, "Calm: a year of 4 m seas moves no sand")
+    Test.assert_eq_int((year({ c with sea_features: 0 }, 360)).sand_day, 0, "an old city's sand never moves")
+
+    -- a storm over seed 7: the floor changes only where sand can move, and the city's own work stays
+    let f = O.field(c)
+    let stormy = { c with sea_run: 4, sand_peak: 400, sand_sector: 4 }
+    let after = Ur.Sand.storm(stormy, f)
+    Test.assert_true(NativeArray.length_int(after.sand_changes) > 0, "a 4 m storm moves some sand")
+    let g = O.field(after)
+    Test.assert_true(only_movable(f, g, 0), "reefs and land never change")
+    Test.assert_true(arrays_same(after.roads, c.roads, 0) && arrays_same(after.seabed, c.seabed, 0), "the city's roads and seabed edits are kept")
+    Test.assert_true(String.contains(after.message, "The storm moved the sand"), "the player is told: " ++ after.message)
+    -- the changes survive a save and rebuild the same floor
+    match Ur.Save.decode_session(Ur.Save.encode_session({ game: { city: after, cx: 0.0, cz: 0.0, zoom: 60.0, yaw: 0.55, paused: true, speed: 1 }, evacuation: Nil })) do
+      Ok(back) -> Test.assert_true(floors_same(O.field(back.game.city), g, 0), "the stormed floor loads the same")
+      Err(e) -> Test.assert_true(false, "the save loads: " ++ e)
+    end
+    -- and the ocean knows to rebuild
+    Test.assert_true(O.seabed_touched(c, after), "a storm that moved sand changes the floor")
+    Authority.must(println("Sand checks passed"))
+  end
+end

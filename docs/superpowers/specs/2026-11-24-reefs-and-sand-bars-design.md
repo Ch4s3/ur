@@ -302,12 +302,12 @@ surface, but not land.
 - **Trigger:**
   - Track a run of consecutive days with today's counted open-sea height
     (the Sea storms setting applied) at or above a threshold, about 3 m.
-  - A run of 3 or more days is a **shaping storm**.
+  - A run of 4 or more days is a **shaping storm** *(tuned by replay: 3 days gave 1.3–4.5 storms a year at Normal; 4 gives about one every three years on average, from none to one a year depending on the map's climate)*.
   - Threshold and run length are tuned with a multi-year replay
     (`UR_SAND_REPLAY`, like `UR_RAIN_REPLAY`) to about once every 2–4
     years on Normal, more often on Rough and Harsh, and never on Calm.
     *(call)*
-- **Where it runs:** when the storm ends, a worker runs `Strata.Seabed.rework`
+- **Where it runs:** when the storm ends, the day roll's worker (*built that way: no separate job, so nothing can race the player's edits*) runs `Strata.Seabed.rework`
   with the storm's dominant wind sector's swell (`solve_sea` at the storm's
   peak height). It takes one step per storm day, with a cap of about 6 steps.
 - **The sand model**, each step:
@@ -328,9 +328,7 @@ surface, but not land.
   - Breakwaters and artificial reefs change the energy and so where
     sand settles.
   - The ferry draft and fish capacity are re-checked after a storm.
-- **Saving:** the cells whose depth or kind changed (against generated
-  features) are stored as a compact list `City.sand_changes`, in the same
-  style as the other optional arrays. Between storms it never changes.
+- **Saving:** the cells whose depth or kind changed are stored as a compact list `City.sand_changes` of **changes in depth** against the floor with its reefs, bars and the player's edits but no storms *(built that way: the field applies edits, then sand, so a silted channel stays silted and dredging it again digs deeper)*. Between storms it never changes.
 - **Feedback:** one notification after a shaping storm: "The storm moved
   the sand: a new bar off the east coast; the channel at the harbour
   silted to 1.1 m." Changed cells briefly highlight on the Fish or
