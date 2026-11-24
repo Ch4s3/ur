@@ -1463,7 +1463,42 @@ mod UrTest do
     let fresh = S.unclaimed()
     Test.assert_eq_int(fresh.watch, S.watch_of(S.street_hour(int_to_float(fresh.clock_ms) /. 1000.0)), "a new game starts in the watch its clock is in")
   end
+
+  -- a round island, a cone 40 m high in the middle of the map
+  pfn test_island(i : Int, a : NativeIntArr) : NativeIntArr do
+    if i >= S.count() do a else
+      let dx = int_to_float(i % S.width() - 30)
+      let dz = int_to_float(i / S.width() - 22)
+      let r = math_sqrt(dx *. dx +. dz *. dz)
+      let h = if r >= 20.0 do 0 else 4 + float_to_int(156.0 *. (1.0 -. r /. 20.0)) end
+      test_island(i + 1, NativeArray.set_int(a, i, h))
+    end
+  end
+  pfn air_checks() : Unit do
+    Test.assert_true(Ur.Air.sea_temp(0, 0) > Ur.Air.land_temp(21, 0, 70, 5), "a winter dawn: the sea is warmer than the land")
+    Test.assert_true(Ur.Air.land_temp(33, 0, 70, 15) > Ur.Air.sea_temp(6, 0), "a summer afternoon: the land is warmer than the sea")
+    Test.assert_true(Ur.Air.land_temp(33, 0, 70, 15) - Ur.Air.land_temp(33, 0, 70, 3) > Ur.Air.land_temp(33, 4, 70, 15) - Ur.Air.land_temp(33, 4, 70, 3), "rain damps the day's swing")
+    let island = test_island(0, NativeArray.make_int(S.count(), 0))
+    let heat = NativeArray.make_int(S.count(), 0)
+    let summer = Ur.Air.build(180, island, heat, 6, 0, 33, 70, 0, 26, 0.0)
+    let west_coast = S.index(11, 22)
+    let (day_x, _) = Ur.Air.breeze(summer, west_coast, 15)
+    let (night_x, _) = Ur.Air.breeze(summer, west_coast, 3)
+    Test.assert_true(day_x > 0 && night_x < 0, "a summer sea breeze blows inland by day and out to sea by night")
+    let windward = Ur.Air.area_of(S.index(21, 22))
+    let lee = Ur.Air.area_of(S.index(39, 22))
+    Test.assert_true(Ur.Air.lift_at(summer, 3, windward) > Ur.Air.lift_at(summer, 3, lee), "air climbing the windward slope lifts more than the lee")
+    Test.assert_true(Ur.Air.lift_at(summer, 3, Ur.Air.area_of(S.index(30, 22))) > Ur.Air.lift_at(summer, 3, Ur.Air.area_of(S.index(2, 2))), "a summer afternoon lifts over the island, not the open sea")
+    let winter = Ur.Air.build(5, island, heat, 0, 0, 21, 70, 0, 26, 0.0)
+    Test.assert_true(Ur.Air.lift_at(winter, 0, Ur.Air.area_of(S.index(30, 1))) > Ur.Air.lift_at(winter, 0, Ur.Air.area_of(S.index(2, 2))), "a winter night lifts over the warm sea by the coast, not far out")
+    Test.assert_true(Ur.Air.shadowed(summer, S.index(38, 22)) && !Ur.Air.shadowed(summer, S.index(22, 22)), "the lee of the mountain is in its rain shadow, the windward side is not")
+    let sea = Ur.Air.build(1, NativeArray.make_int(S.count(), 0), heat, 3, 2, 25, 70, 0, 26, 1.0)
+    let land = Ur.Air.build(1, NativeArray.make_int(S.count(), 8), heat, 3, 2, 25, 70, 0, 26, 1.0)
+    Test.assert_true(Ur.Air.lift_at(sea, 4, 100) == 0 && Ur.Air.lift_at(land, 4, 100) >= 0, "an all-sea or all-land map has air too")
+  end
+
   fn main(_cap : Cap(IO)) : Unit do
+    air_checks()
     review_fix_checks()
     watch_clock_checks()
     watch_checks()
