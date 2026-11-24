@@ -136,12 +136,35 @@ mod IslandTreesTest do
     Test.assert_true(List.all(parts, fn p -> p.x >= 0 && p.z >= 0 && p.x + p.w <= 32 && p.z + p.d <= 32), "inside the parcel")
   end
 
+  -- mangroves
+  pfn rooted(parts : List(Ur.Architecture.Piece)) : Bool do List.any(parts, fn p -> p.y == 0 && p.material == 13 && p.w == 1 && p.d == 1) end
+  pfn mangroves(c : Ur.Sim.City) : Unit do
+    let zero = NativeArray.make_int(S.count(), 0)
+    -- a bay: land two parcels round (45, 10) but for the south side; an open coast along z 29..31
+    let a = block(block(block(zero, 43, 47, 8, 8, 12), 43, 43, 8, 12, 12), 47, 47, 8, 12, 12)
+    let a = block(a, 35, 55, 29, 31, 12)
+    let bare = { c with heights: a, roads: zero, buildings: NativeArray.make_int(S.count(), 0), zones: NativeArray.make_int(S.count(), 0),
+      parks: NativeArray.make_int(S.count(), 0), plants: NativeArray.make_int(S.count(), 0), seawalls: NativeArray.make_int(S.count(), 0), harbour: -1 }
+    let on = { bare with world_seed: -1 }
+    let off = seeded(bare, first_mangrove_seed(bare, false, 1))
+    let shore = S.index(44, 10)
+    Test.assert_true(rooted(Ur.Landscape.structures(on, shore, 0)), "a sheltered shore on a mangrove map grows mangroves")
+    Test.assert_eq_int(List.length(Ur.Landscape.structures(off, shore, 0)), 0, "on other maps the water there stays bare")
+    Test.assert_true(!rooted(Ur.Landscape.structures(on, S.index(45, 28), 0)), "an exposed coast grows none")
+    Test.assert_eq_int(List.length(Ur.Landscape.structures(on, S.index(45, 10), 0)), 0, "nor water with no land beside it")
+    Test.assert_eq_int(List.length(Ur.Landscape.structures(on, S.index(20, 20), 0)), 0, "nor open sea")
+  end
+  pfn first_mangrove_seed(c : Ur.Sim.City, want : Bool, s : Int) : Int do
+    if Ur.Flora.mangrove_map(seeded(c, s)) == want do s else first_mangrove_seed(c, want, s + 1) end
+  end
+
   fn main(_cap : Cap(IO)) : Unit do
     let c = S.new()
     traits(c)
     spot(c)
     shapes()
     choosing(c)
+    mangroves(c)
     Authority.must(println("Island trees: all assertions passed"))
   end
 end

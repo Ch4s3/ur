@@ -107,6 +107,17 @@ mod Ur.Flora do
     end
   end
 
+  doc "Whether a spot [h] voxels high on [lot] grows mangroves: on a mangrove map, where the parcel is sheltered, either in water beside land or on the lowest sand (h 1..4) of a coastal parcel."
+  fn mangrove_spot(site : (Int, Int, Bool, Bool), c : Ur.Sim.City, lot : Int, h : Int) : Bool do
+    let (_, _, shelter, coastal) = site
+    if !shelter || !mangrove_map(c) do false
+    else if h <= 0 do
+      let x = lot % S.width()
+      let z = lot / S.width()
+      land(c, x + 1, z) > 0 || land(c, x - 1, z) > 0 || land(c, x, z + 1) > 0 || land(c, x, z - 1) > 0
+    else coastal && h <= 4 end end
+  end
+
   doc "Whether [lot] lies in sheltered water: of 16 rays from it, each 8 parcels long, at most 5 meet no land (past the map's edge is open sea)."
   fn sheltered(c : Ur.Sim.City, lot : Int) : Bool do
     let x = lot % S.width()
