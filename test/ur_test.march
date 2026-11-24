@@ -436,7 +436,7 @@ mod UrTest do
     Test.assert_eq_int(S.facility_draw_of(9), 6, "a water import terminal draws grid power")
     Test.assert_true(night_stats.power >= night_stats.used, "the grid's supply counts the battery")
     -- growth and the monthly books are judged at midday, so a night rollover does not stall a solar town
-    Test.assert_eq_int((S.tick({ built with hour: 0 })).hour, 0, "settling the month leaves the clock alone")
+    Test.assert_eq_int((Ur.Clock.month({ built with hour: 0 })).hour, 0, "settling the month leaves the clock alone")
   end
   pfn starter_guide_checks() : Unit do
     let dock = S.index(20, 36)
