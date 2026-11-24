@@ -1,0 +1,187 @@
+-- Island tree kinds drawn as boxes (Ur.Architecture.Piece), in quarter-metre
+-- voxels: what Ur.Flora chooses for a spot. Each kind varies by seed in size,
+-- lean, crown offset and leaf shade; a tree is at most twelve pieces, clipped
+-- to the parcel, and stands on its base. Colours are Ur.Scene palette ids:
+-- 13 dark wood, 1 light wood, 14 deep green, 21 green, 25 mid green,
+-- 22 pale green, 11 fern green, 30 red (lehua blossom), 15 orange.
+mod Ur.Trees do
+  alias Ur.Architecture as A
+
+  doc "How many kinds there are: 0 coconut palm, 1 columnar araucaria, 2 mangrove, 3 broad rainforest tree, 4 banana clump, 5 ʻōhiʻa, 6 tree fern, 7 cloud-forest tree, 8 elfin tree, 9 bush, 10 Hispaniola pine, 11 koa-like open tree."
+  fn kinds() : Int do 12 end
+  doc "The palm kind."
+  fn palm() : Int do 0 end
+  doc "The mangrove kind."
+  fn mangrove() : Int do 2 end
+
+  pfn r(s : Int, k : Int, n : Int) : Int do int_mod_euclid(Strata.Seed.mix(s, k), n) end
+  pfn leaf(s : Int) : Int do match r(s, 1, 3) do 0 -> 14 | 1 -> 21 | _ -> 25 end end
+  -- a box with its near corner at (x, y, z), clipped to the parcel; nothing if clipped away
+  pfn box(out : List(Ur.Architecture.Piece), x : Int, y : Int, z : Int, w : Int, h : Int, d : Int, m : Int) : List(Ur.Architecture.Piece) do
+    let x0 = if x < 0 do 0 else x end
+    let z0 = if z < 0 do 0 else z end
+    let x1 = if x + w > 32 do 32 else x + w end
+    let z1 = if z + d > 32 do 32 else z + d end
+    if x1 <= x0 || z1 <= z0 || h <= 0 do out else Cons(A.piece(x0, y, z0, x1 - x0, h, z1 - z0, m), out) end
+  end
+  -- a rounded layer: two crossed boxes radius rx by rz round (x, z)
+  pfn tier(out : List(Ur.Architecture.Piece), x : Int, y : Int, z : Int, rx : Int, rz : Int, h : Int, m : Int) : List(Ur.Architecture.Piece) do
+    box(box(out, x - rx, y, z - rz + 1, 2 * rx + 1, h, 2 * rz - 1, m), x - rx + 1, y, z - rz, 2 * rx - 1, h, 2 * rz + 1, m)
+  end
+  -- one of four directions by seed
+  pfn dir(s : Int, k : Int) : (Int, Int) do match r(s, k, 4) do 0 -> (1, 0) | 1 -> (-1, 0) | 2 -> (0, 1) | _ -> (0, -1) end end
+  -- four fronds round (cx, cz) at y: an inner run [len] long, its tip a voxel lower
+  pfn fronds(out : List(Ur.Architecture.Piece), cx : Int, y : Int, cz : Int, len : Int, m : Int) : List(Ur.Architecture.Piece) do
+    let a = box(box(out, cx + 2, y, cz, len, 1, 2, m), cx + 2 + len, y - 1, cz, 2, 1, 2, m)
+    let a = box(box(a, cx - len, y, cz, len, 1, 2, m), cx - len - 2, y - 1, cz, 2, 1, 2, m)
+    let a = box(box(a, cx, y, cz + 2, 2, 1, len, m), cx, y - 1, cz + 2 + len, 2, 1, 2, m)
+    box(box(a, cx, y, cz - len, 2, 1, len, m), cx, y - 1, cz - len - 2, 2, 1, 2, m)
+  end
+
+  pfn coconut_palm(x : Int, z : Int, b : Int, s : Int) : List(Ur.Architecture.Piece) do
+    let t = 22 + r(s, 2, 13)
+    let (lx, lz) = dir(s, 3)
+    let low = t / 2
+    let a = box(box(Nil, x, b, z, 2, low, 2, 1), x + 2 * lx, b + low, z + 2 * lz, 2, t - low, 2, 1)
+    let cx = x + 3 * lx
+    let cz = z + 3 * lz
+    let a = box(a, cx, b + t, cz, 2, 2, 2, 25)
+    let a = fronds(a, cx, b + t + 1, cz, 4 + r(s, 4, 3), if r(s, 5, 2) == 0 do 21 else 25 end)
+    if r(s, 6, 2) == 0 do box(a, cx, b + t - 1, cz, 2, 1, 2, 15) else a end
+  end
+  pfn araucaria(x : Int, z : Int, b : Int, s : Int) : List(Ur.Architecture.Piece) do
+    let t = 30 + r(s, 2, 15)
+    let a = box(Nil, x, b, z, 2, t + 2, 2, 13)
+    let tiers = 6 + r(s, 3, 3)
+    let start = b + t / 3
+    let step = (t - t / 3) / tiers
+    let rad = 3 + r(s, 4, 2)
+    let m = if r(s, 5, 2) == 0 do 14 else 25 end
+    let a = List.fold_left(List.range(0, tiers), a, fn (a, k) ->
+      let rk = if k >= tiers - 2 do rad - 1 else rad end
+      if k % 2 == 0 do box(a, x - rk, start + k * step, z, 2 * rk + 2, 1, 2, m)
+      else box(a, x, start + k * step, z - rk, 2, 1, 2 * rk + 2, m) end)
+    box(a, x - 1, b + t + 1, z - 1, 4, 3, 4, m)
+  end
+  pfn mangrove_tree(x : Int, z : Int, b : Int, s : Int) : List(Ur.Architecture.Piece) do
+    let spread = 3 + r(s, 2, 2)
+    let root = 4 + r(s, 3, 3)
+    let a = box(box(Nil, x - spread, b, z - 1, 1, root, 1, 13), x + spread + 1, b, z + 1, 1, root, 1, 13)
+    let a = box(box(a, x, b, z - spread, 1, root - 1, 1, 13), x + 1, b, z + spread + 1, 1, root - 1, 1, 13)
+    let a = box(box(a, x - spread, b + root, z, 2 * spread + 2, 1, 1, 13), x, b + root - 1, z - spread, 1, 1, 2 * spread + 2, 13)
+    let a = box(a, x, b + root, z, 2, 4, 2, 13)
+    let cy = b + root + 3
+    let w = 4 + r(s, 4, 3)
+    let m = if r(s, 5, 3) == 0 do 25 else 14 end
+    let a = tier(a, x, cy, z, w, w - 1, 3, m)
+    let (ox, oz) = dir(s, 6)
+    box(a, x - w + 2 + ox * 2, cy + 3, z - w + 3 + oz * 2, 2 * w - 3, 2, 2 * w - 5, m)
+  end
+  pfn broad(x : Int, z : Int, b : Int, s : Int) : List(Ur.Architecture.Piece) do
+    let t = 20 + r(s, 2, 11)
+    let thick = 2 + r(s, 3, 2)
+    let a = box(Nil, x, b, z, thick, t, thick, 13)
+    let a = if r(s, 4, 2) == 0 do box(box(a, x - 2, b, z, 2, 3, 1, 13), x + thick, b, z + 1, 2, 3, 1, 13) else a end
+    let rad = 5 + r(s, 5, 3)
+    let m = leaf(s)
+    let (ox, oz) = dir(s, 6)
+    let a = tier(a, x, b + t, z, rad, rad - 1, 3, m)
+    let a = tier(a, x + ox * 2, b + t + 3, z + oz * 2, rad - 2, rad - 3, 2, if m == 14 do 25 else 22 end)
+    box(a, x - ox * 4 - 2, b + t - 4, z - oz * 4 - 2, 5, 2, 5, m)
+  end
+  pfn banana(x : Int, z : Int, b : Int, s : Int) : List(Ur.Architecture.Piece) do
+    let stems = 2 + r(s, 2, 2)
+    List.fold_left(List.range(0, stems), Nil, fn (a, k) ->
+      let sx = x + (k % 2) * 3 - 1
+      let sz = z + (k / 2) * 3 - 1
+      let h = 6 + r(s, 10 + k, 5)
+      let a = box(a, sx, b, sz, 1, h, 1, 22)
+      let a = box(a, sx - 3, b + h, sz, 3, 1, 2, if k % 2 == 0 do 21 else 11 end)
+      box(a, sx + 1, b + h - 1, sz - 1, 1, 1, 3 + r(s, 20 + k, 2), 21))
+  end
+  pfn ohia(x : Int, z : Int, b : Int, s : Int) : List(Ur.Architecture.Piece) do
+    let t = 8 + r(s, 2, 5)
+    let (ox, oz) = dir(s, 3)
+    let a = box(box(Nil, x, b, z, 2, t, 2, 13), x + ox, b + t, z + oz, 2, 5, 2, 13)
+    let cx = x + ox * 2
+    let cz = z + oz * 2
+    let rad = 4 + r(s, 4, 2)
+    let m = if r(s, 5, 2) == 0 do 14 else 25 end
+    let a = tier(a, cx, b + t + 3, cz, rad, rad, 3, m)
+    let a = tier(a, cx, b + t + 6, cz, rad - 1, rad - 1, 2, m)
+    let a = box(a, cx - 1, b + t + 8, cz - 1, 3, 1, 3, m)
+    if r(s, 6, 2) == 0 do box(box(a, cx + rad - 1, b + t + 5, cz, 1, 1, 1, 30), cx - 2, b + t + 8, cz + 1, 1, 1, 1, 30) else a end
+  end
+  pfn tree_fern(x : Int, z : Int, b : Int, s : Int) : List(Ur.Architecture.Piece) do
+    let t = 10 + r(s, 2, 9)
+    let a = box(Nil, x, b, z, 2, t, 2, 13)
+    let a = box(a, x, b + t, z, 2, 1, 2, 11)
+    fronds(a, x, b + t, z, 3 + r(s, 3, 3), if r(s, 4, 2) == 0 do 11 else 22 end)
+  end
+  pfn cloud_tree(x : Int, z : Int, b : Int, s : Int) : List(Ur.Architecture.Piece) do
+    let t = 5 + r(s, 2, 4)
+    let (ox, oz) = dir(s, 3)
+    let a = box(box(Nil, x, b, z, 2, t, 2, 13), x + ox * 2, b + t, z + oz * 2, 2, 4, 2, 13)
+    let a = box(a, x, b + 1, z, 2, 3, 2, 22)
+    let cx = x + ox * 3
+    let cz = z + oz * 3
+    let rad = 5 + r(s, 4, 2)
+    let m = if r(s, 5, 2) == 0 do 14 else 25 end
+    let a = tier(a, cx, b + t + 4, cz, rad, rad - 2, 2, m)
+    let (px, pz) = dir(s, 6)
+    tier(a, cx + px * 3, b + t + 6, cz + pz * 3, rad - 2, rad - 2, 2, 22)
+  end
+  pfn elfin(x : Int, z : Int, b : Int, s : Int) : List(Ur.Architecture.Piece) do
+    let t = 2 + r(s, 2, 2)
+    let (ox, oz) = dir(s, 3)
+    let a = box(box(Nil, x, b, z, 1, t, 1, 13), x + ox, b + t, z + oz, 1, 2, 1, 13)
+    let rad = 2 + r(s, 4, 2)
+    tier(a, x + ox, b + t + 2, z + oz, rad, rad - 1 + r(s, 5, 2), 2, if r(s, 6, 2) == 0 do 22 else 25 end)
+  end
+  pfn bush(x : Int, z : Int, b : Int, s : Int) : List(Ur.Architecture.Piece) do
+    let n = 1 + r(s, 2, 3)
+    List.fold_left(List.range(0, n), Nil, fn (a, k) ->
+      let w = 3 + r(s, 10 + k, 3)
+      box(a, x + k * 2 - 2, b, z + r(s, 20 + k, 3) - 1, w, 2 + r(s, 30 + k, 2), w - 1, if (k + r(s, 3, 2)) % 2 == 0 do 25 else 22 end))
+  end
+  pfn pine(x : Int, z : Int, b : Int, s : Int) : List(Ur.Architecture.Piece) do
+    let t = 30 + r(s, 2, 13)
+    let a = box(Nil, x, b, z, 2, t + 2, 2, 1)
+    let tufts = 3 + r(s, 3, 2)
+    let a = List.fold_left(List.range(0, tufts), a, fn (a, k) ->
+      let (dx, dz) = dir(s, 10 + k)
+      let reach = 2 + r(s, 20 + k, 2)
+      let y = b + t - 6 + k * 2 + r(s, 30 + k, 2)
+      box(box(a, x + dx * reach - 1, y, z + dz * reach - 1, 4, 3, 4, 14), x + dx, y - 1, z + dz, 2, 1, 2, 1))
+    box(a, x - 1, b + t + 1, z - 1, 4, 3, 4, 14)
+  end
+  pfn koa(x : Int, z : Int, b : Int, s : Int) : List(Ur.Architecture.Piece) do
+    let t = 10 + r(s, 2, 7)
+    let (ox, oz) = dir(s, 3)
+    let a = box(Nil, x, b, z, 2, t, 2, 13)
+    let a = box(box(a, x + ox * 2, b + t, z + oz * 2, 2, 4, 2, 13), x - oz * 2, b + t - 1, z + ox * 2, 2, 4, 2, 13)
+    let blobs = 3 + r(s, 4, 2)
+    List.fold_left(List.range(0, blobs), a, fn (a, k) ->
+      let (dx, dz) = dir(s, 10 + k)
+      let rad = 2 + r(s, 20 + k, 2)
+      box(a, x + dx * 4 - rad, b + t + 3 + r(s, 30 + k, 3), z + dz * 4 - rad + r(s, 40 + k, 3) - 1, 2 * rad + 1, 2, 2 * rad, if r(s, 50 + k, 3) == 0 do 25 else 22 end))
+  end
+
+  doc "A tree of [kind] with its trunk at (x, z) of a parcel, standing on ground [base], varied by [seed]: at most twelve pieces, clipped to the parcel."
+  fn shape(kind : Int, x : Int, z : Int, base : Int, seed : Int) : List(Ur.Architecture.Piece) do
+    match kind do
+      0 -> coconut_palm(x, z, base, seed)
+      1 -> araucaria(x, z, base, seed)
+      2 -> mangrove_tree(x, z, base, seed)
+      3 -> broad(x, z, base, seed)
+      4 -> banana(x, z, base, seed)
+      5 -> ohia(x, z, base, seed)
+      6 -> tree_fern(x, z, base, seed)
+      7 -> cloud_tree(x, z, base, seed)
+      8 -> elfin(x, z, base, seed)
+      9 -> bush(x, z, base, seed)
+      10 -> pine(x, z, base, seed)
+      _ -> koa(x, z, base, seed)
+    end
+  end
+end

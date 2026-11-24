@@ -71,10 +71,36 @@ mod IslandTreesTest do
       "the map's corners are read without a fault")
   end
 
+  -- tree shapes
+  pfn shape_sig(ps : List(Ur.Architecture.Piece)) : Int do
+    List.fold_left(ps, 7, fn (h, p) -> Strata.Seed.mix(h, ((((p.x * 37 + p.y) * 41 + p.z) * 43 + p.w) * 47 + p.h) * 53 + p.d * 59 + p.material))
+  end
+  pfn top(ps : List(Ur.Architecture.Piece)) : Int do List.fold_left(ps, 0, fn (t, p) -> if p.y + p.h > t do p.y + p.h else t end) end
+  pfn mean_top(kind : Int) : Int do List.fold_left(List.range(0, 200), 0, fn (t, s) -> t + top(Ur.Trees.shape(kind, 16, 16, 20, s))) / 200 end
+  pfn shapes() : Unit do
+    Test.assert_eq_int(Ur.Trees.kinds(), 12, "twelve kinds")
+    List.each(List.range(0, Ur.Trees.kinds()), fn kind ->
+      let name = "kind " ++ int_to_string(kind)
+      let lists = List.map(List.range(0, 200), fn s -> Ur.Trees.shape(kind, 16, 16, 20, s))
+      Test.assert_true(List.all(lists, fn ps -> List.length(ps) >= 1 && List.length(ps) <= 12), name ++ ": one to twelve pieces")
+      Test.assert_true(List.all(lists, fn ps -> List.all(ps, fn p -> p.x >= 0 && p.z >= 0 && p.x + p.w <= 32 && p.z + p.d <= 32 && p.y >= 20 && p.w > 0 && p.h > 0 && p.d > 0)),
+        name ++ ": inside the parcel, on the ground or above")
+      Test.assert_true(shape_sig(Ur.Trees.shape(kind, 16, 16, 20, 99)) == shape_sig(Ur.Trees.shape(kind, 16, 16, 20, 99)), name ++ ": the same seed, the same tree")
+      let distinct = List.fold_left(List.map(lists, fn ps -> shape_sig(ps)), Nil, fn (seen, k) ->
+        if List.any(seen, fn s -> s == k) do seen else Cons(k, seen) end)
+      Test.assert_true(List.length(distinct) >= 8, name ++ ": varies by seed (" ++ int_to_string(List.length(distinct)) ++ " shapes)")
+      -- a tree on a parcel's edge is kept inside it
+      Test.assert_true(List.all(List.range(0, 50), fn s -> List.all(Ur.Trees.shape(kind, 1, 30, 20, s), fn p -> p.x >= 0 && p.z >= 0 && p.x + p.w <= 32 && p.z + p.d <= 32)),
+        name ++ ": kept inside the parcel at its edge"))
+    Test.assert_true(mean_top(0) > mean_top(4) && mean_top(1) > mean_top(4), "palms and araucarias stand taller than banana clumps")
+    Test.assert_true(List.all(List.range(0, 200), fn s -> top(Ur.Trees.shape(8, 16, 16, 20, s)) <= 28), "elfin trees stay low")
+  end
+
   fn main(_cap : Cap(IO)) : Unit do
     let c = S.new()
     traits(c)
     spot(c)
+    shapes()
     Authority.must(println("Island trees: all assertions passed"))
   end
 end
