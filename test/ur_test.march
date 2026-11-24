@@ -1530,7 +1530,108 @@ mod UrTest do
     Test.assert_true(Ur.Air.lift_at(sea, 4, 100) == 0 && Ur.Air.lift_at(land, 4, 100) >= 0, "an all-sea or all-land map has air too")
   end
 
+
+  -- lots in the 12-parcel block round the middle of the test island
+  pfn in_core(lot : Int) : Bool do lot % S.width() >= 24 && lot % S.width() <= 35 && lot / S.width() >= 16 && lot / S.width() <= 27 end
+  pfn mark_core(a : NativeIntArr, v : Int, lot : Int) : NativeIntArr do
+    if lot >= S.count() do a else mark_core(if in_core(lot) do NativeArray.set_int(a, lot, v) else a end, v, lot + 1) end
+  end
+  -- the core's share (percent) of the island's lift squared at the afternoon snapshot: the odds a storm is born there
+  pfn core_share(air : Ur.Air.Air) : Int do core_share_at(air, 0, 0, 0) end
+  pfn core_share_at(air : Ur.Air.Air, area : Int, core : Int, all : Int) : Int do
+    if area >= Ur.Air.areas() do core * 100 / (if all < 1 do 1 else all end) else
+      let v = Ur.Air.lift_at(air, 3, area)
+      let w = if v > 0 do v * v else 0 end
+      let x = area % 15
+      let z = area / 15
+      core_share_at(air, area + 1, if x >= 6 && x <= 8 && z >= 4 && z <= 6 do core + w else core end, all + w)
+    end
+  end
+  pfn land_units(c : Ur.Sim.City, a : NativeIntArr, shade : Bool, lot : Int, sum : Int, n : Int) : (Int, Int) do
+    if lot >= S.count() do (sum, n)
+    else if S.get(c.heights, lot) > 0 && Ur.Air.shadowed(c.air, lot) == shade do land_units(c, a, shade, lot + 1, sum + NativeArray.get_int(a, lot), n + 1)
+    else land_units(c, a, shade, lot + 1, sum, n) end end
+  end
+  pfn total_units(a : NativeIntArr, i : Int, acc : Int) : Int do if i >= S.count() do acc else total_units(a, i + 1, acc + NativeArray.get_int(a, i)) end end
+  pfn day_units(c : Ur.Sim.City) : Int do
+    let (_, a0) = S.watch_rain(c, 0)
+    let (_, a1) = S.watch_rain(c, 1)
+    let (_, a2) = S.watch_rain(c, 2)
+    total_units(a0, 0, 0) + total_units(a1, 0, 0) + total_units(a2, 0, 0)
+  end
+  -- island-wide rain units a day by regional kind (2, 3, 4) over a year, and the days of each
+  pfn year_units(c : Ur.Sim.City, k : Int, sums : NativeIntArr) : NativeIntArr do
+    if k >= 720 do sums else
+      let d = S.ensure_dawn({ c with month: k / 30, calendar_day: k % 30 })
+      let kind = S.current_weather(d)
+      let sums = if kind >= 2 do NativeArray.set_int(NativeArray.set_int(sums, kind, NativeArray.get_int(sums, kind) + day_units(d)), kind + 5, NativeArray.get_int(sums, kind + 5) + 1) else sums end
+      year_units(c, k + 1, sums)
+    end
+  end
+  pfn within_fifth(sums : NativeIntArr, kind : Int, before : Int) : Bool do
+    let days = NativeArray.get_int(sums, kind + 5)
+    let mean = NativeArray.get_int(sums, kind) / (if days < 1 do 1 else days end)
+    mean * 10 >= before * 8 && mean * 10 <= before * 12
+  end
+  pfn lift_city_checks() : Unit do
+    let island = { S.unclaimed() with heights: test_island(0, NativeArray.make_int(S.count(), 0)), climate_seed: 4242 }
+    -- a new city has no dawn yet: its first hour of rain makes one
+    let stormy = S.set_rain_hour(severe_day(island, 0), 12)
+    Test.assert_true(stormy.air.day == stormy.month * 30 + stormy.calendar_day && List.length(S.day_cells(stormy)) >= 2, "a new city's first rain brings its day's air and storms")
+    -- heat: a paved core draws a few more storms, a leafy one a few fewer
+    let summer = { island with month: 6, calendar_day: 3 }
+    let plain = S.dawn(summer)
+    let paved = S.dawn({ summer with roads: mark_core(NativeArray.make_int(S.count(), 0), 1, 0) })
+    let leafy = S.dawn({ summer with parks: mark_core(NativeArray.make_int(S.count(), 0), 1, 0), park_tiers: mark_core(NativeArray.make_int(S.count(), 0), 2, 0) })
+    Test.assert_true(S.get(S.city_heat(paved), S.index(30, 22)) > 0 && S.get(S.city_heat(leafy), S.index(30, 22)) < 0, "paving warms a parcel, parks cool it")
+    Test.assert_true(core_share(paved.air) > core_share(plain.air) && core_share(leafy.air) < core_share(plain.air), "a paved core draws more storms than a leafy one")
+    Test.assert_true(core_share(paved.air) * 100 < core_share(plain.air) * 120 && core_share(leafy.air) * 100 > core_share(plain.air) * 80, "but only a little")
+    -- shadow: the lee of the mountain gets less rain on a stormy day
+    let (lee, lee_n) = land_units(stormy, total_units_watch(stormy), true, 0, 0, 0)
+    let (open, open_n) = land_units(stormy, total_units_watch(stormy), false, 0, 0, 0)
+    Test.assert_true(lee_n > 0 && open_n > 0 && lee * open_n < open * lee_n, "the rain shadow is drier than open ground")
+    -- calibration: the island's rain a day, by kind, within a fifth of before the air (docs/superpowers/plans/2026-11-23-lift-map.md, Task 0)
+    let sums = year_units(S.unclaimed(), 0, NativeArray.make_int(10, 0))
+    Test.assert_true(within_fifth(sums, 2, 33500) && within_fifth(sums, 3, 33500) && within_fifth(sums, 4, 92000), "the island's rain a day stays within a fifth of before")
+    -- the day's storms are fixed at dawn: grading at noon changes tomorrow's, not today's
+    let morning = S.set_rain_hour(stormy, 9)
+    let graded = { morning with heights: mark_core(morning.heights, 170, 0) }
+    let after = S.set_rain_hour(graded, 13)
+    let before = S.set_rain_hour(morning, 13)
+    Test.assert_true(same_ints(after.rain_now, before.rain_now, 0), "grading mid-day leaves today's storms")
+    -- a save made after the grading keeps the day: its storms, its air, its rain for the rest of the day
+    let noon = S.set_rain_hour(graded, 12)
+    let session = { game: { city: noon, cx: 0.0, cz: 0.0, zoom: 52.0, yaw: 0.0, paused: true, speed: 1 }, evacuation: Nil }
+    match Ur.Save.decode_session(Ur.Save.encode_session(session)) do
+      Ok(back) ->
+        let city = back.game.city
+        let later = S.set_rain_hour(city, 15)
+        let kept = S.set_rain_hour(noon, 15)
+        Test.assert_true(city.air.day == noon.air.day && same_ints(city.air.shadow, noon.air.shadow, 0) && near_cells(city.storms, noon.storms), "a save keeps the day's storms and air")
+        Test.assert_true(same_ints(later.rain_now, kept.rain_now, 0), "and a loaded city rains as the saved one would")
+      Err(e) -> Test.assert_true(false, "the save loads: " ++ e)
+    end
+  end
+  pfn near(a : Float, b : Float) : Bool do float_abs(a -. b) < 0.01 end
+  pfn near_cells(a : List(Ur.Rain.Cell), b : List(Ur.Rain.Cell)) : Bool do
+    match (a, b) do
+      (Nil, Nil) -> true
+      (Cons(p, ps), Cons(q, qs)) -> if near(p.x, q.x) && near(p.z, q.z) && near(p.vx, q.vx) && near(p.vz, q.vz) && near(p.radius, q.radius) && p.level == q.level && near(p.start, q.start) && near(p.stop, q.stop) do near_cells(ps, qs) else false end
+      _ -> false
+    end
+  end
+  pfn total_units_watch(c : Ur.Sim.City) : NativeIntArr do
+    let (_, a0) = S.watch_rain(c, 0)
+    let (_, a1) = S.watch_rain(c, 1)
+    let (_, a2) = S.watch_rain(c, 2)
+    sum3(a0, a1, a2, 0, NativeArray.make_int(S.count(), 0))
+  end
+  pfn sum3(a : NativeIntArr, b : NativeIntArr, c : NativeIntArr, i : Int, out : NativeIntArr) : NativeIntArr do
+    if i >= S.count() do out else sum3(a, b, c, i + 1, NativeArray.set_int(out, i, NativeArray.get_int(a, i) + NativeArray.get_int(b, i) + NativeArray.get_int(c, i))) end
+  end
+
   fn main(_cap : Cap(IO)) : Unit do
+    lift_city_checks()
     air_checks()
     review_fix_checks()
     watch_clock_checks()

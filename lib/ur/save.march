@@ -815,6 +815,8 @@ mod Ur.Save do
       Cons(("climate_seed", Json.encode_int(v.climate_seed)),
       Cons(("rain_uniform", Json.encode_bool(v.rain_uniform)),
       Cons(("watch", Json.encode_int(v.watch)),
+      Cons(("storms", Json.encode_array(List.map(v.storms, encode_cell))),
+      Cons(("air", encode_air(v.air)),
       Cons(("pump_orders", enc_array(v.pump_orders, S.count() - 1, Nil)),
       Cons(("surface_water", enc_array(v.surface_water, S.count() - 1, Nil)),
       Cons(("flood_damage", enc_array(v.flood_damage, S.count() - 1, Nil)),
@@ -825,7 +827,69 @@ mod Ur.Save do
       Cons(("subway_water", enc_array(v.subway_water, S.count() - 1, Nil)),
       Cons(("soil_moisture", Json.encode_int(v.soil_moisture)),
       Cons(("pumping_cost", Json.encode_int(v.pumping_cost)),
-      Cons(("message", Json.encode_string(v.message)), Nil)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+      Cons(("message", Json.encode_string(v.message)), Nil)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+  end
+  pfn encode_cell(c : Ur.Rain.Cell) : Json.JsonValue do
+    Json.encode_array([Json.encode_number(c.x), Json.encode_number(c.z), Json.encode_number(c.vx), Json.encode_number(c.vz),
+      Json.encode_number(c.radius), Json.encode_int(c.level), Json.encode_number(c.start), Json.encode_number(c.stop)])
+  end
+  pfn coordinate(j : Json.JsonValue) : Result(Float, String) do
+    match j do
+      Json.Number(n) -> if n >= -100000.0 && n <= 100000.0 do Ok(n) else Err("Invalid storm.") end
+      _ -> Err("Invalid storm.")
+    end
+  end
+  pfn decode_cell(j : Json.JsonValue) : Result(Ur.Rain.Cell, String) do
+    match j do
+      Json.Array(Cons(x, Cons(z, Cons(vx, Cons(vz, Cons(r, Cons(level, Cons(start, Cons(stop, Nil))))))))) ->
+        let? x = coordinate(x)
+        let? z = coordinate(z)
+        let? vx = coordinate(vx)
+        let? vz = coordinate(vz)
+        let? r = coordinate(r)
+        let? level = integer(level)
+        let? start = coordinate(start)
+        let? stop = coordinate(stop)
+        Ok({ x: x, z: z, vx: vx, vz: vz, radius: r, level: S.clamp(level, 0, 4), start: start, stop: stop })
+      _ -> Err("Invalid storm.")
+    end
+  end
+  pfn enc_signed(a : NativeIntArr) : Json.JsonValue do enc_array(a, NativeArray.length_int(a) - 1, Nil) end
+  pfn decode_signed(xs : List(Json.JsonValue), a : NativeIntArr, i : Int, length : Int) : Result(NativeIntArr, String) do
+    match xs do
+      Nil -> if i == length do Ok(a) else Err("Incomplete air data.") end
+      Cons(value, rest) ->
+        let? n = integer(value)
+        if i >= length do Err("Invalid air data.") else decode_signed(rest, NativeArray.set_int(a, i, n), i + 1, length) end
+    end
+  end
+  pfn signed_array(j : Json.JsonValue, length : Int) : Result(NativeIntArr, String) do
+    match j do
+      Json.Array(xs) -> decode_signed(xs, NativeArray.make_int(length, 0), 0, length)
+      _ -> Err("Missing air data.")
+    end
+  end
+  -- the day's air as the simulation reads it; its coast field is rebuilt from the heights on load
+  pfn encode_air(a : Ur.Air.Air) : Json.JsonValue do
+    Json.encode_object([("day", Json.encode_int(a.day)), ("shadow", enc_signed(a.shadow)), ("lift", enc_signed(a.lift)),
+      ("sea", Json.encode_int(a.sea)), ("daily", Json.encode_int(a.daily)), ("kind", Json.encode_int(a.kind)), ("soil", Json.encode_int(a.soil))])
+  end
+  pfn decode_air(j : Json.JsonValue, heights : NativeIntArr) : Result(Ur.Air.Air, String) do
+    let? raw_day = field(j, "day")
+    let? day = integer(raw_day)
+    let? raw_shadow = field(j, "shadow")
+    let? shadow = array(raw_shadow, S.count(), 1)
+    let? raw_lift = field(j, "lift")
+    let? lift = signed_array(raw_lift, Ur.Air.snapshots() * Ur.Air.areas())
+    let? raw_sea = field(j, "sea")
+    let? sea = integer(raw_sea)
+    let? raw_daily = field(j, "daily")
+    let? daily = integer(raw_daily)
+    let? raw_kind = field(j, "kind")
+    let? kind = integer(raw_kind)
+    let? raw_soil = field(j, "soil")
+    let? soil = integer(raw_soil)
+    Ok(Ur.Air.restore(day, heights, shadow, lift, sea, daily, kind, soil))
   end
   pfn decode_city(j : Json.JsonValue) : Result(Ur.Sim.City, String) do
     let? freight = match Json.get(j, "freight") do
@@ -1056,6 +1120,10 @@ mod Ur.Save do
     let? rain_uniform = boolean(raw_uniform)
     let? raw_watch = field(j, "watch")
     let? watch = integer(raw_watch)
+    let? raw_storms = field(j, "storms")
+    let? storms = items(raw_storms, decode_cell, 16)
+    let? raw_air = field(j, "air")
+    let? air = decode_air(raw_air, heights)
     let? flood_active = match Json.get(j, "flood_active") do
       None -> Ok(false)
       Some(value) -> boolean(value)
@@ -1097,7 +1165,7 @@ mod Ur.Save do
     let? raw_message = field(j, "message")
     let? message = string(raw_message)
     if !((harbour == -1 || S.valid(harbour)) && (ferry_start == -1 || S.valid(ferry_start)) && month >= 0 && construction_spend >= 0 && tax >= 0 && tax <= 25 && energy >= 1 && energy <= 12) do Err("Invalid city values.") else
-    Ok(S.restore_rain({ rain_uniform: rain_uniform, watch: S.clamp(watch, 0, 2), rain_now: NativeArray.make_int(S.count(), 0), storms: Nil, air: Ur.Air.empty(), milestones: milestones, facility_staff: facility_staff, facility_expansion: facility_expansion, founders: S.clamp(founders, 0, 12), world_seed: world_seed, setup: setup, climate_seed: S.clamp(climate_seed, 0, 2147483646), storm_drains: storm_drains, seawalls: seawalls, pump_orders: pump_orders, surface_water: surface_water, flood_damage: flood_damage, flood_active: flood_active, rain_tanks: rain_tanks, subway_water: subway_water, soil_moisture: S.clamp(soil, 0, 100), pumping_cost: S.clamp(pumping, 0, 200000),
+    Ok(S.restore_rain({ rain_uniform: rain_uniform, watch: S.clamp(watch, 0, 2), rain_now: NativeArray.make_int(S.count(), 0), storms: storms, air: air, milestones: milestones, facility_staff: facility_staff, facility_expansion: facility_expansion, founders: S.clamp(founders, 0, 12), world_seed: world_seed, setup: setup, climate_seed: S.clamp(climate_seed, 0, 2147483646), storm_drains: storm_drains, seawalls: seawalls, pump_orders: pump_orders, surface_water: surface_water, flood_damage: flood_damage, flood_active: flood_active, rain_tanks: rain_tanks, subway_water: subway_water, soil_moisture: S.clamp(soil, 0, 100), pumping_cost: S.clamp(pumping, 0, 200000),
       waste_live: waste_live, waste_bins: waste_bins, waste_stock: waste_stock, waste_sites: waste_sites,
       waste_last: waste_last, waste_log: waste_log, waste_runs: waste_runs, council: council, religion: religion, construction_spend: construction_spend, island_exports: island_exports, island_crops: island_crops, island_catch: island_catch,
       shop_imports: shop_imports, harbour: harbour, ferry_start: ferry_start, trash: trash,
