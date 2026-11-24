@@ -51,9 +51,9 @@ mod Ur.Layers do
       25 -> "Transit foot traffic · Green low / amber medium / cyan high."
       30 -> "Green: contained / amber: piling up / red: overflowing / blue: disposal facility."
       34 -> "Green covered · Gray uncovered · Cyan open · Red needs staff · Amber closed"
-      35 -> "Rain today · darker is heavier · faded is still to come"
+      35 -> "Rain today · deeper blue is heavier · faint is still to come"
       33 -> "Amber: storm risk · Blue: flooded now · Green: protection"
-      32 -> "Blue <25 °C · Green 25–27.9 · Amber 28–32.9 · Red 33+ °C"
+      32 -> "Blue: cooler than 25 °C · Clear: comfortable · Amber to red: hotter than 28 °C"
       29 -> "Arrows point downwind. Gray: light / blue: moderate / amber: strong."
       28 -> "Amber: sponsor ward   Red: target parcel   Cyan/green: represented"
       27 -> "Cyan: closed to cars   Amber: scheduled   Gray: eligible street"
@@ -105,22 +105,19 @@ mod Ur.Layers do
       name(layer) ++ " · " ++ int_to_string(S.get(report.delivered, lot)) ++ " / " ++ int_to_string(demand) ++ " served here"
     else "" end end
   end
-  -- Rainfall colours by level: blue severe, cyan heavy, gray rain
-  fn rain_color(level : Int) : Int do if level >= 4 do 12 else if level == 3 do 20 else if level == 2 do 17 else -1 end end end end
-  -- Rainfall as two smooth fields in 64ths of a level: today's peak where it
-  -- has already fallen (and is the day's heaviest), and the peak still to come.
-  fn rain_fields(c : Ur.Sim.City) : (NativeIntArr, NativeIntArr) do
+  -- Rainfall strength on each parcel (0..63) for the blended overlay: today's
+  -- peak where it has already fallen, deeper for heavier rain, and a faint
+  -- wash where the day's heaviest rain is still to come.
+  fn rain_strength(c : Ur.Sim.City) : NativeIntArr do
     let (p0, _) = S.watch_rain(c, 0)
     let (p1, _) = S.watch_rain(c, 1)
     let (p2, _) = S.watch_rain(c, 2)
-    List.fold_left(List.range(0, S.count()), (NativeArray.make_int(S.count(), 0), NativeArray.make_int(S.count(), 0)), fn (fields, i) ->
-      let (now, ahead) = fields
+    List.fold_left(List.range(0, S.count()), NativeArray.make_int(S.count(), 0), fn (field, i) ->
       let peak_of = fn (w : Int) -> S.get(if w == 0 do p0 else if w == 1 do p1 else p2 end end, i)
       let past = List.fold_left(List.range(0, c.watch), 0, fn (m, w) -> if peak_of(w) > m do peak_of(w) else m end)
       let later = List.fold_left(List.range(c.watch, 3), 0, fn (m, w) -> if peak_of(w) > m do peak_of(w) else m end)
-      let fallen = past >= later && past >= 2
-      (NativeArray.set_int(now, i, if fallen do past * 64 else 0 end),
-        NativeArray.set_int(ahead, i, if !fallen && later >= 2 do later * 64 else 0 end)))
+      let strength = if past >= later && past >= 2 do past * 15 else if later >= 2 do later * 5 else 0 end end
+      NativeArray.set_int(field, i, strength))
   end
   fn heat_color(temperature : Int) : Int do
     if temperature < 250 do 12 else if temperature < 280 do 11 else if temperature < 330 do 10 else 6 end end end
