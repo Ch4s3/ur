@@ -918,8 +918,8 @@ mod Ur.Sim do
         offshore_barrier(c, x + dx, z + dz, dx, dz, remaining - 1))
     end
   end
-  doc "The surge today's sea drives at water parcel [lot], quarter metres: nothing below 1.5 m of counted sea, then a quarter metre a 10 cm more, to 16 (4 m). Calm seas (the setting) drive none."
-  fn surge_at(c : City, lot : Int) : Int do if sea_storms(c) == 0 do 0 else clamp((sea_at(c, lot) - 150) / 10, 0, 16) end end
+  doc "The surge today's sea drives at water parcel [lot], quarter metres: nothing below 2.5 m of counted sea, then a quarter metre an 8 cm more, to 16 (4 m). Calm seas (the setting) drive none."
+  fn surge_at(c : City, lot : Int) : Int do if sea_storms(c) == 0 do 0 else clamp((sea_at(c, lot) - 250) / 8, 0, 16) end end
   -- the level water reaches walking in from the sea along (dx, dz): the full
   -- 16 for the geometric reach (drainage, tides), or today's surge when [sea]
   pfn coast_approach(c : City, sea : Bool, x : Int, z : Int, dx : Int, dz : Int, distance : Int, crest : Int) : Int do
@@ -2872,10 +2872,10 @@ mod Ur.Sim do
       crossing_at(c, a, b, 1, if dx > dz do dx else dz end, 0)
     end
   end
-  doc "The wave height in cm the ferry route at terminal [lot] runs in: 300 with a larger ferry at either end, else 150."
+  doc "The wave height in cm the ferry route at terminal [lot] runs in: 450 with a larger ferry at either end, else 300 (tuned on a year of the founding map's seas: an exposed crossing is suspended about 5 days a year at Normal, a sheltered one about 1)."
   fn ferry_rating(c : City, lot : Int) : Int do
     let peer = get(c.ferries, lot) - 1
-    if larger_ferry(c, lot) || (valid(peer) && larger_ferry(c, peer)) do 300 else 150 end
+    if larger_ferry(c, lot) || (valid(peer) && larger_ferry(c, peer)) do 450 else 300 end
   end
   doc "Today's status of the ferry route at terminal [lot]: 0 running, 1 slowed (from 75% of its rating), 2 suspended (above it)."
   fn ferry_status(c : City, lot : Int) : Int do
@@ -3105,8 +3105,8 @@ mod Ur.Sim do
       worst_sea_beside(c, i, d + 1, if h > worst do h else worst end)
     end
   end
-  doc "Whether the sea off fishing plant [i] is too rough to fish fully today (over 2 m beside it)."
-  fn rough_fishing(c : City, i : Int) : Bool do worst_sea_beside(c, i, 0, sea_at(c, i)) > 200 end
+  doc "Whether the sea off fishing plant [i] is too rough to fish fully today (over 3 m beside it)."
+  fn rough_fishing(c : City, i : Int) : Bool do worst_sea_beside(c, i, 0, sea_at(c, i)) > 300 end
   pfn catch_yield(c : City, i : Int) : Int do
     let blessing = if favor_god(c) == 4 do 135 else 100 end
     let full = (if food_island(c, i) == 2 do 224 else 128 end) * (80 + get(c.setup, 4) * 10) / 100 * (100 - pollution_at(c, i)) * blessing / 10000
@@ -4873,7 +4873,7 @@ mod Ur.Sim do
     else if tool == 123 && get(c.ferries, lot) == 0 && lot != c.harbour do { c with message: "Protect a ferry terminal or the harbour." }
     else if tool == 123 && protected_harbour(c, lot) do { c with message: "This harbour is protected already." }
     else if (tool == 122 || tool == 123) && c.cash < price do { c with message: "Not enough money for water works." }
-    else if tool == 122 do { c with cash: c.cash - price, ferry_works: NativeArray.set_int(c.ferry_works, lot, works + 1), message: "Larger ferry: the route runs in seas up to 3 m." }
+    else if tool == 122 do { c with cash: c.cash - price, ferry_works: NativeArray.set_int(c.ferry_works, lot, works + 1), message: "Larger ferry: the route runs in seas up to 4.5 m." }
     else if tool == 123 do { c with cash: c.cash - price, ferry_works: NativeArray.set_int(c.ferry_works, lot, works + 2), message: "Harbour protected: the seas at this end count half." }
     else if (tool == 118 || tool == 119 || tool == 120) && !clear_water(c, lot) do
       { c with message: "Work on clear water, away from seawalls, ferries, crossings and the harbour." }

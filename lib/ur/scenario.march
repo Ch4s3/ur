@@ -643,8 +643,8 @@ mod Ur.Scenario do
       transit: NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(c.transit, station, 4),
         S.index(9, 17), 4), S.index(9, 18), 4), inland, 4),
       land_pollution: NativeArray.set_int(c.land_pollution, station, 90),
-      -- a storm's sea: 3.5 m everywhere, a full surge on the coast
-      sea_heights: NativeArray.make_int(S.count(), 350),
+      -- a storm's sea: 4 m everywhere, a full surge on the coast
+      sea_heights: NativeArray.make_int(S.count(), 400),
       month: date / 30, calendar_day: date % 30, rain_uniform: true }
   end
 
@@ -663,7 +663,7 @@ mod Ur.Scenario do
   fn flood_backup_turn(c : Ur.Sim.City) : Ur.Sim.City do
     let tie = flood_backup_tie()
     -- the drill's sea follows its weather: a storm sea on severe days, calm after
-    let c = { c with sea_heights: NativeArray.make_int(S.count(), if S.severe_rain(c) do 350 else 0 end) }
+    let c = { c with sea_heights: NativeArray.make_int(S.count(), if S.severe_rain(c) do 400 else 0 end) }
     if c.month == 0 && c.calendar_day == 19 && S.get(c.grid, tie) == 0 do
       S.act(c, tie, 26)
     else c end
