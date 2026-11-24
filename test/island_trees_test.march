@@ -1,0 +1,33 @@
+mod IslandTreesTest do
+  needs IO
+  needs IO.Console
+  alias Ur.Sim as S
+
+  pfn seeded(c : Ur.Sim.City, seed : Int) : Ur.Sim.City do { c with world_seed: seed } end
+  pfn count_seeds(c : Ur.Sim.City, test : Ur.Sim.City -> Bool, seed : Int, n : Int) : Int do
+    if seed > 300 do n else count_seeds(c, test, seed + 1, if test(seeded(c, seed)) do n + 1 else n end) end
+  end
+
+  -- map traits
+  pfn traits(c : Ur.Sim.City) : Unit do
+    let mangroves = count_seeds(c, fn m -> Ur.Flora.mangrove_map(m), 1, 0)
+    let pines = count_seeds(c, fn m -> Ur.Flora.pine_map(m), 1, 0)
+    let both = count_seeds(c, fn m -> Ur.Flora.mangrove_map(m) == Ur.Flora.pine_map(m), 1, 0)
+    Test.assert_true(mangroves >= 70 && mangroves <= 130, "mangroves on about a third of seeds: " ++ int_to_string(mangroves))
+    Test.assert_true(pines >= 70 && pines <= 130, "a pine stand on about a third of seeds: " ++ int_to_string(pines))
+    Test.assert_true(both <= 180, "the two are drawn apart: they agree on " ++ int_to_string(both) ++ " of 300")
+    let founding = seeded(c, -1)
+    Test.assert_true(Ur.Flora.mangrove_map(founding), "the founding map has mangroves")
+    Test.assert_true(!Ur.Flora.pine_map(founding), "and no pine stand")
+    Test.assert_true(Math.abs(Ur.Flora.prevailing(founding) -. 0.42) < 0.001, "and the daily wind's base as its trade wind")
+    let one = seeded(c, 77)
+    let later = { one with calendar_day: one.calendar_day + 9, month: one.month + 3 }
+    Test.assert_true(Ur.Flora.prevailing(one) == Ur.Flora.prevailing(later), "a map's trade wind does not turn with the days")
+  end
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let c = S.new()
+    traits(c)
+    Authority.must(println("Island trees: all assertions passed"))
+  end
+end

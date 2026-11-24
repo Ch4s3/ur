@@ -1,0 +1,23 @@
+-- What grows where on the islands: each map's traits (its trade wind, and
+-- whether its shores carry mangroves and its mountains a pine stand), and for
+-- a spot its zone (from height on the local massif), its side of the wind and
+-- its shelter. Trees follow tropical island mountains (docs/superpowers/specs/
+-- 2026-11-24-island-trees-design.md): palms and rainforest low down, ʻōhiʻa
+-- and tree ferns up the slopes, cloud forest and elfin scrub near the tops,
+-- wetter on the windward side. Pure: a function of the city and the spot.
+mod Ur.Flora do
+  alias Ur.Sim as S
+
+  doc "The heading (radians the wind blows toward, 0 east, pi/2 south) of the map's trade wind: fixed by its seed, unlike the daily wind, which turns all the way round over the months. The founding map's is the daily wind's base, 0.42."
+  fn prevailing(c : Ur.Sim.City) : Float do
+    if c.world_seed < 0 do 0.42 else Strata.Seed.unit(Strata.Seed.mix(c.world_seed, 1303)) *. 6.2831853 end
+  end
+  doc "Whether the map's sheltered shores carry mangroves: about one map in three, and the founding map."
+  fn mangrove_map(c : Ur.Sim.City) : Bool do
+    c.world_seed < 0 || Strata.Seed.mix(c.world_seed, 1301) % 3 == 0
+  end
+  doc "Whether the map's lee slopes carry a pine stand, as on Hispaniola: about one map in three (drawn apart from mangroves); not the founding map."
+  fn pine_map(c : Ur.Sim.City) : Bool do
+    c.world_seed >= 0 && Strata.Seed.mix(c.world_seed, 1302) % 3 == 0
+  end
+end
