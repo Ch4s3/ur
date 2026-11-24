@@ -1254,7 +1254,7 @@ mod UrTest do
     end
   end
   pfn rain_cell_checks() : Unit do
-    let summer = lift_map(in_patch, 80, 2, 3, 0, NativeArray.make_int(5 * 165, 0))
+    let summer = lift_map(in_patch, 150, 2, 3, 0, NativeArray.make_int(5 * 165, 0))
     let winter = lift_map(in_ring, 80, 0, 1, 0, NativeArray.make_int(5 * 165, 0))
     let still = NativeArray.make_int(5 * 165, 0)
     let wet = Ur.Rain.cells(77, 3, 12, 4, 30, 0.6, summer)
@@ -1590,6 +1590,11 @@ mod UrTest do
     let (lee, lee_n) = land_units(stormy, total_units_watch(stormy), true, 0, 0, 0)
     let (open, open_n) = land_units(stormy, total_units_watch(stormy), false, 0, 0, 0)
     Test.assert_true(lee_n > 0 && open_n > 0 && lee * open_n < open * lee_n, "the rain shadow is drier than open ground")
+    -- the sea breeze turns the wind on the coast inland by day
+    let breezy = S.dawn(summer)
+    let afternoon = S.local_wind(breezy, S.index(11, 22), 15)
+    let night = S.local_wind(breezy, S.index(11, 22), 3)
+    Test.assert_true(int_to_float(afternoon.speed) *. Math.cos(afternoon.heading) > int_to_float(night.speed) *. Math.cos(night.heading), "the afternoon sea breeze turns the west coast's wind inland")
     -- calibration: the island's rain a day, by kind, within a fifth of before the air (docs/superpowers/plans/2026-11-23-lift-map.md, Task 0)
     let sums = year_units(S.unclaimed(), 0, NativeArray.make_int(10, 0))
     Test.assert_true(within_fifth(sums, 2, 33500) && within_fifth(sums, 3, 33500) && within_fifth(sums, 4, 92000), "the island's rain a day stays within a fifth of before")

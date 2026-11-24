@@ -1061,6 +1061,16 @@ mod Ur.Sim do
       heading: wind.heading +. terrain *. 0.27 }
     end
   end
+  doc "The wind on [lot] at game [hour]: the day's wind there (wind_at) with today's sea or land breeze (Ur.Air.breeze) added."
+  fn local_wind(c : City, lot : Int, hour : Int) : Wind do
+    let w = wind_at(c, lot)
+    let (bx, bz) = Ur.Air.breeze(c.air, lot, hour)
+    let vx = int_to_float(w.speed) *. Math.cos(w.heading) +. int_to_float(bx)
+    let vz = int_to_float(w.speed) *. Math.sin(w.heading) +. int_to_float(bz)
+    { speed: float_to_int(Math.sqrt(vx *. vx +. vz *. vz) +. 0.5), heading: Math.atan2(vz, vx) }
+  end
+  doc "The game hour [c]'s clock stands at (0..23)."
+  fn hour_now(c : City) : Int do street_hour(int_to_float(c.clock_ms) /. 1000.0) end
   fn wind_direction(heading : Float) : String do
     let sector = int_mod_euclid(float_to_int(Math.floor(heading /. 0.785398163 +. 0.5)), 8)
     match sector do

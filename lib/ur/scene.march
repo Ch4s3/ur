@@ -591,11 +591,23 @@ mod Ur.Scene do
       Some((x +. px *. side, z +. pz *. side, S.fclamp(cell.radius *. 0.9 /. 32.0, 2.6, 3.4)))
     else None end end
   end
-  pfn place_clouds(sky : Strata.Weather.Sky, hour : Float, offset : (Float, Float), peaks : List(Peak), storms : List(Ur.Rain.Cell), bands : List(Ur.Rain.Cell), i : Int, out : NativeF32Arr, n : Int) : (NativeF32Arr, Int) do
+  -- how much the air under (x, z) helps a heaped cloud form at [hour]: barely
+  -- over sinking air or the cool sea, fully where the land lifts strongly; 1
+  -- when there is no air today (a forced or uniform sky)
+  pfn lift_help(air : Ur.Air.Air, x : Float, z : Float, hour : Float) : Float do
+    if air.day < 0 || x < 0.0 || z < 0.0 || x >= 480.0 || z >= 352.0 do 1.0 else
+      let area = float_to_int(z /. 32.0) * Ur.Air.areas_x() + float_to_int(x /. 32.0)
+      let v = int_to_float(Ur.Air.lift_at(air, Ur.Air.snapshot_of(float_to_int(hour)), area))
+      0.4 +. 1.2 *. unit(v /. 60.0)
+    end
+  end
+  pfn place_clouds(sky : Strata.Weather.Sky, hour : Float, offset : (Float, Float), peaks : List(Peak), storms : List(Ur.Rain.Cell), bands : List(Ur.Rain.Cell), air : Ur.Air.Air, i : Int, out : NativeF32Arr, n : Int) : (NativeF32Arr, Int) do
     if i == cloud_bodies() do (out, n) else
       let slot = cloud_slot(i)
       let spot = cell_spot(i, storms, bands, hour)
-      let formed = if Option.is_some(spot) do 1.0 else presence(i, sky, hour) end
+      let (hx, hz) = cloud_middle(i, offset)
+      let heaped = cloud_type(i) <= 2
+      let formed = if Option.is_some(spot) do 1.0 else (if heaped do unit(presence(i, sky, hour) *. lift_help(air, hx, hz, hour)) else presence(i, sky, hour) end) end
       let show = formed > 0.04
       Vk.chunk_show(slot, show)
       if show do
@@ -618,8 +630,8 @@ mod Ur.Scene do
         Vk.slot_voxel(slot, voxel)
         Vk.slot_pose(slot, x, y, z, 0.0, Math.sin(heading *. 0.5), 0.0, Math.cos(heading *. 0.5))
         let (blobs, count) = if cloud_type(i) <= 5 do cloud_blobs(cloud_puffs(i), x, y, z, voxel, heading, out, n, 3) else (out, n) end
-        place_clouds(sky, hour, offset, peaks, storms, bands, i + 1, blobs, count)
-      else place_clouds(sky, hour, offset, peaks, storms, bands, i + 1, out, n) end
+        place_clouds(sky, hour, offset, peaks, storms, bands, air, i + 1, blobs, count)
+      else place_clouds(sky, hour, offset, peaks, storms, bands, air, i + 1, out, n) end
     end
   end
   -- Show and place the clouds for the weather drawn now and the time of day
@@ -631,7 +643,8 @@ mod Ur.Scene do
     let active = if local do List.filter(S.day_cells(c), fn cell -> hour >= cell.start && hour <= cell.stop) else Nil end
     let storms = List.filter(active, fn cell -> cell.level >= 4)
     let bands = List.filter(active, fn cell -> cell.level == 3)
-    let (blobs, n) = place_clouds(Strata.Weather.now(w), hour, offset, peaks, storms, bands, 0, NativeArray.make_f32(64 * 4, 0.0), 0)
+    let air = if local do c.air else Ur.Air.empty() end
+    let (blobs, n) = place_clouds(Strata.Weather.now(w), hour, offset, peaks, storms, bands, air, 0, NativeArray.make_f32(64 * 4, 0.0), 0)
     Vk.set_cloud_shadows(blobs, n, Strata.Weather.shadow_darkness(w))
     let (cells, count, baseline) = rain_cells_for(c, hour, active, local)
     Vk.set_rain_cells(cells, count, baseline)
@@ -3303,7 +3316,7 @@ mod Ur.Scene do
     if shaft do face(m, 11, 1, 11, 10, 10, 0, 10) else m end
   end
   pfn wind_arrow(c : Ur.Sim.City, lot : Int, slot : Int, tex : Int) : Unit do
-    let wind = S.wind_at(c, lot)
+    let wind = S.local_wind(c, lot, S.hour_now(c))
     let reach = S.clamp(wind.speed / 2, 6, 23)
     let m = { words: NativeArray.make_i32(72, 0), quads: 0 }
     let m = box(m, 14, 0, 3, 3, 1, reach, tex)

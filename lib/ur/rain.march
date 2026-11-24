@@ -136,12 +136,14 @@ mod Ur.Rain do
     let n = cell_count(seed, month, day, kind)
     let total = snapshot_total(lift, 0, 0, 0) + snapshot_total(lift, 1, 0, 0) + snapshot_total(lift, 2, 0, 0) + snapshot_total(lift, 3, 0, 0) + snapshot_total(lift, 4, 0, 0)
     let mean = total / (Ur.Air.snapshots() * Ur.Air.areas())
-    let n = if mean >= 25 do n + 1 else if mean < 3 do n - 1 else n end end
-    if n < 1 do 1 else n end
+    -- a typical day's mean lift is about 9; the strongest fifth lift 15 or more, the weakest quarter under 5
+    let n = if mean >= 15 do n + 1 else if mean < 5 do n - 1 else n end end
+    let floor = if kind == 4 do 2 else 1 end
+    if n < floor do floor else n end
   end
 
   doc "The level of lift (Ur.Air) a cloudy day needs somewhere before a shower breaks out."
-  fn shower_lift() : Int do 60 end
+  fn shower_lift() : Int do 130 end
   doc "The storm cells of a day: [kind] the regional weather (0 clear .. 4 severe), the regional wind (km/h, and the heading in radians it blows toward) and the day's lift (Ur.Air.Air.lift). Clear days have none; a cloudy day one short shower only where the air lifts strongly; rainy and heavy days cells born from the lift; a severe day one front crossing the island and storm cells besides."
   fn cells(seed : Int, month : Int, day : Int, kind : Int, wind_speed : Int, heading : Float, lift : NativeIntArr) : List(Cell) do
     if kind <= 0 do Nil

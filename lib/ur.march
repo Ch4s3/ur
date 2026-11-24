@@ -1145,9 +1145,24 @@ mod Ur do
     Authority.must(println("day=" ++ int_to_string(day) ++ " watch=" ++ int_to_string(watch) ++ " kind=" ++ int_to_string(S.current_weather(c)) ++
       " flooded=" ++ int_to_string(flooded) ++ " deepest=" ++ int_to_string(deepest)))
   end
+  -- the day's storms: how many were born over land and over sea, at what hours, and how much land lies in the rain shadow
+  pfn storm_line(c : Ur.Sim.City, day : Int) : Unit do
+    let land = List.length(List.filter(c.storms, fn cell -> born_on_land(c, cell)))
+    let hours = List.fold_left(c.storms, "", fn (acc, cell) -> acc ++ " " ++ int_to_string(float_to_int(cell.start)))
+    let shadow = List.length(List.filter(List.range(0, S.count()), fn i -> Ur.Air.shadowed(c.air, i)))
+    Authority.must(println("day=" ++ int_to_string(day) ++ " storms=" ++ int_to_string(List.length(c.storms)) ++ " over_land=" ++ int_to_string(land) ++
+      " born_at=" ++ hours ++ " shadow_parcels=" ++ int_to_string(shadow)))
+  end
+  pfn born_on_land(c : Ur.Sim.City, cell : Ur.Rain.Cell) : Bool do
+    let (x, z) = Ur.Rain.centre(cell, cell.start)
+    let lot = S.index(float_to_int(x /. 8.0), float_to_int(z /. 8.0))
+    x >= 0.0 && z >= 0.0 && x < 480.0 && z < 352.0 && S.get(c.heights, lot) > 0
+  end
   pfn rain_report(c : Ur.Sim.City, remaining : Int) : Unit do
     if remaining <= 0 do () else
       let day = c.month * S.days_per_month() + c.calendar_day
+      let c = S.ensure_dawn(c)
+      storm_line(c, day)
       let night = S.end_watch(c, 0)
       rain_line(night, day, 0)
       let noon = S.end_watch(night, 1)
