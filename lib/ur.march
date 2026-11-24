@@ -400,6 +400,8 @@ mod Ur do
         else if pressed(keys, p.keys, 15) do (if p.boot do :quit else :resume end)
         else if mouse && !p.mouse do Menu.at(mx, my, w, h, p.boot, p.saved) else :nothing end end end
       let next = menu_action(p, action)
+      -- the menu's and setup preview's city keeps its day's air too, made once
+      let next = { next with city: S.ensure_dawn(next.city) }
       let sky = Strata.Weather.step_eased(Strata.Weather.want(next.weather, Ur.Scene.sky_for(next.city, visible_weather(next))), time -. p.time, 0.0)
       if !next.boot do Ur.Scene.daylight(next.elapsed, sky) else () end
       Ur.Scene.sea_state(Ur.Sea.state_at(next.city, next.elapsed), next.water_time)
@@ -753,7 +755,8 @@ mod Ur do
       let after_watch = if midnight do c else S.catch_up_watches(c, S.street_hour(elapsed)) end
       let watched = !midnight && after_watch.watch != c.watch
       let watch_flooded = watched && S.flood_differs(c, after_watch)
-      let c = if !midnight && (watched || S.street_hour(phase) != S.street_hour(elapsed)) do S.set_rain_hour(after_watch, S.street_hour(elapsed)) else after_watch end
+      -- today's air and storms are made once and kept (a new, loaded or paused city included), never rebuilt each frame
+      let c = if !midnight && (watched || S.street_hour(phase) != S.street_hour(elapsed)) do S.set_rain_hour(after_watch, S.street_hour(elapsed)) else S.ensure_dawn(after_watch) end
       -- Shelter arrivals can change between speculative planning and midnight.
       let evacuation = midnight && Ur.Citizens.has_evacuation(p.citizens)
       let day_plan = if policy_changed || click || release || undone || evacuation || watched do None else p.day_plan end

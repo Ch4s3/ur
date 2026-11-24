@@ -853,8 +853,11 @@ mod Ur.Sim do
   end
   -- a day starts in the night watch, with the new day's rain
   pfn fresh_day(c : City) : City do set_rain_hour({ c with watch: 0 }, 0) end
-  doc "A loaded city's rain, rebuilt from its date and stamped clock."
-  fn restore_rain(c : City) : City do set_rain_hour(c, street_hour(int_to_float(c.clock_ms) /. 1000.0)) end
+  doc "A loaded city's rain, rebuilt from its date and stamped clock. Its storms and air stay as saved (a save keeps them, so this hour's rain matches the saved day); a save without today's air gets it at its next hour."
+  fn restore_rain(c : City) : City do
+    let d = set_rain_hour(c, street_hour(int_to_float(c.clock_ms) /. 1000.0))
+    { c with rain_now: d.rain_now }
+  end
   fn weather_name(kind : Int) : String do
     match kind do
       4 -> "Severe rain"
