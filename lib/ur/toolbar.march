@@ -58,7 +58,7 @@ mod Ur.Toolbar do
       6 -> { span: 3, pages: Nil, items: [6, 7, 118, 119, 120, 121] }
       7 ->
         let items = match page do
-          1 -> Cons(5, Cons(6, Cons(7, Cons(8, Nil))))
+          1 -> Cons(5, Cons(6, Cons(7, Cons(8, Cons(39, Nil)))))
           2 -> [4, 29, 30, 32, 33, 38]
           5 -> [25, 26, 34]
           7 -> [11, 35]
@@ -181,6 +181,7 @@ mod Ur.Toolbar do
       36 -> "housing"
       37 -> "jobs"
       38 -> "rain"
+      39 -> "fish"
       30 -> "waste"
       31 -> "outfall"
       12 | 13 -> "park"

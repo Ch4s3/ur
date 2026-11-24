@@ -118,16 +118,19 @@ mod Ur.Sea do
       if S.get(walls, lot) > 0 do wall_cell(walls, lot, cx % 4, cz % 4) else false end
     end
   end
+  pfn least(a : Int, b : Int) : Int do if a < b do a else b end end
   pfn depths(f : Ur.Ocean.Field, walls : NativeIntArr, w : Int, a : NativeF32Arr, i : Int, n : Int) : NativeF32Arr do
     if i >= n do a else
       -- a 2 m cell's centre, in voxels from the map's corner; a seawall over it is solid (Strata.Waves: depth 0)
       let x = (i % w) * 8 + 4 - O.ring() * 32
       let z = (i / w) * 8 + 4 - O.ring() * 32
-      let d = if breakwater(walls, i % w, i / w) do 0.0 else int_to_float(O.depth(f, x, z)) *. 0.25 end
+      -- the shallowest of the four 1 m cells under it, so a bar a cell or two wide still breaks the swell
+      let shallowest = least(least(O.depth(f, x - 2, z - 2), O.depth(f, x + 2, z - 2)), least(O.depth(f, x - 2, z + 2), O.depth(f, x + 2, z + 2)))
+      let d = if breakwater(walls, i % w, i / w) || shallowest <= 0 do 0.0 else int_to_float(shallowest) *. 0.25 end
       depths(f, walls, w, NativeArray.set_f32(a, i, d), i + 1, n)
     end
   end
-  doc "The depth grid the swell is refracted over: 2 m cells (x fastest) over the map and its ring, metres of water from the coast field, 0 on land and under the seawalls in [walls] (Ur.Sim.City.seawalls), which stand as breakwaters."
+  doc "The depth grid the swell is refracted over: 2 m cells (x fastest) over the map and its ring, the shallowest metres of water of the four field cells under each, 0 on land, dry sand and under the seawalls in [walls] (Ur.Sim.City.seawalls), which stand as breakwaters."
   fn swell_depths(f : Ur.Ocean.Field, walls : NativeIntArr) : NativeF32Arr do
     let w = O.padded_width() * 4
     let h = O.padded_depth() * 4

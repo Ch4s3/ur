@@ -283,11 +283,12 @@ mod Ur.Hud do
       let note = if !S.building_offline(c, hover) && S.retail_kind(c, hover) > 0 do
         "Food stock " ++ int_to_string(S.get(c.shop_stock, hover)) ++ "   ·   Delivered " ++ int_to_string(S.get(c.shop_delivered, hover)) ++
         (if S.get(c.shop_sales, hover) < 8 do "   ·   Shortage" else "" end)
+      else if S.get(c.heights, hover) == 0 && Ur.Fish.inspect(c, hover) != "" do Ur.Fish.inspect(c, hover)
       else if S.freshwater(c, hover) do "Freshwater aquifer"
       else if S.geothermal(c, hover) do "Geothermal field"
       else if S.get(c.pipes, hover) > 0 do "Water pipe installed"
       else if S.get(c.grid, hover) > 0 do "Power line installed"
-      else "" end end end end end
+      else "" end end end end end end
       let a = label(a, x, top +. 455.0, 11.0, note, true)
       let a = if zone > 0 do
         let a = label(a, x, top +. 474.0, 11.0, S.ground_name(S.ground_at(c, hover)) ++ " · " ++ S.quiet_name(S.quiet_at(c, hover)), false)

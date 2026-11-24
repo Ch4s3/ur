@@ -20,9 +20,14 @@ mod Ur.Ocean do
   fn slot_count() : Int do ocean_base() + 16 + ring_cells() * 2 end
 
   -- The sea floor on 4-voxel ground cells over the map and its ring: each
-  -- cell's water depth in voxels (0 land), a Strata.Seabed shelf from the
-  -- coast with the city's dredging and reefs (City.seabed) on top.
-  type Field = { floor : NativeIntArr }
+  -- cell's water depth in voxels (0 land, -2..-1 dry sand that is not land),
+  -- a Strata.Seabed shelf from the coast, the map's natural reefs and sand
+  -- bars, the sand storms moved (City.sand_changes), and the city's dredging
+  -- and reefs (City.seabed) on top. [kind] says what each cell is made of
+  -- (0 open floor, 1 reef, 2 sand bar, 3 a reef the city built); [shelf] is the bare shelf's depth.
+  -- [reef_type] is what the map's reefs are, from its temperature (Ur.Sim setup 2): 0 rocky, 1 mixed, 2 coral.
+  -- [corals] are the coral templates its reefs are dotted with (Strata.Corals; none without reef), in Ur.Scene's material ids.
+  type Field = { floor : NativeIntArr, kind : NativeIntArr, shelf : NativeIntArr, reef_type : Int, corals : List(Strata.Template.Template) }
 
   doc "Ground cells across and down the map and its ring (8 to a parcel)."
   fn cells_wide() : Int do padded_width() * 8 end
@@ -58,18 +63,163 @@ mod Ur.Ocean do
     end
   end
 
-  doc "The sea floor of city [c]: a shelf 2 voxels deep at the shore deepening 3 voxels in 20 to 63, with the city's dredging and reefs."
+  -- the cell at the centre of map parcel (px, pz)
+  pfn parcel_cell(px : Int, pz : Int) : (Int, Int) do (px * 8 + 4 + ring() * 8, pz * 8 + 4 + ring() * 8) end
+  -- the middle of the Fishing shoals island (Ur.Sim.food_island 2), as a cell; None on a map without one
+  pfn shoals_sum(c : Ur.Sim.City, i : Int, n : Int, sx : Int, sz : Int) : (Int, Int, Int) do
+    if i >= S.count() do (n, sx, sz)
+    else if S.food_island(c, i) == 2 do shoals_sum(c, i + 1, n + 1, sx + i % S.width(), sz + i / S.width())
+    else shoals_sum(c, i + 1, n, sx, sz) end end
+  end
+  pfn shoals_centre(c : Ur.Sim.City) : Option((Int, Int)) do
+    let (n, sx, sz) = shoals_sum(c, 0, 0, 0, 0)
+    if n == 0 do None else Some(parcel_cell(sx / n, sz / n)) end
+  end
+  -- walking south from cell (cx, cz), the first water cell
+  pfn south_shore(land : NativeIntArr, cx : Int, cz : Int) : Int do
+    if cz >= cells_deep() - 1 || NativeArray.get_int(land, cz * cells_wide() + cx) == 0 do cz else south_shore(land, cx, cz + 1) end
+  end
+  -- The classic founding map's own features: a fringing reef round the Fishing shoals island and a sand bar off the main island's south shore.
+  pfn classic_features(shelf : Strata.Seabed.Seafloor, land : NativeIntArr) : Strata.Seabed.Features do
+    let (rx0, rz0) = parcel_cell(50, 18)
+    let (rx1, rz1) = parcel_cell(59, 28)
+    let ft = Strata.Seabed.reef_band(Strata.Seabed.features(shelf), land, rx0, rz0, rx1, rz1, 6, 18, 6)
+    let (ax, az) = parcel_cell(15, 22)
+    let (bx, bz) = parcel_cell(25, 22)
+    Strata.Seabed.bar(ft, ax, south_shore(land, ax, az) + 12, bx, south_shore(land, bx, bz) + 12, 3, -1)
+  end
+  -- The map's natural reefs and sand bars: none for a city saved before them or for the old test map, the classic map's own, or the seed's.
+  pfn natural(c : Ur.Sim.City, shelf : Strata.Seabed.Seafloor, land : NativeIntArr) : Strata.Seabed.Features do
+    if c.sea_features == 0 || !c.founding_map do Strata.Seabed.features(shelf)
+    else if c.world_seed < 0 do classic_features(shelf, land)
+    else
+      let forced = match shoals_centre(c) do
+        Some(p) -> [p]
+        None -> Nil
+      end
+      Strata.Seabed.generate(shelf, land, c.world_seed, { Strata.Seabed.default_recipe() with forced: forced })
+    end end
+  end
+  -- the sand storms moved, laid over the floor with its edits: each entry cell * 512 + kind * 128 + (change + 64); a cell that
+  -- would come to 0 (land) stays a voxel under water, and nothing rises above -2 or sinks past 63
+  pfn sand(ft : Strata.Seabed.Features, changes : NativeIntArr, i : Int) : Strata.Seabed.Features do
+    if i >= NativeArray.length_int(changes) do ft else
+      let v = NativeArray.get_int(changes, i)
+      let cell = v / 512
+      if cell < 0 || cell >= cells_wide() * cells_deep() || NativeArray.get_int(ft.floor.depth, cell) == 0 do sand(ft, changes, i + 1) else
+        let f = ft.floor
+        let d = S.clamp(NativeArray.get_int(f.depth, cell) + v % 128 - 64, -2, 63)
+        sand({ floor: { f with depth: NativeArray.set_int(f.depth, cell, if d == 0 do 1 else d end) }, kind: NativeArray.set_int(ft.kind, cell, v / 128 % 4) }, changes, i + 1)
+      end
+    end
+  end
+  -- the cells of each parcel the city built a reef on that stand above the bare shelf: kind 3, reef the storms cannot move
+  pfn built_reefs(c : Ur.Sim.City, ft : Strata.Seabed.Features, shelf : NativeIntArr, i : Int) : Strata.Seabed.Features do
+    if i >= S.count() do ft else
+      let (_, reef) = S.seabed_edit(c, i)
+      let ft = if reef <= 0 do ft else mark_go(ft, shelf, i % S.width() * 8 + ring() * 8, i / S.width() * 8 + ring() * 8, 0) end
+      built_reefs(c, ft, shelf, i + 1)
+    end
+  end
+  pfn mark_go(ft : Strata.Seabed.Features, shelf : NativeIntArr, x0 : Int, z0 : Int, k : Int) : Strata.Seabed.Features do
+    if k >= 64 do ft else
+      let j = (z0 + k / 8) * cells_wide() + x0 + k % 8
+      let d = NativeArray.get_int(ft.floor.depth, j)
+      let ft = if d > 0 && d < NativeArray.get_int(shelf, j) && NativeArray.get_int(ft.kind, j) != 1 do { ft with kind: NativeArray.set_int(ft.kind, j, 3) } else ft end
+      mark_go(ft, shelf, x0, z0, k + 1)
+    end
+  end
+  -- the map's features with the city's edits on them
+  pfn edited(c : Ur.Sim.City, shelf : Strata.Seabed.Seafloor, land : NativeIntArr) : Strata.Seabed.Features do
+    let ft0 = natural(c, shelf, land)
+    built_reefs(c, { ft0 with floor: edits(c, ft0.floor, 0) }, shelf.depth, 0)
+  end
+  doc "The sea floor of city [c] with its reefs, bars and the city's dredging and reefs but no storms: what sand changes (City.sand_changes) are measured against."
+  fn unsanded(c : Ur.Sim.City) : Strata.Seabed.Features do
+    let n = cells_wide() * cells_deep()
+    let land = seed(c, NativeArray.make_int(n, 0), 0)
+    edited(c, Strata.Seabed.shelf(land, cells_wide(), cells_deep(), 4, 2, 3, 20, 63), land)
+  end
+  doc "The sea floor of city [c]: a shelf 2 voxels deep at the shore deepening 3 voxels in 20 to 63, with the map's reefs and sand bars, the city's dredging and reefs, and the sand storms moved."
   fn field(c : Ur.Sim.City) : Field do
     let n = cells_wide() * cells_deep()
-    let shelf = Strata.Seabed.shelf(seed(c, NativeArray.make_int(n, 0), 0), cells_wide(), cells_deep(), 4, 2, 3, 20, 63)
-    let edited = edits(c, shelf, 0)
-    { floor: edited.depth }
+    let land = seed(c, NativeArray.make_int(n, 0), 0)
+    let shelf = Strata.Seabed.shelf(land, cells_wide(), cells_deep(), 4, 2, 3, 20, 63)
+    -- the city's edits, then the sand storms moved over them: a dredged channel silts, and dredging it again digs deeper
+    let ft = sand(edited(c, shelf, land), c.sand_changes, 0)
+    let rt = reef_type(c)
+    { floor: ft.floor.depth, kind: ft.kind, shelf: shelf.depth, reef_type: rt, corals: if has_reef(ft.kind, 0) do coral_set(rt) else Nil end }
   end
+
+  pfn shoal_cells(f : Field, px : Int, pz : Int, k : Int, least : Int, reef : Int) : (Int, Int) do
+    if k >= 64 do (least, reef) else
+      let cx = px * 8 + k % 8 + ring() * 8
+      let cz = pz * 8 + k / 8 + ring() * 8
+      let i = cz * cells_wide() + cx
+      let d = NativeArray.get_int(f.floor, i)
+      if d != 0 && d < NativeArray.get_int(f.shelf, i) && d < least do shoal_cells(f, px, pz, k + 1, d, if NativeArray.get_int(f.kind, i) == 1 || NativeArray.get_int(f.kind, i) == 3 do 1 else 0 end)
+      else shoal_cells(f, px, pz, k + 1, least, reef) end
+    end
+  end
+  pfn shoals_go(f : Field, i : Int, depths : NativeIntArr, reefs : NativeIntArr) : (NativeIntArr, NativeIntArr) do
+    if i >= S.count() do (depths, reefs) else
+      let (d, r) = shoal_cells(f, i % S.width(), i / S.width(), 0, 63, 0)
+      shoals_go(f, i + 1, NativeArray.set_int(depths, i, d), NativeArray.set_int(reefs, i, r))
+    end
+  end
+  doc "Per map parcel, the shallowest cell (voxels) that a reef, a bar or the player's reef raised above the bare shelf, 63 where none did; and 1 where that cell is reef. A ferry's draft is measured against these (Ur.Sim.ferry_status)."
+  fn shoals(f : Field) : (NativeIntArr, NativeIntArr) do shoals_go(f, 0, NativeArray.make_int(S.count(), 63), NativeArray.make_int(S.count(), 0)) end
+  doc "City [c] with its shoals measured from field [f] (Ur.Sim.City.sea_shoals)."
+  fn with_shoals(c : Ur.Sim.City, f : Field) : Ur.Sim.City do
+    let (d, r) = shoals(f)
+    { c with sea_shoals: d, sea_reefs: r }
+  end
+  pfn has_reef(kind : NativeIntArr, i : Int) : Bool do
+    if i >= NativeArray.length_int(kind) do false else if NativeArray.get_int(kind, i) == 1 do true else has_reef(kind, i + 1) end end
+  end
+  -- (species, main, accent) in Ur.Scene's materials: 37 reef rock, 38 tan, 39 pink, 40 purple, 41 yellow-green, 42 orange, 43 pale tips
+  pfn coral_colours(sp : Int) : (Int, Int) do
+    match sp do
+      0 -> (38, 43)
+      1 -> (41, 37)
+      2 -> (40, 43)
+      3 -> (40, 39)
+      _ -> (42, 38)
+    end
+  end
+  pfn coral_go(species : List(Int), k : Int, out : List(Strata.Template.Template)) : List(Strata.Template.Template) do
+    match species do
+      Nil -> out
+      Cons(sp, rest) ->
+        let (main, accent) = coral_colours(sp)
+        let t = Strata.Corals.build(sp, 31 * k + sp, 0.25, main, accent)
+        coral_go(rest, k + 1, Cons(t, out))
+    end
+  end
+  doc "The coral templates a reef of [reef_type] is dotted with: a coral reef every species, three of each; a mixed one brains, fans and sponges among boulders; a rocky one boulders of reef rock alone."
+  fn coral_set(reef_type : Int) : List(Strata.Template.Template) do
+    if reef_type == 0 do List.map([0, 1, 2], fn k -> Strata.Corals.build(1, 500 + k, 0.25, 37, 13))
+    else if reef_type == 1 do List.append(coral_go([1, 1, 3, 3, 4, 4], 0, Nil), List.map([0, 1], fn k -> Strata.Corals.build(1, 500 + k, 0.25, 37, 13)))
+    else coral_go([0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4], 0, Nil) end end
+  end
+  doc "What city [c]'s reefs are, from its temperature setting: 0 rocky (0..1), 1 mixed (2), 2 coral (3..4)."
+  fn reef_type(c : Ur.Sim.City) : Int do
+    let t = if NativeArray.length_int(c.setup) > 2 do NativeArray.get_int(c.setup, 2) else 2 end
+    if t >= 3 do 2 else if t <= 1 do 0 else 1 end end
+  end
+  doc "What the floor at voxel (x, z) is made of: 0 open floor, 1 reef, 2 sand bar; open floor off the field."
+  fn kind(f : Field, x : Int, z : Int) : Int do
+    let cx = int_div_euclid(x, 4) + ring() * 8
+    let cz = int_div_euclid(z, 4) + ring() * 8
+    if cx < 0 || cz < 0 || cx >= cells_wide() || cz >= cells_deep() do 0 else NativeArray.get_int(f.kind, cz * cells_wide() + cx) end
+  end
+  doc "The bare shelf's depth in voxels at voxel (x, z), before reefs, bars, storms and edits; deep off the field."
+  fn shelf_depth(f : Field, x : Int, z : Int) : Int do at(f.shelf, int_div_euclid(x, 4) + ring() * 8, int_div_euclid(z, 4) + ring() * 8) end
 
   -- a cell's water depth in voxels; off the field the open sea is deep
   pfn cell_depth(f : Field, cx : Int, cz : Int) : Int do at(f.floor, cx, cz) end
 
-  doc "The water's depth in voxels (0..63; 0 is land, 63 deep) at voxel (x, z), in the map's voxel coordinates; anywhere off the field is deep."
+  doc "The water's depth in voxels (-2..63; 0 is land, -2..-1 dry sand, 63 deep) at voxel (x, z), in the map's voxel coordinates; anywhere off the field is deep."
   fn depth(f : Field, x : Int, z : Int) : Int do
     let cx = int_div_euclid(x, 4) + ring() * 8
     let cz = int_div_euclid(z, 4) + ring() * 8
@@ -77,9 +227,10 @@ mod Ur.Ocean do
   end
 
   pfn least4(a : Int, b : Int, c : Int, d : Int) : Int do least(least(a, b), least(c, d)) end
-  doc "The water's depth at a cell corner (x, z on the 4-voxel grid): the shallowest of the four cells that meet there, so a shoreline vertex is dry from whichever side it is seen."
+  doc "The water's depth at a cell corner (x, z on the 4-voxel grid): the shallowest of the four cells that meet there (0 where any is land or dry sand), so a shoreline vertex is dry from whichever side it is seen."
   fn corner_depth(f : Field, x : Int, z : Int) : Int do
-    least4(depth(f, x - 2, z - 2), depth(f, x + 2, z - 2), depth(f, x - 2, z + 2), depth(f, x + 2, z + 2))
+    -- dry sand is as dry as land to the sea surface
+    S.clamp(least4(depth(f, x - 2, z - 2), depth(f, x + 2, z - 2), depth(f, x - 2, z + 2), depth(f, x + 2, z + 2)), 0, 63)
   end
 
   doc "The seabed's height in voxels at (x, z): below sea level (0) by the water's depth."
@@ -131,8 +282,19 @@ mod Ur.Ocean do
   pfn seabed_from(a : Ur.Sim.City, b : Ur.Sim.City, i : Int) : Bool do
     if i >= S.count() do false else if S.get(a.seabed, i) != S.get(b.seabed, i) do true else seabed_from(a, b, i + 1) end end
   end
-  doc "Whether any parcel was dredged or given a reef between [a] and [b]: the floor, and so the water and its swell, change."
-  fn seabed_touched(a : Ur.Sim.City, b : Ur.Sim.City) : Bool do seabed_from(a, b, 0) end
+  doc "Whether any parcel was dredged or given a reef, or a storm moved sand, between [a] and [b]: the floor, and so the water and its swell, change."
+  fn seabed_touched(a : Ur.Sim.City, b : Ur.Sim.City) : Bool do a.sand_day != b.sand_day || seabed_from(a, b, 0) end
+  doc "Whether the sea floor of city [b] may differ from [a]'s: another map, features version, coast, edits or storms (a load or new game swaps the whole city)."
+  fn floor_differs(a : Ur.Sim.City, b : Ur.Sim.City) : Bool do
+    a.sea_features != b.sea_features || a.world_seed != b.world_seed || a.founding_map != b.founding_map ||
+      !same_ints(a.sand_changes, b.sand_changes, 0) || seabed_touched(a, b) || coast_touched(a, b)
+  end
+  pfn same_ints(a : NativeIntArr, b : NativeIntArr, i : Int) : Bool do
+    if NativeArray.length_int(a) != NativeArray.length_int(b) do false
+    else if i >= NativeArray.length_int(a) do true
+    else if NativeArray.get_int(a, i) != NativeArray.get_int(b, i) do false
+    else same_ints(a, b, i + 1) end end end
+  end
   doc "Whether any seawall was built or removed between [a] and [b]: the swell must be refracted again round the new breakwaters, though the coast is the same."
   fn walls_touched(a : Ur.Sim.City, b : Ur.Sim.City) : Bool do walls_from(a, b, 0) end
 

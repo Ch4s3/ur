@@ -473,6 +473,9 @@ mod Ur.Save do
   pfn copy_setup(from : NativeIntArr, into : NativeIntArr, i : Int) : NativeIntArr do
     if i >= NativeArray.length_int(from) || i >= NativeArray.length_int(into) do into else copy_setup(from, NativeArray.set_int(into, i, NativeArray.get_int(from, i)), i + 1) end
   end
+  pfn shift(a : NativeIntArr, k : Int, out : NativeIntArr, i : Int) : NativeIntArr do
+    if i >= NativeArray.length_int(a) do out else shift(a, k, NativeArray.set_int(out, i, NativeArray.get_int(a, i) + k), i + 1) end
+  end
   pfn optional_array(j : Json.JsonValue, name : String, limit : Int) : Result(NativeIntArr, String) do
     match Json.get(j, name) do
       None -> Ok(NativeArray.make_int(S.count(), 0))
@@ -846,11 +849,18 @@ mod Ur.Save do
       Cons(("sea_heights", enc_array(v.sea_heights, S.count() - 1, Nil)),
       Cons(("ferry_works", enc_array(v.ferry_works, S.count() - 1, Nil)),
       Cons(("sea_counted", Json.encode_int(v.sea_counted)),
+      Cons(("sea_features", Json.encode_int(v.sea_features)),
+      Cons(("sand_storm", enc_array(NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(NativeArray.make_int(4, 0), 0, v.sea_run), 1, v.sand_peak), 2, v.sand_sector), 3, v.sand_day), 3, Nil)),
+      -- shoals run from -2 (dry sand): saved 2 higher, as parcel data is never negative
+      Cons(("sea_shoals", enc_array(shift(v.sea_shoals, 2, NativeArray.make_int(S.count(), 0), 0), S.count() - 1, Nil)),
+      Cons(("fish", enc_array(v.fish, S.count() - 1, Nil)),
+      Cons(("fish_capacity", enc_array(v.fish_capacity, S.count() - 1, Nil)),
+      Cons(("sand_changes", enc_array(v.sand_changes, NativeArray.length_int(v.sand_changes) - 1, Nil)),
       Cons(("rain_tanks", enc_array(v.rain_tanks, S.count() - 1, Nil)),
       Cons(("subway_water", enc_array(v.subway_water, S.count() - 1, Nil)),
       Cons(("soil_moisture", Json.encode_int(v.soil_moisture)),
       Cons(("pumping_cost", Json.encode_int(v.pumping_cost)),
-      Cons(("message", Json.encode_string(v.message)), Nil)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+      Cons(("message", Json.encode_string(v.message)), Nil)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
   end
   pfn encode_cell(c : Ur.Rain.Cell) : Json.JsonValue do
     Json.encode_array([Json.encode_number(c.x), Json.encode_number(c.z), Json.encode_number(c.vx), Json.encode_number(c.vz),
@@ -1170,6 +1180,26 @@ mod Ur.Save do
       None -> Ok(2)
       Some(value) -> integer(value)
     end
+    -- a city saved before reefs and sand bars keeps its bare shelf
+    let? sea_features = match Json.get(j, "sea_features") do
+      None -> Ok(0)
+      Some(value) -> integer(value)
+    end
+    -- a save from before the draft rule has no shoals: 63 everywhere, until the field is measured
+    let? sea_shoals = match Json.get(j, "sea_shoals") do
+      None -> Ok(NativeArray.make_int(S.count(), 63))
+      Some(value) -> Result.map(array(value, S.count(), 65), fn a -> shift(a, -2, NativeArray.make_int(S.count(), 0), 0))
+    end
+    let? fish = optional_array(j, "fish", 100000000)
+    let? fish_capacity = optional_array(j, "fish_capacity", 100000000)
+    let? sand_storm = match Json.get(j, "sand_storm") do
+      Some(value) -> array(value, 4, 2147483647)
+      None -> Ok(NativeArray.make_int(4, 0))
+    end
+    let? sand_changes = match Json.get(j, "sand_changes") do
+      Some(Json.Array(xs)) -> array(Json.Array(xs), List.length(xs), 2147483647)
+      _ -> Ok(NativeArray.make_int(0, 0))
+    end
     let? soil = match Json.get(j, "soil_moisture") do
       None -> Ok(70)
       Some(value) -> integer(value)
@@ -1203,7 +1233,7 @@ mod Ur.Save do
     let? raw_message = field(j, "message")
     let? message = string(raw_message)
     if !((harbour == -1 || S.valid(harbour)) && (ferry_start == -1 || S.valid(ferry_start)) && month >= 0 && construction_spend >= 0 && tax >= 0 && tax <= 25 && energy >= 1 && energy <= 12) do Err("Invalid city values.") else
-    Ok(S.restore_rain({ public_works: public_works, rain_uniform: rain_uniform, watch: S.clamp(watch, 0, 2), rain_now: NativeArray.make_int(S.count(), 0), storms: storms, air: air, milestones: milestones, facility_staff: facility_staff, facility_expansion: facility_expansion, founders: S.clamp(founders, 0, 12), world_seed: world_seed, setup: setup, climate_seed: S.clamp(climate_seed, 0, 2147483646), storm_drains: storm_drains, seawalls: seawalls, seabed: seabed, sea_heights: sea_heights, ferry_works: ferry_works, sea_counted: S.clamp(sea_counted, 0, 4), pump_orders: pump_orders, surface_water: surface_water, flood_damage: flood_damage, flood_active: flood_active, rain_tanks: rain_tanks, subway_water: subway_water, soil_moisture: S.clamp(soil, 0, 100), pumping_cost: S.clamp(pumping, 0, 200000),
+    Ok(S.restore_rain({ public_works: public_works, rain_uniform: rain_uniform, watch: S.clamp(watch, 0, 2), rain_now: NativeArray.make_int(S.count(), 0), storms: storms, air: air, milestones: milestones, facility_staff: facility_staff, facility_expansion: facility_expansion, founders: S.clamp(founders, 0, 12), world_seed: world_seed, setup: setup, climate_seed: S.clamp(climate_seed, 0, 2147483646), storm_drains: storm_drains, seawalls: seawalls, seabed: seabed, sea_heights: sea_heights, ferry_works: ferry_works, sea_counted: S.clamp(sea_counted, 0, 4), sea_features: S.clamp(sea_features, 0, 1), sand_changes: sand_changes, sea_run: S.clamp(NativeArray.get_int(sand_storm, 0), 0, 1000), sand_peak: NativeArray.get_int(sand_storm, 1), sand_sector: S.clamp(NativeArray.get_int(sand_storm, 2), 0, 15), sand_day: NativeArray.get_int(sand_storm, 3), sand_marks: NativeArray.make_int(S.count(), 0), sea_shoals: sea_shoals, sea_reefs: NativeArray.make_int(S.count(), 0), fish: fish, fish_capacity: fish_capacity, fish_last: NativeArray.make_int(S.count(), 0), fish_alerts: NativeArray.make_int(S.count(), 0), pump_orders: pump_orders, surface_water: surface_water, flood_damage: flood_damage, flood_active: flood_active, rain_tanks: rain_tanks, subway_water: subway_water, soil_moisture: S.clamp(soil, 0, 100), pumping_cost: S.clamp(pumping, 0, 200000),
       waste_live: waste_live, waste_bins: waste_bins, waste_stock: waste_stock, waste_sites: waste_sites,
       waste_last: waste_last, waste_log: waste_log, waste_runs: waste_runs, council: council, religion: religion, construction_spend: construction_spend, island_exports: island_exports, island_crops: island_crops, island_catch: island_catch,
       shop_imports: shop_imports, harbour: harbour, ferry_start: ferry_start, trash: trash,
