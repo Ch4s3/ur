@@ -1,0 +1,213 @@
+-- Ur.Air — the island's air through a day, as simply as gives real weather.
+--
+-- The sea keeps the season's warmth a month late and barely changes through
+-- a day; land swings with the sun, less under cloud and over wet ground. The
+-- difference drives a sea breeze (onshore by day, a weaker land breeze by
+-- night). Air rises (lift) where land is hotter than the sea, where breezes
+-- from opposite coasts meet, where wind climbs a slope, and over warm sea
+-- near the coast when the land is colder; it sinks in a mountain's lee,
+-- which is also where the rain thins (shadow). Storms are born where it
+-- lifts (Ur.Rain.cells).
+--
+-- Everything is a pure function of its arguments, computed once a day
+-- (Ur.Sim.dawn). The record holds only ints: temperatures in tenths of a
+-- degree, vectors times 100.
+mod Ur.Air do
+  type Air = { day : Int, shadow : NativeIntArr, lift : NativeIntArr, coast : NativeIntArr, inland_x : NativeIntArr, inland_z : NativeIntArr, sea : Int, daily : Int, kind : Int, soil : Int }
+
+  pfn width() : Int do 60 end
+  pfn depth() : Int do 44 end
+  pfn count() : Int do 2640 end
+  doc "The lift grid: 15 by 11 areas of 4 by 4 parcels."
+  fn areas_x() : Int do 15 end
+  fn areas_z() : Int do 11 end
+  fn areas() : Int do 165 end
+  doc "Lift is kept at five hours of the day: 02, 06, 10, 14 and 18, each standing for the four hours after it (22 to 02 reuses 02)."
+  fn snapshots() : Int do 5 end
+  fn snapshot_hour(s : Int) : Int do 2 + 4 * s end
+  fn snapshot_of(hour : Int) : Int do if hour < 2 || hour >= 22 do 0 else (hour - 2) / 4 end end
+  doc "The area holding parcel [lot]."
+  fn area_of(lot : Int) : Int do lot / width() / 4 * areas_x() + lot % width() / 4 end
+  doc "The middle of area [area] in metres."
+  fn area_centre(area : Int) : (Float, Float) do (int_to_float(area % areas_x() * 32 + 16), int_to_float(area / areas_x() * 32 + 16)) end
+
+  pfn get(a : NativeIntArr, i : Int) : Int do NativeArray.get_int(a, i) end
+  pfn clamp(v : Int, low : Int, high : Int) : Int do if v < low do low else if v > high do high else v end end end
+  pfn imax(a : Int, b : Int) : Int do if a > b do a else b end end
+  pfn imin(a : Int, b : Int) : Int do if a < b do a else b end end
+
+  doc "An empty air: no day, nothing lifts."
+  fn empty() : Air do
+    let z = NativeArray.make_int(count(), 0)
+    { day: -1, shadow: z, lift: NativeArray.make_int(snapshots() * areas(), 0), coast: z, inland_x: z, inland_z: z, sea: 0, daily: 0, kind: 0, soil: 0 }
+  end
+
+  -- the season's temperature in whole degrees, as Ur.Sim.temperature_on reckons it
+  pfn season(month : Int) : Int do 21 + 2 * (6 - int_abs(month % 12 - 6)) end
+  doc "The sea's temperature in [month], tenths of a degree: the season a month late, two thirds of land's swing about 27 degrees."
+  fn sea_temp(month : Int, climate_heat : Int) : Int do
+    270 + (season((month + 11) % 12) * 10 - 270) * 2 / 3 + climate_heat * 10
+  end
+  doc "Land's temperature at [hour], tenths of a degree, on a day whose mean is [daily] degrees: coolest before dawn, warmest mid-afternoon, a smaller swing under cloud or rain and over wet soil."
+  fn land_temp(daily : Int, kind : Int, soil : Int, hour : Int) : Int do
+    let swing = match kind do
+      0 -> 80
+      1 -> 40
+      _ -> 20
+    end
+    let swing = swing * (130 - clamp(soil, 0, 100)) / 100
+    daily * 10 + float_to_int(int_to_float(swing) *. Math.cos(int_to_float(hour - 15) *. 0.261799388))
+  end
+
+  -- signed distance to the shore in parcels: land counts up from the coast, sea down; capped at 12
+  pfn seed_dist(heights : NativeIntArr, i : Int, d : NativeIntArr) : NativeIntArr do
+    if i >= count() do d else seed_dist(heights, i + 1, NativeArray.set_int(d, i, 99)) end
+  end
+  -- one chamfer pass over cells whose land-ness is [land]: forward (step 1) or backward (step -1)
+  pfn pass(heights : NativeIntArr, land : Bool, i : Int, step : Int, d : NativeIntArr) : NativeIntArr do
+    if i < 0 || i >= count() do d else
+      let mine = get(heights, i) > 0
+      let d = if mine != land do NativeArray.set_int(d, i, 0) else
+        let x = i % width()
+        let a = if step > 0 do (if x > 0 do get(d, i - 1) + 1 else 99 end) else (if x < width() - 1 do get(d, i + 1) + 1 else 99 end) end
+        let b = if step > 0 do (if i >= width() do get(d, i - width()) + 1 else 99 end) else (if i + width() < count() do get(d, i + width()) + 1 else 99 end) end
+        let best = imin(get(d, i), imin(a, b))
+        NativeArray.set_int(d, i, best)
+      end
+      pass(heights, land, i + step, step, d)
+    end
+  end
+  pfn distance_to(heights : NativeIntArr, land : Bool) : NativeIntArr do
+    let d = seed_dist(heights, 0, NativeArray.make_int(count(), 0))
+    pass(heights, land, count() - 1, -1, pass(heights, land, 0, 1, d))
+  end
+  pfn signed(heights : NativeIntArr, inland : NativeIntArr, offshore : NativeIntArr, i : Int, out : NativeIntArr) : NativeIntArr do
+    if i >= count() do out else
+      let v = if get(heights, i) > 0 do clamp(get(inland, i), 0, 12) else 0 - clamp(get(offshore, i), 0, 13) end
+      signed(heights, inland, offshore, i + 1, NativeArray.set_int(out, i, v))
+    end
+  end
+  pfn gradient(d : NativeIntArr, i : Int, gx : NativeIntArr, gz : NativeIntArr) : (NativeIntArr, NativeIntArr) do
+    if i >= count() do (gx, gz) else
+      let x = i % width()
+      let z = i / width()
+      let dx = get(d, if x < width() - 1 do i + 1 else i end) - get(d, if x > 0 do i - 1 else i end)
+      let dz = get(d, if z < depth() - 1 do i + width() else i end) - get(d, if z > 0 do i - width() else i end)
+      let len = Math.sqrt(int_to_float(dx * dx + dz * dz))
+      let (vx, vz) = if len < 0.01 do (0, 0) else (float_to_int(int_to_float(dx) *. 100.0 /. len), float_to_int(int_to_float(dz) *. 100.0 /. len)) end
+      gradient(d, i + 1, NativeArray.set_int(gx, i, vx), NativeArray.set_int(gz, i, vz))
+    end
+  end
+  doc "Each parcel's signed distance to the shore (parcels; land positive, sea negative down to -13, meaning farther than 12) and the unit vector, times 100, pointing inland."
+  fn coast_field(heights : NativeIntArr) : (NativeIntArr, NativeIntArr, NativeIntArr) do
+    let d = signed(heights, distance_to(heights, true), distance_to(heights, false), 0, NativeArray.make_int(count(), 0))
+    let (gx, gz) = gradient(d, 0, NativeArray.make_int(count(), 0), NativeArray.make_int(count(), 0))
+    (d, gx, gz)
+  end
+
+  -- the highest ground up to [k] parcels upwind of (x, z)
+  pfn upwind_peak(heights : NativeIntArr, x : Float, z : Float, dx : Float, dz : Float, k : Int, best : Int) : Int do
+    if k > 12 do best else
+      let px = float_to_int(Math.floor(x -. dx *. int_to_float(k) +. 0.5))
+      let pz = float_to_int(Math.floor(z -. dz *. int_to_float(k) +. 0.5))
+      if px < 0 || px >= width() || pz < 0 || pz >= depth() do best
+      else upwind_peak(heights, x, z, dx, dz, k + 1, imax(best, get(heights, pz * width() + px))) end
+    end
+  end
+  pfn shadow_fill(heights : NativeIntArr, dx : Float, dz : Float, i : Int, out : NativeIntArr) : NativeIntArr do
+    if i >= count() do out else
+      let h = get(heights, i)
+      let lee = h > 0 && upwind_peak(heights, int_to_float(i % width()), int_to_float(i / width()), dx, dz, 1, 0) - h >= 24
+      shadow_fill(heights, dx, dz, i + 1, if lee do NativeArray.set_int(out, i, 1) else out end)
+    end
+  end
+  doc "1 on each land parcel in a mountain's lee: ground at least 6 m higher within 12 parcels upwind of it, the wind blowing toward [heading] (radians)."
+  fn shadow(heights : NativeIntArr, heading : Float) : NativeIntArr do
+    shadow_fill(heights, Math.cos(heading), Math.sin(heading), 0, NativeArray.make_int(count(), 0))
+  end
+
+  -- how strongly the breeze blows onshore at [hour], km/h (negative: offshore)
+  pfn breeze_strength(air : Air, hour : Int) : Float do
+    let contrast = int_to_float(land_temp(air.daily, air.kind, air.soil, hour) - air.sea)
+    if contrast > 0.0 do contrast *. 0.15 else contrast *. 0.075 end
+  end
+  doc "The sea or land breeze on [lot] at [hour], km/h east and south (rounded away from zero): onshore when land is warmer than the sea, offshore and weaker when it is cooler, fading 12 parcels from the shore."
+  fn breeze(air : Air, lot : Int, hour : Int) : (Int, Int) do
+    if lot < 0 || lot >= count() do (0, 0) else
+      let strength = breeze_strength(air, hour) *. int_to_float(imax(0, 12 - int_abs(get(air.coast, lot)))) /. 12.0
+      (away(int_to_float(get(air.inland_x, lot)) *. strength /. 100.0), away(int_to_float(get(air.inland_z, lot)) *. strength /. 100.0))
+    end
+  end
+  pfn away(v : Float) : Int do if v > 0.0 do float_to_int(Math.ceil(v)) else if v < 0.0 do 0 - float_to_int(Math.ceil(0.0 -. v)) else 0 end end end
+
+  -- per-area sums over its 16 parcels: [what] 0 land count, 1 mean height, 2 inland x, 3 inland z
+  pfn area_sum(a : Air, heights : NativeIntArr, area : Int, what : Int) : Int do
+    let x0 = area % areas_x() * 4
+    let z0 = area / areas_x() * 4
+    area_sum_at(a, heights, x0, z0, what, 0, 0)
+  end
+  pfn area_sum_at(a : Air, heights : NativeIntArr, x0 : Int, z0 : Int, what : Int, k : Int, acc : Int) : Int do
+    if k >= 16 do acc else
+      let i = (z0 + k / 4) * width() + x0 + k % 4
+      let v = match what do
+        0 -> if get(heights, i) > 0 do 1 else 0 end
+        1 -> get(heights, i)
+        2 -> get(a.inland_x, i)
+        _ -> get(a.inland_z, i)
+      end
+      area_sum_at(a, heights, x0, z0, what, k + 1, acc + v)
+    end
+  end
+  -- area [area]'s neighbour [dx], [dz] steps away, or itself at the map's edge
+  pfn neighbour(area : Int, dx : Int, dz : Int) : Int do
+    let x = clamp(area % areas_x() + dx, 0, areas_x() - 1)
+    let z = clamp(area / areas_x() + dz, 0, areas_z() - 1)
+    z * areas_x() + x
+  end
+  -- heating: land hotter than the sea (a fifth of its city heat counts: heat nudges storms, it does not steer them), damped on dry soil;; sea within 12 parcels of land warmer than it
+  pfn heating(a : Air, heights : NativeIntArr, heat : NativeIntArr, contrast : Int, x0 : Int, z0 : Int, k : Int, acc : Int) : Int do
+    if k >= 16 do acc / 16 else
+      let i = (z0 + k / 4) * width() + x0 + k % 4
+      let v = if get(heights, i) > 0 do imax(0, contrast + get(heat, i) / 5) * (clamp(a.soil, 0, 100) + 30) / 100
+        else if get(a.coast, i) >= -12 do imax(0, 0 - contrast) else 0 end end
+      heating(a, heights, heat, contrast, x0, z0, k + 1, acc + v)
+    end
+  end
+  pfn area_lift(a : Air, heights : NativeIntArr, heat : NativeIntArr, hour : Int, dx : Float, dz : Float, wind_speed : Int, area : Int) : Int do
+    let contrast = land_temp(a.daily, a.kind, a.soil, hour) - a.sea
+    let warm = heating(a, heights, heat, contrast, area % areas_x() * 4, area / areas_x() * 4, 0, 0)
+    -- breezes meeting: inland vectors pointing into this area from either side
+    let div = area_sum(a, heights, neighbour(area, 1, 0), 2) - area_sum(a, heights, neighbour(area, -1, 0), 2)
+      + area_sum(a, heights, neighbour(area, 0, 1), 3) - area_sum(a, heights, neighbour(area, 0, -1), 3)
+    let land = area_sum(a, heights, area, 0)
+    let meet = if land == 0 do 0 else imax(0, 0 - div * contrast / 6400) end
+    -- wind climbing (or falling down) the slope
+    let gx = area_sum(a, heights, neighbour(area, 1, 0), 1) - area_sum(a, heights, neighbour(area, -1, 0), 1)
+    let gz = area_sum(a, heights, neighbour(area, 0, 1), 1) - area_sum(a, heights, neighbour(area, 0, -1), 1)
+    let climb = float_to_int((dx *. int_to_float(gx) +. dz *. int_to_float(gz)) /. 16.0 *. int_to_float(wind_speed) /. 60.0)
+    warm + meet + climb
+  end
+  pfn fill_lift(a : Air, heights : NativeIntArr, heat : NativeIntArr, dx : Float, dz : Float, wind_speed : Int, k : Int, out : NativeIntArr) : NativeIntArr do
+    if k >= snapshots() * areas() do out else
+      let v = area_lift(a, heights, heat, snapshot_hour(k / areas()), dx, dz, wind_speed, k % areas())
+      fill_lift(a, heights, heat, dx, dz, wind_speed, k + 1, NativeArray.set_int(out, k, v))
+    end
+  end
+  doc "The lift in area [area] at snapshot [s]: positive where air rises, negative where it sinks."
+  fn lift_at(air : Air, s : Int, area : Int) : Int do get(air.lift, clamp(s, 0, snapshots() - 1) * areas() + clamp(area, 0, areas() - 1)) end
+  doc "Whether [lot] is in a mountain's rain shadow today."
+  fn shadowed(air : Air, lot : Int) : Bool do lot >= 0 && lot < count() && get(air.shadow, lot) > 0 end
+
+  doc "Today's air over [heights]: absolute [day], [heat] each parcel's city heat (tenths of a degree), [month], the regional weather [kind], the day's mean temperature [daily] in degrees, island-wide [soil] moisture, the climate's warmth, and the regional wind (km/h, heading in radians)."
+  fn build(day : Int, heights : NativeIntArr, heat : NativeIntArr, month : Int, kind : Int, daily : Int, soil : Int, climate_heat : Int, wind_speed : Int, heading : Float) : Air do
+    let (coast, ix, iz) = coast_field(heights)
+    let a = { day: day, shadow: shadow(heights, heading), lift: NativeArray.make_int(snapshots() * areas(), 0), coast: coast, inland_x: ix, inland_z: iz,
+      sea: sea_temp(month, climate_heat), daily: daily, kind: kind, soil: soil }
+    { a with lift: fill_lift(a, heights, heat, Math.cos(heading), Math.sin(heading), wind_speed, 0, NativeArray.make_int(snapshots() * areas(), 0)) }
+  end
+  doc "The same air with [lift] and [shadow] as a save kept them, its coast field rebuilt from [heights]."
+  fn restore(day : Int, heights : NativeIntArr, shadow : NativeIntArr, lift : NativeIntArr, sea : Int, daily : Int, kind : Int, soil : Int) : Air do
+    let (coast, ix, iz) = coast_field(heights)
+    { day: day, shadow: shadow, lift: lift, coast: coast, inland_x: ix, inland_z: iz, sea: sea, daily: daily, kind: kind, soil: soil }
+  end
+end

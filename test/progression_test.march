@@ -1,0 +1,39 @@
+mod ProgressionTest do
+  needs IO
+  needs IO.Console
+  needs IO.Clock
+  needs IO.Process
+  needs IO.FileRead
+  needs IO.FileWrite
+  alias Ur.Sim as S
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let c = S.new()
+    let empty = { c with plants: NativeArray.make_int(S.count(), 0), milestones: NativeArray.make_int(64, 0) }
+    Test.assert_true(S.construction_requirement(empty, 8) != "", "Geothermal requires trade education")
+    Test.assert_true(S.construction_requirement(empty, 35) != "", "Tram tracks require a bus depot")
+    Test.assert_true(S.construction_requirement(empty, 36) != "", "Subway requires earlier transit")
+    Test.assert_true(S.construction_requirement(empty, 89) != "", "Underground parking requires earlier parking")
+    Test.assert_true(S.construction_requirement(empty, 22) != "", "Nuclear requires science")
+    Test.assert_true(S.construction_requirement(empty, 62) != "", "Hospital requires medicine")
+    let milestones = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(empty.milestones, 27, 1), 23, 1), 50, 1), 52, 1), 30, 1), 19, 1), 28, 1)
+    let unlocked = { empty with milestones: NativeArray.set_int(milestones, 29, 1) }
+    Test.assert_true(S.construction_requirement(unlocked, 8) == "" && S.construction_requirement(unlocked, 35) == "" &&
+      S.construction_requirement(unlocked, 36) == "" && S.construction_requirement(unlocked, 89) == "" &&
+      S.construction_requirement(unlocked, 22) == "" && S.construction_requirement(unlocked, 62) == "",
+      "Earned milestones remain unlocked after prerequisites are gone")
+    let lot = S.index(10, 19)
+    let plant = { unlocked with plants: NativeArray.set_int(unlocked.plants, lot, 14),
+      facility_staff: NativeArray.set_int(unlocked.facility_staff, lot, 3) }
+    Test.assert_eq_int(S.facility_staffed(plant, lot), 0, "Nuclear plant cannot operate without its scientist")
+    let staffed = { plant with facility_staff: NativeArray.set_int(plant.facility_staff, lot, 103) }
+    Test.assert_eq_int(S.facility_staffed(staffed, lot), 50, "Qualified staffing scales plant capacity")
+    let game = { city: staffed, cx: 78.0, cz: 151.0, zoom: 52.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(game)) do
+      Ok(loaded) ->
+        Test.assert_true(S.construction_requirement(loaded.city, 22) == "" && S.facility_staffed(loaded.city, lot) == 50,
+          "Unlocks and staffing survive save and load")
+      Err(error) -> panic(error)
+    end
+  end
+end

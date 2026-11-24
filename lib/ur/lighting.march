@@ -1,0 +1,83 @@
+-- The player's lighting settings: eight rows, each a step on a slider. All at their first
+-- step but trace detail is the lighting Ur has always had (light mode 8, lamps without shadows).
+mod Ur.Lighting do
+  needs IO.Foreign
+  needs Window
+  alias Strata.Ffi.Vk as Vk
+
+  fn rows() : Int do 8 end
+  doc "How many positions row [row]'s slider has."
+  fn steps(row : Int) : Int do
+    match row do
+      1 -> 3
+      2 -> 3
+      7 -> 4
+      _ -> 2
+    end
+  end
+  fn label(row : Int) : String do
+    match row do
+      0 -> "Sky light"
+      1 -> "Sky light rays"
+      2 -> "Trace detail"
+      3 -> "Reflections"
+      4 -> "Street light shadows"
+      5 -> "Car light shadows"
+      6 -> "Building light shadows"
+      _ -> "Light reach"
+    end
+  end
+  fn value_name(row : Int, value : Int) : String do
+    match row do
+      0 -> if value > 0 do "Ray traced, with one bounce" else "Flat" end
+      1 -> (match value do 0 -> "1 a pixel" | 1 -> "2 a pixel" | _ -> "4 a pixel" end)
+      2 -> (match value do 0 -> "Low: one pixel in 16 traced" | 1 -> "Medium: one in 4" | _ -> "High: every pixel" end)
+      3 -> if value > 0 do "Mirror rays on smooth surfaces" else "Off" end
+      4 -> if value > 0 do "Street lamps cast shadows" else "Off" end
+      5 -> if value > 0 do "Headlights and beacons cast shadows" else "Off" end
+      6 -> if value > 0 do "Every lit window is a lamp and casts shadows" else "Off" end
+      _ -> (match value do 0 -> "4 m" | 1 -> "8 m" | 2 -> "12 m" | _ -> "16 m" end)
+    end
+  end
+  fn defaults() : NativeIntArr do
+    NativeArray.set_int(NativeArray.set_int(NativeArray.make_int(8, 0), 1, 1), 2, 1)
+  end
+  fn get(l : NativeIntArr, row : Int) : Int do
+    if row < 0 || row >= NativeArray.length_int(l) do 0 else
+      let v = NativeArray.get_int(l, row)
+      if v < 0 do 0 else if v >= steps(row) do steps(row) - 1 else v end end
+    end
+  end
+  fn set(l : NativeIntArr, row : Int, value : Int) : NativeIntArr do
+    if row < 0 || row >= rows() do l else
+      NativeArray.set_int(l, row, if value < 0 do 0 else if value >= steps(row) do steps(row) - 1 else value end end)
+    end
+  end
+  pfn same_from(a : NativeIntArr, b : NativeIntArr, row : Int) : Bool do
+    row >= rows() || (get(a, row) == get(b, row) && same_from(a, b, row + 1))
+  end
+  fn same(a : NativeIntArr, b : NativeIntArr) : Bool do same_from(a, b, 0) end
+  doc "Settings from eight decimal digits, the first row's first (UR_LIGHTING=11111113 is everything on)."
+  fn from_digits(digits : Int) : NativeIntArr do from_digits_at(defaults(), digits, 7) end
+  pfn from_digits_at(l : NativeIntArr, digits : Int, row : Int) : NativeIntArr do
+    if row < 0 do l else from_digits_at(set(l, row, digits % 10), digits / 10, row - 1) end
+  end
+  doc "Whether every lit window is its own lamp: the scene's buildings are meshed differently when it changes."
+  fn window_lamps(l : NativeIntArr) : Bool do get(l, 6) > 0 end
+  doc "Hand the settings to the renderer."
+  fn apply(l : NativeIntArr) : Unit do
+    let traced = get(l, 0) > 0
+    let street = get(l, 4) > 0
+    let car = get(l, 5) > 0
+    let building = get(l, 6) > 0
+    Vk.set_lighting(if traced do 4 else 8 end)
+    Vk.set_quality(if traced do (match get(l, 1) do 0 -> 1 | 1 -> 2 | _ -> 4 end) else 0 end, get(l, 3) > 0)
+    Vk.set_trace_scale(match get(l, 2) do 0 -> 4 | 1 -> 2 | _ -> 1 end)
+    -- the traced sky light's own lamp ray knows neither headlights nor a longer reach: with it on, the lamps are gathered
+    Vk.set_lamp_tracing(traced || street || car || building, car)
+    Vk.set_lamp_shadow(27, building)
+    Vk.set_lamp_shadow(28, building)
+    Vk.set_lamp_shadow(29, street)
+    Vk.set_lamp_reach(match get(l, 7) do 0 -> 16 | 1 -> 32 | 2 -> 48 | _ -> 64 end)
+  end
+end

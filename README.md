@@ -57,6 +57,39 @@ second at 1x speed. Roads permit at most 3 m of elevation change between parcels
 The founding map is 480 x 352 m, with 8 m planning parcels and 0.25 m voxel geometry. Terrain contours are sampled on a 1 m grid with
 quarter-metre elevation steps. Buildings use quarter-metre detail throughout.
 
+## Planning streets and crossings
+
+Choose a street type in **Roads → Streets**. **Quick street** builds on
+release. **Plan street** lets you click to add waypoints and drag any pin
+to revise the route. Hover a placed waypoint and press **R** to flip its
+incoming bend, or flip the live end of the route. Hold **Alt** to preview
+the other bend and **Shift** to bypass snapping. **N** toggles snapping.
+
+Use **Block** or **Grid** to drag a layout, then drag either corner to resize
+it. Grid spacing is in parcels. The layout leaves frontage between the
+outer road and the last interior street. Green markers identify new frontage.
+**Replace street** selects a corridor between junctions. Click farther along
+a connected street to extend it. Orange markers identify attached infrastructure.
+
+In **Roads → Crossings**, choose an **Overpass**, **Underpass**, or **Road
+tunnel**. Place two portals on the same axis, then drag either portal to move it.
+Mountain tunnels meet the approach streets at grade. Tunnels under water
+descend through recessed ramps. The profile shows where each road goes underground.
+The Road crossings layer shows built routes through terrain or water.
+Press **T** or choose **Layers → Crossings → Tunnel cutaway** to open the
+terrain and water above built tunnels. Press **T** again to restore the surface.
+
+Press **Enter** or click **Build** to confirm a draft, **Escape** or right-click
+to cancel, and **Z** to undo a confirmed project in one step.
+
+```sh
+UR_DEMO=29 UR_ROAD_DEMO=1 ./run.sh
+```
+
+Choose **1** for the harbour route, **2** for a grid, **3** for a mountain
+tunnel, or **4** for a channel tunnel. Add `UR_ROAD_BUILT=1` to start with
+the selected project built.
+
 ## Founding a city
 
 The default game starts with empty land and a landing survey. Click a cyan
@@ -115,6 +148,14 @@ both road and pipe access. Homes need pipe access before they can grow.
 Power, water, and sewage have limits on individual segments. New homes must
 reserve utility capacity and have access to food before construction starts.
 Water and sewage use the same pipe assets and have separate flow limits.
+Homes and businesses can ride out brief interruptions. The city checks for
+severe shortfalls every five days. A check with adequate service halves the
+running count, so supply that keeps failing still builds toward the limit.
+Energy income and fuel are averaged over the month's checks, so the bill
+reflects the whole month's weather. After 30 days of disruption, the next
+monthly settlement closes affected businesses and sends affected households
+looking for an affordable home with enough utility capacity. Families who
+cannot find one have three months to search before leaving the region.
 
 ## Electricity and trash
 
@@ -151,10 +192,30 @@ height limit** to preserve low-rise parcels.
 Paint a maximum nuisance level with the four nuisance tools. Quiet parcels
 permit housing. Neighbourhood parcels also allow mixed-use buildings and low
 impact facilities. Commercial parcels admit employment zones and depots.
-Industrial parcels also permit gas plants, nuclear stations, landfills, and
-outfalls. The limits are cumulative. Lowering a limit leaves existing uses in
+Neighborhood parcels permit industrial zoning for workshops; commercial
+limits also allow processors. Industrial limits admit manufacturers, gas plants,
+nuclear stations, landfills, and outfalls. The limits are cumulative. Lowering a limit leaves existing uses in
 place and prevents incompatible new construction or expansion. Mixed-use
 buildings add both households and jobs.
+
+New mixed-use zoning starts at the Commercial limit, with a shop on the ground
+floor. Raise a mixed-use parcel to the Industrial limit to allow a light
+industrial workshop there instead: it takes over the ground floor on the next
+construction, or when the ground-floor business is empty or closed. A workshop
+employs more people than a shop and needs more power and water, but its noise
+and pollution fall on the flats above and next door. Lowering the limit stops
+a workshop building from growing until the limit is raised again.
+
+Use **Zoning → Land use → Industrial zone** to reserve land for private
+industry. Buildings grow when connected roads, workers, utilities, and market
+conditions support them. Industrial buildings consume more electricity and
+water than ordinary workplaces, and active sites release air and land pollution
+and neighborhood noise. Workshops, food processors and manufacturers emerge
+from local food production and the availability of trade graduates, with
+different power needs and emissions. Their revenue and emissions scale with
+the number of workers actually assigned to the site. Their businesses pay wages and operating costs and can close during prolonged
+losses or utility outages. Industrial goods and dedicated production deliveries
+are not yet modeled.
 
 ## Civic services
 
@@ -172,6 +233,19 @@ limits still apply.
 Select **Layers → Civic services** to see coverage. Hover over a housing or
 mixed-use parcel to see which of the four services reach it. Try a serviced
 district with `UR_DEMO=5 ./run.sh`.
+
+The **Civic → Community** menu offers a community center and a library.
+Staffed centers improve nearby civic-service access. A staffed, road-connected
+library improves local access and makes further education more attractive;
+course capacity, job opportunities, and tuition still influence enrollment.
+Use **Civic → Expansions** to add classrooms, clinic or hospital beds, and
+additional fire or police vehicle bays. These additions cost money to build
+and operate. The vehicle bays need an additional worker and allow a second
+crew to respond while the first is busy. **Civic → Disaster** includes a
+staffed emergency shelter for displaced households.
+
+A civic visual review scene is available with
+`UR_DEMO=9 UR_COMMUNITY_DEMO=1 ./run.sh`.
 
 ## Public religion
 
@@ -207,8 +281,10 @@ reach the approaching election, or select a temple to inspect offerings.
 Choose **Local street**, **Avenue**, or **Pedestrian street** in **Roads**.
 Paint over an existing street to change its type at the retrofit price.
 Avenues cost more to maintain and have twice the traffic capacity of local
-streets. Faster driving attracts some extra trips from nearby development,
-so a new avenue can fill up. Pedestrian streets keep walking access and
+streets. Households drive to the nearest workplace, while goods and shop
+trips run between each business and the harbour. Faster driving attracts some
+extra trips from nearby development, so a new avenue can fill up. Traffic at
+the freight quays slows cargo handling. Pedestrian streets keep walking access and
 building frontage. Remove any bus route or toll before converting a street
 to pedestrian use.
 
@@ -247,8 +323,11 @@ history and safety score. Theft and vandalism reports count against safety
 for six months. A delayed or missed response increases the impact.
 The **Reported incidents** layer marks the latest month's cases.
 Fire stations and clinics dispatch trucks and ambulances across roads and
-wide pedestrian streets. Traffic slows all responders. Fires that burn for
-12 minutes can reach adjoining buildings, with further spread possible if
+wide pedestrian streets. Traffic slows all responders. Voxel flames shed
+embers and smoke, and the pollution layer shows the plume as wind carries
+it across the city. Rain shortens fires and reduces their smoke and spread.
+Earthquakes can ignite fires, especially at gas plants and nearby buildings.
+Fires that burn for 12 minutes can reach adjoining buildings, with further spread possible if
 crews take longer. Buildings close for one or two months of repair. After
 30 minutes of local fire exposure a building burns down and requires four
 months of reconstruction. Work proceeds when the site is dry and connected
@@ -260,7 +339,7 @@ the evacuation.
 The **Fires** and **Medical calls** layers also filter the Safety chart.
 Ambulances pick patients up and deliver them to the clinic or hospital that
 can start treatment soonest. Clinics have one treatment bed and hospitals
-have four. Pickup, traffic, and bed waits can cause complications. Medical
+have four; a clinic wing adds one, and a hospital ward adds two when fully staffed. Pickup, traffic, and bed waits can cause complications. Medical
 charts show admissions, time to treatment, and stabilized patients.
 Try the dispatch showcase with `UR_DEMO=9 ./run.sh` or the planted district
 with `UR_DEMO=8 ./run.sh`.
@@ -319,7 +398,7 @@ Run `./scripts/verify.sh` for all code checks, or
 ```sh
 source ../strata/scripts/env.sh
 forge check
-for t in test/*_test.march; do forge test --release "$t"; done
+for suite in test/*_test.march; do forge test --release "$suite"; done
 forge lint --strict
 forge build --release
 UR_BENCH=1000 .march/build/release/ur
@@ -346,12 +425,77 @@ pointer state for diagnosing native input.
   are applied in the adjacent checkout and recorded in
   `docs/engine/strata-cursor.patch` for reproducibility.
 
+## People and investment
+
+The monthly resident survey sets how the city is regarded. A well-liked city
+draws more newcomers than ordinary demand; a disliked one draws fewer and
+loses residents. Some arriving workers come to fill open posts that need a
+secondary or trade qualification, and more of them come to a better-liked
+city. University degrees and specialisms are only earned in the city.
+
+Ready parcels wait for investors, who look at each parcel every few turns.
+Income tax, business tax above 10%, energy prices, and a long commute each
+add turns; civic services take one off homes. Hover a ready parcel to see its
+wait. A larger city has more investors, so more projects start per turn; the
+extra ones avoid housing while a tenth of workers are without a job.
+
+During a campaign the Council panel shows each incumbent's odds, which follow
+how residents of that ward feel, whom you endorse, and how the share index did
+over the term.
+
+## Land, wealth and the treasury
+
+**Land value.** Every parcel has a value set by its livability, road access,
+the coast and its neighbours' wealth. Values drift a quarter of the way to
+their target each month. Property tax is a rate on land value for each storey
+of an occupied building; set it under **Details → Policy**. Landlords pass it
+on in rent, so raising it costs tenants. A vacant building's owner still owes
+the tax its land would carry. The **Land value** layer is under Neighborhoods.
+
+**Household savings.** Each household saves what is left of its income after
+rent, tax and costs, and carries its savings when it moves. Savings above
+three months of costs go partly into the share index. A household whose
+savings cover a bad month does not count it toward leaving. Wealthy
+neighbourhoods spend more in shops and raise land values, and savings soften
+how wards feel about hard times. The **Household savings** layer and the
+Population and Council panels show it.
+
+**Funding.** **Details → Finance → Funding** sets education, health, safety,
+utilities, transit, and parks and community between 50% and 150%. Costs follow
+the level. Below 100% posts go unfilled and output falls; above 100% schools
+add seats.
+
+**Borrowing.** **Details → Finance → Debt** takes loans of $5,000 or $20,000
+over three years, issues bonds over ten years, and repays a loan early. Bonds
+sell to residents first, from savings above a cushion, and pay them interest;
+outside buyers take the rest at a higher rate. The credit rating, from AAA to
+D, follows debt against revenue, debt service, deficits and missed payments,
+and sets new rates. Below BB the bond market closes. If a month would end with
+negative cash, the bank covers it with an emergency overdraft. A month whose
+debt service cannot be paid counts as one missed payment and the shortfall
+becomes arrears. There is no new borrowing while in arrears. Three missed
+months in a year bring an administrator, who caps every service at 70%,
+freezes paid construction except demolition and angers voters; clearing the
+arrears and paying three months ends it. If arrears are still higher after a
+year under administration, the city is insolvent and the game ends.
+
+**Stock market.** A business with twelve profitable months and at least
+twelve jobs lists on the market; the **listing incentive** halves that for
+$200 a month. Prices move toward earnings times a valuation multiple with
+seeded shocks that come in calm and turbulent spells. The multiple rises with
+market sentiment and falls with interest rates. Sentiment follows a regional
+business cycle, growth in city spending, momentum, and falls with city debt.
+Listed firms pay dividends to households, and a firm that closes or is
+demolished delists near zero. A **tax break** for listed firms raises their
+value at the cost of business tax. A rising index draws better firms and
+speeds commercial investment; a falling one slows it. **Details → Finance →
+Stocks** charts the index and any company's price.
+
 This is the first gameplay slice, with procedural voxel architecture and landscaping. It does not
 simulate the eventual tens of thousands of individual residents. Households and
-employment are aggregates; wages, area income, land markets, differentiated
+employment are aggregates; differentiated
 industries, trade chains, ferries and full-region streaming
-are future work. Existing buildings do not yet abandon when conditions worsen;
-those conditions restrict new investment. Power currently follows the harbour
+are future work. Power currently follows the harbour
 road network. Terrain grading is a parcel operation, not a voxel brush.
 
 Start a new city or load your saved city from the title menu. During play,

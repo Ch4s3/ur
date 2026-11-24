@@ -1,0 +1,111 @@
+mod DebtTest do
+  needs IO
+  needs IO.Console
+  needs IO.Clock
+  needs IO.Process
+  needs IO.FileRead
+  needs IO.FileWrite
+  alias Ur.Sim as S
+
+  pfn with_savings(c : Ur.Sim.City, lot : Int, amount : Int) : Ur.Sim.City do
+    { c with economy: { c.economy with savings: NativeArray.set_int(c.economy.savings, lot, amount) } }
+  end
+  pfn total_savings(c : Ur.Sim.City, i : Int, sum : Int) : Int do
+    if i >= S.count() do sum else total_savings(c, i + 1, sum + S.get(c.economy.savings, i)) end
+  end
+  pfn earning(c : Ur.Sim.City, month : Int, left : Int, out : List(Ur.Sim.FinanceMonth)) : List(Ur.Sim.FinanceMonth) do
+    if left <= 0 do List.reverse(out) else
+      let budget = (S.stats(c)).budget
+      earning(c, month - 1, left - 1, Cons({ month: month, revenue: 6000, expenditures: 5000, budget: budget, construction: 0, property_receipts: 0, debt_service: 0 }, out))
+    end
+  end
+  fn main(_cap : Cap(IO)) : Unit do
+    let fresh = S.new()
+    let c = { fresh with finance_history: earning(fresh, 0, 12, Nil) }
+    Test.assert_eq_int(Ur.Debt.stage(c), 0, "A new city owes nothing")
+    let loan = Ur.Debt.borrow(c, 0, 5000)
+    Test.assert_eq_int(loan.cash, c.cash + 5000, "A loan pays out at once")
+    Test.assert_true(Ur.Debt.debt_service(loan) > 5000 / Ur.Debt.loan_months(), "A loan costs principal plus interest each month")
+    let repaid = Ur.Debt.settle(loan)
+    let booked = match repaid.finance_history do
+      Cons(m, _) -> m.debt_service
+      Nil -> 0
+    end
+    Test.assert_true(booked > 0, "Debt service is recorded in the month's finances")
+    Test.assert_true(Ur.Debt.total_debt(repaid) < 5000, "Each month pays down the loan")
+    Test.assert_true(repaid.cash < loan.cash, "Debt service comes out of cash")
+
+    let broke = Ur.Debt.settle({ c with cash: -2500 })
+    Test.assert_true(broke.cash >= 0, "Cash never ends a month below zero")
+    Test.assert_true(List.any(broke.economy.debts, fn d -> d.kind == 2), "An emergency overdraft covers the shortfall")
+    Test.assert_true(List.is_empty(broke.economy.missed), "A first overdraft is not a missed payment")
+    Test.assert_eq_int(Ur.Debt.rating(Ur.Debt.borrow(fresh, 0, 5000)), 0, "A brand-new city is rated on its payment record alone")
+    let advanced = Ur.Clock.month({ c with cash: -2500 })
+    Test.assert_true(advanced.cash >= 0, "The calendar settles debts at month end")
+
+    let three = Ur.Debt.borrow(Ur.Debt.borrow(Ur.Debt.borrow(c, 0, 5000), 0, 5000), 0, 5000)
+    let missed = Ur.Debt.settle({ three with cash: 0 })
+    Test.assert_eq_int(List.length(missed.economy.missed), 1, "Several unpaid loans in one month count as one missed payment")
+    Test.assert_true(missed.economy.arrears > 0, "Unpaid service goes to arrears")
+    Test.assert_true(Ur.Debt.rating(missed) > Ur.Debt.rating(three), "A missed payment lowers the rating")
+    Test.assert_true(Ur.Debt.rate_for(Ur.Debt.rating(missed), 0) > Ur.Debt.rate_for(Ur.Debt.rating(three), 0), "A lower rating raises the rate on new loans")
+    Test.assert_true(Ur.Debt.borrowing_refusal(missed, 0) != "", "No new borrowing while in arrears")
+    Test.assert_eq_int(Ur.Debt.stage(missed), 1, "Missing a payment brings credit penalties")
+
+    let strained = { three with cash: 0, month: 20, economy: { three.economy with missed: [19, 18] } }
+    let administered = Ur.Debt.settle(strained)
+    Test.assert_true(administered.economy.administrator >= 0, "Three missed months in a year bring an administrator")
+    Test.assert_eq_int(Ur.Debt.rating(administered), 7, "Administration is rated D")
+    Test.assert_eq_int(S.funding_level({ administered with economy: { administered.economy with funding: NativeArray.make_int(6, 150) } }, 0), 70, "The administrator caps funding at 70%")
+    let site = S.index(12, 20)
+    let refused = S.act({ administered with cash: 50000 }, site, 2)
+    Test.assert_eq_int(S.get(refused.zones, site), S.get(administered.zones, site), "The administrator freezes paid construction")
+    let dragged = S.draft_act({ administered with cash: 50000 }, site, 2)
+    Test.assert_eq_int(S.get(dragged.zones, site), S.get(administered.zones, site), "The freeze covers dragged construction too")
+    let home = S.index(10, 20)
+    let cleared = S.act({ administered with cash: 50000 }, home, 7)
+    Test.assert_eq_int(S.get(cleared.buildings, home), 0, "Demolition is still allowed")
+    Test.assert_true(Ur.Debt.borrowing_refusal(administered, 0) != "", "The administrator closes new borrowing")
+
+    let recovering = { administered with cash: 100000, month: 30,
+      economy: { administered.economy with arrears: 0, administrator: 26, missed: [24, 23, 22] } }
+    let released = Ur.Debt.settle(recovering)
+    Test.assert_eq_int(released.economy.administrator, -1, "Clearing arrears and three paid months end administration")
+    Test.assert_eq_int((Ur.Debt.settle({ released with cash: 100000 })).economy.administrator, -1, "Old misses alone do not bring the administrator back")
+
+    let history = [NativeArray.set_int(NativeArray.set_int(NativeArray.make_int(4, 0), 0, 18), 2, 1000)]
+    let sinking = { three with cash: 0, month: 30, economy: { three.economy with administrator: 17, arrears: 5000, missed: [29, 28, 27], debt_history: history } }
+    let failed = Ur.Debt.settle(sinking)
+    Test.assert_true(failed.economy.insolvent, "Arrears still growing after a year under administration mean insolvency")
+    Test.assert_eq_int(Ur.Debt.stage(failed), 3, "Insolvency is the last stage")
+
+    let saver = with_savings(c, home, 400000)
+    let issued = Ur.Debt.borrow(saver, 1, 50000)
+    Test.assert_eq_int(issued.cash, saver.cash + 50000, "A bond raises its full amount")
+    Test.assert_true(total_savings(issued, 0, 0) < total_savings(saver, 0, 0), "Residents buy part of a bond from their savings")
+    let bond = List.find(issued.economy.debts, fn d -> d.kind == 1)
+    Test.assert_true(match bond do
+      Some(d) -> d.resident > 0
+      None -> false
+    end, "The bond records what residents hold")
+    let shorted = Ur.Debt.settle({ issued with cash: 0 })
+    Test.assert_eq_int(total_savings(shorted, 0, 0), total_savings(issued, 0, 0), "Bondholders receive nothing in a month the city cannot pay")
+    Test.assert_true(shorted.economy.resident_arrears > 0, "What residents were shorted is recorded")
+    let made_good = Ur.Debt.settle({ shorted with cash: 100000 })
+    Test.assert_eq_int(made_good.economy.resident_arrears, 0, "Clearing the arrears settles the residents' claim")
+    Test.assert_true(total_savings(made_good, 0, 0) >= total_savings(shorted, 0, 0) + shorted.economy.resident_arrears, "Residents are repaid what they were shorted")
+    let paid = Ur.Debt.settle({ issued with cash: 100000 })
+    Test.assert_true(total_savings(paid, 0, 0) > total_savings(issued, 0, 0), "Bond interest and principal flow back to resident holders")
+    let junk = { issued with month: 30, economy: { issued.economy with missed: [29, 25, 20] } }
+    Test.assert_true(Ur.Debt.rating(junk) > 4 && Ur.Debt.borrowing_refusal({ junk with economy: { junk.economy with arrears: 0 } }, 1) != "", "The bond market closes below BB")
+
+    let game = { city: missed, cx: 78.0, cz: 151.0, zoom: 52.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(game)) do
+      Ok(loaded) ->
+        Test.assert_eq_int(Ur.Debt.total_debt(loaded.city), Ur.Debt.total_debt(missed), "Debts survive save and load")
+        Test.assert_eq_int(loaded.city.economy.arrears, missed.economy.arrears, "Arrears survive save and load")
+        Test.assert_eq_int(List.length(loaded.city.economy.missed), 1, "Missed payments survive save and load")
+      Err(error) -> panic(error)
+    end
+  end
+end

@@ -1,11 +1,13 @@
 -- Ur.Rain — where a day's rain falls.
 --
--- A day's rain is a baseline level that falls on every parcel plus a few
--- cells: discs that cross the island in a straight line with the wind, each
--- raining at its own level while it is active. Everything here is a pure
--- function of the climate seed, the date, the day's regional weather kind
--- (Ur.Sim.weather_on) and the regional wind, so the same storms cross the
--- same parcels on every replay and after loading a save.
+-- A day's rain is a baseline level that falls on every parcel (thinned in a
+-- mountain's rain shadow) plus a few cells: discs, each raining at its own
+-- level while it is active. Most are born where the air lifts (Ur.Air) at
+-- the hours it lifts, grow, drift with the wind and die within a few hours;
+-- a severe day also has one front that crosses the whole island. Everything
+-- here is a pure function of the climate seed, the date, the day's regional
+-- weather kind (Ur.Sim.weather_on), the regional wind and the day's lift, so
+-- the same storms cross the same parcels on every replay.
 --
 -- Levels use the simulation's scale: 0 none, 2 rain, 3 heavy, 4 severe.
 mod Ur.Rain do
@@ -28,6 +30,7 @@ mod Ur.Rain do
     Strata.Seed.unit(Strata.Seed.cell(seed, 700 + k * 16 + what, month, day, kind))
   end
   pfn between(low : Float, high : Float, u : Float) : Float do low +. (high -. low) *. u end
+  -- today's budget of cells before the air has its say
   pfn cell_count(seed : Int, month : Int, day : Int, kind : Int) : Int do
     let u = pick(seed, month, day, kind, 15, 0)
     match kind do
@@ -37,20 +40,20 @@ mod Ur.Rain do
       _ -> 0
     end
   end
-  pfn radius_of(kind : Int, u : Float) : Float do
+  pfn convective_radius(kind : Int, u : Float) : Float do
     match kind do
       4 -> between(60.0, 90.0, u)
-      3 -> between(180.0, 220.0, u)
-      _ -> between(120.0, 180.0, u)
+      1 -> between(50.0, 70.0, u)
+      _ -> between(70.0, 120.0, u)
     end
   end
-  pfn level_of(kind : Int) : Int do if kind == 4 do 4 else 3 end end
+  pfn level_of(kind : Int) : Int do if kind == 4 do 4 else if kind == 1 do 2 else 3 end end end
 
-  -- One cell. It enters the map's upwind edge at its start hour and leaves
+  -- The front: it enters the map's upwind edge at its start hour and leaves
   -- the far edge after its crossing time; half way it passes [offset] metres
   -- to one side of the map's middle.
-  pfn make(seed : Int, month : Int, day : Int, kind : Int, heading : Float, k : Int) : Cell do
-    let radius = radius_of(kind, pick(seed, month, day, kind, k, 1))
+  pfn front(seed : Int, month : Int, day : Int, kind : Int, heading : Float, k : Int) : Cell do
+    let radius = between(100.0, 150.0, pick(seed, month, day, kind, k, 1))
     let hours = between(6.0, 12.0, pick(seed, month, day, kind, k, 2))
     let start = between(0.0, 14.0, pick(seed, month, day, kind, k, 3))
     let dx = Math.cos(heading)
@@ -66,24 +69,114 @@ mod Ur.Rain do
     { x: enter_x -. dx *. speed *. start, z: enter_z -. dz *. speed *. start, vx: dx *. speed, vz: dz *. speed,
       radius: radius, level: level_of(kind), start: start, stop: start +. hours }
   end
-  pfn make_all(seed : Int, month : Int, day : Int, kind : Int, heading : Float, k : Int, n : Int, acc : List(Cell)) : List(Cell) do
-    if k >= n do List.reverse(acc) else make_all(seed, month, day, kind, heading, k + 1, n, Cons(make(seed, month, day, kind, heading, k), acc)) end
+
+  pfn lift_get(lift : NativeIntArr, s : Int, area : Int) : Int do
+    let v = NativeArray.get_int(lift, s * Ur.Air.areas() + area)
+    if v > 0 do v else 0 end
+  end
+  pfn snapshot_total(lift : NativeIntArr, s : Int, area : Int, acc : Int) : Int do
+    if area >= Ur.Air.areas() do acc else snapshot_total(lift, s, area + 1, acc + lift_get(lift, s, area)) end
+  end
+  pfn peak_lift(lift : NativeIntArr, k : Int, best : Int) : Int do
+    if k >= Ur.Air.snapshots() * Ur.Air.areas() do best else
+      let v = NativeArray.get_int(lift, k)
+      peak_lift(lift, k + 1, if v > best do v else best end)
+    end
+  end
+  -- the snapshot whose share of the day's lift holds [u] (0..1); none lifting: any
+  pfn choose_snapshot(lift : NativeIntArr, total : Int, u : Float, s : Int, acc : Int) : Int do
+    if s >= Ur.Air.snapshots() - 1 || total <= 0 do (if total <= 0 do float_to_int(u *. 4.99) else s end) else
+      let acc = acc + snapshot_total(lift, s, 0, 0)
+      if int_to_float(acc) >= u *. int_to_float(total) do s else choose_snapshot(lift, total, u, s + 1, acc) end
+    end
+  end
+  pfn squares(lift : NativeIntArr, s : Int, area : Int, acc : Int) : Int do
+    if area >= Ur.Air.areas() do acc else
+      let v = lift_get(lift, s, area)
+      squares(lift, s, area + 1, acc + v * v)
+    end
+  end
+  -- the area whose share of the snapshot's lift squared holds [u]; none lifting: any
+  pfn choose_area(lift : NativeIntArr, s : Int, total : Int, u : Float, area : Int, acc : Int) : Int do
+    if total <= 0 do float_to_int(u *. int_to_float(Ur.Air.areas() - 1)) else
+      if area >= Ur.Air.areas() - 1 do area else
+        let v = lift_get(lift, s, area)
+        let acc = acc + v * v
+        if int_to_float(acc) >= u *. int_to_float(total) do area else choose_area(lift, s, total, u, area + 1, acc) end
+      end
+    end
   end
 
-  doc "The storm cells of a day: [kind] the regional weather (0 clear .. 4 severe), the wind as Ur.Sim.regional_wind gives it (km/h, and the heading in radians the cells move toward). Clear and cloudy days have none."
-  fn cells(seed : Int, month : Int, day : Int, kind : Int, wind_speed : Int, wind_heading : Float) : List(Cell) do
-    let _ = wind_speed
-    make_all(seed, month, day, kind, wind_heading, 0, cell_count(seed, month, day, kind), Nil)
+  -- A cell born where the air lifts: an area chosen by its lift at an hour
+  -- chosen by how much the island lifts then. It lives two to five hours,
+  -- longer the stronger its birth lift, drifting with the wind at about a
+  -- metre a game hour for each km/h.
+  pfn convective(seed : Int, month : Int, day : Int, kind : Int, wind_speed : Int, heading : Float, lift : NativeIntArr, k : Int) : Cell do
+    let total = snapshot_total(lift, 0, 0, 0) + snapshot_total(lift, 1, 0, 0) + snapshot_total(lift, 2, 0, 0) + snapshot_total(lift, 3, 0, 0) + snapshot_total(lift, 4, 0, 0)
+    let s = choose_snapshot(lift, total, pick(seed, month, day, kind, k, 5), 0, 0)
+    let area = choose_area(lift, s, squares(lift, s, 0, 0), pick(seed, month, day, kind, k, 6), 0, 0)
+    let (ax, az) = Ur.Air.area_centre(area)
+    let bx = ax +. (pick(seed, month, day, kind, k, 7) -. 0.5) *. 24.0
+    let bz = az +. (pick(seed, month, day, kind, k, 8) -. 0.5) *. 24.0
+    let start = int_to_float(Ur.Air.snapshot_hour(s)) +. 4.0 *. pick(seed, month, day, kind, k, 3)
+    let peak = peak_lift(lift, 0, 1)
+    let strength = int_to_float(lift_get(lift, s, area)) /. int_to_float(if peak < 1 do 1 else peak end)
+    let hours = 2.0 +. 3.0 *. (0.5 *. strength +. 0.5 *. pick(seed, month, day, kind, k, 2))
+    let speed = int_to_float(wind_speed)
+    let vx = Math.cos(heading) *. speed
+    let vz = Math.sin(heading) *. speed
+    { x: bx -. vx *. start, z: bz -. vz *. start, vx: vx, vz: vz,
+      radius: convective_radius(kind, pick(seed, month, day, kind, k, 1)), level: level_of(kind), start: start, stop: start +. hours }
+  end
+  pfn make_all(seed : Int, month : Int, day : Int, kind : Int, wind_speed : Int, heading : Float, lift : NativeIntArr, k : Int, n : Int, acc : List(Cell)) : List(Cell) do
+    if k >= n do List.reverse(acc) else make_all(seed, month, day, kind, wind_speed, heading, lift, k + 1, n, Cons(convective(seed, month, day, kind, wind_speed, heading, lift, k), acc)) end
+  end
+  -- the budget moves one either way with how much the day lifts overall
+  pfn budget(seed : Int, month : Int, day : Int, kind : Int, lift : NativeIntArr) : Int do
+    let n = cell_count(seed, month, day, kind)
+    let total = snapshot_total(lift, 0, 0, 0) + snapshot_total(lift, 1, 0, 0) + snapshot_total(lift, 2, 0, 0) + snapshot_total(lift, 3, 0, 0) + snapshot_total(lift, 4, 0, 0)
+    let mean = total / (Ur.Air.snapshots() * Ur.Air.areas())
+    -- a typical day's mean lift is about 9; the strongest fifth lift 15 or more, the weakest quarter under 5
+    let n = if mean >= 15 do n + 1 else if mean < 5 do n - 1 else n end end
+    let floor = if kind == 4 do 2 else 1 end
+    if n < floor do floor else n end
+  end
+
+  doc "The level of lift (Ur.Air) a cloudy day needs somewhere before a shower breaks out."
+  fn shower_lift() : Int do 130 end
+  doc "The storm cells of a day: [kind] the regional weather (0 clear .. 4 severe), the regional wind (km/h, and the heading in radians it blows toward) and the day's lift (Ur.Air.Air.lift). Clear days have none; a cloudy day one short shower only where the air lifts strongly; rainy and heavy days cells born from the lift; a severe day one front crossing the island and storm cells besides."
+  fn cells(seed : Int, month : Int, day : Int, kind : Int, wind_speed : Int, heading : Float, lift : NativeIntArr) : List(Cell) do
+    if kind <= 0 do Nil
+    else if kind == 1 do (if peak_lift(lift, 0, 0) >= shower_lift() do make_all(seed, month, day, kind, wind_speed, heading, lift, 0, 1, Nil) else Nil end)
+    else if kind == 4 do Cons(front(seed, month, day, kind, heading, 9), make_all(seed, month, day, kind, wind_speed, heading, lift, 0, budget(seed, month, day, kind, lift) - 1, Nil))
+    else make_all(seed, month, day, kind, wind_speed, heading, lift, 0, budget(seed, month, day, kind, lift), Nil) end end end
+  end
+
+  doc "The rain falling everywhere on [lot] at [hour] on a day of weather [kind]: the baseline, thinned in a rain shadow — heavy rain falls as rain, and rain only every other hour."
+  fn baseline_at(kind : Int, shadowed : Bool, lot : Int, hour : Float) : Int do
+    let b = baseline(kind)
+    if !shadowed do b
+    else if b == 3 do 2
+    else if b == 2 do (if (lot + float_to_int(Math.floor(hour))) % 2 == 0 do 2 else 0 end)
+    else b end end end
   end
 
   doc "Where [cell]'s centre is at game hour [hour] (metres)."
   fn centre(cell : Cell, hour : Float) : (Float, Float) do (cell.x +. cell.vx *. hour, cell.z +. cell.vz *. hour) end
 
+  doc "How far [cell] has grown at [hour]: four tenths of its radius when born or dying, all of it from an hour after birth to an hour before it dies."
+  fn grown(cell : Cell, hour : Float) : Float do
+    let age = hour -. cell.start
+    let left = cell.stop -. hour
+    let t = if age < left do age else left end
+    0.4 +. 0.6 *. (if t < 0.0 do 0.0 else if t > 1.0 do 1.0 else t end end)
+  end
   doc "Whether [cell] rains on the point (x, z) at [hour]."
   fn covers(cell : Cell, x : Float, z : Float, hour : Float) : Bool do
     if hour < cell.start || hour > cell.stop do false else
       let (cx, cz) = centre(cell, hour)
-      (x -. cx) *. (x -. cx) +. (z -. cz) *. (z -. cz) <= cell.radius *. cell.radius
+      let r = cell.radius *. grown(cell, hour)
+      (x -. cx) *. (x -. cx) +. (z -. cz) *. (z -. cz) <= r *. r
     end
   end
 

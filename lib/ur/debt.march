@@ -1,0 +1,267 @@
+-- Borrowing and solvency. Loans come from a regional bank, bonds are sold to
+-- residents first, and an emergency overdraft covers any month that would end
+-- with negative cash. Missed payments lead to credit penalties, then an
+-- administrator, then insolvency.
+mod Ur.Debt do
+  alias Ur.Sim as S
+
+  fn loan_months() : Int do 36 end
+  fn bond_months() : Int do 120 end
+  fn overdraft_months() : Int do 24 end
+
+  fn rating_name(rating : Int) : String do
+    match rating do
+      0 -> "AAA"
+      1 -> "AA"
+      2 -> "A"
+      3 -> "BBB"
+      4 -> "BB"
+      5 -> "B"
+      6 -> "CCC"
+      _ -> "D"
+    end
+  end
+  fn kind_name(kind : Int) : String do
+    if kind == 1 do "Bond" else if kind == 2 do "Overdraft" else "Loan" end end
+  end
+
+  -- Interest owed this month and the principal falling due.
+  fn interest(d : Ur.Sim.Debt) : Int do (d.principal * d.rate + 11999) / 12000 end
+  fn principal_due(d : Ur.Sim.Debt) : Int do
+    if d.months <= 1 do d.principal else (d.principal + d.months - 1) / d.months end
+  end
+  fn payment(d : Ur.Sim.Debt) : Int do interest(d) + principal_due(d) end
+
+  fn total_debt(c : Ur.Sim.City) : Int do List.fold_left(c.economy.debts, 0, fn (t, d) -> t + d.principal) end
+  fn debt_service(c : Ur.Sim.City) : Int do List.fold_left(c.economy.debts, 0, fn (t, d) -> t + payment(d)) end
+
+  pfn recent_revenue(months : List(Ur.Sim.FinanceMonth), left : Int, total : Int, count : Int) : (Int, Int) do
+    match months do
+      Nil -> (total, count)
+      Cons(m, rest) -> if left <= 0 do (total, count) else recent_revenue(rest, left - 1, total + m.revenue, count + 1) end
+    end
+  end
+  -- Revenue over a year, scaled up from however many months are recorded.
+  fn yearly_revenue(c : Ur.Sim.City) : Int do
+    let (total, count) = recent_revenue(c.finance_history, 12, 0, 0)
+    if count == 0 do 1 else S.clamp(total * 12 / count, 1, 2000000000) end
+  end
+  fn monthly_revenue(c : Ur.Sim.City) : Int do S.clamp(yearly_revenue(c) / 12, 1, 2000000000) end
+  pfn deficit_months(months : List(Ur.Sim.FinanceMonth), left : Int, count : Int) : Int do
+    match months do
+      Nil -> count
+      Cons(m, rest) -> if left <= 0 do count else deficit_months(rest, left - 1, count + (if m.revenue < m.expenditures do 1 else 0 end)) end
+    end
+  end
+  fn misses_within(c : Ur.Sim.City, months : Int) : Int do
+    List.fold_left(c.economy.missed, 0, fn (t, m) -> if m > c.month - months do t + 1 else t end)
+  end
+
+  -- Debt against a year's revenue, debt service against a month's, the last
+  -- year's deficits and two years of missed payments. Under an administrator
+  -- the rating is D.
+  fn has_history(c : Ur.Sim.City) : Bool do !List.is_empty(c.finance_history) end
+  -- Before the first month closes there is no revenue to measure debt against,
+  -- so a new city is rated on its payment record alone.
+  fn rating(c : Ur.Sim.City) : Int do
+    if c.economy.administrator >= 0 do 7 else
+      let debt_ratio = if has_history(c) do total_debt(c) * 100 / yearly_revenue(c) else 0 end
+      let service_ratio = if has_history(c) do debt_service(c) * 100 / monthly_revenue(c) else 0 end
+      let deficits = deficit_months(c.finance_history, 12, 0)
+      S.clamp(debt_ratio / 100 + service_ratio / 30 + deficits / 4 + misses_within(c, 24) * 2, 0, 6)
+    end
+  end
+  -- The main thing holding the rating down, for the Debt page.
+  fn rating_reason(c : Ur.Sim.City) : String do
+    if c.economy.administrator >= 0 do "Under administration after repeated missed payments"
+    else if misses_within(c, 24) > 0 do int_to_string(misses_within(c, 24)) ++ " missed payment(s) in two years"
+    else if has_history(c) && total_debt(c) * 100 / yearly_revenue(c) >= 80 do "Debt is " ++ int_to_string(total_debt(c) * 100 / yearly_revenue(c)) ++ "% of a year's revenue"
+    else if deficit_months(c.finance_history, 12, 0) >= 4 do int_to_string(deficit_months(c.finance_history, 12, 0)) ++ " deficit months this year"
+    else if total_debt(c) == 0 do "No borrowing" else "Debt well covered by revenue" end end end end end
+  end
+  -- Yearly rate in tenths of a percent.
+  fn rate_for(rating : Int, kind : Int) : Int do
+    let r = S.clamp(rating, 0, 7)
+    if kind == 1 do 40 + r * 15
+    else if kind == 2 do 120 + r * 20
+    else 60 + r * 20 end end
+  end
+  -- 0 sound, 1 credit penalties, 2 administrator, 3 insolvent.
+  fn stage(c : Ur.Sim.City) : Int do
+    if c.economy.insolvent do 3
+    else if c.economy.administrator >= 0 do 2
+    else if c.economy.arrears > 0 || misses_within(c, 12) > 0 do 1 else 0 end end end
+  end
+  fn next_trigger(c : Ur.Sim.City) : String do
+    match stage(c) do
+      0 -> "A missed payment lowers the credit rating."
+      1 -> "Three missed months within a year bring in an administrator."
+      2 -> "Clear arrears and pay three months to end administration; arrears still growing after a year mean insolvency."
+      _ -> "The city is insolvent."
+    end
+  end
+
+  -- Residents' savings above a modest cushion that could buy city bonds.
+  pfn investable(c : Ur.Sim.City, i : Int, total : Int) : Int do
+    if i >= S.count() do total else
+      let spare = S.get(c.economy.savings, i) - 200 * S.occupied_homes(c, i)
+      investable(c, i + 1, total + (if spare > 0 do spare else 0 end))
+    end
+  end
+  -- Move `amount` out of (negative) or into (positive) household savings,
+  -- shared by each parcel's spare savings when taking and by savings when paying.
+  pfn share_savings(c : Ur.Sim.City, amount : Int, pool : Int, i : Int, out : NativeIntArr) : NativeIntArr do
+    if i >= S.count() || pool <= 0 || amount == 0 do out else
+      let held = S.get(out, i)
+      let basis = if amount < 0 do held - 200 * S.occupied_homes(c, i) else held end
+      let part = if basis > 0 do amount * basis / pool else 0 end
+      share_savings(c, amount, pool, i + 1, if part == 0 do out else NativeArray.set_int(out, i, S.clamp(held + part, 0, 1000000000)) end)
+    end
+  end
+  pfn savings_pool(c : Ur.Sim.City, i : Int, total : Int) : Int do
+    if i >= S.count() do total else savings_pool(c, i + 1, total + S.get(c.economy.savings, i)) end
+  end
+  fn pay_residents(c : Ur.Sim.City, amount : Int) : Ur.Sim.City do
+    if amount <= 0 do c else
+      { c with economy: { c.economy with savings: share_savings(c, amount, savings_pool(c, 0, 0), 0, c.economy.savings) } }
+    end
+  end
+
+  fn borrowing_refusal(c : Ur.Sim.City, kind : Int) : String do
+    if c.economy.insolvent do "The city is insolvent."
+    else if c.economy.administrator >= 0 do "The administrator has closed new borrowing."
+    else if c.economy.arrears > 0 do "Clear the arrears before borrowing again."
+    else if kind == 1 && rating(c) > 4 do "The bond market is closed below BB."
+    else "" end end end end
+  end
+  fn add_debt(c : Ur.Sim.City, d : Ur.Sim.Debt) : Ur.Sim.City do
+    { c with cash: c.cash + d.principal, economy: { c.economy with debts: List.append(c.economy.debts, Cons(d, Nil)), next_debt: c.economy.next_debt + 1 } }
+  end
+  -- Take a loan (kind 0) or issue a bond (kind 1) of `amount`.
+  fn borrow(c : Ur.Sim.City, kind : Int, amount : Int) : Ur.Sim.City do
+    let refusal = borrowing_refusal(c, kind)
+    if refusal != "" || amount <= 0 do { c with message: if refusal == "" do "Choose an amount to borrow." else refusal end } else
+      let r = rating(c)
+      if kind == 1 do
+        let pool = investable(c, 0, 0)
+        let resident = S.clamp(amount, 0, pool * 3 / 10)
+        -- Outside buyers take the rest at a higher rate.
+        let rate = rate_for(r, 1) + 15 * (amount - resident) / amount
+        let next = { c with economy: { c.economy with savings: share_savings(c, 0 - resident, pool, 0, c.economy.savings) } }
+        let next = add_debt(next, { id: c.economy.next_debt, kind: 1, principal: amount, rate: rate, months: bond_months(), resident: resident })
+        { next with message: "Bond issued: $" ++ int_to_string(amount) ++ " at " ++ int_to_string(rate / 10) ++ "." ++ int_to_string(rate % 10) ++ "%, $" ++ int_to_string(resident) ++ " from residents." }
+      else
+        let rate = rate_for(r, 0)
+        let next = add_debt(c, { id: c.economy.next_debt, kind: 0, principal: amount, rate: rate, months: loan_months(), resident: 0 })
+        { next with message: "Loan of $" ++ int_to_string(amount) ++ " at " ++ int_to_string(rate / 10) ++ "." ++ int_to_string(rate % 10) ++ "% over " ++ int_to_string(loan_months()) ++ " months." }
+      end
+    end
+  end
+  -- Repay the oldest loan or overdraft in full from cash.
+  fn repay(c : Ur.Sim.City) : Ur.Sim.City do
+    match List.find(c.economy.debts, fn d -> d.kind != 1) do
+      None -> { c with message: "No loan to repay early." }
+      Some(d) ->
+        if c.cash < d.principal do { c with message: "Repaying this loan needs $" ++ int_to_string(d.principal) ++ "." } else
+          { c with cash: c.cash - d.principal, message: kind_name(d.kind) ++ " repaid early.",
+            economy: { c.economy with debts: List.filter(c.economy.debts, fn other -> other.id != d.id) } }
+        end
+    end
+  end
+  fn cycle_bond_size(c : Ur.Sim.City, delta : Int) : Ur.Sim.City do
+    let size = S.clamp(c.economy.bond_size + delta * 25000, 25000, 200000)
+    { c with economy: { c.economy with bond_size: size } }
+  end
+  -- Rows 10-14 of the Debt page.
+  fn act(c : Ur.Sim.City, row : Int, delta : Int) : Ur.Sim.City do
+    match row do
+      10 -> borrow(c, 0, 5000)
+      11 -> borrow(c, 0, 20000)
+      12 -> borrow(c, 1, c.economy.bond_size)
+      13 -> repay(c)
+      14 -> cycle_bond_size(c, delta)
+      _ -> c
+    end
+  end
+
+  -- One instalment off every debt; resident bondholders get their interest and,
+  -- at maturity, their principal.
+  pfn advance_debts(debts : List(Ur.Sim.Debt), out : List(Ur.Sim.Debt), to_residents : Int) : (List(Ur.Sim.Debt), Int) do
+    match debts do
+      Nil -> (List.reverse(out), to_residents)
+      Cons(d, rest) ->
+        let due = principal_due(d)
+        let resident_interest = if d.principal > 0 do interest(d) * d.resident / d.principal else 0 end
+        let resident_principal = if d.principal > 0 do due * d.resident / d.principal else 0 end
+        let left = { d with principal: d.principal - due, months: d.months - 1, resident: S.clamp(d.resident - resident_principal, 0, d.principal - due) }
+        let out = if left.months <= 0 || left.principal <= 0 do out else Cons(left, out) end
+        advance_debts(rest, out, to_residents + resident_interest + resident_principal)
+    end
+  end
+  fn overdraft(c : Ur.Sim.City) : Ur.Sim.City do
+    if c.cash >= 0 do c else
+      let amount = (0 - c.cash + 999) / 1000 * 1000
+      let next = add_debt(c, { id: c.economy.next_debt, kind: 2, principal: amount, rate: rate_for(rating(c), 2), months: overdraft_months(), resident: 0 })
+      { next with message: "The bank covered a shortfall with a $" ++ int_to_string(amount) ++ " overdraft." }
+    end
+  end
+  pfn arrears_before(history : List(NativeIntArr), month : Int) : Int do
+    match history do
+      Nil -> -1
+      Cons(sample, rest) -> if S.get(sample, 0) <= month do S.get(sample, 2) else arrears_before(rest, month) end
+    end
+  end
+  pfn paid_streak(c : Ur.Sim.City) : Bool do
+    !List.any(c.economy.missed, fn m -> m > c.month - 3)
+  end
+
+  -- Add a payment made after the month's books closed to that month's record,
+  -- so the Finance panel and the deficit count include it.
+  fn book_expense(c : Ur.Sim.City, amount : Int) : Ur.Sim.City do
+    if amount <= 0 do c else
+      match c.finance_history do
+        Nil -> c
+        Cons(m, rest) -> { c with finance_history: Cons({ m with expenditures: m.expenditures + amount, debt_service: m.debt_service + amount }, rest) }
+      end
+    end
+  end
+  -- Month end, after the city's books are settled: cover any operating
+  -- shortfall, pay debt service and arrears, then move through the stages.
+  fn settle(c : Ur.Sim.City) : Ur.Sim.City do
+    -- This month's service is owed on the debts already held: an overdraft
+    -- taken now starts its instalments next month.
+    let due = debt_service(c)
+    let (debts, to_residents) = advance_debts(c.economy.debts, Nil, 0)
+    let c = overdraft({ c with economy: { c.economy with debts: debts } })
+    let owed = due + c.economy.arrears
+    let paid = S.clamp(c.cash, 0, owed)
+    let paid_due = S.clamp(paid, 0, due)
+    let missed_now = due > 0 && paid_due < due
+    let arrears = owed - paid
+    let missed = if missed_now do Cons(c.month, List.take(c.economy.missed, 23)) else c.economy.missed end
+    -- Resident bondholders receive only what the city actually paid; the rest
+    -- is a default they bear with the city's other creditors.
+    let resident_paid = if due > 0 do to_residents * paid_due / due else to_residents end
+    -- What residents were shorted joins their claim on the arrears, and they
+    -- get it back as the arrears are paid down.
+    let old_arrears = c.economy.arrears
+    let claim = c.economy.resident_arrears
+    let resident_back = if old_arrears > 0 do S.clamp((paid - paid_due) * claim / old_arrears, 0, claim) else 0 end
+    let resident_arrears = if arrears == 0 do 0 else claim - resident_back + (to_residents - resident_paid) end
+    let settled = { c with cash: c.cash - paid, economy: { c.economy with arrears: arrears, missed: missed, resident_arrears: resident_arrears } }
+    let c = pay_residents(book_expense(settled, paid), resident_paid + (if arrears == 0 do claim else resident_back end))
+    let misses = misses_within(c, 12)
+    let administrator = if c.economy.administrator < 0 && missed_now && misses >= 3 do c.month
+      else if c.economy.administrator >= 0 && arrears == 0 && c.month - c.economy.administrator >= 3 && paid_streak(c) do -1
+      else c.economy.administrator end end
+    let earlier = arrears_before(c.economy.debt_history, c.month - 12)
+    let insolvent = c.economy.insolvent || (administrator >= 0 && c.month - administrator >= 12 && arrears > 0 && earlier >= 0 && arrears > earlier)
+    let sample = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(NativeArray.make_int(4, 0), 0, c.month), 1, total_debt(c)), 2, arrears), 3, rating(c))
+    let message = if insolvent && !c.economy.insolvent do "The city is insolvent."
+      else if administrator >= 0 && c.economy.administrator < 0 do "An administrator has taken over the city's finances."
+      else if administrator < 0 && c.economy.administrator >= 0 do "Administration has ended."
+      else if missed_now do "The city missed a debt payment. Its credit rating has fallen."
+      else c.message end end end end
+    { c with message: message, economy: { c.economy with administrator: administrator, insolvent: insolvent, debt_history: Cons(sample, List.take(c.economy.debt_history, 23)) } }
+  end
+end

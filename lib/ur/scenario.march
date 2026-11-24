@@ -1,6 +1,7 @@
 -- A reproducible player-built expansion, used by tests and screenshot runs.
 -- The showcase includes a prebuilt bridge. Other construction uses player tools.
 mod Ur.Scenario do
+  needs IO.Process
   alias Ur.Sim as S
   pfn corridor(c : Ur.Sim.City, x : Int) : Ur.Sim.City do
     if x > 28 do c else
@@ -13,10 +14,15 @@ mod Ur.Scenario do
       corridor(jobs, x + 1)
     end
   end
+  -- Technicians trained before play began: the trade-school unlock and a small
+  -- trade-qualified workforce, so specialist plants can be built and staffed.
+  -- The progression chain itself is covered by `test/progression_test.march`.
+  pfn trained(c : Ur.Sim.City, technicians : Int) : Ur.Sim.City do
+    { c with milestones: NativeArray.set_int(c.milestones, 27, 1), education: NativeArray.set_int(c.education, 2, technicians) }
+  end
   fn connected_region() : Ur.Sim.City do
     let c = corridor(S.new(), 10)
     let c = S.act(S.act(c, S.index(12, 17), 7), S.index(12, 17), 4)
-    let c = S.act(S.act(c, S.index(27, 15), 7), S.index(27, 15), 8)
     let c = S.act(c, S.index(8, 17), 9)
     let c = S.act(c, S.index(8, 18), 9)
     let c = S.act(c, S.index(8, 19), 13)
@@ -25,14 +31,14 @@ mod Ur.Scenario do
     let c = S.act(S.act(c, S.index(16, 15), 7), S.index(16, 15), 25)
     S.act(S.act(c, S.index(18, 15), 7), S.index(18, 15), 23)
   end
-  pfn metro_parcels(c : Ur.Sim.City, lot : Int) : Ur.Sim.City do
+  pfn metro_parcels(c : Ur.Sim.City, floors : Int, lot : Int) : Ur.Sim.City do
     if lot == S.count() do c else
       let x = lot % S.width()
       let z = lot / S.width()
       let height = S.get(c.heights, lot)
       let road = x % 4 == 1 || z % 4 == 0
       let office = (x / 4 + z / 4) % 7 == 2
-      let tower = (if office do 7 else 9 end) + (lot * 31 + x * z) % 3
+      let tower = (if office do 7 else floors end) + (lot * 31 + x * z) % 3
       let c = if height < 4 || height > 92 || S.get(c.plants, lot) > 0 || S.get(c.roads, lot) > 0 || lot == c.harbour do c
         else if road do
           { c with roads: NativeArray.set_int(c.roads, lot, if x % 8 == 1 || z % 8 == 0 do 2 else 1 end),
@@ -41,12 +47,40 @@ mod Ur.Scenario do
           { c with zones: NativeArray.set_int(c.zones, lot, if office do 2 else 1 end),
             buildings: NativeArray.set_int(c.buildings, lot, tower) }
         end end
-      metro_parcels(c, lot + 1)
+      metro_parcels(c, floors, lot + 1)
     end
   end
+  -- The metro demo: every lot of the map built up, the residents UR_METRO_PEOPLE asks for (default
+  -- 100,000) in homes UR_METRO_FLOORS tall (default 9 to 11 floors; the original map houses about
+  -- 114,000 at 9, a 120 x 88 map about 456,000, and 13 floors fit 500,000 there).
+  -- The lot nearest (x, z) a harbour can be founded on (a shoreline lot), searching rings out to
+  -- 12 lots; the design-grid landing point is inland once the islands are scaled up.
+  pfn landing_near(c : Ur.Sim.City, x : Int, z : Int, r : Int) : Int do
+    if r > 12 do S.index(x, z) else
+      match landing_ring(c, x, z, r, 0 - r) do
+        Some(i) -> i
+        None -> landing_near(c, x, z, r + 1)
+      end
+    end
+  end
+  pfn landing_ring(c : Ur.Sim.City, x : Int, z : Int, r : Int, dz : Int) : Option(Int) do
+    if dz > r do None else
+      let found = List.find(List.map(Range.to_list(Range.new(0 - r, r + 1)), fn dx -> (x + dx, z + dz)), fn p ->
+        match p do
+          (px, pz) -> (px - x == r || x - px == r || pz - z == r || z - pz == r) && px >= 0 && px < S.width() && pz >= 0 && pz < S.depth() && S.can_land(c, S.index(px, pz))
+        end)
+      match found do
+        Some((px, pz)) -> Some(S.index(px, pz))
+        None -> landing_ring(c, x, z, r, dz + 1)
+      end
+    end
+  end
+  fn metro_people() : Int do Authority.must(Env.get_int("UR_METRO_PEOPLE", 100000)) end
   fn metropolitan_benchmark() : Ur.Sim.City do
-    let c = metro_parcels(S.land(S.unclaimed(), S.index(20, 36)), 0)
-    { c with census: Ur.Demography.seed(100000), clock_ms: 600, cash: 120000, founding_map: false }
+    let floors = S.clamp(Authority.must(Env.get_int("UR_METRO_FLOORS", 9)), 3, 40)
+    let island = S.unclaimed()
+    let c = metro_parcels(S.land(island, landing_near(island, 20 * S.width() / 60, 36 * S.depth() / 44, 0)), floors, 0)
+    { c with census: Ur.Demography.seed(metro_people()), clock_ms: 600, cash: 120000, founding_map: false }
   end
   pfn street(c : Ur.Sim.City, x : Int, z : Int) : Ur.Sim.City do
     let i = S.index(x, z)
@@ -56,14 +90,30 @@ mod Ur.Scenario do
     end
   end
   fn civic_region(c : Ur.Sim.City) : Ur.Sim.City do
-    let c = S.advance(c, 120)
+    let c = Ur.Clock.advance(c, 120)
     let gateway = S.index(14, 17)
     let c = street(S.act(c, gateway, 7), 14, 17)
     let c = street(street(c, 14, 18), 14, 19)
     let c = S.act(c, S.index(13, 18), 44)
     let c = S.act(c, S.index(15, 18), 45)
     let c = S.act(c, S.index(13, 19), 46)
-    S.act(c, S.index(15, 19), 47)
+    let c = S.act(c, S.index(15, 19), 47)
+    -- A second gas station carries the growing town while technicians train
+    -- for the eastern geothermal field.
+    let c = cleared_site(c, S.index(18, 15), 4)
+    let c = cleared_site(c, S.index(9, 15), 79)
+    let c = S.act(cleared_blocks(c, 24, 15, 0), S.index(24, 15), 80)
+    cleared_site(c, S.index(28, 15), 8)
+  end
+  -- Clear whatever a decade of growth put on the lot, then build there.
+  pfn cleared_site(c : Ur.Sim.City, lot : Int, tool : Int) : Ur.Sim.City do S.act(S.act(c, lot, 7), lot, tool) end
+  -- A campus needs open blocks around its gate: clear the buildings within two
+  -- parcels of it and leave the streets.
+  pfn cleared_blocks(c : Ur.Sim.City, x : Int, z : Int, n : Int) : Ur.Sim.City do
+    if n == 25 do c else
+      let lot = S.index(x - 2 + n % 5, z - 2 + n / 5)
+      cleared_blocks(if S.get(c.roads, lot) > 0 do c else S.act(c, lot, 7) end, x, z, n + 1)
+    end
   end
   pfn cross_street(c : Ur.Sim.City, x : Int, z : Int) : Ur.Sim.City do
     if x > 17 do c else cross_street(street(c, x, z), x + 1, z) end
@@ -86,7 +136,7 @@ mod Ur.Scenario do
     let c = S.act(S.act(c, S.index(9, 22), 7), S.index(9, 22), 1)
     let c = S.act(c, S.index(9, 23), 12)
     let c = S.act(c, S.index(10, 19), 28)
-    S.advance(c, 160)
+    Ur.Clock.advance(c, 160)
   end
 
   pfn export_street(c : Ur.Sim.City, x : Int) : Ur.Sim.City do
@@ -106,11 +156,11 @@ mod Ur.Scenario do
     let c = S.act(c, S.index(36, 21), 14)
     let c = S.act(c, S.index(35, 21), 7)
     let c = S.act(c, S.index(35, 21), 21)
-    let c = S.advance(c, 12)
+    let c = Ur.Clock.advance(c, 12)
     let c = S.act(S.act(c, harbour, 37), terminal, 37)
     let c = S.act(c, S.index(51, 23), 12)
     let c = S.act(S.act(c, terminal, 39), terminal, 39)
-    S.tick(c)
+    Ur.Clock.month(c)
   end
 
   pfn civic_workplaces(c : Ur.Sim.City, x : Int) : Ur.Sim.City do
@@ -129,7 +179,7 @@ mod Ur.Scenario do
     let c = S.act(c, S.index(29, 23), 47)
     let c = S.act(c, S.index(28, 21), 14)
     let c = S.act(c, S.index(28, 23), 21)
-    S.advance(civic_workplaces(c, 27), 42)
+    Ur.Clock.advance(civic_workplaces(c, 27), 42)
   end
 
   pfn avenue_row(c : Ur.Sim.City, x : Int) : Ur.Sim.City do
@@ -151,6 +201,39 @@ mod Ur.Scenario do
     road_demo_path(c, Cons(S.index(31, 24), Cons(S.index(31, 25), Cons(S.index(31, 26), Nil))), 48)
   end
 
+  type RoadDemo = { city : Ur.Sim.City, draft : Ur.Build.Draft, tool : Int, cx : Float, cz : Float, zoom : Float }
+  pfn road_point(x : Int, z : Int) : Ur.Build.Point do { lot: S.index(x, z), flip: false } end
+  fn road_planning(kind : Int, built : Bool) : RoadDemo do
+    let base = S.new()
+    let base = road_demo_path({ base with clock_ms: 825, cash: 24000 }, [S.index(10, 16), S.index(11, 16)], 1)
+    let start = Ur.Build.new_draft()
+    let config = match kind do
+      3 ->
+        let west = List.map(List.range(9, 17), fn z -> S.index(5, z))
+        let harbor = List.map(List.range(6, 9), fn x -> S.index(x, 16))
+        let approaches = List.append(List.append(west, harbor), [S.index(15, 9), S.index(15, 10), S.index(15, 11)])
+        { city: road_demo_path(base, approaches, 1), draft: { start with points: [road_point(5, 9), road_point(15, 9)] },
+          tool: 52, cx: 84.0, cz: 78.0, zoom: 71.0 }
+      4 ->
+        let approaches = List.append(
+          List.map(List.range(12, 19), fn x -> S.index(x, 16)),
+          [S.index(18, 15), S.index(18, 14), S.index(18, 13), S.index(19, 13), S.index(20, 13),
+            S.index(24, 13), S.index(25, 13), S.index(26, 13)])
+        { city: road_demo_path(base, approaches, 1), draft: { start with points: [road_point(20, 13), road_point(24, 13)] },
+          tool: 52, cx: 179.0, cz: 112.0, zoom: 52.0 }
+      2 ->
+        { city: base, draft: { start with mode: 3, spacing: 3, points: [road_point(11, 16), road_point(18, 21)] },
+          tool: 1, cx: 117.0, cz: 149.0, zoom: 64.0 }
+      _ ->
+        { city: base, draft: { start with mode: 1, points: [road_point(11, 16), road_point(13, 16), road_point(13, 19), road_point(17, 19)] },
+          tool: 1, cx: 112.0, cz: 153.0, zoom: 52.0 }
+    end
+    if !built do config else
+      let p = Ur.Build.planned(config.city, config.tool, config.draft, true)
+      { config with city: if p.valid && p.changed do p.city else { config.city with message: p.reason } end,
+        draft: Ur.Build.reset(config.draft) }
+    end
+  end
   fn parks_and_crossings() : Ur.Sim.City do
     let c = street_district()
     let a = S.index(22, 25)
@@ -176,23 +259,57 @@ mod Ur.Scenario do
     c
   end
 
+  pfn show_emergency_bays(c : Ur.Sim.City, lot : Int) : Ur.Sim.City do
+    if lot == S.count() do c else
+      let kind = S.get(c.plants, lot)
+      let expansion = if kind == 20 || kind == 25 do 4 else if kind == 21 do 5 else 0 end end
+      let c = if expansion == 0 do c else { c with facility_expansion: NativeArray.set_int(c.facility_expansion, lot, expansion) } end
+      show_emergency_bays(c, lot + 1)
+    end
+  end
+  fn emergency_bay_demo() : Ur.Sim.City do show_emergency_bays(emergency_district(), 0) end
+  fn industry_demo() : Ur.Sim.City do
+    let c = emergency_bay_demo()
+    let first = S.index(31, 21)
+    let second = S.index(32, 21)
+    { c with founding_map: false,
+      plants: NativeArray.set_int(NativeArray.set_int(c.plants, first, 0), second, 0),
+      zones: NativeArray.set_int(NativeArray.set_int(c.zones, first, 4), second, 4),
+      business_sector: NativeArray.set_int(NativeArray.set_int(c.business_sector, first, 1), second, 2),
+      buildings: NativeArray.set_int(NativeArray.set_int(c.buildings, first, 1), second, 2),
+      storefronts: NativeArray.set_int(NativeArray.set_int(c.storefronts, first, 0), second, 0) }
+  end
+  fn community_demo() : Ur.Sim.City do
+    let c = emergency_bay_demo()
+    let center = S.index(31, 21)
+    let library = S.index(32, 21)
+    { c with founding_map: false,
+      facility_expansion: NativeArray.set_int(c.facility_expansion, S.index(34, 23), 6),
+      buildings: NativeArray.set_int(NativeArray.set_int(c.buildings, center, 0), library, 0),
+      construction: NativeArray.set_int(NativeArray.set_int(c.construction, center, 0), library, 0),
+      plants: NativeArray.set_int(NativeArray.set_int(c.plants, center, 43), library, 44),
+      facility_staff: NativeArray.set_int(NativeArray.set_int(c.facility_staff, center, 3), library, 3) }
+  end
+
   fn emergency_district() : Ur.Sim.City do
     let hospital = S.index(34, 23)
     let c = S.act(green_district(), hospital, 7)
-    let c = { c with plants: NativeArray.set_int(c.plants, hospital, 22) }
+    -- Clear skies keep the fire plume and response crews visible in this demo.
+    let c = { c with plants: NativeArray.set_int(c.plants, hospital, 22), climate_seed: 186, clock_ms: 525 }
     let traffic = S.stats(c)
     let stations = Cons(S.index(29, 21), Cons(S.index(30, 23), Cons(hospital, Nil)))
     let fire = { lot: S.index(33, 21), kind: 3, reported: 0, station: -1, response: -1, travel: 0, road: Nil, spread: Nil, medical: None }
     let medical = { fire with lot: S.index(26, 23), kind: 4 }
-    let (fire, busy) = S.run_emergency(c, traffic.traffic, stations, NativeArray.make_int(2640, 0), fire)
+    let (fire, busy) = S.run_emergency(c, traffic.traffic, stations, NativeArray.make_int(S.count(), 0), fire)
     let (medical, busy) = S.run_emergency(c, traffic.traffic, stations, busy, medical)
-    let beds = NativeArray.set_int(NativeArray.make_int(10560, 0), S.index(30, 23) * 4, 95)
+    let beds = NativeArray.set_int(NativeArray.make_int(S.count() * 4, 0), S.index(30, 23) * 4, 95)
     let (medical, _, _) = S.transfer_patient(c, traffic.traffic, stations, busy, beds, medical)
     let history = match c.crime_history do
       Cons(_, rest) -> rest
       Nil -> Nil
     end
-    { c with crime_history: Cons({ month: c.month, calls: Cons(fire, Cons(medical, Nil)) }, history) }
+    let c = S.fire_pollution(c, [fire])
+    { c with crime_history: Cons({ month: c.month, calls: [fire, medical] }, history) }
   end
 
   fn fire_recovery_home() : Int do S.index(33, 21) end
@@ -272,6 +389,7 @@ mod Ur.Scenario do
   fn corridor_home() : Int do S.index(10, 17) end
   fn corridor_project() : Int do S.index(10, 19) end
   fn corridor_workplace() : Int do S.index(25, 19) end
+  fn corridor_depot() : Int do S.index(8, 18) end
   pfn corridor_lot(c : Ur.Sim.City, lot : Int, zone : Int, floors : Int) : Ur.Sim.City do
     let c = { c with heights: NativeArray.set_int(c.heights, lot, 8) }
     let c = S.act(c, lot, if zone == 1 do 2 else 3 end)
@@ -290,7 +408,7 @@ mod Ur.Scenario do
   end
   fn employment_corridor() : Ur.Sim.City do
     let c = S.new()
-    let empty = NativeArray.make_int(2640, 0)
+    let empty = NativeArray.make_int(S.count(), 0)
     let c = { c with buildings: empty, zones: empty, construction: empty, clock_ms: 540 }
     let c = corridor_row(corridor_row(c, 9, 13, 18), 21, 25, 18)
     let c = corridor_row(corridor_column(corridor_column(c, 13, 15), 21, 15), 13, 21, 14)
@@ -301,9 +419,10 @@ mod Ur.Scenario do
     let c = corridor_lot(c, corridor_workplace(), 2, 3)
     -- Keep ground-floor jobs out of the residential end for this comparison.
     let c = S.act(S.act(S.act(c, corridor_home(), 64), S.index(11, 17), 64), corridor_project(), 64)
-    let depot = S.index(8, 18)
+    let depot = corridor_depot()
     let c = S.act({ c with heights: NativeArray.set_int(c.heights, depot, 8) }, depot, 76)
-    { c with message: "West housing has limited access to the east jobs. Inspect the west bus stop and increase service." }
+    -- Let the depot hire its drivers before the comparison starts.
+    { (S.update_facility_staff(c)) with message: "West housing has limited access to the east jobs. Inspect the west bus stop and increase service." }
   end
   fn upgrade_corridor(c : Ur.Sim.City) : Ur.Sim.City do
     S.act(S.act(c, corridor_stop(), 39), corridor_stop(), 39)
@@ -442,7 +561,7 @@ mod Ur.Scenario do
     { c with message: "Inspect the freight dock at 18, 16. Suspend sailings or enable backup imports and watch the local food price." }
   end
   fn advance_freight_days(c : Ur.Sim.City, days : Int) : Ur.Sim.City do
-    if days <= 0 do c else advance_freight_days(S.advance_day(c), days - 1) end
+    if days <= 0 do c else advance_freight_days(Ur.Clock.day(c), days - 1) end
   end
 
   fn diagnosis_district() : Ur.Sim.City do
@@ -464,7 +583,7 @@ mod Ur.Scenario do
     let c = S.act(S.act(S.new(), depot, 24), landfill, 25)
     let c = S.act(S.act(c, S.index(9, 19), 91), road, 92)
     let stock = NativeArray.set_int(NativeArray.set_int(c.waste_stock, home, 66), S.index(10, 19), 18)
-    let c = S.advance_day({ c with waste_stock: stock, trash: 84 })
+    let c = Ur.Clock.day({ c with waste_stock: stock, trash: 84 })
     { c with clock_ms: 750 }
   end
   fn parking_district() : Ur.Sim.City do
@@ -506,7 +625,7 @@ mod Ur.Scenario do
   end
 
   fn storm_site() : Ur.Sim.City do
-    let c = S.new()
+    let c = trained(S.new(), 6)
     let station = storm_station()
     let inland = S.index(9, 19)
     let date = first_weather(0, 4, 360)
@@ -524,6 +643,8 @@ mod Ur.Scenario do
       transit: NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(c.transit, station, 4),
         S.index(9, 17), 4), S.index(9, 18), 4), inland, 4),
       land_pollution: NativeArray.set_int(c.land_pollution, station, 90),
+      -- a storm's sea: 4 m everywhere, a full surge on the coast
+      sea_heights: S.sea_on_water(heights, 400),
       month: date / 30, calendar_day: date % 30, rain_uniform: true }
   end
 
@@ -541,6 +662,8 @@ mod Ur.Scenario do
 
   fn flood_backup_turn(c : Ur.Sim.City) : Ur.Sim.City do
     let tie = flood_backup_tie()
+    -- the drill's sea follows its weather: a storm sea on severe days, calm after
+    let c = { c with sea_heights: S.sea_on_water(c.heights, if S.severe_rain(c) do 400 else 0 end) }
     if c.month == 0 && c.calendar_day == 19 && S.get(c.grid, tie) == 0 do
       S.act(c, tie, 26)
     else c end
@@ -555,7 +678,9 @@ mod Ur.Scenario do
     let school = S.index(10, 18)
     let heights = NativeArray.set_int(NativeArray.set_int(c.heights, home, 11), next_home, 12)
     let heights = NativeArray.set_int(NativeArray.set_int(heights, S.index(11, 19), 0), S.index(11, 20), 0)
-    { c with heights: NativeArray.set_int(heights, school, 21),
+    let heights = NativeArray.set_int(heights, school, 21)
+    -- the storm's sea reaches the water cut beside the home too
+    { c with heights: heights, sea_heights: S.sea_on_water(heights, 400),
       buildings: NativeArray.set_int(c.buildings, home, 2),
       plants: NativeArray.set_int(c.plants, school, 18) }
   end
@@ -614,7 +739,7 @@ mod Ur.Scenario do
 
   fn transit_region() : Ur.Sim.City do
     let c = connected_region()
-    let c = S.advance(c, 120)
+    let c = Ur.Clock.advance(c, 120)
     let c = cross_street(c, 9, 20)
     let c = avenue(avenue(c, 13, 16), 17, 16)
     let c = infill(c, 10)

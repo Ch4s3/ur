@@ -1,0 +1,59 @@
+mod SeaWorksTest do
+  needs IO
+  needs IO.Console
+  alias Ur.Sim as S
+
+  pfn water_beside_land(c : Ur.Sim.City, i : Int) : Int do
+    if i >= S.count() do panic("no water beside land") else
+      let land_near = S.valid(S.neighbour(i, 0)) && S.get(c.heights, S.neighbour(i, 0)) > 0
+      if S.get(c.heights, i) == 0 && land_near && i != c.harbour && S.get(c.seawalls, i) == 0 && S.get(c.ferries, i) == 0 && S.get(c.roads, i) == 0
+      do i else water_beside_land(c, i + 1) end
+    end
+  end
+  pfn open_water(c : Ur.Sim.City, i : Int) : Int do
+    if i >= S.count() do panic("no open water") else
+      if S.get(c.heights, i) == 0 && i != c.harbour && S.get(c.ferries, i) == 0 && S.get(c.roads, i) == 0 && S.get(c.seawalls, i) == 0 && i % S.width() > 20 do i else open_water(c, i + 1) end
+    end
+  end
+  pfn low_shore(c : Ur.Sim.City, i : Int) : Int do
+    if i >= S.count() do panic("no empty low shore") else
+      let h = S.get(c.heights, i)
+      let water_near = S.valid(S.neighbour(i, 1)) && S.get(c.heights, S.neighbour(i, 1)) == 0
+      let empty = S.get(c.buildings, i) == 0 && S.get(c.roads, i) == 0 && S.get(c.plants, i) == 0 && S.get(c.parks, i) == 0 &&
+        S.get(c.construction, i) == 0 && S.get(c.ferries, i) == 0 && S.get(c.transit, i) == 0 && S.get(c.grade_cover, i) == 0 && i != c.harbour
+      if h > 0 && h <= 8 && water_near && empty do i else low_shore(c, i + 1) end
+    end
+  end
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let c = { S.new() with cash: 100000 }
+    -- dredge: 4 m, then 2 m deeper
+    let w = open_water(c, 0)
+    let d1 = S.act(c, w, 118)
+    Test.assert_eq_int(S.get(d1.seabed, w), 16, "a first dredging makes the parcel 4 m (16 voxels) deep")
+    Test.assert_eq_int(d1.cash, c.cash - 600, "dredging costs $600")
+    let d2 = S.act(d1, w, 118)
+    Test.assert_eq_int(S.get(d2.seabed, w), 24, "dredging again goes 2 m deeper")
+    -- reef
+    let r = S.act(c, w, 119)
+    Test.assert_eq_int(S.get(r.seabed, w), 68, "a reef's top is 1 m (4 voxels) down")
+    -- reclaim land beside the coast
+    let shore_water = water_beside_land(c, 0)
+    let land = S.act(d1, shore_water, 120)
+    Test.assert_eq_int(S.get(land.heights, shore_water), 4, "reclaimed water becomes land 1 m above the sea")
+    Test.assert_eq_int(S.get(land.seabed, shore_water), 0, "and loses its seabed edit")
+    let far_reclaim = S.act(c, w, 120)
+    Test.assert_eq_int(S.get(far_reclaim.heights, w), 0, "water far from land cannot be reclaimed")
+    -- cut a harbour into empty low land
+    let low = low_shore(c, 0)
+    let cut = S.act(c, low, 121)
+    Test.assert_eq_int(S.get(cut.heights, low), 0, "a harbour cut turns low land to water")
+    Test.assert_eq_int(S.get(cut.seabed, low), 8, "dredged 2 m deep")
+    -- refusals leave the city as it was
+    let dredged_land = S.act(c, low, 118)
+    Test.assert_eq_int(S.get(dredged_land.seabed, low), 0, "land cannot be dredged")
+    let cut_harbour = S.act(c, c.harbour, 121)
+    Test.assert_eq_int(S.get(cut_harbour.heights, c.harbour), S.get(c.heights, c.harbour), "the harbour cannot be cut away")
+    Authority.must(println("Sea works checks passed"))
+  end
+end

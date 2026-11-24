@@ -84,7 +84,8 @@ mod Ur.Demography do
   end
 
   type Month = { census : NativeIntArr, births : Int, deaths : Int, arrived : Int, left : Int, workers_lost : Int, pupils : Int }
-  fn advance(data : NativeIntArr, homes : Int, jobs : Int, strain : Int, policy : Int) : Month do
+  -- `pull` is the city's draw on newcomers as a percentage of ordinary demand.
+  pfn settle(data : NativeIntArr, homes : Int, jobs : Int, strain : Int, policy : Int, vacancies : Int, evicted : Int, pull : Int) : Month do
     let aged = age_groups(data, 0, 0, { census: data, deaths: 0, adult_deaths: 0, retiring: 0, pupils: 0 })
     let after_deaths = total(aged.census)
     let birth_credit = NativeArray.get_int(data, 10) + age(aged.census, 2)
@@ -95,15 +96,24 @@ mod Ur.Demography do
     let before_moving = total(census)
     let departure_credit = NativeArray.get_int(census, 16) + before_moving * (strain + 1)
     let displaced = if before_moving > homes * 5 do before_moving - homes * 5 else 0 end
-    let leaving = min(before_moving, displaced + departure_credit / 2400)
+    let forced = if evicted > displaced do evicted else displaced end
+    let leaving = min(before_moving, forced + departure_credit / 2400)
     let census = remove(census, census, leaving, before_moving, 0, 0)
     let census = NativeArray.set_int(census, 16, departure_credit % 2400)
     let remaining = before_moving - leaving
-    let places = if homes * 4 > remaining do homes * 4 - remaining else 0 end
-    let demand = if jobs > 0 && strain < 12 do 12 + jobs / 6 else if remaining == 0 && jobs > 0 do 4 else 0 end end
+    let places = if vacancies >= 0 do vacancies else if homes * 4 > remaining do homes * 4 - remaining else 0 end end
+    let demand = if vacancies >= 0 do 4 + (if strain < 12 do 8 + jobs / 6 else 0 end)
+      else if jobs > 0 && strain < 12 do 12 + jobs / 6 else if remaining == 0 && jobs > 0 do 4 else 0 end end end
+    let demand = demand * pull / 100
     let quota = if policy == 0 do demand / 6 else if policy == 2 do demand * 2 else demand end end
     let arrivals = min(places, quota)
     { census: settle_immigrants(census, arrivals), births: births, deaths: aged.deaths,
       arrived: arrivals, left: leaving, workers_lost: aged.adult_deaths + aged.retiring + working_age(aged.census) - working_age(census), pupils: aged.pupils }
+  end
+  fn advance(data : NativeIntArr, homes : Int, jobs : Int, strain : Int, policy : Int) : Month do
+    settle(data, homes, jobs, strain, policy, -1, 0, 100)
+  end
+  fn advance_market(data : NativeIntArr, homes : Int, jobs : Int, strain : Int, policy : Int, vacancies : Int, evicted : Int, pull : Int) : Month do
+    settle(data, homes, jobs, strain, policy, vacancies, evicted, pull)
   end
 end

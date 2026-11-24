@@ -1,0 +1,148 @@
+mod SeaTest do
+  needs IO
+  needs IO.Console
+  needs IO.Clock
+  alias Ur.Sim as S
+  alias Ur.Sea as W
+  alias Ur.Ocean as O
+
+  pfn near(a : Float, b : Float, eps : Float) : Bool do Math.abs(a -. b) <= eps end
+  pfn same_state(a : Ur.Sea.State, b : Ur.Sea.State) : Bool do
+    if !near(a.speed, b.speed, 0.000001) do false
+    else if !near(a.height, b.height, 0.000001) do false
+    else if !near(a.whitecaps, b.whitecaps, 0.000001) do false
+    else if !near(a.wind_x, b.wind_x, 0.000001) do false
+    else near(a.wind_z, b.wind_z, 0.000001) end end end end
+  end
+  pfn tomorrow(c : Ur.Sim.City) : Ur.Sim.City do
+    let day = S.absolute_day(c) + 1
+    { c with month: day / S.days_per_month(), calendar_day: day % S.days_per_month() }
+  end
+  pfn at(e : NativeF32Arr, px : Int, pz : Int) : Float do NativeArray.get_f32(e, O.padded_cell(px, pz)) end
+  -- A map water parcel whose western neighbour is land, scanning row by row.
+  pfn lee_parcel(c : Ur.Sim.City, f : Ur.Ocean.Field, i : Int) : Int do
+    if i >= S.count() do panic("no water parcel east of land") else
+      let px = i % S.width()
+      let pz = i / S.width()
+      let wet = O.depth(f, px * 32 + 16, pz * 32 + 16) > 0
+      let west_dry = px > 0 && O.depth(f, px * 32 - 16, pz * 32 + 16) == 0
+      if wet && west_dry do i else lee_parcel(c, f, i + 1) end
+    end
+  end
+  pfn edge_ok(e : NativeF32Arr, px : Int) : Bool do
+    if px >= S.width() + O.ring() - 1 do true else
+      let a = at(e, px, 0 - O.ring())
+      let b = at(e, px + 1, 0 - O.ring())
+      if a > 0.0 && b > 0.0 && Math.abs(a -. b) > 0.2 do false else edge_ok(e, px + 1) end
+    end
+  end
+
+  pfn open_water(c : Ur.Sim.City, f : Ur.Ocean.Field, px : Int, pz : Int) : Bool do
+    px >= 0 && pz >= 0 && px < S.width() && pz < S.depth() && S.get(c.heights, S.index(px, pz)) == 0 && O.depth(f, px * 32 + 16, pz * 32 + 16) >= 12
+  end
+  pfn open_run(c : Ur.Sim.City, f : Ur.Ocean.Field, px : Int, pz : Int, k : Int) : Bool do
+    if k > 4 do true else if !open_water(c, f, px - 2 + k, pz) do false else open_run(c, f, px, pz, k + 1) end end
+  end
+  -- A parcel of open water with open water a parcel either side along z and two parcels either side along x: a seawall site.
+  pfn wall_site(c : Ur.Sim.City, f : Ur.Ocean.Field, i : Int) : Int do
+    if i >= S.count() do panic("no open water for a seawall") else
+      let px = i % S.width()
+      let pz = i / S.width()
+      if open_run(c, f, px, pz, 0) && open_water(c, f, px, pz - 1) && open_water(c, f, px, pz + 1) do i else wall_site(c, f, i + 1) end
+    end
+  end
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let c = S.new()
+    let day = S.day_seconds()
+    -- state_eases_between_days
+    let today = W.state_at(c, 0.0)
+    Test.assert_true(same_state(W.state_at(c, 0.69 *. day), today), "the sea holds today's state for most of the day")
+    let next = W.state_at(tomorrow(c), 0.0)
+    Test.assert_true(same_state(W.state_at(c, day), next), "at the day's end it has become tomorrow's")
+    let mid = W.state_at(c, 0.85 *. day)
+    let lo = if today.speed < next.speed do today.speed else next.speed end
+    let hi = if today.speed < next.speed do next.speed else today.speed end
+    Test.assert_true(mid.speed >= lo -. 0.000001 && mid.speed <= hi +. 0.000001, "midway through the change the wind lies between the two days'")
+    Test.assert_true(near(mid.wind_x *. mid.wind_x +. mid.wind_z *. mid.wind_z, 1.0, 0.0001), "the wind's direction stays a unit vector")
+
+    -- storm_raises_the_sea
+    let storm = Ur.Scenario.storm_site()
+    Test.assert_eq_int(S.weather_on(storm, storm.month, storm.calendar_day), 4, "the storm site starts on a severe-rain day")
+    let s = W.state_at(storm, 0.0)
+    Test.assert_true(s.height >= 1.6 *. W.calm_height(s.speed) -. 0.0001, "a storm raises the sea by at least 1.6 times")
+
+    -- sector_wraps
+    Test.assert_eq_int(W.sector(0.0), 0, "east is sector 0")
+    Test.assert_eq_int(W.sector(6.2832), 0, "a full turn is sector 0 again")
+    Test.assert_eq_int(W.sector(-0.15), 0, "just north of east is still sector 0")
+    Test.assert_eq_int(W.sector(3.1416), 8, "west is sector 8")
+
+    -- exposure
+    let f = O.field(c)
+    let start = Authority.must(System.now_ms())
+    let east = W.exposure(f, 0)
+    let took = Authority.must(System.now_ms()) - start
+    Authority.must(println("sea exposure built in " ++ int_to_string(took) ++ " ms"))
+    Test.assert_true(took < 30, "an exposure map builds in under 30 ms")
+    Test.assert_eq_int(NativeArray.length_f32(east), O.ring_cells(), "one value a padded parcel")
+    -- open_sea_is_exposed
+    List.each([0, 4, 8, 12], fn k ->
+      Test.assert_true(near(at(W.exposure(f, k), 0 - O.ring(), 0 - O.ring()), 1.0, 0.0001), "the ring's corner is open sea"))
+    -- lee_is_sheltered
+    let lee = lee_parcel(c, f, 0)
+    let lx = lee % S.width()
+    let lz = lee / S.width()
+    let sheltered = at(east, lx, lz)
+    Test.assert_true(sheltered <= 0.3, "water just east of land is sheltered from a wind blowing east, got " ++ float_to_string(sheltered))
+    Test.assert_true(at(W.exposure(f, 8), lx, lz) > sheltered, "and more exposed when the wind blows west")
+    -- exposure_continuous_at_ring_edge
+    Test.assert_true(edge_ok(W.exposure(f, 4), 0 - O.ring()), "no jumps along the ring's outer row")
+    Test.assert_true(near(at(east, lx - 1, lz), 0.0, 0.0), "land has no exposure")
+    -- the swell refracted round the coast: one 2 m cell a quarter-parcel over the map and its ring
+    let sw = W.swell(f, c.seawalls, 0.0, 40.0)
+    Test.assert_eq_int(sw.w, O.padded_width() * 4, "the swell grid spans the map and its ring across")
+    let (_, open_amp) = Strata.Waves.sample(sw, 2, 2)
+    Test.assert_true(open_amp > 0.8 && open_amp < 1.2, "the open sea's swell is about its deep-water size, got " ++ float_to_string(open_amp))
+    -- the land parcel just west of the lee parcel, at its centre: metres from the ring's corner over 2 m cells
+    let land_cx = ((lx - 1) * 8 + 4 + O.ring() * 8) / 2
+    let land_cz = (lz * 8 + 4 + O.ring() * 8) / 2
+    let (_, land_amp) = Strata.Waves.sample(sw, land_cx, land_cz)
+    Test.assert_true(land_amp == 0.0, "land has no swell")
+    -- seawalls are breakwaters: a wall of three parcels across a swell running east casts a calm lee
+    let site = wall_site(c, f, 0)
+    let sx = site % S.width()
+    let sz = site / S.width()
+    let walls = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(c.seawalls, S.index(sx, sz - 1), 1), S.index(sx, sz), 1), S.index(sx, sz + 1), 1)
+    let d = W.swell_depths(f, walls)
+    let plain = W.swell_depths(f, c.seawalls)
+    let cx = (sx + O.ring()) * 4
+    let cz = (sz + O.ring()) * 4
+    let width = O.padded_width() * 4
+    -- a lone run of walls along z: the middle 2 m cells across (1 and 2 of 0..3) are solid, the outer ones water
+    Test.assert_true(NativeArray.get_f32(d, (cz + 1) * width + cx + 1) == 0.0 && NativeArray.get_f32(d, (cz + 1) * width + cx + 2) == 0.0, "the wall's own cells are solid")
+    Test.assert_true(NativeArray.get_f32(d, (cz + 1) * width + cx) > 0.0 && NativeArray.get_f32(d, (cz + 1) * width + cx + 3) > 0.0, "the water either side of it is not")
+    Test.assert_true(NativeArray.get_f32(d, (cz - 3) * width + cx + 1) == 0.0 && NativeArray.get_f32(d, (cz + 6) * width + cx + 2) == 0.0 && NativeArray.get_f32(d, (cz + 7) * width + cx + 2) > 0.0, "it runs from the middle of the first parcel to the middle of the last")
+    Test.assert_true(NativeArray.get_f32(plain, (cz + 1) * width + cx + 1) > 0.0, "without the walls it is open water")
+    let lee_x = cx + 8
+    let solve_start = Authority.must(System.now_ms())
+    let walled = W.swell(f, walls, 0.0, 30.0)
+    Authority.must(println("swell refracted in " ++ int_to_string(Authority.must(System.now_ms()) - solve_start) ++ " ms"))
+    let open = W.swell(f, c.seawalls, 0.0, 30.0)
+    let (_, calm) = Strata.Waves.sample(walled, lee_x, cz + 2)
+    let (_, rough) = Strata.Waves.sample(open, lee_x, cz + 2)
+    Authority.must(println("behind the seawall: " ++ float_to_string(calm) ++ ", without it: " ++ float_to_string(rough)))
+    -- a 24 m wall in 30 m waves: the swell fills its lee in from both ends (Strata.Waves spreads a lee over half a wavelength)
+    Test.assert_true(calm < 0.8 *. rough, "behind the seawall the swell is lower")
+    -- today's sea as the city counts it
+    let seas = W.daily_seas(c, 2.0, east, Some(open))
+    Test.assert_eq_int(S.get(seas, lee - 1), 0, "land has no sea")
+    let site_sea = S.get(seas, site)
+    Test.assert_true(site_sea > 100 && site_sea <= 260, "open water is near the sea's height, got " ++ int_to_string(site_sea))
+    Test.assert_true(S.get(seas, lee) < site_sea, "the lee is calmer than open water")
+    let walled_seas = W.daily_seas(c, 2.0, east, Some(walled))
+    Test.assert_true(S.get(walled_seas, S.index(sx + 2, sz)) < S.get(seas, S.index(sx + 2, sz)), "a breakwater calms the sea the city counts behind it")
+    Test.assert_true(W.next_height(c) > 0.0, "tomorrow has a sea")
+    Authority.must(println("Sea checks passed"))
+  end
+end

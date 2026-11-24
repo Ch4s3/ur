@@ -1,0 +1,62 @@
+mod CityPressuresTest do
+  needs IO
+  needs IO.Console
+  needs IO.Clock
+  needs IO.Process
+  needs IO.FileRead
+  needs IO.FileWrite
+  alias Ur.Sim as S
+  alias Ur.Demography as D
+
+  pfn fronts_work(c : Ur.Sim.City, road : Int, d : Int) : Bool do
+    if d == 4 do false else
+      let lot = S.neighbour(road, d)
+      if S.valid(lot) && S.job_slots(c, lot) > 0 do true else fronts_work(c, road, d + 1) end
+    end
+  end
+  pfn kerbs_front_work(c : Ur.Sim.City, field : NativeIntArr, road : Int) : Bool do
+    if road >= S.count() do true else
+      if S.get(field, road) != 0 || fronts_work(c, road, 0) do kerbs_front_work(c, field, road + 1) else false end
+    end
+  end
+  fn main(_cap : Cap(IO)) : Unit do
+    -- A well-liked city draws newcomers and a disliked one sheds residents.
+    Test.assert_eq_int(S.mood_pull(55), 100, "An average city draws ordinary demand")
+    Test.assert_true(S.mood_pull(75) > 100 && S.mood_pull(35) < 100, "Livability scales the draw on newcomers")
+    Test.assert_true(S.mood_strain(55) == 0 && S.mood_strain(25) > 0, "Only a disliked city pushes residents out")
+    let census = D.seed(100)
+    let liked = D.advance_market(census, 100, 60, 0, 1, 40, 0, S.mood_pull(80))
+    let disliked = D.advance_market(census, 100, 60, 0, 1, 40, 0, S.mood_pull(30))
+    Test.assert_true(liked.arrived > disliked.arrived, "More households move to the better-liked city")
+
+    -- Investors come more often to a larger city and less often under heavy business tax.
+    Test.assert_eq_int(S.investment_starts(0), 1, "A hamlet sees one project at a time")
+    Test.assert_true(S.investment_starts(400) > 1, "A town supports several projects at once")
+    let base = S.new()
+    let lot = S.index(10, 19)
+    let zoned = S.act({ base with buildings: NativeArray.set_int(base.buildings, lot, 0),
+      zones: NativeArray.set_int(base.zones, lot, 0), nuisance: NativeArray.set_int(base.nuisance, lot, 3), cash: 10000 }, lot, 117)
+    let st = S.stats(zoned)
+    let light = S.investment_delay(zoned, st.commutes, st.civic, lot)
+    let heavy = S.investment_delay({ zoned with business_rate: 19 }, st.commutes, st.civic, lot)
+    Test.assert_true(heavy.turns > light.turns, "Business tax above the ordinary rate slows workplace investment")
+
+    -- Commutes run to workplaces rather than all to the harbour.
+    let field = S.job_field(base)
+    Test.assert_true(S.get(field, base.harbour) >= 0, "Streets lead to a workplace")
+    Test.assert_true(kerbs_front_work(base, field, 0), "Commutes end at a workplace kerb")
+    let jobless = { base with zones: NativeArray.make_int(S.count(), 1), plants: NativeArray.make_int(S.count(), 0) }
+    Test.assert_true(S.get(S.job_field(jobless), base.harbour) < 0, "A town without work has nowhere to commute")
+
+    -- Skilled newcomers arrive for open posts.
+    let plant = S.index(8, 18)
+    let hiring = { base with cash: 100000, milestones: NativeArray.set_int(base.milestones, 27, 1),
+      plants: NativeArray.set_int(base.plants, plant, 2), facility_staff: NativeArray.set_int(base.facility_staff, plant, 1) }
+    let later = Ur.Clock.advance(hiring, 12)
+    let control = Ur.Clock.advance({ base with cash: 100000 }, 12)
+    Test.assert_true(S.graduates(later, 2) > 0, "Tradespeople move in for open trade posts")
+    Test.assert_eq_int(S.graduates(control, 2), 0, "Nobody brings a trade without a post to fill")
+    Test.assert_true(S.facility_staffed(later, plant) > 0, "Arriving tradespeople staff the plant")
+    Test.assert_true(S.skilled_arrival_share(70) > S.skilled_arrival_share(40), "A better-liked city attracts more skilled newcomers")
+  end
+end

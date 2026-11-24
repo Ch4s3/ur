@@ -1,0 +1,29 @@
+mod CivicExpansionTest do
+  needs IO
+  needs IO.Console
+  needs IO.Clock
+  needs IO.Process
+  needs IO.FileRead
+  needs IO.FileWrite
+  alias Ur.Sim as S
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let base = S.new()
+    let school = S.index(10, 19)
+    let clinic = S.index(10, 20)
+    let plants = NativeArray.set_int(NativeArray.set_int(base.plants, school, 18), clinic, 19)
+    let c = { base with plants: plants, cash: 10000 }
+    let expanded = S.act(S.act(c, school, 109), clinic, 110)
+    Test.assert_eq_int(S.get(expanded.facility_expansion, school), 1, "School classrooms are added")
+    Test.assert_eq_int(S.get(expanded.facility_expansion, clinic), 2, "Clinic wing is added")
+    Test.assert_eq_int(expanded.cash, c.cash - 1300, "Expansions cost money")
+    Test.assert_eq_int(S.parcel_facility_upkeep(expanded, school), S.parcel_facility_upkeep(c, school) + 5, "Classrooms increase upkeep")
+    let shelter = { expanded with plants: NativeArray.set_int(expanded.plants, clinic, 42) }
+    Test.assert_eq_int(Ur.Evacuation.capacity(shelter, clinic), 64, "A dedicated shelter houses 64 households")
+    let game = { city: expanded, cx: 78.0, cz: 151.0, zoom: 52.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(game)) do
+      Ok(loaded) -> Test.assert_true(S.get(loaded.city.facility_expansion, school) == 1 && S.get(loaded.city.facility_expansion, clinic) == 2, "Expansions persist in saves")
+      Err(error) -> panic(error)
+    end
+  end
+end
