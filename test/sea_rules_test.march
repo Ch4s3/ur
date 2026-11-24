@@ -58,18 +58,18 @@ mod SeaRulesTest do
     end
     -- a ferry route across a stretch of water, every water parcel between at [h] cm
     let (route, a, b) = ferry_route(c)
-    let calm = seas_between(route, a, b, 200)
-    Test.assert_eq_int(S.ferry_status(calm, a), 0, "a ferry runs in 2 m seas")
-    Test.assert_eq_int(S.ferry_status(seas_between(route, a, b, 240), a), 1, "it slows in 2.4 m seas (over 75% of its 3 m rating)")
-    let rough = seas_between(route, a, b, 320)
-    Test.assert_eq_int(S.ferry_status(rough, a), 2, "it is suspended in 3.2 m seas")
+    let calm = seas_between(route, a, b, 150)
+    Test.assert_eq_int(S.ferry_status(calm, a), 0, "a ferry runs in 1.5 m seas")
+    Test.assert_eq_int(S.ferry_status(seas_between(route, a, b, 180), a), 1, "it slows in 1.8 m seas (over 75% of its 2.2 m rating)")
+    let rough = seas_between(route, a, b, 240)
+    Test.assert_eq_int(S.ferry_status(rough, a), 2, "it is suspended in 2.4 m seas")
     Test.assert_eq_int(S.ferry_peer(rough, a), -1, "a suspended route links nowhere")
     Test.assert_eq_int(S.ferry_peer(calm, a), b, "a running one links its terminals")
-    let larger = S.act({ seas_between(route, a, b, 400) with cash: 100000 }, a, 122)
-    Test.assert_eq_int(S.ferry_status(larger, b), 1, "a larger ferry runs, slowed, in 4 m seas (rated 4.5 m)")
+    let larger = S.act({ seas_between(route, a, b, 300) with cash: 100000 }, a, 122)
+    Test.assert_eq_int(S.ferry_status(larger, b), 1, "a larger ferry runs, slowed, in 3 m seas (rated 3.5 m)")
     -- a protected harbour counts half the sea at its own end
-    let ends = { calm with sea_heights: NativeArray.set_int(calm.sea_heights, a + 1, 400) }
-    Test.assert_eq_int(S.ferry_status(ends, a), 2, "4 m seas beside a terminal suspend the route")
+    let ends = { calm with sea_heights: NativeArray.set_int(calm.sea_heights, a + 1, 300) }
+    Test.assert_eq_int(S.ferry_status(ends, a), 2, "3 m seas beside a terminal suspend the route")
     let sheltered = S.act({ ends with cash: 100000 }, a, 123)
     Test.assert_true(S.ferry_status(sheltered, a) < 2, "behind a protected harbour the same seas count half")
     -- the founding map counts a ferry as a road: a suspended route cuts the far bank off, and it reconnects when the sea drops
@@ -86,9 +86,9 @@ mod SeaRulesTest do
     let low = { calm with heights: NativeArray.set_int(calm.heights, a, 4) }
     let shore = fn (h : Int) -> { low with sea_heights: (seas_between(low, a, b, h)).sea_heights }
     Test.assert_eq_int(S.sea_surge(shore(0), a), 0, "no sea, no surge")
-    Test.assert_eq_int(S.sea_surge(shore(250), a), 0, "ordinary seas drive no surge")
-    Test.assert_true(S.sea_surge(shore(320), a) > 0, "rough seas do")
-    Test.assert_true(S.sea_surge(shore(380), a) > S.sea_surge(shore(320), a), "and more the rougher they are")
+    Test.assert_eq_int(S.sea_surge(shore(190), a), 0, "ordinary seas drive no surge")
+    Test.assert_true(S.sea_surge(shore(250), a) > 0, "rough seas do")
+    Test.assert_true(S.sea_surge(shore(300), a) > S.sea_surge(shore(250), a), "and more the rougher they are")
     let walled = { shore(350) with seawalls: NativeArray.set_int(low.seawalls, a + 1, 1) }
     Test.assert_eq_int(S.sea_surge(walled, a), 0, "a seawall blocks it")
     Test.assert_eq_int(S.sea_surge(with_storms(shore(350), 0), a), 0, "Calm seas drive no surge")
@@ -96,8 +96,8 @@ mod SeaRulesTest do
     Test.assert_eq_int(S.get(flooded.surface_water, a), S.sea_surge(shore(350), a), "the day's surge stands on the shore")
     Test.assert_true(S.ground_closed(flooded, a), "and closes it")
     -- fishing
-    Test.assert_true(S.rough_fishing(shore(320), a), "3.2 m seas halve the catch")
-    Test.assert_true(!S.rough_fishing(shore(250), a), "2.5 m seas do not")
+    Test.assert_true(S.rough_fishing(shore(250), a), "2.5 m seas halve the catch")
+    Test.assert_true(!S.rough_fishing(shore(200), a), "2 m seas do not")
     -- both terminals of a diagonal crossing rate it alike
     let p = S.index(10, 10)
     let q = S.index(15, 12)
