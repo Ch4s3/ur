@@ -85,12 +85,12 @@ mod Ur.Menu do
     let x = left(w)
     let y = top(h)
     let a = U.rect(a, 0, 0.0, 0.0, w, h, (0.015, 0.036, 0.043, 0.43))
-    let a = U.rect(a, 0, x, y, 344.0, if boot do 362.0 else 482.0 end, (0.05, 0.10, 0.13, 0.98))
+    let a = U.rect(a, 0, x, y, 344.0, if boot do 362.0 else 512.0 end, (0.05, 0.10, 0.13, 0.98))
     let a = U.rect(a, 0, x, y, 344.0, 3.0, (0.35, 0.71, 0.67, 1.0))
     let a = T.text(a, 0, x +. 22.0, y +. 18.0, T.default_font(), 32.0, (0.93, 0.96, 0.94, 1.0), if boot do "UR" else "Game menu" end)
     let a = T.text(a, 0, x +. 23.0, y +. 68.0, T.default_font(), 13.0, (0.65, 0.79, 0.79, 1.0), if boot do "The island region" else "Manage your city" end)
     let a = buttons(a, x +. 22.0, y +. 108.0, boot, saved, confirm, at(mx, my, w, h, boot, saved), sea, 0)
-    let a = if !boot && seed >= 0 do T.text(a, 0, x +. 22.0, y +. 458.0, T.default_font(), 11.0, (0.65, 0.79, 0.79, 1.0), "Region seed  " ++ seed_code(seed)) else a end
+    let a = if !boot && seed >= 0 do T.text(a, 0, x +. 22.0, y +. 488.0, T.default_font(), 11.0, (0.65, 0.79, 0.79, 1.0), "Region seed  " ++ seed_code(seed)) else a end
     T.styled(a, 0, x +. 22.0, y +. (if boot do 298.0 else 426.0 end), T.default_font(), 12.0,
       (0.76, 0.84, 0.82, 1.0), T.with_wrap(T.style(), 300.0), notice)
   end

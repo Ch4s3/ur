@@ -827,11 +827,12 @@ mod Ur.Save do
       Cons(("seabed", enc_array(v.seabed, S.count() - 1, Nil)),
       Cons(("sea_heights", enc_array(v.sea_heights, S.count() - 1, Nil)),
       Cons(("ferry_works", enc_array(v.ferry_works, S.count() - 1, Nil)),
+      Cons(("sea_counted", Json.encode_int(v.sea_counted)),
       Cons(("rain_tanks", enc_array(v.rain_tanks, S.count() - 1, Nil)),
       Cons(("subway_water", enc_array(v.subway_water, S.count() - 1, Nil)),
       Cons(("soil_moisture", Json.encode_int(v.soil_moisture)),
       Cons(("pumping_cost", Json.encode_int(v.pumping_cost)),
-      Cons(("message", Json.encode_string(v.message)), Nil))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+      Cons(("message", Json.encode_string(v.message)), Nil)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
   end
   pfn decode_city(j : Json.JsonValue) : Result(Ur.Sim.City, String) do
     let? freight = match Json.get(j, "freight") do
@@ -1077,6 +1078,10 @@ mod Ur.Save do
     let? ferry_works = optional_array(j, "ferry_works", 15)
     let? rain_tanks = optional_array(j, "rain_tanks", S.rain_tank_capacity())
     let? subway_water = optional_array(j, "subway_water", 72)
+    let? sea_counted = match Json.get(j, "sea_counted") do
+      None -> Ok(2)
+      Some(value) -> integer(value)
+    end
     let? soil = match Json.get(j, "soil_moisture") do
       None -> Ok(70)
       Some(value) -> integer(value)
@@ -1110,7 +1115,7 @@ mod Ur.Save do
     let? raw_message = field(j, "message")
     let? message = string(raw_message)
     if !((harbour == -1 || S.valid(harbour)) && (ferry_start == -1 || S.valid(ferry_start)) && month >= 0 && construction_spend >= 0 && tax >= 0 && tax <= 25 && energy >= 1 && energy <= 12) do Err("Invalid city values.") else
-    Ok(S.restore_rain({ rain_uniform: rain_uniform, watch: S.clamp(watch, 0, 2), rain_now: NativeArray.make_int(S.count(), 0), milestones: milestones, facility_staff: facility_staff, facility_expansion: facility_expansion, founders: S.clamp(founders, 0, 12), world_seed: world_seed, setup: setup, climate_seed: S.clamp(climate_seed, 0, 2147483646), storm_drains: storm_drains, seawalls: seawalls, seabed: seabed, sea_heights: sea_heights, ferry_works: ferry_works, pump_orders: pump_orders, surface_water: surface_water, flood_damage: flood_damage, flood_active: flood_active, rain_tanks: rain_tanks, subway_water: subway_water, soil_moisture: S.clamp(soil, 0, 100), pumping_cost: S.clamp(pumping, 0, 200000),
+    Ok(S.restore_rain({ rain_uniform: rain_uniform, watch: S.clamp(watch, 0, 2), rain_now: NativeArray.make_int(S.count(), 0), milestones: milestones, facility_staff: facility_staff, facility_expansion: facility_expansion, founders: S.clamp(founders, 0, 12), world_seed: world_seed, setup: setup, climate_seed: S.clamp(climate_seed, 0, 2147483646), storm_drains: storm_drains, seawalls: seawalls, seabed: seabed, sea_heights: sea_heights, ferry_works: ferry_works, sea_counted: S.clamp(sea_counted, 0, 4), pump_orders: pump_orders, surface_water: surface_water, flood_damage: flood_damage, flood_active: flood_active, rain_tanks: rain_tanks, subway_water: subway_water, soil_moisture: S.clamp(soil, 0, 100), pumping_cost: S.clamp(pumping, 0, 200000),
       waste_live: waste_live, waste_bins: waste_bins, waste_stock: waste_stock, waste_sites: waste_sites,
       waste_last: waste_last, waste_log: waste_log, waste_runs: waste_runs, council: council, religion: religion, construction_spend: construction_spend, island_exports: island_exports, island_crops: island_crops, island_catch: island_catch,
       shop_imports: shop_imports, harbour: harbour, ferry_start: ferry_start, trash: trash,

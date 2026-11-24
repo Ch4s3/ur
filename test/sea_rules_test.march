@@ -3,7 +3,8 @@ mod SeaRulesTest do
   needs IO.Console
   alias Ur.Sim as S
 
-  pfn with_storms(c : Ur.Sim.City, level : Int) : Ur.Sim.City do { c with setup: NativeArray.set_int(c.setup, 7, level) } end
+  -- the setting at [level], as counted from a day roll
+  pfn with_storms(c : Ur.Sim.City, level : Int) : Ur.Sim.City do { c with setup: NativeArray.set_int(c.setup, 7, level), sea_counted: level } end
 
   -- two coastal land parcels with water between them along x, linked as a ferry route
   pfn ferry_route(c : Ur.Sim.City) : (Ur.Sim.City, Int, Int) do find_route(c, 0) end
@@ -46,6 +47,8 @@ mod SeaRulesTest do
     Test.assert_eq_int(S.sea_at(seas, lot), 200, "Normal counts the sea as it is")
     Test.assert_eq_int(S.sea_at(with_storms(seas, 4), lot), 320, "Harsh counts 1.6 times it")
     Test.assert_eq_int(S.sea_at(with_storms(seas, 0), lot), 100, "Calm counts half")
+    Test.assert_eq_int(S.sea_at(S.set_sea_storms(seas, 4), lot), 200, "a change in play waits for the next day")
+    Test.assert_eq_int(S.sea_at(S.start_sea_day(S.set_sea_storms(seas, 4)), lot), 320, "and counts from it")
     -- saved with the city
     match Ur.Save.decode_session(Ur.Save.encode_session({ game: { city: with_storms(seas, 3), cx: 0.0, cz: 0.0, zoom: 60.0, yaw: 0.55, paused: true, speed: 1 }, evacuation: Nil })) do
       Ok(back) ->
@@ -95,6 +98,11 @@ mod SeaRulesTest do
     -- fishing
     Test.assert_true(S.rough_fishing(shore(320), a), "3.2 m seas halve the catch")
     Test.assert_true(!S.rough_fishing(shore(250), a), "2.5 m seas do not")
+    -- both terminals of a diagonal crossing rate it alike
+    let p = S.index(10, 10)
+    let q = S.index(15, 12)
+    let lumpy = { c with sea_heights: NativeArray.set_int(NativeArray.set_int(NativeArray.make_int(S.count(), 0), S.index(12, 10), 500), S.index(13, 12), 100) }
+    Test.assert_eq_int(S.crossing_sea(lumpy, p, q), S.crossing_sea(lumpy, q, p), "a crossing reads the same sea from either end")
     Authority.must(println("Sea rules checks passed"))
   end
 end
