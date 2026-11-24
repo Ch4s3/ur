@@ -291,21 +291,6 @@ mod Ur do
         seaworks_demo(next, rest, if i >= 0 do Cons(i, used) else used end)
     end
   end
-  -- Choosing a tool that lays, upgrades or needs a buried pipe or power line
-  -- shows that network through the ground while the tool is in hand.
-  pfn water_network_tool(t : Int) : Bool do t == 18 || t == 19 || t == 98 || t == 9 || t == 10 || (t >= 14 && t <= 17) end
-  pfn power_network_tool(t : Int) : Bool do t == 26 || t == 27 || t == 97 || t == 4 || t == 8 || (t >= 20 && t <= 23) || t == 86 end
-  -- the map layer a tool shows while it is in hand, or -1
-  pfn tool_layer(t : Int) : Int do
-    if t == 99 || t == 100 || t == 101 do 33 else if water_network_tool(t) do 1
-    else if power_network_tool(t) do 2
-    else if t == 36 || t == 43 do 3
-    else if (t >= 44 && t <= 47) || t == 62 do 10
-    else if S.grade_tool(t) || t == 54 do 11
-    else if S.timed_street_tool(t) do 27
-    else if S.area_policy_tool(t) do (if t <= 66 do 23 else 24 end)
-    else -1 end end end end end end end end
-  end
   pfn clock_phase(c : Ur.Sim.City) : Float do int_to_float(c.clock_ms) /. 1000.0 end
   pfn stamp_clock(c : Ur.Sim.City, elapsed : Float) : Ur.Sim.City do
     { c with clock_ms: float_to_int(elapsed *. 1000.0) }
@@ -322,7 +307,7 @@ mod Ur do
     Ur.Scene.sync(p.city, c, 0, false, true, S.street_hour(p.elapsed), S.street_hour(clock_phase(c)),
       { before: p.stats.junctions, after: stats.junctions, before_tick: S.signal_tick(p.traffic_time), after_tick: S.signal_tick(clock_phase(c)) }, p.stats.utilities.electric, stats.utilities.electric, { before: Ur.Scene.tunnel_view(p.layer, p.yaw), after: 0 })
     let (ocean, _) = Ur.Scene.ocean(p.ocean, p.city, c, false, true)
-    Ur.Scene.map_layer(c, stats, layer)
+    Ur.Scene.map_layer(c, stats, p.layer, layer)
     Ur.Scene.clear_preview(0, p.preview_chunks)
     Ur.Scene.sidewalk_marker(c, -1, -1, true)
     Ur.Scene.begin_vehicle_lights(S.street_hour(clock_phase(c)))
@@ -503,7 +488,7 @@ mod Ur do
       let cz = maximum(0.0, minimum(S.map_metres_z(), p.cz +. (back *. Math.cos(yaw) -. right *. Math.sin(yaw)) *. pan))
       let keys_zoom = (if Vk.key(61) || Vk.key(334) do 1.0 else 0.0 end) -. (if Vk.key(45) || Vk.key(333) do 1.0 else 0.0 end)
       let over_toolbar = Toolbar.over(mx, my, w, h, p.group, p.page)
-      let scroll = if Ur.Hud.over_panel(mx, my, w, h, p.sidebar_visible) || over_toolbar do 0.0 else Vk.scroll_y() end
+      let scroll = if Ur.Hud.over_panel(mx, my, w, h, p.sidebar_visible) || Ur.Hud.over_utility_panel(mx, my, p.layer, p.tool) || over_toolbar do 0.0 else Vk.scroll_y() end
       let amount = maximum(-1.0, minimum(1.0, scroll *. 0.14 +. keys_zoom *. dt *. 1.2))
       let zoom = maximum(18.0, minimum(S.max_zoom(), p.zoom *. Math.exp(0.0 -. amount)))
       let view = { w: w, h: h, cx: cx, cz: cz, zoom: zoom, yaw: yaw }
@@ -590,13 +575,23 @@ mod Ur do
       let clicked_layer = if p.group == 7 do option else -1 end
       let layer = if clicked_layer < 0 do p.layer else if clicked_layer == p.layer do 0 else clicked_layer end end
       let changed_tool = clicked_tool > 0
-      let layer = if tool_layer(clicked_tool) == 11 && layer == 35 do 35
-        else if tool_layer(clicked_tool) >= 0 do tool_layer(clicked_tool)
-        else if changed_tool && (layer == 1 || layer == 2 || layer == 11 || layer == 35 || layer == 23 || layer == 24 || layer == 27) do 0
-        -- the overlay a tool brought up goes when the tool is put down
-        else if tool == 0 && p.tool > 0 && layer == tool_layer(p.tool) do 0
-        else layer end end end end
+      let utility_page = (clicked_group > 0 || key_group > 0 || clicked_page >= 0) && group == 4
+      let layer = if clicked_tool == 99 || clicked_tool == 100 || clicked_tool == 101 do 33
+        else if utility_page && page == 1 do 1
+        else if utility_page && (page == 0 || page == 4) do 2
+        else if clicked_tool == 36 || clicked_tool == 43 do 3
+        else if (clicked_tool >= 44 && clicked_tool <= 47) || clicked_tool == 62 do 10
+        else if S.grade_tool(clicked_tool) || clicked_tool == 54 do (if layer == 35 do 35 else 11 end)
+        else if S.timed_street_tool(clicked_tool) do 27
+        else if S.area_policy_tool(clicked_tool) do (if clicked_tool <= 66 do 23 else 24 end)
+        else if (changed_tool || (utility_page && page != 5)) && Ur.Layers.is_utility(layer) do 0
+        else if changed_tool && (layer == 11 || layer == 35 || layer == 23 || layer == 24 || layer == 27) do 0
+        -- closing the utilities menu puts its overlay away with the tool
+        else if group == 0 && p.group == 4 && Ur.Layers.is_utility(layer) do 0
+        else layer end end end end end end end end end end end
       let layer = if p.city.harbour >= 0 && pressed(keys, p.keys, 22) do (if p.layer == 35 do 0 else 35 end) else layer end
+      let tool_layer = Ur.Layers.utility_tool(tool)
+      let layer = if p.city.harbour >= 0 && tool_layer > 0 do tool_layer else layer end
       let selected_speed = if mouse && !p.mouse do Ur.Hud.speed_at(mx, my, w) else -1 end
       let cycle_speed = pressed(keys, p.keys, 8)
       let paused = if selected_speed >= 0 do selected_speed == 0
@@ -653,7 +648,9 @@ mod Ur do
       let tool = if S.valid(council_lot) || S.valid(diagnosis_lot) || (sidebar_visible && sidebar_tab == 12) do 0 else tool end
       let point = Ur.Scene.tile_anchor(c, p.popup, w, h, cx, cz, zoom, yaw)
       let over_popup = tool == 0 && Ur.Hud.over_tile_popup(w, h, point, mx, my)
-      let over_ui = popup_temple || over_popup || truck_popup_over || citizen_panel || planner_hit >= 0 || over_toolbar || Toolbar.over(mx, my, w, h, group, page) || Ur.Hud.over_panel(mx, my, w, h, p.sidebar_visible) || Ur.Hud.over_starter(p.stats.startup_step, sidebar_visible, mx, my)
+      let over_ui = popup_temple || over_popup || truck_popup_over || citizen_panel || planner_hit >= 0 || over_toolbar || Toolbar.over(mx, my, w, h, group, page) ||
+        Ur.Hud.over_panel(mx, my, w, h, p.sidebar_visible) || Ur.Hud.over_utility_panel(mx, my, layer, tool) ||
+        Ur.Hud.over_starter(p.stats.startup_step, sidebar_visible, mx, my)
       let hovered = if over_ui do -1 else Ur.Scene.pick(c, mx, my, w, h, cx, cz, zoom, yaw, Ur.Scene.tunnel_view(layer, yaw)) end
       let temple_selected = click && !over_ui && sidebar_visible && (sidebar_tab == 14 || sidebar_tab == 15) && S.temple_tier(c, hovered) > 0
       let sidebar_tab = if temple_selected do 15 else sidebar_tab end
@@ -914,7 +911,7 @@ mod Ur do
           Ur.Scene.clear_preview(0, p.preview_chunks)
           0
         else if guided || Build.street(preview_tool) do Ur.Scene.road_preview(c, preview, draft, preview_tool, p.preview_chunks)
-        else Ur.Scene.preview(c, preview.tiles, p.preview_chunks, preview.valid) end end
+        else Ur.Scene.preview(c, preview.tiles, p.preview_chunks, preview.valid, Ur.Layers.utility_route(preview_tool)) end end
         Ur.Scene.sidewalk_marker(c, if sidewalk do hovered else -1 end, spot, preview.valid && preview.changed)
         chunks
       else p.preview_chunks end
@@ -1030,7 +1027,7 @@ mod Ur do
       Ur.Scene.citizen_vehicles(c, walk_map, Ur.Citizens.visible_actors(citizens), Ur.Citizens.visible_actors(p.shown), night, !scene_changed && p.frame > 0, section.after > 0)
       let truck_selected = truck_selected && sanitation.driver >= 0 && sanitation.pickup == p.sanitation.pickup && !undone
       let citizen_stats = Ur.Citizens.indexed_counts(c, citizens)
-      if layer != p.layer || (layer > 0 && (flood_day || religion_event)) || (midnight && (layer == 29 || layer == 30 || layer == 26 || layer == 4 || layer == 3 || layer == 9 || layer == 32 || layer == 33 || layer == 34 || Ur.Layers.is_utility(layer))) || (layer > 0 && (paint || undone || policy_changed || day_changed || (due && (layer == 3 || layer == 4 || layer == 9 || Ur.Layers.is_utility(layer) || layer >= 12)))) do Ur.Scene.map_layer(c, st, layer) else () end
+      if layer != p.layer || (stats_landed && Ur.Layers.is_utility(layer)) || (layer > 0 && (flood_day || religion_event)) || (midnight && (layer == 29 || layer == 30 || layer == 26 || layer == 4 || layer == 3 || layer == 9 || layer == 32 || layer == 33 || layer == 34 || Ur.Layers.is_utility(layer))) || (layer > 0 && (paint || undone || policy_changed || day_changed || (due && (layer == 3 || layer == 4 || layer == 9 || Ur.Layers.is_utility(layer) || layer >= 12)))) do Ur.Scene.map_layer(c, st, p.layer, layer) else () end
       Ur.Scene.camera(cx, cz, zoom, if h > 0.0 do w /. h else 1.6 end, yaw)
       let weather = S.current_weather(c)
       let weather_time = int_to_float(c.month * S.days_per_month() + c.calendar_day) *. S.day_seconds() +. elapsed
@@ -1395,7 +1392,7 @@ mod Ur do
       let signal_tick = S.signal_tick(clock_phase(c))
       Ur.Scene.sync(c, c, 0, true, false, 0, S.street_hour(clock_phase(c)),
         { before: stats.junctions, after: stats.junctions, before_tick: signal_tick, after_tick: signal_tick }, stats.utilities.electric, stats.utilities.electric, { before: 0, after: Ur.Scene.tunnel_view(layer, 0.55) })
-      if layer > 0 do Ur.Scene.map_layer(c, stats, layer) else () end
+      if layer > 0 do Ur.Scene.map_layer(c, stats, 0, layer) else () end
       let civic_demo = demo == 5
       let streets_demo = demo >= 6 && demo <= 10
       let save_path = Ur.Save.path()

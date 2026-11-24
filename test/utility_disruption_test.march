@@ -33,10 +33,22 @@ mod UtilityDisruptionTest do
       zones: zones, buildings: buildings, empty_homes: NativeArray.set_int(zero, vacant, 4), plants: plants,
       tax: 0, energy: 2, immigration: 0 }
     let healthy = days(town, S.utility_sample_days())
+    let healthy_stats = S.stats(healthy)
+    let beside_pipe = S.index(8, 19)
+    let beyond_pipe = S.index(7, 19)
+    Test.assert_eq_int(Ur.Layers.material(healthy, healthy_stats, 1, beside_pipe), 12, "water reach includes an empty parcel beside a supplied pipe")
+    Test.assert_eq_int(Ur.Layers.material(healthy, healthy_stats, 1, beyond_pipe), -1, "water reach ends one parcel from a pipe")
+    Test.assert_eq_int(Ur.Layers.material(healthy, healthy_stats, 2, home), 20, "electricity mode marks a powered home")
     Test.assert_eq_int(S.get(healthy.utility_service, business), 1, "an operating firm has a service history")
     Test.assert_eq_int(S.get(healthy.utility_service, home), 1, "occupied housing has a service history")
     let keys = S.households_at(healthy, home)
     let cut = { healthy with grid: NativeArray.set_int(healthy.grid, feeder, 0) }
+    let cut_stats = S.stats(cut)
+    Test.assert_eq_int(Ur.Layers.material(cut, cut_stats, 2, home), 30, "a home beside a disconnected line is marked off grid")
+    Test.assert_eq_int(Ur.Layers.material(cut, cut_stats, 2, employer), 20, "a home district outage leaves the connected branch marked on grid")
+    let electric = healthy_stats.utilities.electric
+    let limited = { electric with delivered: NativeArray.set_int(electric.delivered, home, 0) }
+    Test.assert_eq_int(Ur.Layers.power_material(healthy, limited, home), 10, "a connected home with unmet demand is marked as a shortfall")
     let short = days(cut, S.utility_sample_days() * 2)
     Test.assert_eq_int(S.utility_disruption(short, home), 10, "a local outage accumulates even with generation elsewhere")
     Test.assert_eq_int(S.utility_disruption(short, employer), 0, "a separate branch keeps service")

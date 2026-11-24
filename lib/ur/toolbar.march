@@ -358,7 +358,7 @@ mod Ur.Toolbar do
     let prerequisite = if group == 7 || hovered_tool <= 0 do "" else S.construction_requirement(c, hovered_tool) end
     let status = if c.harbour < 0 do c.message
       else if prerequisite != "" do prerequisite ++ "."
-      else if group == 7 && layer > 0 do Ur.Layers.legend(layer)
+      else if group == 7 && layer > 0 && !Ur.Layers.is_utility(layer) do Ur.Layers.legend(layer)
       else c.message end end end
     let a = text(a, 14.0, h -. 23.0, 11.5, status, true)
     let a = if w >= 1250.0 do

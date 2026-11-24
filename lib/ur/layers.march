@@ -40,7 +40,9 @@ mod Ur.Layers do
   end
   fn legend(layer : Int) : String do
     match layer do
-      1 | 2 | 31 -> "Cyan: spare capacity · Amber: busy · Red: full · Gray: no supply or outlet"
+      1 -> "Blue reach · Cyan spare · Amber busy · Red full or short · Gray dry"
+      2 -> "Lines: cyan spare · Amber busy · Red full · Gray disconnected"
+      31 -> "Cyan spare · Amber busy · Red full or short · Gray no outlet"
       3 -> "Cyan running / amber unfinished / green near jobs"
       4 -> "Faint amber: low pollution. Orange to red: higher concentrations."
       5 -> "Blue marks groundwater. Fainter color follows the aquifer edge."
@@ -101,15 +103,49 @@ mod Ur.Layers do
     if layer == 2 do st.utilities.electric else if layer == 31 do st.utilities.sewer else st.utilities.water end end
   end
   fn is_utility(layer : Int) : Bool do layer == 1 || layer == 2 || layer == 31 end
-  fn utility_caption(st : Ur.Sim.Stats, layer : Int, lot : Int) : String do
+  fn utility_tool(tool : Int) : Int do
+    match tool do
+      9 | 10 | 14 | 15 | 16 | 18 | 19 | 98 -> 1
+      4 | 8 | 20 | 21 | 22 | 23 | 26 | 27 | 86 | 97 -> 2
+      17 -> 31
+      _ -> 0
+    end
+  end
+  fn utility_route(tool : Int) : Bool do
+    tool == 18 || tool == 19 || tool == 26 || tool == 27 || S.utility_upgrade(tool)
+  end
+  pfn connected(report : Ur.Sim.UtilityDelivery, tap : Int) : Bool do
+    S.valid(tap) && S.get(report.connections, tap) >= 0
+  end
+  fn power_material(c : Ur.Sim.City, report : Ur.Sim.UtilityDelivery, lot : Int) : Int do
+    let demand = S.get(report.demand, lot)
+    if demand == 0 && S.get(c.buildings, lot) == 0 && S.get(c.plants, lot) == 0 do -1
+    else if !connected(report, N.tap(report.flow, lot, 0)) do 30
+    else if S.get(report.delivered, lot) < demand do 10
+    else 20 end end end
+  end
+  fn utility_caption(c : Ur.Sim.City, st : Ur.Sim.Stats, layer : Int, lot : Int) : String do
     let report = utility_layer(st, layer)
     let capacity = N.capacity(report.flow, lot)
     let demand = S.get(report.demand, lot)
-    if capacity > 0 do
-      name(layer) ++ " · " ++ int_to_string(N.used(report.flow, lot)) ++ " / " ++ int_to_string(capacity) ++ " on segment"
+    let tap = N.tap(report.flow, lot, 0)
+    let live = connected(report, tap)
+    let served = int_to_string(S.get(report.delivered, lot)) ++ "/" ++ int_to_string(demand)
+    let segment = int_to_string(N.used(report.flow, lot)) ++ "/" ++ int_to_string(capacity) ++ " on segment"
+    let power = if layer == 2 do power_material(c, report, lot) else -1 end
+    let status = if power == 30 do
+      if S.valid(tap) do "Off grid · Line has no live source" else "Off grid · No line within reach" end
+    else if power == 10 do "On grid · Power shortfall"
+    else if power == 20 do "On grid" else "" end end end
+    if status != "" do
+      status ++ (if demand > 0 do " · " ++ served ++ " power" else "" end) ++ (if capacity > 0 do " · " ++ segment else "" end)
+    else if capacity > 0 do
+      segment ++ (if live do "" else if layer == 31 do " · No outlet" else " · No live source" end end)
     else if demand > 0 do
-      name(layer) ++ " · " ++ int_to_string(S.get(report.delivered, lot)) ++ " / " ++ int_to_string(demand) ++ " served here"
-    else "" end end
+      served ++ " served here" ++ (if layer == 1 && !live do (if S.valid(tap) do " · Pipe has no supply" else " · No pipe within reach" end) else "" end)
+    else if layer == 1 && S.get(c.heights, lot) > 0 do
+      if live do "Within reach of a supplied pipe" else if S.valid(tap) do "Nearby pipe has no supply" else "Out of pipe reach" end end
+    else "" end end end end
   end
   -- Rainfall strength on each parcel (0..63) for the blended overlay: today's
   -- peak where it has already fallen, deeper for heavier rain, and a faint
@@ -147,12 +183,15 @@ mod Ur.Layers do
         if S.occupied_homes(c, i) == 0 do -1 else if saved < 100 do 6 else if saved < 400 do 10 else if saved < 1200 do 11 else 20 end end end end
       1 | 2 | 31 ->
         let report = utility_layer(st, layer)
-        let capacity = N.capacity(report.flow, i)
-        let demand = S.get(report.demand, i)
-        if capacity == 0 do
-          if demand > S.get(report.delivered, i) do 6 else -1 end
-        else if S.get(report.connections, i) < 0 do 17
+        let tier = S.get(if layer == 2 do c.grid else c.pipes end, i)
+        if tier == 0 do
+          if layer == 2 do power_material(c, report, i)
+          else if S.get(report.demand, i) > S.get(report.delivered, i) do 6
+          else if layer == 1 && land && connected(report, N.tap(report.flow, i, 0)) do 12
+          else -1 end end end
+        else if N.capacity(report.flow, i) == 0 || !connected(report, i) do 17
         else
+          let capacity = S.utility_capacity(if layer == 2 do 0 else if layer == 1 do 1 else 2 end end, tier)
           let used = N.used(report.flow, i)
           if used >= capacity do 6 else if used * 5 >= capacity * 4 do 10 else 20 end end
         end end
