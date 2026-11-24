@@ -1,7 +1,7 @@
 # Sea gameplay (water slice 3) — design draft
 
-Date: 2026-11-23 · Status: **draft for discussion**; open questions are
-marked ❓
+Date: 2026-11-23 · Status: **draft**: storm timing decided; my calls are
+marked (call), for review
 
 ## Intent
 
@@ -84,17 +84,32 @@ the water is what the simulation uses.
 | Larger ferry | route runs in up to about 3 m seas, more capacity | new route upgrade |
 | Dredged channel | lets a larger ferry use a shallow approach | dredge (slice 2) |
 
-## Open questions
+**6. Sea storms setting (decided).** Storm pressure applies **from the
+start**, and it's easy to set and tune:
+- **New game:** an eighth setup row, **Sea storms**: Calm, Mild, Normal
+  (default), Rough, Harsh (`setup[7]`, 0..4, saved with the city like the
+  other setup rows).
+- **During play:** the same value can be changed any time from the game
+  menu, on a Sea page beside Lighting, and takes effect at the next day.
+- **Effect:** every sea-driven consequence reads one multiplier on the
+  wave height counted:
+  - Calm 0.5, Mild 0.75, Normal 1.0, Rough 1.25, Harsh 1.6;
+  - Calm also turns surge flooding off.
+  - The drawn sea doesn't change, only what the city counts.
 
-- ❓ **When does storm pressure start?** From the first season, growing with
-  the city, or slowed-only at first with full suspensions later? This
-  changes the early game most.
-- ❓ Should larger ferries need a dredged approach (a minimum depth at both
-  terminals), tying slices 2 and 3 together, or is that too fiddly?
-- ❓ Do rough seas affect anything else, such as fishing (`island_catch`) or
-  freight shipments?
-- ❓ How often should cut-offs happen at the start? A target such as "an
-  unprotected ferry is suspended a few days a season" sets the thresholds.
+## Decided or called
+
+- **Storm timing:** from the start, configurable (above). *(decided)*
+- **Larger ferries don't need a dredged approach in this slice.** Dredging
+  matters through the waves (a channel calms or focuses them). A minimum
+  draft can come later if it plays well. *(call)*
+- **Fishing:** rough days (sea above 2 m at the fishing grounds) cut that
+  day's catch in half. **Freight:** follows ferry suspension, since freight
+  already rides the ferry routes. *(call)*
+- **Cut-off frequency target** at Normal: an unprotected, exposed ferry is
+  suspended about 3–5 days a season, and a sheltered one rarely. Thresholds
+  are tuned to that with a seasonal replay (`UR_*_REPLAY` style), not
+  guessed. *(call)*
 
 ## Not in this slice
 
