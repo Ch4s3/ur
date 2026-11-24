@@ -11,6 +11,35 @@ mod Ur.Hud do
   pfn panel(u : Strata.Ui.Ui, x : Float, y : Float, w : Float, h : Float) : Strata.Ui.Ui do
     U.rect(u, 0, x, y, w, h, (0.055, 0.105, 0.13, 0.96))
   end
+  pfn utility_key(u : Strata.Ui.Ui, x : Float, name : String, color : (Float, Float, Float, Float)) : Strata.Ui.Ui do
+    label(U.rect(u, 0, x, 123.0, 9.0, 9.0, color), x +. 14.0, 119.0, 11.0, name, true)
+  end
+  pfn utility_height(layer : Int, tool : Int) : Float do
+    44.0 +. (if layer == 2 do 18.0 else 0.0 end) +. (if Ur.Layers.utility_route(tool) do 18.0 else 0.0 end)
+  end
+  fn over_utility_panel(x : Float, y : Float, layer : Int, tool : Int) : Bool do
+    Ur.Layers.is_utility(layer) && x >= 18.0 && x < 418.0 && y >= 116.0 && y < 116.0 +. utility_height(layer, tool)
+  end
+  pfn utility_panel(u : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, layer : Int, tool : Int, hover : Int) : Strata.Ui.Ui do
+    let route = Ur.Layers.utility_route(tool)
+    let height = utility_height(layer, tool)
+    let a = panel(u, 18.0, 116.0, 400.0, height)
+    let detail_y = if layer == 2 do 155.0 else 137.0 end
+    let a = if layer == 2 do
+      let a = utility_key(a, 26.0, "+ On grid", (0.49, 0.86, 0.84, 1.0))
+      let a = utility_key(a, 116.0, "− Power shortfall", (0.98, 0.77, 0.31, 1.0))
+      utility_key(a, 260.0, "× Off grid", (0.99, 0.34, 0.27, 1.0))
+    else label(a, 26.0, 119.0, 11.0, Ur.Layers.legend(layer), true) end
+    let a = if layer == 2 do label(a, 26.0, 137.0, 11.0, Ur.Layers.legend(layer), false) else a end
+    let a = if route do
+      label(a, 26.0, detail_y +. 18.0, 11.0, "Drag across tiles · Release to apply · Right-click to cancel", false)
+    else a end
+    let caption = if S.valid(hover) do Ur.Layers.utility_caption(c, st, layer, hover) else "" end
+    let detail = if caption != "" do caption
+      else if layer == 2 do "Point at a building or line to see its power status."
+      else "Point at a parcel or pipe to check service." end end
+    label(a, 26.0, detail_y, 11.0, detail, caption != "")
+  end
   pfn menu_width(w : Float) : Float do if w < 752.0 do w -. 32.0 else 720.0 end end
   pfn menu_x(w : Float) : Float do (w -. menu_width(w)) *. 0.5 end
   pfn menu_y(h : Float) : Float do
@@ -1788,8 +1817,9 @@ mod Ur.Hud do
     let y = y -. planner_top(w, h)
     if x < 0.0 || x >= 422.0 || y < 0.0 || y >= (if S.grade_tool(tool) do 172.0 else if mode == 0 do 36.0 else if mode == 4 do 144.0 else 120.0 end end end) do -1
     else if S.grade_tool(tool) && y < 32.0 do if x < 102.0 do 50 else if x < 204.0 do 51 else if x < 306.0 do 52 else 0 end end end
-    else if !S.grade_tool(tool) && y < 32.0 do
-      if x < 90.0 do 1 else if x < 174.0 do 2 else if x < 242.0 do 3 else if x < 304.0 do 4 else 5 end end end end
+    else if !S.grade_tool(tool) && y >= 4.0 && y < 29.0 do
+      if x < 76.0 do 11 else if x < 146.0 do 1 else if x < 237.0 do 2
+      else if x < 291.0 do 3 else if x < 345.0 do 4 else 5 end end end end end
     else if y >= 38.0 && y < 66.0 do
       if x < 102.0 do 6 else if x < 180.0 do 7 else if x < 266.0 do 8
       else if mode == 3 && !S.grade_tool(tool) do (if x < 306.0 do 9 else if x >= 382.0 do 10 else 0 end end)
@@ -1797,8 +1827,10 @@ mod Ur.Hud do
     else 0 end end end end
   end
   pfn planner_button(u : Strata.Ui.Ui, x : Float, y : Float, width : Float, name : String, enabled : Bool) : Strata.Ui.Ui do
-    let colour = if enabled do (0.15, 0.29, 0.33, 1.0) else (0.071, 0.14, 0.17, 1.0) end
-    label(U.rect(u, 0, x, y, width -. 3.0, 25.0, colour), x +. 7.0, y +. 5.0, 11.0, name, enabled)
+    let colour = if enabled do (0.14, 0.31, 0.33, 1.0) else (0.071, 0.14, 0.17, 1.0) end
+    let u = U.rect(u, 0, x, y, width -. 3.0, 25.0, colour)
+    let u = if enabled do U.rect(u, 0, x, y +. 23.0, width -. 3.0, 2.0, (0.38, 0.78, 0.72, 1.0)) else u end
+    label(u, x +. 7.0, y +. 5.0, 11.0, name, enabled)
   end
   pfn crossing_profile(u : Strata.Ui.Ui, p : Ur.Build.Preview, a : Int, b : Int, x : Float, y : Float, i : Int) : Strata.Ui.Ui do
     if i >= 46 do u else
@@ -1836,15 +1868,16 @@ mod Ur.Hud do
       let u = planner_button(u, x +. 104.0, y +. 4.0, 98.0, "Underpass", tool == 51)
       planner_button(u, x +. 206.0, y +. 4.0, 104.0, "Road tunnel", tool == 52)
     else
-      let u = planner_button(u, x +. 4.0, y +. 4.0, 86.0, "Quick street", d.mode == 0)
-      let u = planner_button(u, x +. 90.0, y +. 4.0, 84.0, "Plan street", d.mode == 1)
-      let u = planner_button(u, x +. 174.0, y +. 4.0, 68.0, "Block", d.mode == 2)
-      let u = planner_button(u, x +. 242.0, y +. 4.0, 62.0, "Grid", d.mode == 3)
-      planner_button(u, x +. 304.0, y +. 4.0, 114.0, "Replace street", d.mode == 4)
+      let u = planner_button(u, x +. 4.0, y +. 4.0, 72.0, "Straight", d.mode == Ur.Build.straight_mode())
+      let u = planner_button(u, x +. 76.0, y +. 4.0, 70.0, "Quick bend", d.mode == 0)
+      let u = planner_button(u, x +. 146.0, y +. 4.0, 91.0, "Waypoints", d.mode == 1)
+      let u = planner_button(u, x +. 237.0, y +. 4.0, 54.0, "Block", d.mode == 2)
+      let u = planner_button(u, x +. 291.0, y +. 4.0, 54.0, "Grid", d.mode == 3)
+      planner_button(u, x +. 345.0, y +. 4.0, 73.0, "Replace", d.mode == 4)
     end
     if height == 36.0 do u else
       let points = List.length(d.points)
-      let ready = points >= (if crossing do 2 else 1 end) && p.valid && p.changed
+      let ready = points >= Ur.Build.confirm_points(tool, d.mode) && p.valid && p.changed
       let u = planner_button(u, x +. 4.0, y +. 38.0, 98.0, "Build [Enter]", ready)
       let u = planner_button(u, x +. 102.0, y +. 38.0, 78.0, "Cancel", points > 0)
       let u = planner_button(u, x +. 180.0, y +. 38.0, 86.0, "Snap [N]", d.snap)
@@ -1854,9 +1887,10 @@ mod Ur.Hud do
         planner_button(u, x +. 382.0, y +. 38.0, 36.0, "+", true)
       else u end
       let help = if crossing do "Set two portals on the same axis. Drag either to adjust."
-        else if d.mode == 1 do "Click waypoints · Drag to move · Alt previews bend · R flips · Shift bypasses snap"
+        else if d.mode == Ur.Build.straight_mode() do "Click a start and end · Enter builds and continues from the end"
+        else if d.mode == 1 do "Click to add pins · Drag to move · R flips bend · Right-click removes last"
         else if d.mode == 4 do "Click a street between junctions. Click farther along to extend."
-        else "Drag out the corners. Drag either corner to resize." end end end
+        else "Drag out the corners. Drag either corner to resize." end end end end
       let u = label(u, x +. 8.0, y +. 70.0, 10.0, help, false)
       let quote = if S.valid(Ur.Build.start_point(d)) do Ur.Build.quote(p, tool) else "" end
       let u = if quote == "" do u else
@@ -1952,7 +1986,7 @@ mod Ur.Hud do
       else if layer == 27 do "Point at a street to see its schedule." else "" end end end end
       label(a, 24.0, 138.0, 11.0, detail, false)
     else a end
-    let a = if S.valid(hover) && S.public_trade(c, hover) && !sidebar_visible do
+    let a = if S.valid(hover) && S.public_trade(c, hover) && !sidebar_visible && !Ur.Layers.is_utility(layer) do
       let open = S.business_open(c, hover, hour)
       let hours = business_hours(c, hover)
       label(panel(a, 18.0, 170.0, 326.0, 30.0), 24.0, 176.0, 11.0,
@@ -1968,8 +2002,7 @@ mod Ur.Hud do
     let a = label(a, w -. 225.0, 99.0, 12.0, "Undo  [Z]", can_undo)
     let a = label(panel(a, w -. 192.0, 130.0, 174.0, 45.0), w -. 180.0, 135.0, 11.0, S.weather_name(weather) ++ " · " ++ int_to_string(S.temperature(c)) ++ " °C", true)
     let a = label(a, w -. 180.0, 154.0, 10.0, "Soil moisture " ++ int_to_string(c.soil_moisture) ++ "%   ·   Forecast >", false)
-    let caption = if Ur.Layers.is_utility(layer) && S.valid(hover) do Ur.Layers.utility_caption(st, layer, hover) else "" end
-    let a = if caption != "" do label(panel(a, 18.0, 116.0, 425.0, 37.0), 26.0, 128.0, 12.0, caption, true) else a end
+    let a = if Ur.Layers.is_utility(layer) do utility_panel(a, c, st, layer, chosen, hover) else a end
     Ur.Toolbar.draw(a, if preview == "" do c else { c with message: preview } end, chosen, group, page, layer, mx, my)
   end
 end

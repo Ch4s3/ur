@@ -715,12 +715,28 @@ mod Ur.Save do
     let (_, valid) = keys_are_valid
     if valid do Ok({ next: next, addresses: addresses }) else Err("Invalid household identities.") end
   end
+  pfn encode_public_work(work : Ur.Sim.PublicWork) : Json.JsonValue do
+    encode_ints([work.lot, work.tool, work.remaining, work.god])
+  end
+  pfn decode_public_work(value : Json.JsonValue) : Result(Ur.Sim.PublicWork, String) do
+    match value do
+      Json.Array([a, b, c, d]) ->
+        let? lot = integer(a)
+        let? tool = integer(b)
+        let? remaining = integer(c)
+        let? god = integer(d)
+        if S.valid(lot) && S.public_building_tool(tool) && remaining > 0 && remaining <= 14 && god >= 0 && god <= 4 do
+          Ok({ lot: lot, tool: tool, remaining: remaining, god: god })
+        else Err("Invalid public construction project.") end
+      _ -> Err("Invalid public construction project.")
+    end
+  end
   pfn encode_city(v : Ur.Sim.City) : Json.JsonValue do
     let freight = match v.freight do
       Some(route) -> [("freight", encode_freight(route))]
       None -> Nil
     end
-    let fields = List.append([("facility_expansion", enc_array(v.facility_expansion, S.count() - 1, Nil)), ("milestones", enc_array(v.milestones, 63, Nil)), ("facility_staff", enc_array(v.facility_staff, S.count() - 1, Nil)), ("founders", Json.encode_int(v.founders)), ("world_seed", Json.encode_int(v.world_seed)), ("world_setup", enc_array(v.setup, NativeArray.length_int(v.setup) - 1, Nil)), ("utility_service", enc_array(v.utility_service, S.count() - 1, Nil))], freight)
+    let fields = List.append([("public_works", Json.encode_array(List.map(v.public_works, encode_public_work))), ("facility_expansion", enc_array(v.facility_expansion, S.count() - 1, Nil)), ("milestones", enc_array(v.milestones, 63, Nil)), ("facility_staff", enc_array(v.facility_staff, S.count() - 1, Nil)), ("founders", Json.encode_int(v.founders)), ("world_seed", Json.encode_int(v.world_seed)), ("world_setup", enc_array(v.setup, NativeArray.length_int(v.setup) - 1, Nil)), ("utility_service", enc_array(v.utility_service, S.count() - 1, Nil))], freight)
     Json.encode_object(List.append(Cons(("religion", encode_religion(v.religion)), fields),
       Cons(("bus_fare", Json.encode_int(v.bus_fare)),
       Cons(("waste_live", Json.encode_bool(v.waste_live)),
@@ -1124,6 +1140,10 @@ mod Ur.Save do
       None -> Ok(0)
       Some(value) -> integer(value)
     end
+    let? public_works = match Json.get(j, "public_works") do
+      None -> Ok(Nil)
+      Some(value) -> items(value, decode_public_work, S.count())
+    end
     let? pump_orders = optional_array(j, "pump_orders", 1)
     let? surface_water = optional_array(j, "surface_water", 16)
     let? flood_damage = optional_array(j, "flood_damage", 10)
@@ -1183,7 +1203,7 @@ mod Ur.Save do
     let? raw_message = field(j, "message")
     let? message = string(raw_message)
     if !((harbour == -1 || S.valid(harbour)) && (ferry_start == -1 || S.valid(ferry_start)) && month >= 0 && construction_spend >= 0 && tax >= 0 && tax <= 25 && energy >= 1 && energy <= 12) do Err("Invalid city values.") else
-    Ok(S.restore_rain({ rain_uniform: rain_uniform, watch: S.clamp(watch, 0, 2), rain_now: NativeArray.make_int(S.count(), 0), storms: storms, air: air, milestones: milestones, facility_staff: facility_staff, facility_expansion: facility_expansion, founders: S.clamp(founders, 0, 12), world_seed: world_seed, setup: setup, climate_seed: S.clamp(climate_seed, 0, 2147483646), storm_drains: storm_drains, seawalls: seawalls, seabed: seabed, sea_heights: sea_heights, ferry_works: ferry_works, sea_counted: S.clamp(sea_counted, 0, 4), pump_orders: pump_orders, surface_water: surface_water, flood_damage: flood_damage, flood_active: flood_active, rain_tanks: rain_tanks, subway_water: subway_water, soil_moisture: S.clamp(soil, 0, 100), pumping_cost: S.clamp(pumping, 0, 200000),
+    Ok(S.restore_rain({ public_works: public_works, rain_uniform: rain_uniform, watch: S.clamp(watch, 0, 2), rain_now: NativeArray.make_int(S.count(), 0), storms: storms, air: air, milestones: milestones, facility_staff: facility_staff, facility_expansion: facility_expansion, founders: S.clamp(founders, 0, 12), world_seed: world_seed, setup: setup, climate_seed: S.clamp(climate_seed, 0, 2147483646), storm_drains: storm_drains, seawalls: seawalls, seabed: seabed, sea_heights: sea_heights, ferry_works: ferry_works, sea_counted: S.clamp(sea_counted, 0, 4), pump_orders: pump_orders, surface_water: surface_water, flood_damage: flood_damage, flood_active: flood_active, rain_tanks: rain_tanks, subway_water: subway_water, soil_moisture: S.clamp(soil, 0, 100), pumping_cost: S.clamp(pumping, 0, 200000),
       waste_live: waste_live, waste_bins: waste_bins, waste_stock: waste_stock, waste_sites: waste_sites,
       waste_last: waste_last, waste_log: waste_log, waste_runs: waste_runs, council: council, religion: religion, construction_spend: construction_spend, island_exports: island_exports, island_crops: island_crops, island_catch: island_catch,
       shop_imports: shop_imports, harbour: harbour, ferry_start: ferry_start, trash: trash,

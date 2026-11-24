@@ -60,7 +60,9 @@ mod Ur do
     end end
   end
   pfn keymask(i : Int, mask : Int) : Int do
-    if i >= 23 do mask else keymask(i + 1, if Vk.key(keycode(i)) do int_or(mask, int_shl(1, i)) else mask end) end
+    if i == 23 do
+      if Vk.mouse_button(1) do int_or(mask, int_shl(1, i)) else mask end
+    else keymask(i + 1, if Vk.key(keycode(i)) do int_or(mask, int_shl(1, i)) else mask end) end
   end
   pfn pressed(now : Int, old : Int, i : Int) : Bool do int_and(now, int_shl(1, i)) != 0 && int_and(old, int_shl(1, i)) == 0 end
   pfn seed_keys(i : Int, mask : Int) : Int do
@@ -152,7 +154,7 @@ mod Ur do
     let seas = Ur.Sea.daily_seas(c, Ur.Sea.next_height(c), sea.exposure, sea.swell)
     let next = S.advance_day_with_traffic({ c with waste_runs: runs, sea_heights: seas }, traffic)
     let next = if flood_drill do Ur.Scenario.flood_backup_turn(next) else next end
-    let day = Ur.Clock.close_day(c.month, next, traffic, true)
+    let day = Ur.Clock.close_day(c, next, traffic, true)
     let stats = match day.stats do
       Some(st) -> st
       None -> S.stats(day.city)
@@ -307,7 +309,7 @@ mod Ur do
     Ur.Scene.sync(p.city, c, 0, false, true, S.street_hour(p.elapsed), S.street_hour(clock_phase(c)),
       { before: p.stats.junctions, after: stats.junctions, before_tick: S.signal_tick(p.traffic_time), after_tick: S.signal_tick(clock_phase(c)) }, p.stats.utilities.electric, stats.utilities.electric, { before: Ur.Scene.tunnel_view(p.layer, p.yaw), after: 0 })
     let (ocean, _) = Ur.Scene.ocean(p.ocean, p.city, c, false, true)
-    Ur.Scene.map_layer(c, stats, layer)
+    Ur.Scene.map_layer(c, stats, p.layer, layer)
     Ur.Scene.clear_preview(0, p.preview_chunks)
     Ur.Scene.sidewalk_marker(c, -1, -1, true)
     Ur.Scene.begin_vehicle_lights(S.street_hour(clock_phase(c)))
@@ -488,7 +490,7 @@ mod Ur do
       let cz = maximum(0.0, minimum(S.map_metres_z(), p.cz +. (back *. Math.cos(yaw) -. right *. Math.sin(yaw)) *. pan))
       let keys_zoom = (if Vk.key(61) || Vk.key(334) do 1.0 else 0.0 end) -. (if Vk.key(45) || Vk.key(333) do 1.0 else 0.0 end)
       let over_toolbar = Toolbar.over(mx, my, w, h, p.group, p.page)
-      let scroll = if Ur.Hud.over_panel(mx, my, w, h, p.sidebar_visible) || over_toolbar do 0.0 else Vk.scroll_y() end
+      let scroll = if Ur.Hud.over_panel(mx, my, w, h, p.sidebar_visible) || Ur.Hud.over_utility_panel(mx, my, p.layer, p.tool) || over_toolbar do 0.0 else Vk.scroll_y() end
       let amount = maximum(-1.0, minimum(1.0, scroll *. 0.14 +. keys_zoom *. dt *. 1.2))
       let zoom = maximum(18.0, minimum(S.max_zoom(), p.zoom *. Math.exp(0.0 -. amount)))
       let view = { w: w, h: h, cx: cx, cz: cz, zoom: zoom, yaw: yaw }
@@ -572,16 +574,21 @@ mod Ur do
       let clicked_layer = if p.group == 7 do option else -1 end
       let layer = if clicked_layer < 0 do p.layer else if clicked_layer == p.layer do 0 else clicked_layer end end
       let changed_tool = clicked_tool > 0
-      let layer = if clicked_tool == 99 || clicked_tool == 100 || clicked_tool == 101 do 33 else if clicked_tool == 18 || clicked_tool == 19 || clicked_tool == 98 do 1
-        else if clicked_tool == 26 || clicked_tool == 27 || clicked_tool == 97 do 2
+      let utility_page = (clicked_group > 0 || key_group > 0 || clicked_page >= 0) && group == 4
+      let layer = if clicked_tool == 99 || clicked_tool == 100 || clicked_tool == 101 do 33
+        else if utility_page && page == 1 do 1
+        else if utility_page && (page == 0 || page == 4) do 2
         else if clicked_tool == 36 || clicked_tool == 43 do 3
         else if (clicked_tool >= 44 && clicked_tool <= 47) || clicked_tool == 62 do 10
         else if S.grade_tool(clicked_tool) || clicked_tool == 54 do (if layer == 35 do 35 else 11 end)
         else if S.timed_street_tool(clicked_tool) do 27
         else if S.area_policy_tool(clicked_tool) do (if clicked_tool <= 66 do 23 else 24 end)
-        else if changed_tool && (layer == 1 || layer == 2 || layer == 11 || layer == 35 || layer == 23 || layer == 24 || layer == 27) do 0
-        else layer end end end end end end end end end
+        else if (changed_tool || (utility_page && page != 5)) && Ur.Layers.is_utility(layer) do 0
+        else if changed_tool && (layer == 11 || layer == 35 || layer == 23 || layer == 24 || layer == 27) do 0
+        else layer end end end end end end end end end end
       let layer = if p.city.harbour >= 0 && pressed(keys, p.keys, 22) do (if p.layer == 35 do 0 else 35 end) else layer end
+      let tool_layer = Ur.Layers.utility_tool(tool)
+      let layer = if p.city.harbour >= 0 && tool_layer > 0 do tool_layer else layer end
       let selected_speed = if mouse && !p.mouse do Ur.Hud.speed_at(mx, my, w) else -1 end
       let cycle_speed = pressed(keys, p.keys, 8)
       let paused = if selected_speed >= 0 do selected_speed == 0
@@ -638,7 +645,9 @@ mod Ur do
       let tool = if S.valid(council_lot) || S.valid(diagnosis_lot) || (sidebar_visible && sidebar_tab == 12) do 0 else tool end
       let point = Ur.Scene.tile_anchor(c, p.popup, w, h, cx, cz, zoom, yaw)
       let over_popup = tool == 0 && Ur.Hud.over_tile_popup(w, h, point, mx, my)
-      let over_ui = popup_temple || over_popup || truck_popup_over || citizen_panel || planner_hit >= 0 || over_toolbar || Toolbar.over(mx, my, w, h, group, page) || Ur.Hud.over_panel(mx, my, w, h, p.sidebar_visible) || Ur.Hud.over_starter(p.stats.startup_step, sidebar_visible, mx, my)
+      let over_ui = popup_temple || over_popup || truck_popup_over || citizen_panel || planner_hit >= 0 || over_toolbar || Toolbar.over(mx, my, w, h, group, page) ||
+        Ur.Hud.over_panel(mx, my, w, h, p.sidebar_visible) || Ur.Hud.over_utility_panel(mx, my, layer, tool) ||
+        Ur.Hud.over_starter(p.stats.startup_step, sidebar_visible, mx, my)
       let hovered = if over_ui do -1 else Ur.Scene.pick(c, mx, my, w, h, cx, cz, zoom, yaw, Ur.Scene.tunnel_view(layer, yaw)) end
       let temple_selected = click && !over_ui && sidebar_visible && (sidebar_tab == 14 || sidebar_tab == 15) && S.temple_tier(c, hovered) > 0
       let sidebar_tab = if temple_selected do 15 else sidebar_tab end
@@ -700,17 +709,22 @@ mod Ur do
       let sidewalk = S.sidewalk_tool(preview_tool) && c.harbour >= 0
       let spot = if sidewalk do Ur.Scene.sidewalk_pick(c, view, hovered, mx, my) else -1 end
       let planner_jog = p.road_bench > 0
-      let chosen_mode = if click && planner_hit >= 1 && planner_hit <= 5 do planner_hit - 1 else p.road_draft.mode end
+      let chosen_mode = if click && planner_hit == 11 do Build.straight_mode()
+        else if click && planner_hit >= 1 && planner_hit <= 5 do planner_hit - 1 else p.road_draft.mode end end
       let mode = if tool == 33 && chosen_mode == 4 do 0 else chosen_mode end
       let replacing = mode == 4 && S.road_tool(tool) && S.road_tool(p.tool)
+      let step_back = road_cancel && pressed(keys, p.keys, 23) && !List.is_empty(p.road_draft.points)
       let cancel = safety_open || parcel_open || undone || (tool != p.tool && !crossing_picker && !replacing) || mode != p.road_draft.mode ||
-        road_cancel || pressed(keys, p.keys, 15) || (click && planner_hit == 7)
+        pressed(keys, p.keys, 15) || (click && planner_hit == 7)
       let draft = if cancel do Build.reset(p.road_draft) else p.road_draft end
       let snap_toggle = pressed(keys, p.keys, 18) || (click && planner_hit == 8)
       let spacing = S.clamp(draft.spacing + (if click && planner_hit == 10 do 1 else if click && planner_hit == 9 do -1 else 0 end end), 2, 16)
       let draft = { draft with mode: mode, spacing: spacing, snap: draft.snap != snap_toggle }
       let guided = c.harbour >= 0 && Build.guided(preview_tool, mode)
       let fixed_pair = S.grade_tool(tool) || mode >= 2
+      let straight = mode == Build.straight_mode() && !S.grade_tool(tool)
+      let from = if straight && draft.drag != 0 do Build.start_point(draft) else Build.end_point(draft) end
+      let laid = if straight do Build.straight_target(from, hovered) else hovered end
       let moving_draft = draft.drag >= 0 && mouse
       let using_snap = guided && draft.snap && !Vk.key(340) && !Vk.key(344) && S.valid(hovered) && !cancel &&
         (moving_draft || click || !fixed_pair || List.length(draft.points) < 2)
@@ -719,12 +733,12 @@ mod Ur do
         hovered != p.hovered || policy_changed || click || snap_toggle || pressed(keys, p.keys, 20) || pressed(p.keys, keys, 20) ||
         pressed(keys, p.keys, 21) || pressed(p.keys, keys, 21) || draft.drag != p.road_draft.drag
       let snapped = if !using_snap do -1 else if pointer_changed do
-        Ur.Scene.road_snap(c, view, hovered, Build.end_point(draft), mx, my, mode == 2 || mode == 3)
+        Ur.Scene.road_snap(c, view, laid, from, mx, my, straight)
       else p.road_draft.snapped end end
-      let target = if S.valid(snapped) do snapped else hovered end
+      let target = if S.valid(snapped) do snapped else laid end
       let ghost = guided && mode == 1 && !S.grade_tool(tool) && (Vk.key(342) || Vk.key(346))
       let road_flip = pressed(keys, p.keys, 17)
-      let road_remove = pressed(keys, p.keys, 19)
+      let road_remove = step_back || pressed(keys, p.keys, 19)
       let road_click = click && !over_ui
       let planner_refresh = planner_jog || tool != p.tool || cancel || (guided && (draft.spacing != p.road_draft.spacing || snap_toggle || snapped != p.road_draft.snapped || ghost != p.road_draft.ghost || road_flip ||
         road_remove || road_click || (moving_draft && target != Build.drag_point(draft)) || (!fixed_pair && target != p.road_draft.target) ||
@@ -737,8 +751,8 @@ mod Ur do
         { draft with points: [{ lot: S.index(9, 16), flip: false },
           { lot: S.index(29 + p.frame % 10, 24 + (p.frame / 10) % 6), flip: false }] }
       else draft end
-      let confirm = guided && !cancel && !moving_draft && !List.is_empty(draft.points) &&
-        (!S.grade_tool(tool) || List.length(draft.points) >= 2) && (pressed(keys, p.keys, 16) || (click && planner_hit == 6))
+      let confirm = guided && !cancel && !moving_draft && List.length(draft.points) >= Build.confirm_points(tool, mode) &&
+        (pressed(keys, p.keys, 16) || (click && planner_hit == 6))
       let active = if guided || safety_open || parcel_open || undone || tool != p.tool || Vk.mouse_button(1) do -1
         else if click do hovered else p.anchor end end
       let release = !guided && !mouse && p.mouse && S.valid(active) && S.valid(hovered) && (!sidewalk || (active == hovered && spot >= 0))
@@ -748,7 +762,7 @@ mod Ur do
       let stroke = if drawing do Build.park_stroke(if click do Nil else p.stroke end, if click do -1 else p.hovered end, hovered) else Nil end
       let preview_start = if p.profile do Vk.time() else 0.0 end
       let preview = if preview_changed do
-        if guided do Build.planned(c, preview_tool, draft, false)
+        if guided do Build.planned(c, preview_tool, draft, straight && confirm)
         else if sidewalk do Build.sidewalk_preview(c, hovered, spot, preview_tool)
         else if drawing do Build.park_preview(c, stroke)
         else if p.road_bench == 1 do Build.preview(c, 1, S.index(9, 16), S.index(12 + p.frame % 10, 18))
@@ -756,7 +770,12 @@ mod Ur do
       else p.preview end
       let quote_ms = if p.profile do (Vk.time() -. preview_start) *. 1000.0 else 0.0 end
       let paint = (release || confirm) && preview.valid && preview.changed
-      let draft = if paint && guided do Build.reset(draft) else draft end
+      let draft = if paint && guided do
+        let cleared = Build.reset(draft)
+        if straight do
+          { cleared with points: [{ lot: Build.end_point(draft), flip: false }] }
+        else cleared end
+      else draft end
       let undo = if paint do Cons(stamp_clock(c, p.elapsed), List.take(undo, 15)) else undo end
       let c = if paint do Ur.Council.settle(Ur.Council.invest(c, preview.city, tool, preview.tiles)) else if (release || confirm) && !preview.valid do { c with message: preview.reason } else c end end
       let undo = if paint && S.patron(p.city) == 0 && S.patron(c) > 0 do Nil else undo end
@@ -843,8 +862,8 @@ mod Ur do
       let next = day.city
       let due = next.month != c.month
       let day_changed = next.street_day != c.street_day && (next.street_day >= 5 || c.street_day >= 5)
-      let building_day = midnight && !due && (next.calendar_day % 3 == 0 || next.calendar_day % 5 == 0) &&
-        S.development_changed(next, p.city, 0)
+      let building_day = midnight && !due && (S.public_work_visuals_changed(c, next) ||
+        ((next.calendar_day % 3 == 0 || next.calendar_day % 5 == 0) && S.development_changed(next, p.city, 0)))
       let st = day.stats
       let c = next
       let day_ms = if p.profile && midnight do (Vk.time() -. start) *. 1000.0 else 0.0 end
@@ -890,7 +909,7 @@ mod Ur do
           Ur.Scene.clear_preview(0, p.preview_chunks)
           0
         else if guided || Build.street(preview_tool) do Ur.Scene.road_preview(c, preview, draft, preview_tool, p.preview_chunks)
-        else Ur.Scene.preview(c, preview.tiles, p.preview_chunks, preview.valid) end end
+        else Ur.Scene.preview(c, preview.tiles, p.preview_chunks, preview.valid, Ur.Layers.utility_route(preview_tool)) end end
         Ur.Scene.sidewalk_marker(c, if sidewalk do hovered else -1 end, spot, preview.valid && preview.changed)
         chunks
       else p.preview_chunks end
@@ -1006,7 +1025,7 @@ mod Ur do
       Ur.Scene.citizen_vehicles(c, walk_map, Ur.Citizens.visible_actors(citizens), Ur.Citizens.visible_actors(p.shown), night, !scene_changed && p.frame > 0, section.after > 0)
       let truck_selected = truck_selected && sanitation.driver >= 0 && sanitation.pickup == p.sanitation.pickup && !undone
       let citizen_stats = Ur.Citizens.indexed_counts(c, citizens)
-      if layer != p.layer || (layer > 0 && (flood_day || religion_event)) || (midnight && (layer == 29 || layer == 30 || layer == 26 || layer == 4 || layer == 3 || layer == 9 || layer == 32 || layer == 33 || layer == 34 || Ur.Layers.is_utility(layer))) || (layer > 0 && (paint || undone || policy_changed || day_changed || (due && (layer == 3 || layer == 4 || layer == 9 || Ur.Layers.is_utility(layer) || layer >= 12)))) do Ur.Scene.map_layer(c, st, layer) else () end
+      if layer != p.layer || (stats_landed && Ur.Layers.is_utility(layer)) || (layer > 0 && (flood_day || religion_event)) || (midnight && (layer == 29 || layer == 30 || layer == 26 || layer == 4 || layer == 3 || layer == 9 || layer == 32 || layer == 33 || layer == 34 || Ur.Layers.is_utility(layer))) || (layer > 0 && (paint || undone || policy_changed || day_changed || (due && (layer == 3 || layer == 4 || layer == 9 || Ur.Layers.is_utility(layer) || layer >= 12)))) do Ur.Scene.map_layer(c, st, p.layer, layer) else () end
       Ur.Scene.camera(cx, cz, zoom, if h > 0.0 do w /. h else 1.6 end, yaw)
       let weather = S.current_weather(c)
       let weather_time = int_to_float(c.month * S.days_per_month() + c.calendar_day) *. S.day_seconds() +. elapsed
@@ -1371,7 +1390,7 @@ mod Ur do
       let signal_tick = S.signal_tick(clock_phase(c))
       Ur.Scene.sync(c, c, 0, true, false, 0, S.street_hour(clock_phase(c)),
         { before: stats.junctions, after: stats.junctions, before_tick: signal_tick, after_tick: signal_tick }, stats.utilities.electric, stats.utilities.electric, { before: 0, after: Ur.Scene.tunnel_view(layer, 0.55) })
-      if layer > 0 do Ur.Scene.map_layer(c, stats, layer) else () end
+      if layer > 0 do Ur.Scene.map_layer(c, stats, 0, layer) else () end
       let civic_demo = demo == 5
       let streets_demo = demo >= 6 && demo <= 10
       let save_path = Ur.Save.path()

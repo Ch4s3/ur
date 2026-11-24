@@ -8,6 +8,19 @@ mod Ur.Build do
   end
   fn street(tool : Int) : Bool do S.road_tool(tool) || tool == 33 end
   fn guided(tool : Int, mode : Int) : Bool do S.grade_tool(tool) || (street(tool) && mode > 0) end
+  fn straight_mode() : Int do 5 end
+  fn confirm_points(tool : Int, mode : Int) : Int do
+    if S.grade_tool(tool) || mode == straight_mode() do 2 else 1 end
+  end
+  fn straight_target(from : Int, to : Int) : Int do
+    if !S.valid(from) || !S.valid(to) do to else
+      let x = from % S.width()
+      let z = from / S.width()
+      let tx = to % S.width()
+      let tz = to / S.width()
+      if int_abs(tx - x) >= int_abs(tz - z) do S.index(tx, z) else S.index(x, tz) end
+    end
+  end
 
   pfn bend(i : Int, target : Int, flip : Bool) : List(Int) do
     if i == target do Cons(i, Nil) else
@@ -48,7 +61,7 @@ mod Ur.Build do
   end
 
   pfn changed(old : Ur.Sim.City, next : Ur.Sim.City, i : Int) : Bool do
-    old.cash != next.cash || S.get(old.pump_orders, i) != S.get(next.pump_orders, i) || S.get(old.seawalls, i) != S.get(next.seawalls, i) || S.get(old.waste_bins, i) != S.get(next.waste_bins, i) || old.harbour != next.harbour || old.ferry_start != next.ferry_start ||
+    old.cash != next.cash || S.public_work_stage(old, i) != S.public_work_stage(next, i) || S.get(old.pump_orders, i) != S.get(next.pump_orders, i) || S.get(old.seawalls, i) != S.get(next.seawalls, i) || S.get(old.waste_bins, i) != S.get(next.waste_bins, i) || old.harbour != next.harbour || old.ferry_start != next.ferry_start ||
       S.get(old.car_free_days, i) != S.get(next.car_free_days, i) || S.get(old.ground_areas, i) != S.get(next.ground_areas, i) || S.get(old.quiet_areas, i) != S.get(next.quiet_areas, i) ||
       S.get(old.streetscape, i) != S.get(next.streetscape, i) || S.get(old.parks, i) != S.get(next.parks, i) || S.get(old.grade_cover, i) != S.get(next.grade_cover, i) || S.get(old.pipes, i) != S.get(next.pipes, i) || S.get(old.grid, i) != S.get(next.grid, i) ||
       S.get(old.public_parking, i) != S.get(next.public_parking, i) || S.get(old.nuisance, i) != S.get(next.nuisance, i) || S.get(old.tolls, i) != S.get(next.tolls, i) ||
@@ -67,17 +80,19 @@ mod Ur.Build do
         if steep do { draft with city: c, valid: false, changed: false, blocked: i, edge: previous, reason: "This route is too steep. Grade the land first." } else
         -- An empty message distinguishes a no-op from a rejected action.
         let before = { draft.city with message: "" }
-        let next = S.draft_act(before, i, tool)
+        let next = S.draft_order(before, i, tool)
         let moved = changed(before, next, i)
         if !moved && next.message != "" && !(tool >= 29 && tool <= 32 && S.get(before.nuisance, i) == tool - 29 && S.get(before.heights, i) > 0) do { draft with city: c, valid: false, changed: false, blocked: if next.message == "Not enough funds for this street." do -1 else i end, reason: next.message } else
           let next = if moved do next else draft.city end
-          let upkeep = if S.utility_upgrade(tool) && moved do
+          let upkeep = if S.public_building_tool(tool) && moved && S.valid(before.harbour) do
+            " · " ++ int_to_string(S.public_build_days(before, i, tool)) ++ " work days"
+          else if S.utility_upgrade(tool) && moved do
             " · +$" ++ int_to_string((c.cash - next.cash) / S.cost(c, i, tool) * (S.utility_upkeep(2) - S.utility_upkeep(1))) ++ "/month"
           else if (tool == 99 || tool == 100) && moved do
             " · +$" ++ int_to_string((c.cash - next.cash) / S.cost(c, i, tool) * S.flood_upkeep(next, i)) ++ "/month"
           else if tool >= 103 && tool <= 107 && moved do
             " · +$" ++ int_to_string(S.parcel_facility_upkeep(next, i) - S.parcel_facility_upkeep(before, i)) ++ "/month"
-          else draft.reason end end end
+          else draft.reason end end end end
           let monthly = if street(tool) do S.road_upkeep(S.get(next.roads, i)) - S.road_upkeep(S.get(before.roads, i)) else 0 end
           apply(c, tool, rest, { draft with city: next, cost: c.cash - next.cash, changed: draft.changed || moved, reason: upkeep, upkeep: draft.upkeep + monthly }, i)
         end end
@@ -305,6 +320,7 @@ mod Ur.Build do
     if !S.valid(a) do empty_preview(c, Nil)
     else if S.grade_tool(tool) do crossing(c, tool, a, b)
     else if d.mode == 2 || d.mode == 3 do road_preview(c, tool, grid(a, b, if d.mode == 2 do S.width() else d.spacing end), true)
+    else if d.mode == straight_mode() do road_preview(c, tool, line(a, straight_target(a, b)), false)
     else if d.mode == 4 do
       let run = corridor(c, a)
       let extending = S.valid(b) && a != b && !List.is_empty(run)
@@ -321,7 +337,7 @@ mod Ur.Build do
       let b = if S.valid(b) do b else end_point(d) end
       let points = if b != end_point(d) do List.append(d.points, [{ lot: b, flip: d.flip }]) else d.points end
       road_preview(c, tool, Cons(a, route_legs(a, List.drop(points, 1))), false)
-    end end end end
+    end end end end end
   end
   fn preview(c : Ur.Sim.City, tool : Int, anchor : Int, target : Int) : Preview do
     let tiles = if c.harbour < 0 do footprint(0, -1, target) else footprint(tool, anchor, target) end

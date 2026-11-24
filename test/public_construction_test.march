@@ -1,0 +1,54 @@
+mod PublicConstructionTest do
+  needs IO.Console
+  needs IO
+  alias Ur.Sim as S
+
+  pfn remaining(c : Ur.Sim.City, lot : Int) : Int do
+    match S.public_work_at(c, lot) do
+      Some(work) -> work.remaining
+      None -> 0
+    end
+  end
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let zero = NativeArray.make_int(S.count(), 0)
+    let harbour = S.index(9, 20)
+    let lot = S.index(9, 19)
+    let base = S.new()
+    let c = { base with heights: NativeArray.make_int(S.count(), 10), harbour: harbour,
+      roads: NativeArray.set_int(zero, harbour, 1), zones: zero, plants: zero, buildings: zero, cash: 20000 }
+    let tool = 4
+    let order = Ur.Build.preview(c, tool, -1, lot)
+    Test.assert_true(order.valid && order.changed && order.cost == S.cost(c, lot, tool), "A building can be ordered for its quoted price")
+    Test.assert_eq_int(S.get(order.city.plants, lot), 0, "Ordering a building leaves the facility closed")
+    Test.assert_eq_int(S.get(order.city.milestones, 1), 0, "Ordering a building does not unlock its milestone")
+    Test.assert_true(!(Ur.Build.preview(order.city, 1, -1, lot)).valid, "A construction site reserves its parcel")
+    let idle = S.advance_day_with_traffic(order.city, zero)
+    Test.assert_true(remaining(order.city, lot) == remaining(idle, lot), "A city without workers makes no construction progress")
+    let residents = S.index(10, 20)
+    let staffed = { idle with buildings: NativeArray.set_int(zero, residents, 1),
+      zones: NativeArray.set_int(zero, residents, 1) }
+    let second = S.index(9, 21)
+    let another = Ur.Build.preview(staffed, 13, -1, second)
+    Test.assert_true(another.valid && another.changed, "A second building can wait in the queue")
+    let shared = S.advance_day_with_traffic(another.city, zero)
+    Test.assert_true(remaining(shared, second) == remaining(another.city, second),
+      "The first project gets the crew when only one is available")
+    let after_day = S.advance_day_with_traffic(staffed, zero)
+    Test.assert_eq_int(S.get(after_day.plants, lot), 0, "A crew needs multiple days to finish")
+    Test.assert_true(remaining(after_day, lot) == remaining(staffed, lot) - 1, "An available crew makes daily progress")
+    let game = { city: after_day, cx: 0.0, cz: 0.0, zoom: 1.0, yaw: 0.0, paused: false, speed: 1 }
+    let loaded = match Ur.Save.decode(Ur.Save.encode(game)) do
+      Ok(save) -> save.city
+      Err(reason) -> panic(reason)
+    end
+    Test.assert_true(remaining(after_day, lot) == remaining(loaded, lot), "Loading preserves the project's work remaining")
+    let finished = Ur.Clock.days(loaded, remaining(after_day, lot))
+    Test.assert_eq_int(S.get(finished.plants, lot), 1, "Construction resumes after loading and opens the completed facility")
+    Test.assert_eq_int(S.get(finished.milestones, 1), 1, "Finishing a building unlocks its milestone")
+    Test.assert_eq_int(finished.cash, order.city.cash, "Completion does not charge the building cost again")
+    let cleared = (Ur.Build.preview(order.city, 7, -1, lot)).city
+    Test.assert_true((Ur.Build.preview(cleared, tool, -1, lot)).valid, "Demolition clears the site for a new project")
+    Authority.must(println("Public construction checks passed"))
+  end
+end

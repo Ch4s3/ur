@@ -321,8 +321,9 @@ mod Ur.Scene do
   -- the heaped clouds, the hour: cumulus build after mid-morning and melt
   -- in the evening. A cloud forming or clearing grows or shrinks in place.
   fn cloud_bodies() : Int do 32 end
-  -- above the ocean's slots (Ur.Ocean.slot_count): the clouds, then each lot's fifth and sixth terrain layers
-  fn chunk_slots() : Int do Ur.Ocean.slot_count() + cloud_bodies() + S.count() * 2 end
+  -- Above the ocean's slots: clouds, high terrain, then rooftop electricity markers.
+  pfn power_marker_base() : Int do Ur.Ocean.slot_count() + cloud_bodies() + S.count() * 2 end
+  fn chunk_slots() : Int do power_marker_base() + S.count() end
   -- a parcel's fifth and sixth layers of terrain (32 to 48 m), for the tallest mountains
   pfn high_slot(i : Int, layer : Int) : Int do Ur.Ocean.slot_count() + cloud_bodies() + i * 2 + layer - 4 end
   pfn cloud_slot(i : Int) : Int do Ur.Ocean.slot_count() + i end
@@ -1227,7 +1228,7 @@ mod Ur.Scene do
     if raised do overpass(c, i, x, z) else Vk.body_drop(i * 4 + 3) end
   end
   pfn changed(a : Ur.Sim.City, b : Ur.Sim.City, i : Int) : Bool do
-    S.valid(i) && (S.get(a.seawalls, i) != S.get(b.seawalls, i) || S.flood_repair_days(a, i) != S.flood_repair_days(b, i) || S.get(a.sidewalk_items, i) != S.get(b.sidewalk_items, i) || S.get(a.waste_bins, i) != S.get(b.waste_bins, i) || (a.harbour != b.harbour && (i == a.harbour || i == b.harbour)) || S.get(a.heights, i) != S.get(b.heights, i) || S.campus_root(a, i) != S.campus_root(b, i) || S.get(a.roads, i) != S.get(b.roads, i) || S.get(a.grade_cover, i) != S.get(b.grade_cover, i) || S.get(a.fire_recovery, i) != S.get(b.fire_recovery, i) || S.get(a.park_tiers, i) != S.get(b.park_tiers, i) || S.get(a.streetscape, i) != S.get(b.streetscape, i) || S.get(a.parks, i) != S.get(b.parks, i) || S.get(a.tolls, i) != S.get(b.tolls, i) || S.get(a.public_parking, i) != S.get(b.public_parking, i) ||
+    S.valid(i) && (S.public_work_stage(a, i) != S.public_work_stage(b, i) || S.get(a.seawalls, i) != S.get(b.seawalls, i) || S.flood_repair_days(a, i) != S.flood_repair_days(b, i) || S.get(a.sidewalk_items, i) != S.get(b.sidewalk_items, i) || S.get(a.waste_bins, i) != S.get(b.waste_bins, i) || (a.harbour != b.harbour && (i == a.harbour || i == b.harbour)) || S.get(a.heights, i) != S.get(b.heights, i) || S.campus_root(a, i) != S.campus_root(b, i) || S.get(a.roads, i) != S.get(b.roads, i) || S.get(a.grade_cover, i) != S.get(b.grade_cover, i) || S.get(a.fire_recovery, i) != S.get(b.fire_recovery, i) || S.get(a.park_tiers, i) != S.get(b.park_tiers, i) || S.get(a.streetscape, i) != S.get(b.streetscape, i) || S.get(a.parks, i) != S.get(b.parks, i) || S.get(a.tolls, i) != S.get(b.tolls, i) || S.get(a.public_parking, i) != S.get(b.public_parking, i) ||
       S.get(a.transit, i) != S.get(b.transit, i) || S.get(a.stops, i) != S.get(b.stops, i) || S.get(a.ferries, i) != S.get(b.ferries, i) ||
       S.car_free_now(a, i) != S.car_free_now(b, i) || S.storefront(a, i) != S.storefront(b, i) || S.ground_at(a, i) != S.ground_at(b, i) || S.business_closed(a, i) != S.business_closed(b, i) || S.get(a.zones, i) != S.get(b.zones, i) || S.get(a.buildings, i) != S.get(b.buildings, i) || S.get(a.construction, i) != S.get(b.construction, i) || S.get(a.plants, i) != S.get(b.plants, i))
   end
@@ -1326,12 +1327,13 @@ mod Ur.Scene do
       clear_preview(i + 1, old_count)
     end
   end
-  fn preview(c : Ur.Sim.City, tiles : List(Int), old_count : Int, valid : Bool) : Int do
-    let material = if valid do 20 else 6 end
-    let m = box(empty(), 0, 0, 0, 32, 1, 1, material)
-    let m = box(m, 0, 0, 31, 32, 1, 1, material)
-    let m = box(m, 0, 0, 1, 1, 1, 30, material)
-    let m = box(m, 31, 0, 1, 1, 1, 30, material)
+  fn preview(c : Ur.Sim.City, tiles : List(Int), old_count : Int, valid : Bool, utility : Bool) : Int do
+    let material = if !valid do (if utility do 30 else 6 end) else if utility do 29 else 20 end end
+    let edge = if utility do 2 else 1 end
+    let m = box(empty(), 0, 0, 0, 32, 1, edge, material)
+    let m = box(m, 0, 0, 32 - edge, 32, 1, edge, material)
+    let m = box(m, 0, 0, edge, edge, 1, 32 - edge * 2, material)
+    let m = box(m, 32 - edge, 0, edge, edge, 1, 32 - edge * 2, material)
     let count = List.length(tiles)
     let stride = if count > 72 do (count + 71) / 72 else 1 end
     let used = preview_tiles(c, tiles, stride, 0, 0, m)
@@ -1341,10 +1343,10 @@ mod Ur.Scene do
   pfn road_outline(material : Int, margin : Int) : Mesh do
     let far = 31 - margin
     let width = 32 - margin * 2
-    let m = box({ words: NativeArray.make_i32(48, 0), quads: 0 }, margin, 0, margin, width, 1, 1, material)
-    let m = box(m, margin, 0, far, width, 1, 1, material)
-    let m = box(m, margin, 0, margin + 1, 1, 1, width - 2, material)
-    box(m, far, 0, margin + 1, 1, 1, width - 2, material)
+    let m = box({ words: NativeArray.make_i32(48, 0), quads: 0 }, margin, 1, margin, width, 1, 1, material)
+    let m = box(m, margin, 1, far, width, 1, 1, material)
+    let m = box(m, margin, 1, margin + 1, 1, 1, width - 2, material)
+    box(m, far, 1, margin + 1, 1, 1, width - 2, material)
   end
   pfn road_marker(c : Ur.Sim.City, i : Int, slot : Int, mesh : Mesh) : Int do
     if !S.valid(i) || slot >= 72 do slot else
@@ -1377,13 +1379,23 @@ mod Ur.Scene do
         end
       end)
   end
-  pfn road_strokes(c : Ur.Sim.City, tiles : List(Int), mask : NativeIntArr, next : Int, stride : Int, offset : Int, material : Int) : Int do
+  pfn proposed_street(c : Ur.Sim.City, i : Int, material : Int) : Mesh do
+    let parts = L.portal_street(c, i, S.get(c.heights, i))
+    let m = { words: NativeArray.make_i32(List.length(parts) * 2, 0), quads: 0 }
+    List.fold_left(parts, m, fn (m, piece) ->
+      if piece.h > 2 do m else face(m, piece.x, 0, piece.z, piece.w, piece.d, 0, material) end)
+  end
+  pfn road_strokes(c : Ur.Sim.City, p : Ur.Build.Preview, tiles : List(Int), mask : NativeIntArr, next : Int, stride : Int, offset : Int, material : Int) : Int do
     match tiles do
       Nil -> next
       Cons(i, rest) ->
         if next >= 72 do next else
-          let next = if offset % stride == 0 do road_marker(c, i, next, road_stroke(c, mask, i, material)) else next end
-          road_strokes(c, rest, mask, next, stride, offset + 1, material)
+          let next = if offset % stride != 0 do next else
+            let mesh = if p.valid && S.get(p.city.roads, i) > 0 do proposed_street(p.city, i, material)
+              else road_stroke(c, mask, i, material) end
+            road_marker(c, i, next, mesh)
+          end
+          road_strokes(c, p, rest, mask, next, stride, offset + 1, material)
         end
     end
   end
@@ -1391,12 +1403,13 @@ mod Ur.Scene do
     let pins = List.map(d.points, fn point -> point.lot)
     let issues = List.filter([p.blocked, p.edge], fn i -> S.valid(i))
     let focused = List.append(pins, issues)
-    let tiles = List.filter(p.tiles, fn i -> Ur.Build.point_index(d.points, i, 0) < 0 && i != p.blocked && i != p.edge)
     let approach = S.grade_tool(tool)
+    let tiles = List.filter(p.tiles, fn i -> i != p.blocked && i != p.edge &&
+      (!approach || Ur.Build.point_index(d.points, i, 0) < 0))
     let first = Ur.Build.start_point(d)
     let last = if d.target >= 0 do d.target else Ur.Build.end_point(d) end
     let straight = S.valid(first) && S.valid(last) && (first / S.width() == last / S.width() || first % S.width() == last % S.width())
-    let material = if tool == 52 do 31 else if p.valid do 20 else 17 end end
+    let material = if tool == 52 do 31 else if p.valid do 20 else 30 end end
     let mesh = if approach && straight do
       if first / S.width() == last / S.width() do box(empty(), 0, 0, 14, 32, 1, 4, material)
       else box(empty(), 14, 0, 0, 4, 1, 32, material) end
@@ -1418,7 +1431,7 @@ mod Ur.Scene do
     let stride = S.clamp((count + limit - 1) / limit, 1, S.count())
     let used = if approach do road_markers(c, tiles, used, stride, 0, mesh) else
       let mask = List.fold_left(p.tiles, NativeArray.make_int(S.count(), 0), fn (mask, i) -> NativeArray.set_int(mask, i, 1))
-      road_strokes(c, tiles, mask, used, stride, 0, material)
+      road_strokes(c, p, tiles, mask, used, stride, 0, material)
     end
     let available = S.clamp(72 - used, 1, 72)
     let used = road_markers(c, p.frontage, used, (frontage + available - 1) / available + (if frontage == 0 do 1 else 0 end), 0,
@@ -2152,7 +2165,18 @@ mod Ur.Scene do
     else (ax +. (bx -. ax) *. t, az +. (bz -. az) *. t) end
     end
   end
-  pfn bus_lane_point(c : Ur.Sim.City, trip : Ur.Food.Trip, i : Int, j : Int, index : Int, t : Float, forward : Bool) : (Float, Float) do
+  pfn turnaround_lane() : Float do 6.0 end
+  fn turnaround_pose(from : Int, lot : Int, angle : Float) : (Float, Float, Float, Float) do
+    let x = int_to_float(lot % S.width() * 32 + 16)
+    let z = int_to_float(lot / S.width() * 32 + 16)
+    let dx = int_to_float(lot % S.width() - from % S.width())
+    let dz = int_to_float(lot / S.width() - from / S.width())
+    let advance = turnaround_lane() *. Math.sin(angle)
+    let side = turnaround_lane() *. Math.cos(angle)
+    (x +. dx *. advance -. dz *. side, z +. dz *. advance +. dx *. side,
+     dx *. Math.cos(angle) +. dz *. Math.sin(angle), dz *. Math.cos(angle) -. dx *. Math.sin(angle))
+  end
+  pfn bus_lane_point(c : Ur.Sim.City, trip : Ur.Food.Trip, i : Int, j : Int, index : Int, t : Float, forward : Bool, bulb : Bool) : (Float, Float) do
     let (x, z) = bus_xy(c, trip, i, j, index, t)
     let low = if t < 0.01 do 0.0 else t -. 0.01 end
     let high = if t > 0.99 do 1.0 else t +. 0.01 end
@@ -2167,16 +2191,22 @@ mod Ur.Scene do
       else if trip.mode == 9 && index == trip.legs - 1 do
         if t > 0.45 do 0.0 else (0.45 -. t) /. 0.45 end
       else if index == 0 && t < 0.35 do t /. 0.35
-      else if index == trip.legs - 1 && t > 0.65 do (1.0 -. t) /. 0.35 else 1.0 end end end end
-    let offset = if magnitude > 0.0001 do taper *. sign *. 3.0 /. magnitude else 0.0 end
+      else if !bulb && index == trip.legs - 1 && t > 0.65 do (1.0 -. t) /. 0.35 else 1.0 end end end end
+    let spread = if bulb && t > 0.5 do
+      let u = (t -. 0.5) *. 2.0
+      (turnaround_lane() -. 3.0) *. u *. u *. (3.0 -. 2.0 *. u)
+    else 0.0 end
+    let offset = if magnitude > 0.0001 do (taper *. 3.0 +. spread) *. sign /. magnitude else 0.0 end
     (x -. dz *. offset, z +. dx *. offset)
   end
   pfn bus_pose(c : Ur.Sim.City, trip : Ur.Food.Trip, i : Int, j : Int, index : Int, t : Float, forward : Bool, rotation : Float, slot : Int, section : Bool) : Unit do
-    let (x, z) = bus_lane_point(c, trip, i, j, index, t, forward)
+    let bulb = trip.mode == 2 && index == trip.legs - 1 && S.span_distance(i, j) == 1 &&
+      S.motor_street(c, j) && S.street_end_arm(c, j) == S.direction(j, i)
+    let (x, z) = bus_lane_point(c, trip, i, j, index, t, forward, bulb)
     let low = if t < 0.01 do 0.0 else t -. 0.01 end
     let high = if t > 0.99 do 1.0 else t +. 0.01 end
-    let (ax, az) = bus_lane_point(c, trip, i, j, index, low, forward)
-    let (bx, bz) = bus_lane_point(c, trip, i, j, index, high, forward)
+    let (ax, az) = bus_lane_point(c, trip, i, j, index, low, forward, bulb)
+    let (bx, bz) = bus_lane_point(c, trip, i, j, index, high, forward, bulb)
     let dx = bx -. ax
     let dz = bz -. az
     let (_, ay, _) = bus_point(c, i, j)
@@ -2188,13 +2218,16 @@ mod Ur.Scene do
       if t <= edge do 0.0 else (t -. edge) /. (1.0 -. edge) end
     else t end
     let y = if grade do S.grade_surface(c, i, j, t) +. 2.0 else ay +. (end_y -. ay) *. height_t end
-    if grade && covered_lane(c, i, x, z, section) do Vk.chunk_free(slot)
+    if bulb && t >= 1.0 do
+      let (x, z, dx, dz) = turnaround_pose(i, j, rotation)
+      posed_vehicle(slot, vehicle_mesh(2), x, y, z, dx, dz, 10.0, 5.0)
+    else if grade && covered_lane(c, i, x, z, section) do Vk.chunk_free(slot)
     else
       let front_x = dx *. Math.cos(rotation) -. dz *. Math.sin(rotation)
       let front_z = dz *. Math.cos(rotation) +. dx *. Math.sin(rotation)
       if trip.mode == 9 do posed_vehicle(slot, delivery_mesh(9), x, y, z, front_x, front_z, 11.0, 6.0)
       else posed_vehicle(slot, vehicle_mesh(2), x, y, z, front_x, front_z, 10.0, 5.0) end
-    end
+    end end
   end
   pfn trip_pose(c : Ur.Sim.City, trip : Ur.Food.Trip, step : Float, forward : Bool, rotation : Float, slot : Int, section : Bool) : Unit do
     let index = S.clamp(float_to_int(step), 0, trip.legs - 1)
@@ -2321,11 +2354,11 @@ mod Ur.Scene do
     let leg = S.clamp(float_to_int(m.step), 0, trip.legs - 1)
     let t = m.step -. int_to_float(leg)
     let (a, b) = Ur.Food.leg(trip.stops, leg)
-    let (x, z) = bus_lane_point(c, trip, a, b, leg, t, true)
+    let (x, z) = bus_lane_point(c, trip, a, b, leg, t, true, false)
     let low = if t < 0.01 do 0.0 else t -. 0.01 end
     let high = if t > 0.99 do 1.0 else t +. 0.01 end
-    let (ax, az) = bus_lane_point(c, trip, a, b, leg, low, true)
-    let (bx, bz) = bus_lane_point(c, trip, a, b, leg, high, true)
+    let (ax, az) = bus_lane_point(c, trip, a, b, leg, low, true, false)
+    let (bx, bz) = bus_lane_point(c, trip, a, b, leg, high, true, false)
     let (_, ay, _) = bus_point(c, a, b)
     let (_, end_y, _) = bus_point(c, b, a)
     let grade = S.grade_link(c, a, b)
@@ -2362,7 +2395,7 @@ mod Ur.Scene do
       if square < distance || (square == distance && (best < 0 || lot < best)) do (lot, square) else (best, distance) end
     end
   end
-  pfn nearby_road_ends(c : Ur.Sim.City, base : Int, radius : Int, align : Bool) : List(Int) do
+  pfn nearby_streets(c : Ur.Sim.City, base : Int, radius : Int) : List(Int) do
     let x = base % S.width()
     let z = base / S.width()
     List.flat_map(List.range(0, radius * 2 + 1), fn dx ->
@@ -2370,24 +2403,26 @@ mod Ur.Scene do
         let x = x + dx - radius
         let z = z + dz - radius
         let i = S.index(x, z)
-        if x < 0 || x >= S.width() || z < 0 || z >= S.depth() || S.get(c.roads, i) == 0 do None else
-          let arms = List.length(List.filter([0, 1, 2, 3], fn d -> S.street_link(c, i, d)))
-          if align || arms <= 1 || arms >= 3 do Some(i) else None end
-        end))
+        if x < 0 || x >= S.width() || z < 0 || z >= S.depth() || S.get(c.roads, i) == 0 do None else Some(i) end))
   end
-  fn road_snap(c : Ur.Sim.City, view : Projection, base : Int, from : Int, mx : Float, my : Float, align : Bool) : Int do
-    let radius = S.clamp(float_to_int(9.0 *. view.zoom /. view.w) + 1, 1, 4)
-    let ends = nearby_road_ends(c, base, radius, align)
-    let (best, distance) = List.fold_left(ends, (-1, 20.0 *. 20.0), fn (result, lot) ->
+  fn road_snap(c : Ur.Sim.City, view : Projection, base : Int, from : Int, mx : Float, my : Float, straight : Bool) : Int do
+    if !S.valid(base) do -1 else
+    let radius = 1
+    let scale = view.w *. 1.45 /. view.zoom
+    let pixels = if scale > 18.0 do 18.0 else if scale < 5.0 do 5.0 else scale end end
+    let threshold = pixels *. pixels
+    let streets = nearby_streets(c, base, radius)
+    let (best, _) = List.fold_left(streets, (-1, threshold), fn (result, lot) ->
       let (best, distance) = result
-      road_snap_at(c, view, lot, mx, my, best, distance))
-    if !S.valid(from) do best else
+      if straight && Ur.Build.straight_target(from, lot) != lot do result
+      else road_snap_at(c, view, lot, mx, my, best, distance) end)
+    if S.valid(best) || straight || !S.valid(from) do best else
       let a = S.index(base % S.width(), from / S.width())
       let b = S.index(from % S.width(), base / S.width())
-      let (best, distance) = if S.span_distance(a, base) <= radius do road_snap_at(c, view, a, mx, my, best, distance) else (best, distance) end
+      let (best, distance) = if S.span_distance(a, base) <= radius do road_snap_at(c, view, a, mx, my, -1, threshold) else (-1, threshold) end
       let (best, _) = if S.span_distance(b, base) <= radius do road_snap_at(c, view, b, mx, my, best, distance) else (best, distance) end
       best
-    end
+    end end
   end
   pfn closest_sidewalk(c : Ur.Sim.City, view : Projection, lot : Int, mx : Float, my : Float, spot : Int, best : Int, distance : Float) : Int do
     if spot == 4 do best else
@@ -2811,7 +2846,7 @@ mod Ur.Scene do
   pfn parked_car(c : Ur.Sim.City, id : Int, parking : Int, slot : Int, reuse : Bool) : Unit do
     match Ur.Citizens.parking_at(parking) do
       Some(p) ->
-        if p.kind < 4 && S.motor_street(c, p.road) do
+        if p.kind < 4 && S.motor_street(c, p.road) && (p.kind != 0 || S.street_end_arm(c, p.road) < 0) do
           let pose = parked_pose(c, p)
           if reuse do () else draw_car(id, pose, slot, false, false) end
         else if reuse do () else Vk.chunk_free(slot) end end
@@ -3175,6 +3210,39 @@ mod Ur.Scene do
     let m = face(m, 0, 0, 3, 3, 26, 0, tex)
     face(m, 29, 0, 3, 3, 26, 0, tex)
   end
+  pfn water_reach(tex : Int) : Mesh do
+    let m = { words: NativeArray.make_i32(16, 0), quads: 0 }
+    List.fold_left([2, 24], m, fn (a, x) ->
+      List.fold_left([2, 24], a, fn (b, z) ->
+        let b = face(b, x, 0, if z == 2 do 2 else 28 end, 6, 2, 0, tex)
+        face(b, if x == 2 do 2 else 28 end, 0, if z == 2 do 4 else 24 end, 2, 4, 0, tex)))
+  end
+  pfn power_badge(tex : Int) : Mesh do
+    let m = box({ words: NativeArray.make_i32(32, 0), quads: 0 }, 9, 0, 9, 14, 3, 14, tex)
+    if tex == 30 do
+      List.fold_left([0, 2, 4, 6, 8], m, fn (a, offset) ->
+        let a = face(a, 11 + offset, 3, 11 + offset, 2, 2, 0, 19)
+        if offset == 4 do a else face(a, 19 - offset, 3, 11 + offset, 2, 2, 0, 19) end)
+    else
+      let m = face(m, 11, 3, 15, 10, 2, 0, 19)
+      if tex == 10 do m else face(m, 15, 3, 11, 2, 10, 0, 19) end
+    end
+  end
+  pfn power_markers(c : Ur.Sim.City, report : Ur.Sim.UtilityDelivery, visible : Bool, i : Int) : Unit do
+    if i >= S.count() do () else
+      let slot = power_marker_base() + i
+      let tex = if visible do Ur.Layers.power_material(c, report, i) else -1 end
+      if tex < 0 do Vk.chunk_free(slot) else
+        let roof = List.fold_left(L.structures(c, i, 0), S.get(c.heights, i), fn (height, piece) ->
+          if piece.y + piece.h > height do piece.y + piece.h else height end)
+        let badge = power_badge(tex)
+        if Vk.chunk_begin(slot, i % S.width() * 32, roof + 4, i / S.width() * 32, 0) &&
+          Vk.chunk_part(0, badge.words, badge.quads) && Vk.chunk_commit() do ()
+        else Ur.AppError.stop("Electricity marker upload failed") end
+      end
+      power_markers(c, report, visible, i + 1)
+    end
+  end
   -- Project the utility network above the terrain so it is visible through the city view.
   pfn utility_arms(c : Ur.Sim.City, network : NativeIntArr, i : Int, floor : Int, d : Int, pipe : Bool, tex : Int, m : Mesh) : Mesh do
     if d >= 4 do m else
@@ -3382,7 +3450,8 @@ mod Ur.Scene do
   end
   pfn layer_tiles(c : Ur.Sim.City, st : Ur.Sim.Stats, layer : Int, rain : NativeIntArr, i : Int) : Unit do
     if i >= S.count() do () else
-      let tex = if layer == 38 do NativeArray.get_int(rain, i) else Ur.Layers.material(c, st, layer, i) end
+      let tex = if layer == 38 do NativeArray.get_int(rain, i)
+        else if layer == 2 && S.get(c.grid, i) == 0 do -1 else Ur.Layers.material(c, st, layer, i) end end
       let slot = overlay_slot(i)
       if tex < 0 do Vk.chunk_free(slot) else if layer == 29 do wind_arrow(c, i, slot, tex) else
         let x = i % S.width() * 32
@@ -3396,6 +3465,7 @@ mod Ur.Scene do
         let mesh = if worship_marker do box({ words: NativeArray.make_i32(12, 0), quads: 0 }, 10, 0, 10, 12, 3, 12, tex)
           else if layer == 9 do traffic_mesh(c, st.traffic, i)
           else if Ur.Layers.is_utility(layer) && (if layer == 2 do S.get(c.grid, i) > 0 else S.get(c.pipes, i) > 0 end) do utility_mesh(c, i, floor, layer, tex)
+          else if layer == 1 && tex == 12 do water_reach(tex)
           else if layer == 11 do crossing_layer(c, i, tex)
           else if layer == 32 || (layer == 38 && tex < 1000) do heat_tiles(c, x, z, floor, tex, 0, { words: NativeArray.make_i32(32, 0), quads: 0 })
           else if layer == 38 do layer_outline(tex - 1000, { words: NativeArray.make_i32(8, 0), quads: 0 })
@@ -3403,7 +3473,7 @@ mod Ur.Scene do
             let m = { words: NativeArray.make_i32(12, 0), quads: 0 }
             street_policy_mesh(c, i, tex, 0, face(m, 12, 0, 12, 8, 8, 0, tex))
           else if layer == 28 && tex != 6 do ward_outline(c, i, tex, 0, { words: NativeArray.make_i32(8, 0), quads: 0 })
-          else layer_outline(tex, { words: NativeArray.make_i32(8, 0), quads: 0 }) end end end end end end end end
+          else layer_outline(tex, { words: NativeArray.make_i32(8, 0), quads: 0 }) end end end end end end end end end
         if mesh.quads == 0 do Vk.chunk_free(slot) else if Vk.chunk_begin(slot, x, floor, z, 0) && Vk.chunk_part(if layer == 9 do 2 else 0 end, mesh.words, mesh.quads) && Vk.chunk_commit() do ()
         else Ur.AppError.stop("Map layer upload failed") end end
       end end
@@ -3457,7 +3527,8 @@ mod Ur.Scene do
       flood_map(c, fields, lot + 1)
     end
   end
-  fn map_layer(c : Ur.Sim.City, st : Ur.Sim.Stats, layer : Int) : Unit do
+  fn map_layer(c : Ur.Sim.City, st : Ur.Sim.Stats, previous : Int, layer : Int) : Unit do
+    if layer == 2 || previous == 2 do power_markers(c, st.utilities.electric, layer == 2, 0) else () end
     let tag = match layer do
       4 -> 253
       5 -> 252
@@ -3511,7 +3582,10 @@ mod Ur.Scene do
       else if cut do -33 else if inside do L.height(c, vx, vz) else 0 end end end
       let level = if inside do S.get(c.buildings, i) else 0 end
       let kind = if inside do S.get(c.plants, i) else 0 end
-      let stage = if inside do S.get(c.construction, i) else 0 end
+      let stage = if inside do
+        let construction = S.get(c.construction, i)
+        if construction > 0 do construction else S.public_work_stage(c, i) end
+      else 0 end
       let parking_garage = inside && S.get(c.public_parking, i) == 2
       let station = kind > 0 || parking_garage
       let lx = int_mod_euclid(vx, 32)
