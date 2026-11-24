@@ -164,11 +164,11 @@ mod Ur.Air do
     let z = clamp(area / areas_x() + dz, 0, areas_z() - 1)
     z * areas_x() + x
   end
-  -- heating: land hotter than the sea (with its city heat, damped on dry soil); sea within 12 parcels of land warmer than it
+  -- heating: land hotter than the sea (a fifth of its city heat counts: heat nudges storms, it does not steer them), damped on dry soil;; sea within 12 parcels of land warmer than it
   pfn heating(a : Air, heights : NativeIntArr, heat : NativeIntArr, contrast : Int, x0 : Int, z0 : Int, k : Int, acc : Int) : Int do
     if k >= 16 do acc / 16 else
       let i = (z0 + k / 4) * width() + x0 + k % 4
-      let v = if get(heights, i) > 0 do imax(0, contrast + get(heat, i)) * (clamp(a.soil, 0, 100) + 30) / 100
+      let v = if get(heights, i) > 0 do imax(0, contrast + get(heat, i) / 5) * (clamp(a.soil, 0, 100) + 30) / 100
         else if get(a.coast, i) >= -12 do imax(0, 0 - contrast) else 0 end end
       heating(a, heights, heat, contrast, x0, z0, k + 1, acc + v)
     end
