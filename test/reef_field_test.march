@@ -22,6 +22,9 @@ mod ReefFieldTest do
       if O.kind(f, x, z) == 1 do true else reef_near(f, px, pz, r, k + 1) end
     end
   end
+  pfn any_below(a : NativeIntArr, v : Int, i : Int) : Bool do
+    if i >= NativeArray.length_int(a) do false else if NativeArray.get_int(a, i) < v do true else any_below(a, v, i + 1) end end
+  end
   pfn game_of(c : Ur.Sim.City) : Ur.Save.Session do
     { game: { city: c, cx: 0.0, cz: 0.0, zoom: 60.0, yaw: 0.55, paused: true, speed: 1 }, evacuation: Nil }
   end
@@ -53,6 +56,12 @@ mod ReefFieldTest do
     let dry = { f with floor: NativeArray.set_int(f.floor, 41 * O.cells_wide() + 40, -1) }
     let barred = Ur.Sea.swell_depths(dry, seeded.seawalls)
     Test.assert_true(NativeArray.get_f32(barred, 20 * w + 20) <= 0.0, "a single dry cell under it makes it dry")
+
+    -- shoals: a parcel over a sand bar reads its crest; a parcel over bare shelf reads none
+    let (shoals, _) = O.shoals(f)
+    Test.assert_true(any_below(shoals, 4, 0), "some parcel of seed 7 has a reef or bar under 1 m deep")
+    let (bare, _) = O.shoals(old)
+    Test.assert_false(any_below(bare, 63, 0), "the bare shelf has no shoals")
 
     -- saves keep the features version, and a save without it loads with none
     match Ur.Save.decode_session(Ur.Save.encode_session(game_of(seeded))) do

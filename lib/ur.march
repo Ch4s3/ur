@@ -14,7 +14,8 @@ mod Ur do
   type DayResult = { city : Ur.Sim.City, stats : Ur.Sim.Stats }
   type DayPlan = { completed : List(Int), task : Task(DayResult) }
   -- the last exposure map and refracted swell from the sea job, which the day roll measures the coming day's sea from
-  type SeaView = { exposure : NativeF32Arr, swell : Option(Strata.Waves.Swell) }
+  -- [ocean] is the sea floor the day is measured over: the ferries' shoals come from it
+  type SeaView = { exposure : NativeF32Arr, swell : Option(Strata.Waves.Swell), ocean : Ur.Ocean.Field }
   -- The ocean's slow work runs on workers (Task.async) and is collected with Task.poll, never waited on:
   -- the exposure map of the wind's sector, and the coast field after an edit that may move the shoreline.
   -- the sea job also refracts the swell round the coast (Ur.Sea.swell) for its sector and wavelength
@@ -150,7 +151,9 @@ mod Ur do
   pfn roll_day(c : Ur.Sim.City, traffic : NativeIntArr, completed : List(Int), flood_drill : Bool, sea : SeaView) : DayResult do
     let runs = List.filter(c.waste_runs, fn run -> List.any(completed, fn site -> site == run.pickup))
     let seas = Ur.Sea.daily_seas(c, Ur.Sea.next_height(c), sea.exposure, sea.swell)
-    let next = S.advance_day_with_traffic({ c with waste_runs: runs, sea_heights: seas }, traffic)
+    let next = S.advance_day_with_traffic(Ur.Ocean.with_shoals({ c with waste_runs: runs, sea_heights: seas }, sea.ocean), traffic)
+    -- the day's fishing, growth and spreading of the fish (Ur.Fish), over the sea floor the day was measured on
+    let next = Ur.Fish.day(next, Ur.Fish.habitat(next, sea.ocean))
     let next = if flood_drill do Ur.Scenario.flood_backup_turn(next) else next end
     let day = Ur.Clock.close_day(c.month, next, traffic, true)
     let stats = match day.stats do
@@ -825,7 +828,7 @@ mod Ur do
       let stats_undo = (wait.undo || undone) && (stats_landed || (midnight && undone))
       let day_plan = if Option.is_some(arrived) do None else day_plan end
       let (day, day_ready) = if midnight do
-        complete_day(day_plan, c, p.stats.traffic, p.sanitation.completed, p.flood_drill, { exposure: p.sea_exposure, swell: p.sea_field })
+        complete_day(day_plan, c, p.stats.traffic, p.sanitation.completed, p.flood_drill, { exposure: p.sea_exposure, swell: p.sea_field, ocean: p.ocean })
       else
         let stats = match arrived do
           Some(stats) -> stats
@@ -875,6 +878,8 @@ mod Ur do
           { before: p.stats.junctions, after: st.junctions, before_tick: signal_before, after_tick: signal_after }, p.stats.utilities.electric, st.utilities.electric, section)
       else () end
       let (ocean, ocean_city, ocean_job, rebuilt) = poll_ocean(p.ocean, p.ocean_city, p.ocean_job)
+      -- a new sea floor: the ferries feel its shoals at once
+      let c = if rebuilt do Ur.Ocean.with_shoals(c, ocean) else c end
       let ocean_dirty = p.ocean_dirty || scene_changed
       let (ocean_job, ocean_dirty) = if ocean_dirty && Option.is_none(ocean_job) do (start_ocean(ocean, ocean_city, c), false) else (ocean_job, ocean_dirty) end
       let refresh_preview = paint || due || building_day || (guided && day_changed)
@@ -1064,7 +1069,7 @@ mod Ur do
       let day_plan = if midnight do None else
         if steps > 0 && !paused && Option.is_none(day_plan) && Option.is_none(c.shelter_demand) &&
           (List.is_empty(c.waste_runs) || S.street_hour(elapsed) >= 21) do
-          start_day_plan(c, st.traffic, sanitation.completed, p.flood_drill, { exposure: sea_exposure, swell: sea_field })
+          start_day_plan(c, st.traffic, sanitation.completed, p.flood_drill, { exposure: sea_exposure, swell: sea_field, ocean: ocean })
         else day_plan end
       end
       let render_start = if timing do Vk.time() else 0.0 end
@@ -1349,6 +1354,7 @@ mod Ur do
       if metro && stats.people != Ur.Scenario.metro_people() do Ur.AppError.stop("Metropolitan benchmark: " ++ int_to_string(stats.people) ++ " residents housed, " ++ int_to_string(Ur.Scenario.metro_people()) ++ " asked for (raise UR_METRO_FLOORS)") else () end
       let ocean_start = Authority.must(System.now_ms())
       let ocean = Ur.Ocean.field(c)
+      let c = Ur.Ocean.with_shoals(c, ocean)
       Ur.Scene.ocean_all(ocean)
       let sea = Ur.Sea.state_at(c, clock_phase(c))
       Ur.Scene.sea_state(sea, 0.0)
@@ -1367,7 +1373,7 @@ mod Ur do
       let preview_chunks = if road_demo do Ur.Scene.road_preview(c, preview, draft, start_tool, 0) else 0 end
       let region = Authority.must(Env.get_int("UR_REGION_VIEW", 0)) > 0
       let channel = Authority.must(Env.get_int("UR_CHANNEL_VIEW", 0)) > 0
-      let layer = S.clamp(Authority.must(Env.get_int("UR_LAYER", if S.grade_tool(start_tool) do 11 else if fire_demo do 22 else if demo == 14 do 4 else if demo == 13 || demo == 21 do 28 else if demo == 19 do 2 else if c.harbour < 0 do 8 else 0 end end end end end end)), 0, 38)
+      let layer = S.clamp(Authority.must(Env.get_int("UR_LAYER", if S.grade_tool(start_tool) do 11 else if fire_demo do 22 else if demo == 14 do 4 else if demo == 13 || demo == 21 do 28 else if demo == 19 do 2 else if c.harbour < 0 do 8 else 0 end end end end end end)), 0, 39)
       let signal_tick = S.signal_tick(clock_phase(c))
       Ur.Scene.sync(c, c, 0, true, false, 0, S.street_hour(clock_phase(c)),
         { before: stats.junctions, after: stats.junctions, before_tick: signal_tick, after_tick: signal_tick }, stats.utilities.electric, stats.utilities.electric, { before: 0, after: Ur.Scene.tunnel_view(layer, 0.55) })
