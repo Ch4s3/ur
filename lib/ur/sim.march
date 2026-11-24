@@ -777,7 +777,7 @@ mod Ur.Sim do
   fn fclamp(v : Float, low : Float, high : Float) : Float do if v < low do low else if v > high do high else v end end end
   fn day_cells(c : City) : List(Ur.Rain.Cell) do
     let wind = regional_wind(c)
-    Ur.Rain.cells(if c.climate_seed == 0 do 705 else c.climate_seed end, c.month, c.calendar_day, current_weather(c), wind.speed, wind.heading)
+    Ur.Rain.cells(if c.climate_seed == 0 do 705 else c.climate_seed end, c.month, c.calendar_day, current_weather(c), wind.speed, wind.heading, (Ur.Air.empty()).lift)
   end
   pfn lot_centre(lot : Int) : (Float, Float) do (int_to_float(lot % width() * 8 + 4), int_to_float(lot / width() * 8 + 4)) end
   pfn cell_level(c : City, cells : List(Ur.Rain.Cell), base : Int, lot : Int, hour : Float) : Int do

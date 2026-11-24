@@ -1233,23 +1233,56 @@ mod UrTest do
       _ -> false
     end
   end
+  -- a lift map: [inside] areas lift by [strong] at snapshots [s0] and [s1], everywhere else nothing
+  pfn lift_map(inside : Int -> Bool, strong : Int, s0 : Int, s1 : Int, k : Int, a : NativeIntArr) : NativeIntArr do
+    if k >= 5 * 165 do a else
+      let s = k / 165
+      let v = if inside(k % 165) && (s == s0 || s == s1) do strong else 0 end
+      lift_map(inside, strong, s0, s1, k + 1, NativeArray.set_int(a, k, v))
+    end
+  end
+  pfn in_patch(area : Int) : Bool do area % 15 >= 5 && area % 15 <= 9 && area / 15 >= 3 && area / 15 <= 7 end
+  pfn in_ring(area : Int) : Bool do area % 15 <= 1 || area % 15 >= 13 end
+  pfn birth(c : Ur.Rain.Cell) : (Float, Float) do Ur.Rain.centre(c, c.start) end
+  -- over [n] days of weather [kind] from day 0: births where [where] holds, births in hours [h0, h1), all births
+  pfn births(lift : NativeIntArr, kind : Int, where : (Float, Float) -> Bool, h0 : Float, h1 : Float, d : Int, n : Int, hit : Int, timed : Int, all : Int) : (Int, Int, Int) do
+    if d >= n do (hit, timed, all) else
+      let cells = List.filter(Ur.Rain.cells(77, d / 30 % 12, d % 30, kind, 30, 0.6, lift), fn c -> c.radius < 100.0)
+      let hit = hit + List.length(List.filter(cells, fn c -> where(birth(c))))
+      let timed = timed + List.length(List.filter(cells, fn c -> c.start >= h0 && c.start < h1))
+      births(lift, kind, where, h0, h1, d + 1, n, hit, timed, all + List.length(cells))
+    end
+  end
   pfn rain_cell_checks() : Unit do
-    let wet = Ur.Rain.cells(77, 3, 12, 4, 30, 0.6)
-    Test.assert_true(same_cells(Ur.Rain.cells(77, 3, 12, 4, 30, 0.6), wet), "the same seed and date give the same storms")
-    Test.assert_true(List.is_empty(Ur.Rain.cells(77, 3, 12, 1, 30, 0.6)) && Ur.Rain.baseline(1) == 0, "cloudy days have no rain")
-    Test.assert_true(List.length(wet) >= 2 && List.length(wet) <= 3 && List.all(wet, fn c -> c.level == 4 && c.radius >= 60.0 && c.radius <= 90.0), "severe days bring two or three storm cells")
-    Test.assert_eq_int(Ur.Rain.baseline(4), 3, "severe days rain heavily everywhere")
-    let rainy = Ur.Rain.cells(77, 3, 12, 2, 30, 0.6)
-    Test.assert_true(List.length(rainy) >= 1 && List.length(rainy) <= 2 && List.all(rainy, fn c -> c.level == 3 && c.radius >= 120.0 && c.radius <= 180.0), "rainy days bring one or two heavier bands")
-    let heavy = Ur.Rain.cells(77, 3, 12, 3, 30, 0.6)
-    Test.assert_true(List.length(heavy) == 1 && List.all(heavy, fn c -> c.level == 3 && c.radius >= 180.0 && c.radius <= 220.0), "heavy days bring one broad band")
-    Test.assert_true(List.all(wet, fn c -> c.stop -. c.start >= 6.0 && c.stop -. c.start <= 12.0), "a storm crosses the island in six to twelve hours")
-    Test.assert_true(List.all(wet, mid_crossing_on_map), "storms cross the island")
-    let first = unwrap(List.head_opt(wet))
-    let (cx, cz) = Ur.Rain.centre(first, first.start +. 1.0)
-    Test.assert_eq_int(Ur.Rain.level_at(wet, 3, cx, cz, first.start +. 1.0), 4, "under a storm cell the rain is severe")
-    Test.assert_eq_int(Ur.Rain.level_at(wet, 3, cx, cz, first.stop +. 1.0), 3, "once it has passed, only the baseline is left")
-    Test.assert_eq_int(Ur.Rain.level_at(wet, 3, -2000.0, -2000.0, first.start +. 1.0), 3, "far from every cell, the baseline")
+    let summer = lift_map(in_patch, 80, 2, 3, 0, NativeArray.make_int(5 * 165, 0))
+    let winter = lift_map(in_ring, 80, 0, 1, 0, NativeArray.make_int(5 * 165, 0))
+    let still = NativeArray.make_int(5 * 165, 0)
+    let wet = Ur.Rain.cells(77, 3, 12, 4, 30, 0.6, summer)
+    Test.assert_true(same_cells(Ur.Rain.cells(77, 3, 12, 4, 30, 0.6, summer), wet), "the same seed, date and air give the same storms")
+    Test.assert_true(List.is_empty(Ur.Rain.cells(77, 3, 12, 0, 30, 0.6, summer)), "clear days never rain")
+    Test.assert_true(List.is_empty(Ur.Rain.cells(77, 3, 12, 1, 30, 0.6, still)), "cloudy days without lift have no rain")
+    let shower = Ur.Rain.cells(77, 3, 12, 1, 30, 0.6, summer)
+    Test.assert_true(List.length(shower) == 1 && List.all(shower, fn c -> c.level == 2), "a cloudy day under strong lift brings one shower")
+    let fronts = List.filter(wet, fn c -> c.radius >= 100.0)
+    Test.assert_true(List.length(fronts) == 1 && List.all(fronts, fn c -> c.radius <= 150.0 && c.level == 4 && mid_crossing_on_map(c)), "a severe day has one front crossing the island")
+    Test.assert_true(List.length(wet) >= 2 && List.all(wet, fn c -> c.level == 4 && (c.radius >= 100.0 || (c.radius >= 60.0 && c.radius <= 90.0))), "and storm cells besides")
+    let heavy = Ur.Rain.cells(77, 3, 12, 3, 30, 0.6, summer)
+    Test.assert_true(List.length(heavy) >= 1 && List.all(heavy, fn c -> c.level == 3 && c.radius >= 70.0 && c.radius <= 120.0 && c.stop -. c.start >= 2.0 && c.stop -. c.start <= 5.0), "heavy days bring short-lived heavy cells")
+    let (inside, afternoon, all) = births(summer, 2, fn p -> match p do (x, z) -> x >= 160.0 && x <= 320.0 && z >= 96.0 && z <= 256.0 end, 10.0, 18.0, 0, 200, 0, 0, 0)
+    Test.assert_true(all > 50 && inside * 10 > all * 7, "summer storms are born over the hot ground")
+    Test.assert_true(afternoon * 10 > all * 7, "summer storms are born in the late morning and afternoon")
+    let (ring, night, all) = births(winter, 2, fn p -> match p do (x, _) -> x < 64.0 || x >= 416.0 end, 2.0, 10.0, 0, 200, 0, 0, 0)
+    Test.assert_true(all > 50 && ring * 10 > all * 7 && night * 10 > all * 7, "winter showers are born over the warm sea, at night and early morning")
+    let first = unwrap(List.head_opt(List.filter(wet, fn c -> c.radius < 100.0)))
+    let mid = (first.start +. first.stop) *. 0.5
+    let (cx, cz) = Ur.Rain.centre(first, mid)
+    Test.assert_eq_int(Ur.Rain.level_at(wet, 3, cx, cz, mid), 4, "under a storm cell the rain is severe")
+    Test.assert_eq_int(Ur.Rain.level_at(wet, 3, cx, cz, first.stop +. 30.0), 3, "once it has passed, only the baseline is left")
+    Test.assert_eq_int(Ur.Rain.level_at(wet, 3, -2000.0, -2000.0, mid), 3, "far from every cell, the baseline")
+    let (sx, sz) = Ur.Rain.centre(first, first.start +. 0.05)
+    Test.assert_true(Ur.Rain.covers(first, sx, sz, first.start +. 0.05) && !Ur.Rain.covers(first, sx +. first.radius *. 0.8, sz, first.start +. 0.05) && Ur.Rain.covers(first, cx +. first.radius *. 0.8, cz, mid), "a cell is born small and grows")
+    Test.assert_true(Ur.Rain.baseline_at(4, true, 10, 5.5) == 2 && Ur.Rain.baseline_at(4, false, 10, 5.5) == 3, "the rain shadow turns heavy rain to rain")
+    Test.assert_true(Ur.Rain.baseline_at(2, true, 10, 5.5) + Ur.Rain.baseline_at(2, true, 10, 6.5) == 2 && Ur.Rain.baseline_at(2, false, 10, 6.5) == 2, "in the shadow, rain falls every other hour")
   end
 
   pfn same_ints(a : NativeIntArr, b : NativeIntArr, i : Int) : Bool do
