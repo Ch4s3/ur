@@ -321,8 +321,9 @@ mod Ur.Scene do
   -- the heaped clouds, the hour: cumulus build after mid-morning and melt
   -- in the evening. A cloud forming or clearing grows or shrinks in place.
   fn cloud_bodies() : Int do 32 end
-  -- above the ocean's slots (Ur.Ocean.slot_count): the clouds, then each lot's fifth and sixth terrain layers
-  fn chunk_slots() : Int do Ur.Ocean.slot_count() + cloud_bodies() + S.count() * 2 end
+  -- Above the ocean's slots: clouds, high terrain, then rooftop electricity markers.
+  pfn power_marker_base() : Int do Ur.Ocean.slot_count() + cloud_bodies() + S.count() * 2 end
+  fn chunk_slots() : Int do power_marker_base() + S.count() end
   -- a parcel's fifth and sixth layers of terrain (32 to 48 m), for the tallest mountains
   pfn high_slot(i : Int, layer : Int) : Int do Ur.Ocean.slot_count() + cloud_bodies() + i * 2 + layer - 4 end
   pfn cloud_slot(i : Int) : Int do Ur.Ocean.slot_count() + i end
@@ -1326,12 +1327,13 @@ mod Ur.Scene do
       clear_preview(i + 1, old_count)
     end
   end
-  fn preview(c : Ur.Sim.City, tiles : List(Int), old_count : Int, valid : Bool) : Int do
-    let material = if valid do 20 else 6 end
-    let m = box(empty(), 0, 0, 0, 32, 1, 1, material)
-    let m = box(m, 0, 0, 31, 32, 1, 1, material)
-    let m = box(m, 0, 0, 1, 1, 1, 30, material)
-    let m = box(m, 31, 0, 1, 1, 1, 30, material)
+  fn preview(c : Ur.Sim.City, tiles : List(Int), old_count : Int, valid : Bool, utility : Bool) : Int do
+    let material = if !valid do (if utility do 30 else 6 end) else if utility do 29 else 20 end end
+    let edge = if utility do 2 else 1 end
+    let m = box(empty(), 0, 0, 0, 32, 1, edge, material)
+    let m = box(m, 0, 0, 32 - edge, 32, 1, edge, material)
+    let m = box(m, 0, 0, edge, edge, 1, 32 - edge * 2, material)
+    let m = box(m, 32 - edge, 0, edge, edge, 1, 32 - edge * 2, material)
     let count = List.length(tiles)
     let stride = if count > 72 do (count + 71) / 72 else 1 end
     let used = preview_tiles(c, tiles, stride, 0, 0, m)
@@ -3175,6 +3177,39 @@ mod Ur.Scene do
     let m = face(m, 0, 0, 3, 3, 26, 0, tex)
     face(m, 29, 0, 3, 3, 26, 0, tex)
   end
+  pfn water_reach(tex : Int) : Mesh do
+    let m = { words: NativeArray.make_i32(16, 0), quads: 0 }
+    List.fold_left([2, 24], m, fn (a, x) ->
+      List.fold_left([2, 24], a, fn (b, z) ->
+        let b = face(b, x, 0, if z == 2 do 2 else 28 end, 6, 2, 0, tex)
+        face(b, if x == 2 do 2 else 28 end, 0, if z == 2 do 4 else 24 end, 2, 4, 0, tex)))
+  end
+  pfn power_badge(tex : Int) : Mesh do
+    let m = box({ words: NativeArray.make_i32(32, 0), quads: 0 }, 9, 0, 9, 14, 3, 14, tex)
+    if tex == 30 do
+      List.fold_left([0, 2, 4, 6, 8], m, fn (a, offset) ->
+        let a = face(a, 11 + offset, 3, 11 + offset, 2, 2, 0, 19)
+        if offset == 4 do a else face(a, 19 - offset, 3, 11 + offset, 2, 2, 0, 19) end)
+    else
+      let m = face(m, 11, 3, 15, 10, 2, 0, 19)
+      if tex == 10 do m else face(m, 15, 3, 11, 2, 10, 0, 19) end
+    end
+  end
+  pfn power_markers(c : Ur.Sim.City, report : Ur.Sim.UtilityDelivery, visible : Bool, i : Int) : Unit do
+    if i >= S.count() do () else
+      let slot = power_marker_base() + i
+      let tex = if visible do Ur.Layers.power_material(c, report, i) else -1 end
+      if tex < 0 do Vk.chunk_free(slot) else
+        let roof = List.fold_left(L.structures(c, i, 0), S.get(c.heights, i), fn (height, piece) ->
+          if piece.y + piece.h > height do piece.y + piece.h else height end)
+        let badge = power_badge(tex)
+        if Vk.chunk_begin(slot, i % S.width() * 32, roof + 4, i / S.width() * 32, 0) &&
+          Vk.chunk_part(0, badge.words, badge.quads) && Vk.chunk_commit() do ()
+        else Ur.AppError.stop("Electricity marker upload failed") end
+      end
+      power_markers(c, report, visible, i + 1)
+    end
+  end
   -- Project the utility network above the terrain so it is visible through the city view.
   pfn utility_arms(c : Ur.Sim.City, network : NativeIntArr, i : Int, floor : Int, d : Int, pipe : Bool, tex : Int, m : Mesh) : Mesh do
     if d >= 4 do m else
@@ -3382,7 +3417,8 @@ mod Ur.Scene do
   end
   pfn layer_tiles(c : Ur.Sim.City, st : Ur.Sim.Stats, layer : Int, rain : NativeIntArr, i : Int) : Unit do
     if i >= S.count() do () else
-      let tex = if layer == 38 do NativeArray.get_int(rain, i) else Ur.Layers.material(c, st, layer, i) end
+      let tex = if layer == 38 do NativeArray.get_int(rain, i)
+        else if layer == 2 && S.get(c.grid, i) == 0 do -1 else Ur.Layers.material(c, st, layer, i) end end
       let slot = overlay_slot(i)
       if tex < 0 do Vk.chunk_free(slot) else if layer == 29 do wind_arrow(c, i, slot, tex) else
         let x = i % S.width() * 32
@@ -3396,6 +3432,7 @@ mod Ur.Scene do
         let mesh = if worship_marker do box({ words: NativeArray.make_i32(12, 0), quads: 0 }, 10, 0, 10, 12, 3, 12, tex)
           else if layer == 9 do traffic_mesh(c, st.traffic, i)
           else if Ur.Layers.is_utility(layer) && (if layer == 2 do S.get(c.grid, i) > 0 else S.get(c.pipes, i) > 0 end) do utility_mesh(c, i, floor, layer, tex)
+          else if layer == 1 && tex == 12 do water_reach(tex)
           else if layer == 11 do crossing_layer(c, i, tex)
           else if layer == 32 || (layer == 38 && tex < 1000) do heat_tiles(c, x, z, floor, tex, 0, { words: NativeArray.make_i32(32, 0), quads: 0 })
           else if layer == 38 do layer_outline(tex - 1000, { words: NativeArray.make_i32(8, 0), quads: 0 })
@@ -3403,7 +3440,7 @@ mod Ur.Scene do
             let m = { words: NativeArray.make_i32(12, 0), quads: 0 }
             street_policy_mesh(c, i, tex, 0, face(m, 12, 0, 12, 8, 8, 0, tex))
           else if layer == 28 && tex != 6 do ward_outline(c, i, tex, 0, { words: NativeArray.make_i32(8, 0), quads: 0 })
-          else layer_outline(tex, { words: NativeArray.make_i32(8, 0), quads: 0 }) end end end end end end end end
+          else layer_outline(tex, { words: NativeArray.make_i32(8, 0), quads: 0 }) end end end end end end end end end
         if mesh.quads == 0 do Vk.chunk_free(slot) else if Vk.chunk_begin(slot, x, floor, z, 0) && Vk.chunk_part(if layer == 9 do 2 else 0 end, mesh.words, mesh.quads) && Vk.chunk_commit() do ()
         else Ur.AppError.stop("Map layer upload failed") end end
       end end
@@ -3457,7 +3494,8 @@ mod Ur.Scene do
       flood_map(c, fields, lot + 1)
     end
   end
-  fn map_layer(c : Ur.Sim.City, st : Ur.Sim.Stats, layer : Int) : Unit do
+  fn map_layer(c : Ur.Sim.City, st : Ur.Sim.Stats, previous : Int, layer : Int) : Unit do
+    if layer == 2 || previous == 2 do power_markers(c, st.utilities.electric, layer == 2, 0) else () end
     let tag = match layer do
       4 -> 253
       5 -> 252

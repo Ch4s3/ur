@@ -11,6 +11,35 @@ mod Ur.Hud do
   pfn panel(u : Strata.Ui.Ui, x : Float, y : Float, w : Float, h : Float) : Strata.Ui.Ui do
     U.rect(u, 0, x, y, w, h, (0.055, 0.105, 0.13, 0.96))
   end
+  pfn utility_key(u : Strata.Ui.Ui, x : Float, name : String, color : (Float, Float, Float, Float)) : Strata.Ui.Ui do
+    label(U.rect(u, 0, x, 123.0, 9.0, 9.0, color), x +. 14.0, 119.0, 11.0, name, true)
+  end
+  pfn utility_height(layer : Int, tool : Int) : Float do
+    44.0 +. (if layer == 2 do 18.0 else 0.0 end) +. (if Ur.Layers.utility_route(tool) do 18.0 else 0.0 end)
+  end
+  fn over_utility_panel(x : Float, y : Float, layer : Int, tool : Int) : Bool do
+    Ur.Layers.is_utility(layer) && x >= 18.0 && x < 418.0 && y >= 116.0 && y < 116.0 +. utility_height(layer, tool)
+  end
+  pfn utility_panel(u : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, layer : Int, tool : Int, hover : Int) : Strata.Ui.Ui do
+    let route = Ur.Layers.utility_route(tool)
+    let height = utility_height(layer, tool)
+    let a = panel(u, 18.0, 116.0, 400.0, height)
+    let detail_y = if layer == 2 do 155.0 else 137.0 end
+    let a = if layer == 2 do
+      let a = utility_key(a, 26.0, "+ On grid", (0.49, 0.86, 0.84, 1.0))
+      let a = utility_key(a, 116.0, "- Power shortfall", (0.98, 0.77, 0.31, 1.0))
+      utility_key(a, 260.0, "× Off grid", (0.99, 0.34, 0.27, 1.0))
+    else label(a, 26.0, 119.0, 11.0, Ur.Layers.legend(layer), true) end
+    let a = if layer == 2 do label(a, 26.0, 137.0, 11.0, Ur.Layers.legend(layer), false) else a end
+    let a = if route do
+      label(a, 26.0, detail_y +. 18.0, 11.0, "Drag across tiles · Release to apply · Right-click to cancel", false)
+    else a end
+    let caption = if S.valid(hover) do Ur.Layers.utility_caption(c, st, layer, hover) else "" end
+    let detail = if caption != "" do caption
+      else if layer == 2 do "Point at a building or line to see its power status."
+      else "Point at a parcel or pipe to check service." end end
+    label(a, 26.0, detail_y, 11.0, detail, caption != "")
+  end
   pfn menu_width(w : Float) : Float do if w < 752.0 do w -. 32.0 else 720.0 end end
   pfn menu_x(w : Float) : Float do (w -. menu_width(w)) *. 0.5 end
   pfn menu_y(h : Float) : Float do
@@ -1952,7 +1981,7 @@ mod Ur.Hud do
       else if layer == 27 do "Point at a street to see its schedule." else "" end end end end
       label(a, 24.0, 138.0, 11.0, detail, false)
     else a end
-    let a = if S.valid(hover) && S.public_trade(c, hover) && !sidebar_visible do
+    let a = if S.valid(hover) && S.public_trade(c, hover) && !sidebar_visible && !Ur.Layers.is_utility(layer) do
       let open = S.business_open(c, hover, hour)
       let hours = business_hours(c, hover)
       label(panel(a, 18.0, 170.0, 326.0, 30.0), 24.0, 176.0, 11.0,
@@ -1968,8 +1997,7 @@ mod Ur.Hud do
     let a = label(a, w -. 225.0, 99.0, 12.0, "Undo  [Z]", can_undo)
     let a = label(panel(a, w -. 192.0, 130.0, 174.0, 45.0), w -. 180.0, 135.0, 11.0, S.weather_name(weather) ++ " · " ++ int_to_string(S.temperature(c)) ++ " °C", true)
     let a = label(a, w -. 180.0, 154.0, 10.0, "Soil moisture " ++ int_to_string(c.soil_moisture) ++ "%   ·   Forecast >", false)
-    let caption = if Ur.Layers.is_utility(layer) && S.valid(hover) do Ur.Layers.utility_caption(st, layer, hover) else "" end
-    let a = if caption != "" do label(panel(a, 18.0, 116.0, 425.0, 37.0), 26.0, 128.0, 12.0, caption, true) else a end
+    let a = if Ur.Layers.is_utility(layer) do utility_panel(a, c, st, layer, chosen, hover) else a end
     Ur.Toolbar.draw(a, if preview == "" do c else { c with message: preview } end, chosen, group, page, layer, mx, my)
   end
 end
