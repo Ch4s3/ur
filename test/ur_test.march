@@ -639,12 +639,16 @@ mod UrTest do
           "funded backup imports ease scarcity and pay duty")
         Test.assert_eq_int(late.fuel, 0, "the island plant runs down its separate fuel stock")
         let lot = Ur.Scenario.feeder_demo_site()
-        let shortage = S.stats(delayed)
-        let stocked = S.stats(supplied)
-        let reason = S.reason_with(delayed, lot, shortage)
+        -- Investment starts daily, so the open parcel may already have broken
+        -- ground during the voyage; judge it as the empty site it was.
+        let vacant = fn (city : Ur.Sim.City) -> { city with buildings: NativeArray.set_int(city.buildings, lot, 0),
+          construction: NativeArray.set_int(city.construction, lot, 0) }
+        let short_site = vacant(delayed)
+        let stocked_site = vacant(supplied)
+        let reason = S.reason_with(short_site, lot, S.stats(short_site))
         Test.assert_eq_str(reason, "Local food shortage · Restore sailings or fund backup imports",
           "local scarcity blocks the same housing parcel that the feeder upgrade opened")
-        Test.assert_true(S.reason_with(supplied, lot, stocked) != reason,
+        Test.assert_true(S.reason_with(stocked_site, lot, S.stats(stocked_site)) != reason,
           "backup imports restore the parcel's food access")
         let cut = S.act(warm, port, 38)
         let month_end = S.tick(supplied)

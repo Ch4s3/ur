@@ -90,6 +90,10 @@ mod Ur do
       None -> (roll_day(c, traffic, completed, flood_drill), false)
     end
   end
+  -- Choosing a tool that lays, upgrades or needs a buried pipe or power line
+  -- shows that network through the ground while the tool is in hand.
+  pfn water_network_tool(t : Int) : Bool do t == 18 || t == 19 || t == 98 || t == 9 || t == 10 || (t >= 14 && t <= 17) end
+  pfn power_network_tool(t : Int) : Bool do t == 26 || t == 27 || t == 97 || t == 4 || t == 8 || (t >= 20 && t <= 23) || t == 86 end
   pfn clock_phase(c : Ur.Sim.City) : Float do int_to_float(c.clock_ms) /. 1000.0 end
   pfn stamp_clock(c : Ur.Sim.City, elapsed : Float) : Ur.Sim.City do
     { c with clock_ms: float_to_int(elapsed *. 1000.0) }
@@ -273,8 +277,8 @@ mod Ur do
       let clicked_layer = if p.group == 7 do option else -1 end
       let layer = if clicked_layer < 0 do p.layer else if clicked_layer == p.layer do 0 else clicked_layer end end
       let changed_tool = clicked_tool > 0
-      let layer = if clicked_tool == 99 || clicked_tool == 100 || clicked_tool == 101 do 33 else if clicked_tool == 18 || clicked_tool == 19 || clicked_tool == 98 do 1
-        else if clicked_tool == 26 || clicked_tool == 27 || clicked_tool == 97 do 2
+      let layer = if clicked_tool == 99 || clicked_tool == 100 || clicked_tool == 101 do 33 else if water_network_tool(clicked_tool) do 1
+        else if power_network_tool(clicked_tool) do 2
         else if clicked_tool == 36 || clicked_tool == 43 do 3
         else if (clicked_tool >= 44 && clicked_tool <= 47) || clicked_tool == 62 do 10
         else if clicked_tool == 51 || clicked_tool == 52 || clicked_tool == 54 do 11

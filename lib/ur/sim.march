@@ -5847,7 +5847,7 @@ mod Ur.Sim do
       let transport = transport_report_with(c, roads, running, people, work)
       let operating = operating_city(c, transport.buses)
       let commutes = economic_commutes(operating, transport.traffic, running, transport.buses)
-      let period = c.month * 6 + c.calendar_day / 5
+      let period = c.month * days_per_month() + c.calendar_day
       develop(c, roads, commutes, civic_access_with(c, roads), park_walk(c), reserve_utilities(c, roads, networks),
         (period * 37) % count(), period, 0, people, work, labor_with_fares(transport.hiring.labor, transport.buses.fares),
         food_room(c, roads, reserved_people, networks, gen))
@@ -6392,10 +6392,12 @@ mod Ur.Sim do
     let weekday = (c.street_day + 1) % 7
     if day < days_per_month() do
       let c = open_religion_day({ c with calendar_day: day, street_day: weekday, clock_ms: 0 })
-      if valid(c.harbour) && (day % 3 == 0 || day % 5 == 0) do
+      if valid(c.harbour) do
         let roads = access(c)
         let c = if day % 3 == 0 do advance_construction(c, roads, 0) else c end
-        if day % 5 == 0 do start_day_project(c, roads) else c end
+        -- Private investment looks for a site every day; taxes and commutes
+        -- still space out each parcel's turn through develop's delay.
+        start_day_project(c, roads)
       else c end
     else
       let next = settle_month(c)
