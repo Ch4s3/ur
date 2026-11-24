@@ -5,6 +5,30 @@ mod SeaRulesTest do
 
   pfn with_storms(c : Ur.Sim.City, level : Int) : Ur.Sim.City do { c with setup: NativeArray.set_int(c.setup, 7, level) } end
 
+  -- two coastal land parcels with water between them along x, linked as a ferry route
+  pfn ferry_route(c : Ur.Sim.City) : (Ur.Sim.City, Int, Int) do find_route(c, 0) end
+  pfn water_run(c : Ur.Sim.City, i : Int, n : Int) : Int do
+    -- how many water parcels follow parcel i along +x before land (0 if none)
+    let x = i % S.width() + n + 1
+    if x >= S.width() do -1 else
+      let j = S.index(x, i / S.width())
+      if S.get(c.heights, j) == 0 do water_run(c, i, n + 1) else n end
+    end
+  end
+  pfn find_route(c : Ur.Sim.City, i : Int) : (Ur.Sim.City, Int, Int) do
+    if i >= S.count() do panic("no crossing on the map") else
+      let n = water_run(c, i, 0)
+      if S.get(c.heights, i) > 0 && n >= 2 && n <= 8 && i != c.harbour do
+        let b = i + n + 1
+        ({ c with ferries: NativeArray.set_int(NativeArray.set_int(c.ferries, i, b + 1), b, i + 1) }, i, b)
+      else find_route(c, i + 1) end
+    end
+  end
+  pfn fill(a : NativeIntArr, from : Int, to : Int, h : Int) : NativeIntArr do
+    if from > to do a else fill(NativeArray.set_int(a, from, h), from + 1, to, h) end
+  end
+  pfn seas_between(c : Ur.Sim.City, a : Int, b : Int, h : Int) : Ur.Sim.City do { c with sea_heights: fill(NativeArray.make_int(S.count(), 0), a + 1, b - 1, h) } end
+
   fn main(_cap : Cap(IO)) : Unit do
     let c = S.new()
     -- the Sea storms setting
@@ -29,6 +53,32 @@ mod SeaRulesTest do
         Test.assert_eq_int(S.sea_storms(back.game.city), 3, "and so does the Sea storms setting")
       Err(e) -> Test.assert_true(false, "the save loads: " ++ e)
     end
+    -- a ferry route across a stretch of water, every water parcel between at [h] cm
+    let (route, a, b) = ferry_route(c)
+    let calm = seas_between(route, a, b, 100)
+    Test.assert_eq_int(S.ferry_status(calm, a), 0, "a ferry runs in 1 m seas")
+    Test.assert_eq_int(S.ferry_status(seas_between(route, a, b, 120), a), 1, "it slows in 1.2 m seas (over 75% of its 1.5 m rating)")
+    let rough = seas_between(route, a, b, 160)
+    Test.assert_eq_int(S.ferry_status(rough, a), 2, "it is suspended in 1.6 m seas")
+    Test.assert_eq_int(S.ferry_peer(rough, a), -1, "a suspended route links nowhere")
+    Test.assert_eq_int(S.ferry_peer(calm, a), b, "a running one links its terminals")
+    let larger = S.act({ seas_between(route, a, b, 250) with cash: 100000 }, a, 122)
+    Test.assert_eq_int(S.ferry_status(larger, b), 1, "a larger ferry runs, slowed, in 2.5 m seas (rated 3 m)")
+    -- a protected harbour counts half the sea at its own end
+    let ends = { calm with sea_heights: NativeArray.set_int(calm.sea_heights, a + 1, 200) }
+    Test.assert_eq_int(S.ferry_status(ends, a), 2, "2 m seas beside a terminal suspend the route")
+    let sheltered = S.act({ ends with cash: 100000 }, a, 123)
+    Test.assert_true(S.ferry_status(sheltered, a) < 2, "behind a protected harbour the same seas count half")
+    -- the founding map counts a ferry as a road: a suspended route cuts the far bank off, and it reconnects when the sea drops
+    let linked = { calm with harbour: a, founding_map: true, roads: NativeArray.set_int(calm.roads, a, 1) }
+    Test.assert_true(S.get(S.access(linked), b) >= 0, "a running ferry carries the road across")
+    let cut = { linked with sea_heights: rough.sea_heights }
+    Test.assert_true(S.get(S.access(cut), b) < 0, "a suspended one cuts the far bank off")
+    Test.assert_true(S.get(S.access({ cut with sea_heights: calm.sea_heights }), b) >= 0, "and the road comes back when the sea drops")
+    -- the day roll tells the player
+    let told = S.ferry_day(cut)
+    Test.assert_true(String.contains(told.message, "suspended"), "a suspension is announced")
+    Test.assert_true(String.contains((S.ferry_day({ told with sea_heights: calm.sea_heights })).message, "running again"), "and so is the return")
     Authority.must(println("Sea rules checks passed"))
   end
 end

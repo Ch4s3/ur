@@ -26,7 +26,7 @@ mod Ur.Toolbar do
         let items = match page do
           1 -> Cons(35, Cons(42, Nil))
           2 -> Cons(36, Cons(43, Nil))
-          3 -> Cons(37, Nil)
+          3 -> [37, 122, 123]
           4 -> Cons(39, Cons(38, Nil))
           5 -> [87, 88, 89, 90]
           _ -> Cons(34, Cons(41, Cons(76, Nil)))
@@ -104,6 +104,8 @@ mod Ur.Toolbar do
       119 -> "fish"
       120 -> "grade"
       121 -> "outfall"
+      122 -> "ferry"
+      123 -> "harbour"
       2 | 29 -> "homes"
       3 | 31 -> "jobs"
       28 | 30 -> "mixed"
