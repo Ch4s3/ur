@@ -190,13 +190,12 @@ surface, but not land.
     natural features**, so existing cities don't suddenly gain a bar
     across their ferry. *(call)*
   - New games write version 1.
-- **Drawing:**
-  - Reef cells use a darker, textured seabed material, coloured by type
-    (coral warm tones, rocky grey-green).
-  - Bar cells use pale sand. Dry sand draws as a low sand surface with
-    foam round it.
-  - Ur's 32 texture layers are full, so these reuse or replace existing
-    slots. The builder chooses which.
+- **Drawing** *(updated during the build at the user's request: reefs look like coral, built by Strata's procedural generation)*:
+  - **`Strata.Corals`** (new Strata module, beside `Strata.Trees`) bakes procedural corals into voxel templates from a seed: branching (staghorn), brain (a lumpy dome wound in ridges), table (a stalk under a ragged plate), sea fan (a flat lace in one plane) and tube sponge (open tubes). Each is one connected piece standing on its base, in a main and an accent colour.
+  - **Reefs** are dotted with corals on a 2 m grid: each reef spot holds one with the reef type's chance (coral 60%, mixed 35%, rocky 20%), its species, variant and turn hashed from the spot. Coral reefs use every species, mixed reefs brains, fans and sponges among rock boulders, rocky reefs only boulders of reef rock. Corals are cut a voxel below the surface and meshed into the seabed chunk. The reef floor itself is dark reef rock.
+  - Coral colours are saturated well past their colours in air so they show through the water's tint. Clearer water over reefs would be a Strata shader follow-up.
+  - Bar cells use pale sand. Dry sand draws as a low sand column a voxel or two above the sea, in the seabed's second chunk slot (y 0..31), with foam round it from the shore depth.
+  - Materials 37..43 are new texture layers (reef rock and six coral colours); `textures_create` takes 44 layers.
 
 ### 3. Ferry draft rule
 
