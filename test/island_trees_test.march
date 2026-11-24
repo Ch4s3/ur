@@ -96,11 +96,52 @@ mod IslandTreesTest do
     Test.assert_true(List.all(List.range(0, 200), fn s -> top(Ur.Trees.shape(8, 16, 16, 20, s)) <= 28), "elfin trees stay low")
   end
 
+  -- choosing a kind
+  pfn kinds_at(c : Ur.Sim.City, site : (Int, Int, Bool, Bool), h : Int) : List(Int) do
+    List.fold_left(List.range(0, 400), Nil, fn (seen, s) ->
+      let k = Ur.Flora.pick_at(site, c, h, Strata.Seed.mix(s, 5))
+      if List.any(seen, fn x -> x == k) do seen else Cons(k, seen) end)
+  end
+  pfn all_in(ks : List(Int), allowed : List(Int)) : Bool do List.all(ks, fn k -> List.any(allowed, fn a -> a == k)) end
+  pfn has(ks : List(Int), k : Int) : Bool do List.any(ks, fn x -> x == k) end
+  pfn first_seed(c : Ur.Sim.City, want : Bool, s : Int) : Int do
+    if Ur.Flora.pine_map(seeded(c, s)) == want do s else first_seed(c, want, s + 1) end
+  end
+  pfn wild_lot(c : Ur.Sim.City, i : Int) : Int do
+    if i >= S.count() do panic("no wild hillside on the founding map") else
+      let h = S.get(c.heights, i)
+      if h >= 12 && h <= 40 && S.get(c.roads, i) == 0 && S.get(c.buildings, i) == 0 && S.get(c.zones, i) == 0 && S.get(c.parks, i) == 0 && S.get(c.plants, i) == 0 do i
+      else wild_lot(c, i + 1) end
+    end
+  end
+  pfn choosing(c : Ur.Sim.City) : Unit do
+    let plain = seeded(c, first_seed(c, false, 1))
+    let pines = seeded(c, first_seed(c, true, 1))
+    let coast = kinds_at(plain, (60, 0, false, true), 5)
+    Test.assert_true(all_in(coast, [0, 1, 3]) && has(coast, 0), "the coast grows palms, araucarias and rainforest trees")
+    let low = kinds_at(plain, (60, 0, false, false), 12)
+    Test.assert_true(all_in(low, [0, 3, 4, 5]) && has(low, 4), "the lowland grows rainforest, palms, bananas and some ʻōhiʻa")
+    let summit = kinds_at(plain, (60, 0, false, false), 60)
+    Test.assert_true(all_in(summit, [8, 9]), "the top carries elfin scrub")
+    Test.assert_true(has(kinds_at(plain, (60, 1, false, false), 42), 6), "windward upper slopes have tree ferns")
+    Test.assert_true(!has(kinds_at(plain, (60, -1, false, false), 50), 6), "lee upper slopes none")
+    Test.assert_true(has(kinds_at(pines, (60, -1, false, false), 30), 10), "a pine map's lee slopes carry pines")
+    Test.assert_true(!has(kinds_at(pines, (60, 1, false, false), 30), 10), "not its windward slopes")
+    Test.assert_true(!has(kinds_at(plain, (60, -1, false, false), 30), 10), "and other maps none")
+    Test.assert_true(List.all(List.range(0, 70), fn h -> all_in(kinds_at(pines, (60, -1, false, false), h), List.range(-1, 12))), "every pick is a kind or none")
+    -- planted: at most three trees and their companions, all inside the parcel
+    let lot = wild_lot(c, 0)
+    let parts = Ur.Landscape.structures(c, lot, 0)
+    Test.assert_true(List.length(parts) <= 3 * 12, "a wild parcel holds at most three trees: " ++ int_to_string(List.length(parts)) ++ " pieces")
+    Test.assert_true(List.all(parts, fn p -> p.x >= 0 && p.z >= 0 && p.x + p.w <= 32 && p.z + p.d <= 32), "inside the parcel")
+  end
+
   fn main(_cap : Cap(IO)) : Unit do
     let c = S.new()
     traits(c)
     spot(c)
     shapes()
+    choosing(c)
     Authority.must(println("Island trees: all assertions passed"))
   end
 end

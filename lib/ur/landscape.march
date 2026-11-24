@@ -223,21 +223,20 @@ mod Ur.Landscape do
       Cons(p, rest) -> Cons({ p with y: p.y + h }, shift(rest, h))
     end
   end
-  pfn vegetation(c : Ur.Sim.City, i : Int, n : Int, out : List(Ur.Architecture.Piece)) : List(Ur.Architecture.Piece) do
+  pfn vegetation(c : Ur.Sim.City, i : Int, site : (Int, Int, Bool, Bool), n : Int, out : List(Ur.Architecture.Piece)) : List(Ur.Architecture.Piece) do
     if n >= 3 do out else
       let seed = Strata.Seed.mix(i, n + 1)
       let x = 7 + seed % 18
       let z = 7 + (seed / 13) % 18
       let h = height(c, i % S.width() * 32 + x, i / S.width() * 32 + z)
-      let variety = seed / 23 % 7
-      let form = if h >= 32 && variety < 6 || variety == 0 do 1
-        else if h <= 12 && variety < 5 || variety == 1 do 2 else 0 end end
-      let next = if h > 6 && h < 57 && seed % 11 < 5 && S.grade_kind(c, S.grade_source(c, i)) != 1 do
-        List.append(A.tree(x, z, h, seed, form), out)
+      -- what grows here follows the island (Ur.Flora): zone, wind side, coast
+      let kind = Ur.Flora.pick_at(site, c, h, seed)
+      let next = if kind >= 0 && h < 68 && seed % 11 < 5 && S.grade_kind(c, S.grade_source(c, i)) != 1 do
+        List.append(Ur.Trees.shape(kind, x, z, h, seed), out)
         else if h > 1 && seed % 5 == 0 do Cons(A.piece(x, h, z, 4, 2, 3, 2), Cons(A.piece(x + 1, h + 2, z, 2, 1, 2, 23), out))
         else if h > 7 && h < 37 && seed % 3 == 0 do Cons(A.piece(x, h, z, 2, 2, 2, 25), Cons(A.piece(x, h + 2, z, 1, 1, 1, 20), out))
         else out end end end
-      vegetation(c, i, n + 1, next)
+      vegetation(c, i, site, n + 1, next)
     end
   end
   pfn zone_edge(c : Ur.Sim.City, i : Int, n : Int, tex : Int, out : List(Ur.Architecture.Piece)) : List(Ur.Architecture.Piece) do
@@ -806,7 +805,7 @@ mod Ur.Landscape do
       shift(A.orient(parts, side), h)
     else if zone > 0 do zone_edge(c, i, 0, if zone == 1 do 11 else if zone == 4 do 10 else 12 end end, Nil)
     else if !c.founding_map && i % S.width() == 9 && i / S.width() >= 22 && i / S.width() <= 25 do harbour_piece(i / S.width(), h)
-    else vegetation(c, i, 0, Nil) end end end end end end end end end end
+    else vegetation(c, i, Ur.Flora.site(c, i), 0, Nil) end end end end end end end end end end
   end
   pfn tunnel_approach(c : Ur.Sim.City, lot : Int, peer : Int, z : Int, ground : Int) : List(Ur.Architecture.Piece) do
     if z >= 16 do Nil else
@@ -943,7 +942,7 @@ mod Ur.Landscape do
     let paving = [A.piece(13, y, 13, 6, 1, 6, 16),
       A.piece(12, y, 12, 2, 1, 1, 23), A.piece(18, y, 19, 2, 1, 1, 23)]
     let paths = park_paths(c, i, y, 0, List.append(paving, lawn))
-    let grove = A.tree(7 + seed % 3, 23 + seed % 3, y, Strata.Seed.mix(i, 17), (seed / 3) % 3)
+    let grove = Ur.Trees.shape(match (seed / 3) % 4 do 0 -> 3 | 1 -> 0 | 2 -> 4 | _ -> 5 end, 7 + seed % 3, 23 + seed % 3, y, Strata.Seed.mix(i, 17))
     let flowers = flower_bed(3, y, 4, if seed % 2 == 0 do 15 else 18 end)
     let seating = List.append(park_bench(22, y, 8), List.append(flowers, grove))
     let feature = if tier == 2 && (size == 1 || seed % 3 == 0) do park_fountain(y, true)

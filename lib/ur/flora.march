@@ -85,6 +85,28 @@ mod Ur.Flora do
       else if land(c, rx, rz) > 0 do false else ray_open(c, x, z, a, i + 1) end end
     end
   end
+  doc "What a parcel's trees are chosen from, worked out once a parcel: (the massif's peak, its side of the wind, whether it is sheltered, whether it is on the coast)."
+  fn site(c : Ur.Sim.City, lot : Int) : (Int, Int, Bool, Bool) do
+    (massif_peak(c, lot), wind_side(c, lot), sheltered(c, lot), S.coastal(c, lot))
+  end
+
+  pfn roll(seed : Int, k : Int) : Int do int_mod_euclid(Strata.Seed.mix(seed, k), 100) end
+  doc "The tree kind (Ur.Trees) for a spot [h] voxels high on a parcel of [site], by [seed]; -1 for none (water). Coast: palms, araucarias, rainforest trees. Lowland: rainforest, palms, bananas, some ʻōhiʻa. Mid-slope: ʻōhiʻa, with tree ferns windward and koa-like woods elsewhere. Upper: cloud-forest trees, ferns windward. Top: elfin trees and bushes. A pine map's lee mid and upper slopes are mostly pine."
+  fn pick_at(site : (Int, Int, Bool, Bool), c : Ur.Sim.City, h : Int, seed : Int) : Int do
+    let (peak, side, _, coastal) = site
+    if h <= 0 do -1 else
+      let z = if coastal && h <= 12 do 0 else zone(h, peak, side, seed / 41 % 13 - 6) end
+      let n = roll(seed, 77)
+      let pined = pine_map(c) && side == -1 && (z == 2 || z == 3) && roll(seed, 78) < 60
+      if pined do 10
+      else if z == 0 do (if n < 60 do 0 else if n < 85 do 1 else 3 end end)
+      else if z == 1 do (if n < 45 do 3 else if n < 70 do 0 else if n < 90 do 4 else 5 end end end)
+      else if z == 2 do (if n < 60 do 5 else if n < 90 do (if side == 1 do 6 else 11 end) else 3 end end)
+      else if z == 3 do (if n < 60 do 7 else if n < 90 do (if side == 1 do 6 else 5 end) else 8 end end)
+      else (if n < 55 do 8 else 9 end) end end end end end
+    end
+  end
+
   doc "Whether [lot] lies in sheltered water: of 16 rays from it, each 8 parcels long, at most 5 meet no land (past the map's edge is open sea)."
   fn sheltered(c : Ur.Sim.City, lot : Int) : Bool do
     let x = lot % S.width()
