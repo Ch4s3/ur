@@ -460,10 +460,19 @@ mod Ur do
         let stats = if paint || undone || policy_changed do S.stats(rained) else p.stats end
         ({ city: rained, stats: stats }, false)
       end
+      -- Batteries bank spare power and give it back an hour at a time. The grid is
+      -- worked out again, in the background, when the sun rises or sets over a city
+      -- that has solar arrays or batteries, and when a battery's output has gone stale.
+      let hour_before = S.street_hour(phase)
+      let hour_now = S.street_hour(elapsed)
+      let hours_gone = (hour_now - hour_before + 24) % 24
+      let day = if hours_gone > 0 do { city: S.battery_hours(day.city, p.stats, hours_gone), stats: day.stats } else day end
+      let power_stale = hours_gone > 0 && S.power_follows_clock(day.city) &&
+        (S.daylight(hour_before) != S.daylight(hour_now) || S.battery_stale(day.city, p.stats))
       -- what follows a watch (stats: closed roads, offline utilities) is worked
       -- out in the background and applied when ready, like the prepared day
       let watch_plan = if midnight || paint || undone || policy_changed do None
-        else if watch_flooded do (match Task.async(fn () -> S.stats(day.city)) do
+        else if watch_flooded || (power_stale && Option.is_none(p.watch_plan)) do (match Task.async(fn () -> S.stats(day.city)) do
           Ok(task) -> Some(task)
           Err(_) -> None
         end) else p.watch_plan end end

@@ -367,6 +367,53 @@ mod UrTest do
     let inactive = S.stats(cut)
     Test.assert_true(inactive.generation.solar == 0 && inactive.services.wells == 0, "off-road utilities still need their network connections")
   end
+  pfn energy_checks() : Unit do
+    let start = S.new()
+    let solar_lot = S.index(8, 21)
+    let battery_lot = S.index(8, 19)
+    let well_lot = S.index(9, 22)
+    -- a solar-only grid with no bootstrap supply: the well is its one load
+    let solar_town = { start with founding_map: false, plants: NativeArray.set_int(start.plants, solar_lot, 13) }
+    let built = S.act(solar_town, battery_lot, 110)
+    Test.assert_eq_int(S.get(built.plants, battery_lot), 42, "the grid battery tool places a battery")
+    Test.assert_true(S.facility_name(42) == "Grid battery" && built.cash < solar_town.cash, "a grid battery has a name and a price")
+    let noon = { built with hour: 12 }
+    let night = { built with hour: 2, battery: 400 }
+    let flat = { built with hour: 2, battery: 0 }
+    let day_stats = S.stats(noon)
+    Test.assert_true(day_stats.generation.solar > 0 && S.sun_up(noon), "solar arrays produce by day")
+    Test.assert_eq_int((S.stats(night)).generation.solar, 0, "solar arrays produce nothing at night")
+    Test.assert_true(S.daylight(6) && S.daylight(19) && !S.daylight(5) && !S.daylight(20), "the sun is up from 06:00 to 20:00")
+    Test.assert_eq_int((S.stats(flat)).services.wells, 0, "a well stops at night when nothing else powers it")
+    let night_stats = S.stats(night)
+    Test.assert_true(night_stats.utilities.battery_out > 0 && night_stats.services.wells > 0, "a charged battery keeps the well running through the night")
+    let out = night_stats.utilities.battery_out
+    Test.assert_eq_int(out, night_stats.used, "with the sun down and nothing else running, the battery covers the whole demand")
+    Test.assert_eq_int((S.stats({ built with hour: 2, battery: 0 })).utilities.battery_out, 0, "an empty battery gives nothing")
+    Test.assert_eq_int(night_stats.utilities.battery_capacity, 960, "a battery holds 960 power-hours")
+    let drained = S.battery_hour(night, night_stats)
+    Test.assert_eq_int(drained.battery, 400 - out, "a discharging battery loses what it gives")
+    let charged = S.battery_hour(noon, day_stats)
+    Test.assert_true(charged.battery > noon.battery && charged.battery <= 960, "spare daytime power charges the battery")
+    let full = S.battery_hour({ noon with battery: 959 }, day_stats)
+    Test.assert_eq_int(full.battery, 960, "a battery never charges past capacity")
+    Test.assert_eq_int((S.battery_hours(night, night_stats, 3)).battery, 400 - 3 * out, "hours add up")
+    Test.assert_true(S.battery_stale({ night with battery: 0 }, night_stats), "a battery that has run dry makes the grid stale")
+    Test.assert_true(!S.battery_stale(night, night_stats), "a battery in step with the grid is not stale")
+    Test.assert_true(S.power_follows_clock(built) && !S.power_follows_clock(start), "only cities with solar or batteries follow the clock")
+    -- what a generator reports
+    Test.assert_eq_int(S.plant_output(noon, day_stats, solar_lot), day_stats.generation.solar, "a solar array reports its output")
+    Test.assert_eq_int(S.plant_output(night, night_stats, solar_lot), 0, "a solar array reports nothing at night")
+    Test.assert_eq_int(S.plant_output(night, night_stats, battery_lot), out, "a battery reports what it gives")
+    Test.assert_true(S.reason_with(night, battery_lot, night_stats) != "" && S.reason_with(noon, solar_lot, day_stats) != "", "generators describe themselves")
+    Test.assert_eq_int(S.power_use(night, night_stats, well_lot), 4, "a well reports its draw")
+    Test.assert_eq_int(S.power_received(night, night_stats, well_lot), 4, "a battery-run well receives its power")
+    Test.assert_eq_int(S.power_received(flat, S.stats(flat), well_lot), 0, "a well with no power receives none")
+    Test.assert_eq_int(S.facility_draw_of(9), 6, "a water import terminal draws grid power")
+    Test.assert_true(night_stats.power >= night_stats.used, "the grid's supply counts the battery")
+    -- growth and the monthly books are judged at midday, so a night rollover does not stall a solar town
+    Test.assert_eq_int((S.tick({ built with hour: 0 })).hour, 0, "settling the month leaves the clock alone")
+  end
   pfn starter_guide_checks() : Unit do
     let dock = S.index(20, 36)
     let street = S.index(20, 35)
@@ -810,12 +857,12 @@ mod UrTest do
     Test.assert_true(S.get(waiting.subway_water, station) == 72 && waiting.pumping_cost == 0,
       "the station gains no pump progress or expense on the first dry-enough day without power")
     let restored = S.advance_day(waiting)
-    let recovered = S.stats(restored)
+    let recovered = S.stats({ restored with hour: 12 })
     Test.assert_true(recovered.generation.gas == 0 && recovered.generation.solar > 0 &&
       S.get(restored.subway_water, station) < S.get(waiting.subway_water, station),
       "hilltop backup runs the pumps while gas remains offline")
     Test.assert_eq_int(S.get(recovered.running_transit, inland), 0, "the connected line stays closed until drained")
-    let uncharged = S.stats({ restored with pumping_cost: 0 })
+    let uncharged = S.stats({ restored with hour: 12, pumping_cost: 0 })
     Test.assert_eq_int(recovered.budget.power_cost - uncharged.budget.power_cost, 2, "pump charges reach the power budget")
     let drained = S.stats(storm_drill_days(restored, 5))
     Test.assert_eq_int(S.get(drained.running_transit, inland), 2, "subway service resumes once pumped dry")
@@ -875,8 +922,8 @@ mod UrTest do
     let disconnected = S.advance_day(outage)
     Test.assert_eq_int(S.get(disconnected.subway_water, station), S.get(outage.subway_water, station), "pumps cannot work without a grid connection")
     Test.assert_eq_int(disconnected.pumping_cost, outage.pumping_cost, "unpowered pumps incur no charge")
-    let sunny = S.generation(dry, S.access(dry))
-    let rainy = S.generation(storm, S.access(storm))
+    let sunny = S.generation({ dry with hour: 12 }, S.access(dry))
+    let rainy = S.generation({ storm with hour: 12 }, S.access(storm))
     Test.assert_true(sunny.solar > rainy.solar, "solar supplies less power in severe rain")
     let bare = hot_weather(dry, 0)
     let home = S.index(10, 20)
@@ -2378,6 +2425,7 @@ mod UrTest do
     let outage = S.act(lit_street, lit_street.harbour, 27)
     Test.assert_eq_int(Ur.Landscape.lights(outage, lamp_road, 3), 0, "streetlights go dark when the grid is cut")
     Test.assert_eq_int(Ur.Landscape.lights(outage, night_shop, 3), 0, "shop lights go dark when the grid is cut")
+    energy_checks()
     Authority.must(println("Ur simulation: all assertions passed"))
   end
 end

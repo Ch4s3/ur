@@ -313,6 +313,8 @@ mod Ur.Hud do
     let a = label(a, x, top +. 187.0, 14.0, "Power   " ++ int_to_string(st.utilities.electric.total) ++ " delivered / " ++ int_to_string(st.used - r.treatment_power) ++ " in demand", true)
     let a = label(a, x, top +. 207.0, 11.0, "Wind " ++ int_to_string(p.wind) ++ "   Solar " ++ int_to_string(p.solar) ++ "   Biogas " ++ int_to_string(p.biogas), false)
     let a = label(a, x, top +. 224.0, 11.0, "Gas " ++ int_to_string(p.gas) ++ "   Geothermal " ++ int_to_string(p.geothermal) ++ "   Nuclear " ++ int_to_string(p.nuclear), false)
+    let u = st.utilities
+    let a = if u.battery_capacity > 0 do label(a, x, top +. 238.0, 11.0, "Batteries " ++ int_to_string(u.battery_out) ++ " out   " ++ int_to_string(u.battery_stored) ++ " / " ++ int_to_string(u.battery_capacity) ++ " stored", false) else a end
     let a = label(a, x, top +. 253.0, 14.0, "Household water   " ++ int_to_string(st.utilities.water.total) ++ " / " ++ int_to_string(st.people) ++ " delivered", true)
     let a = label(a, x, top +. 273.0, 11.0, "Pumped " ++ int_to_string(r.wells) ++ "   Rain / starter " ++ int_to_string(r.rain) ++ "   Desal " ++ int_to_string(r.desal), false)
     let a = label(a, x, top +. 290.0, 11.0, "Recycled " ++ int_to_string(r.recycled) ++ "   Imported " ++ int_to_string(r.imported_water), false)
@@ -1370,6 +1372,22 @@ mod Ur.Hud do
         freight_button(box, right, y +. 169.0, half, if route.reserve do "Extra storage available" else "Storage $180" end)
     end
   end
+  pfn power_popup(box : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, lot : Int, x : Float, y : Float) : Strata.Ui.Ui do
+    let kind = S.get(c.plants, lot)
+    let out = S.plant_output(c, st, lot)
+    let demand = st.used
+    let supply = st.power
+    let box = label(box, x, y +. 57.0, 13.0, (if kind == 42 do "Giving " else "Output " end) ++ int_to_string(out) ++ " of " ++ int_to_string(demand) ++ " city demand", true)
+    let box = label(box, x, y +. 81.0, 11.0, "City supply " ++ int_to_string(supply) ++ " · " ++
+      (if supply >= demand do "surplus " ++ int_to_string(supply - demand) else "shortfall " ++ int_to_string(demand - supply) end), false)
+    let detail = if kind == 13 do (if S.sun_up(c) do "Sun is up · weather sets the output" else "Sun is down · no output until 06:00" end)
+      else if kind == 42 do int_to_string(st.utilities.battery_stored) ++ " / " ++ int_to_string(st.utilities.battery_capacity) ++ " stored · "
+        ++ (if out > 0 do "discharging into a deficit" else if supply > demand do "charging from spare power" else "standing by" end end)
+      else if S.wind_turbine(kind) do S.wind_caption(c, lot)
+      else if S.distance(S.grid_access(c), lot) < 0 do "Not connected to a power line" else "" end end end end
+    let box = label(box, x, y +. 104.0, 10.5, detail, false)
+    label(box, x, y +. 127.0, 10.0, "Upkeep $" ++ int_to_string(S.parcel_facility_upkeep(c, lot)) ++ " / month", false)
+  end
   fn tile_popup(u : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, lot : Int, point : (Float, Float), hour : Int, people : List(Ur.Citizens.Citizen), reason : String) : Strata.Ui.Ui do
     let w = U.width(u)
     let h = U.height(u)
@@ -1392,7 +1410,10 @@ mod Ur.Hud do
       let box = label(box, x, y +. 9.0, 15.0, name, true)
       let heat = S.local_temperature(c, lot)
       let temp = int_to_string(heat / 10) ++ "." ++ int_to_string(heat % 10) ++ " °C"
-      let box = label(box, x, y +. 32.0, 10.5, "Parcel " ++ int_to_string(lot % S.width()) ++ ", " ++ int_to_string(lot / S.width()) ++ " · " ++ temp, false)
+      let used = S.power_use(c, st, lot)
+      let received = S.power_received(c, st, lot)
+      let power_note = if used <= 0 do "" else " · " ++ int_to_string(received) ++ (if received < used do " of " ++ int_to_string(used) else "" end) ++ " power" end
+      let box = label(box, x, y +. 32.0, 10.5, "Parcel " ++ int_to_string(lot % S.width()) ++ ", " ++ int_to_string(lot / S.width()) ++ " · " ++ temp ++ power_note, false)
       if S.temple_tier(c, lot) > 0 do
         let box = label(box, x, y +. 57.0, 12.0, S.god_name(S.patron(c)) ++ " · " ++ Religion.temple_status(c, st, lot), true)
         let box = label(box, x, y +. 81.0, 11.0, "Upkeep $" ++ int_to_string(S.parcel_facility_upkeep(c, lot)) ++ " / month", false)
@@ -1413,6 +1434,7 @@ mod Ur.Hud do
           end
           label(box, x, y +. 175.0, 10.0, destination, false)
         else box end
+      else if S.power_plant(kind) do power_popup(box, c, st, lot, x, y)
       else if shelter > 0 && (c.flood_active || S.severe_now(c) ||
         List.any(people, fn person -> person.shelter == lot)) do
         let open = Ur.Evacuation.open_capacity(c, st.routes, lot)
@@ -1512,7 +1534,7 @@ mod Ur.Hud do
           label(box, x, y +. 181.0, 10.0, "Trash " ++ int_to_string(stock) ++ state ++ " · " ++ pickup, false)
         else box end
       end
-    end end end end end end end end end end end
+    end end end end end end end end end end end end
   end
   pfn emergency_panel_top(startup_step : Int) : Float do
     if startup_step > 0 do 326.0 else 168.0 end
