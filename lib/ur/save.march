@@ -470,6 +470,9 @@ mod Ur.Save do
         reserve: reserve, suspended: suspended, shop: shop, voyage: voyage })
     end
   end
+  pfn copy_setup(from : NativeIntArr, into : NativeIntArr, i : Int) : NativeIntArr do
+    if i >= NativeArray.length_int(from) || i >= NativeArray.length_int(into) do into else copy_setup(from, NativeArray.set_int(into, i, NativeArray.get_int(from, i)), i + 1) end
+  end
   pfn optional_array(j : Json.JsonValue, name : String, limit : Int) : Result(NativeIntArr, String) do
     match Json.get(j, name) do
       None -> Ok(NativeArray.make_int(S.count(), 0))
@@ -717,7 +720,7 @@ mod Ur.Save do
       Some(route) -> [("freight", encode_freight(route))]
       None -> Nil
     end
-    let fields = List.append([("facility_expansion", enc_array(v.facility_expansion, S.count() - 1, Nil)), ("milestones", enc_array(v.milestones, 63, Nil)), ("facility_staff", enc_array(v.facility_staff, S.count() - 1, Nil)), ("founders", Json.encode_int(v.founders)), ("world_seed", Json.encode_int(v.world_seed)), ("world_setup", enc_array(v.setup, 6, Nil)), ("utility_service", enc_array(v.utility_service, S.count() - 1, Nil))], freight)
+    let fields = List.append([("facility_expansion", enc_array(v.facility_expansion, S.count() - 1, Nil)), ("milestones", enc_array(v.milestones, 63, Nil)), ("facility_staff", enc_array(v.facility_staff, S.count() - 1, Nil)), ("founders", Json.encode_int(v.founders)), ("world_seed", Json.encode_int(v.world_seed)), ("world_setup", enc_array(v.setup, NativeArray.length_int(v.setup) - 1, Nil)), ("utility_service", enc_array(v.utility_service, S.count() - 1, Nil))], freight)
     Json.encode_object(List.append(Cons(("religion", encode_religion(v.religion)), fields),
       Cons(("bus_fare", Json.encode_int(v.bus_fare)),
       Cons(("waste_live", Json.encode_bool(v.waste_live)),
@@ -822,11 +825,12 @@ mod Ur.Save do
       Cons(("storm_drains", enc_array(v.storm_drains, S.count() - 1, Nil)),
       Cons(("seawalls", enc_array(v.seawalls, S.count() - 1, Nil)),
       Cons(("seabed", enc_array(v.seabed, S.count() - 1, Nil)),
+      Cons(("sea_heights", enc_array(v.sea_heights, S.count() - 1, Nil)),
       Cons(("rain_tanks", enc_array(v.rain_tanks, S.count() - 1, Nil)),
       Cons(("subway_water", enc_array(v.subway_water, S.count() - 1, Nil)),
       Cons(("soil_moisture", Json.encode_int(v.soil_moisture)),
       Cons(("pumping_cost", Json.encode_int(v.pumping_cost)),
-      Cons(("message", Json.encode_string(v.message)), Nil))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+      Cons(("message", Json.encode_string(v.message)), Nil)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
   end
   pfn decode_city(j : Json.JsonValue) : Result(Ur.Sim.City, String) do
     let? freight = match Json.get(j, "freight") do
@@ -1031,8 +1035,11 @@ mod Ur.Save do
     end
     let? setup = match Json.get(j, "world_setup") do
       None -> Ok(S.default_setup())
-      Some(value) -> match array(value, 7, 48) do
+      Some(value) -> match array(value, 8, 48) do
         Ok(settings) -> Ok(settings)
+        Err(_) -> match array(value, 7, 48) do
+        -- a setup saved before Sea storms: its seven rows, and Normal seas
+        Ok(seven) -> Ok(copy_setup(seven, S.default_setup(), 0))
         Err(_) ->
           let old = match array(value, 6, 48) do
             Ok(settings) -> Ok(settings)
@@ -1044,6 +1051,7 @@ mod Ur.Save do
           let settings = NativeArray.set_int(NativeArray.set_int(settings, 2, S.get(previous, 2)), 3, S.get(previous, 3))
           let wet = if NativeArray.length_int(previous) >= 6 do S.get(previous, 5) else S.get(previous, 2) end
           Ok(NativeArray.set_int(NativeArray.set_int(settings, 4, S.get(previous, 4)), 5, wet))
+      end
       end
     end
     let? climate_seed = match Json.get(j, "climate_seed") do
@@ -1064,6 +1072,7 @@ mod Ur.Save do
     let? storm_drains = optional_array(j, "storm_drains", 1)
     let? seawalls = optional_array(j, "seawalls", 1)
     let? seabed = optional_array(j, "seabed", 127)
+    let? sea_heights = optional_array(j, "sea_heights", 2000)
     let? rain_tanks = optional_array(j, "rain_tanks", S.rain_tank_capacity())
     let? subway_water = optional_array(j, "subway_water", 72)
     let? soil = match Json.get(j, "soil_moisture") do
@@ -1099,7 +1108,7 @@ mod Ur.Save do
     let? raw_message = field(j, "message")
     let? message = string(raw_message)
     if !((harbour == -1 || S.valid(harbour)) && (ferry_start == -1 || S.valid(ferry_start)) && month >= 0 && construction_spend >= 0 && tax >= 0 && tax <= 25 && energy >= 1 && energy <= 12) do Err("Invalid city values.") else
-    Ok(S.restore_rain({ rain_uniform: rain_uniform, watch: S.clamp(watch, 0, 2), rain_now: NativeArray.make_int(S.count(), 0), milestones: milestones, facility_staff: facility_staff, facility_expansion: facility_expansion, founders: S.clamp(founders, 0, 12), world_seed: world_seed, setup: setup, climate_seed: S.clamp(climate_seed, 0, 2147483646), storm_drains: storm_drains, seawalls: seawalls, seabed: seabed, pump_orders: pump_orders, surface_water: surface_water, flood_damage: flood_damage, flood_active: flood_active, rain_tanks: rain_tanks, subway_water: subway_water, soil_moisture: S.clamp(soil, 0, 100), pumping_cost: S.clamp(pumping, 0, 200000),
+    Ok(S.restore_rain({ rain_uniform: rain_uniform, watch: S.clamp(watch, 0, 2), rain_now: NativeArray.make_int(S.count(), 0), milestones: milestones, facility_staff: facility_staff, facility_expansion: facility_expansion, founders: S.clamp(founders, 0, 12), world_seed: world_seed, setup: setup, climate_seed: S.clamp(climate_seed, 0, 2147483646), storm_drains: storm_drains, seawalls: seawalls, seabed: seabed, sea_heights: sea_heights, pump_orders: pump_orders, surface_water: surface_water, flood_damage: flood_damage, flood_active: flood_active, rain_tanks: rain_tanks, subway_water: subway_water, soil_moisture: S.clamp(soil, 0, 100), pumping_cost: S.clamp(pumping, 0, 200000),
       waste_live: waste_live, waste_bins: waste_bins, waste_stock: waste_stock, waste_sites: waste_sites,
       waste_last: waste_last, waste_log: waste_log, waste_runs: waste_runs, council: council, religion: religion, construction_spend: construction_spend, island_exports: island_exports, island_crops: island_crops, island_catch: island_catch,
       shop_imports: shop_imports, harbour: harbour, ferry_start: ferry_start, trash: trash,

@@ -1,0 +1,34 @@
+mod SeaRulesTest do
+  needs IO
+  needs IO.Console
+  alias Ur.Sim as S
+
+  pfn with_storms(c : Ur.Sim.City, level : Int) : Ur.Sim.City do { c with setup: NativeArray.set_int(c.setup, 7, level) } end
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let c = S.new()
+    -- the Sea storms setting
+    Test.assert_eq_int(S.sea_storms(c), 2, "a new game's seas are Normal")
+    Test.assert_eq_int(S.sea_factor(with_storms(c, 0)), 50, "Calm counts half the sea")
+    Test.assert_eq_int(S.sea_factor(with_storms(c, 1)), 75, "Mild three quarters")
+    Test.assert_eq_int(S.sea_factor(c), 100, "Normal all of it")
+    Test.assert_eq_int(S.sea_factor(with_storms(c, 3)), 125, "Rough a quarter more")
+    Test.assert_eq_int(S.sea_factor(with_storms(c, 4)), 160, "Harsh 1.6 times")
+    let old = { c with setup: NativeArray.make_int(7, 2) }
+    Test.assert_eq_int(S.sea_storms(old), 2, "an old save's seven-entry setup reads Normal")
+    -- today's sea, as the city counts it
+    let lot = S.index(30, 2)
+    let seas = { c with sea_heights: NativeArray.set_int(c.sea_heights, lot, 200) }
+    Test.assert_eq_int(S.sea_at(seas, lot), 200, "Normal counts the sea as it is")
+    Test.assert_eq_int(S.sea_at(with_storms(seas, 4), lot), 320, "Harsh counts 1.6 times it")
+    Test.assert_eq_int(S.sea_at(with_storms(seas, 0), lot), 100, "Calm counts half")
+    -- saved with the city
+    match Ur.Save.decode_session(Ur.Save.encode_session({ game: { city: with_storms(seas, 3), cx: 0.0, cz: 0.0, zoom: 60.0, yaw: 0.55, paused: true, speed: 1 }, evacuation: Nil })) do
+      Ok(back) ->
+        Test.assert_eq_int(S.get(back.game.city.sea_heights, lot), 200, "today's sea survives a save")
+        Test.assert_eq_int(S.sea_storms(back.game.city), 3, "and so does the Sea storms setting")
+      Err(e) -> Test.assert_true(false, "the save loads: " ++ e)
+    end
+    Authority.must(println("Sea rules checks passed"))
+  end
+end
