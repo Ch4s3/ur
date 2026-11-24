@@ -27,7 +27,6 @@ mod Ur.Ocean do
   doc "Ground cells across and down the map and its ring (8 to a parcel)."
   fn cells_wide() : Int do padded_width() * 8 end
   fn cells_deep() : Int do padded_depth() * 8 end
-  pfn far() : Int do 1000000 end
 
   -- A cell's ground at its centre: land when above sea level, inside the map.
   pfn land(c : Ur.Sim.City, cx : Int, cz : Int) : Bool do
