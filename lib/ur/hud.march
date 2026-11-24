@@ -1186,7 +1186,8 @@ mod Ur.Hud do
         let month = date / days
         let day = date % days
         let date_label = "M" ++ int_to_string(month) ++ " · Day " ++ int_to_string(day + 1)
-        let reading = S.weather_name(S.weather_on(c, month, day)) ++ " · " ++ int_to_string(S.temperature_on(c, month, day)) ++ " °C"
+        let reading = S.weather_name(S.weather_on(c, month, day)) ++ " · " ++ int_to_string(S.temperature_on(c, month, day)) ++ " °C" ++
+          (if forecast do " · Sea " ++ Ur.Sea.metres(Ur.Sea.counted_on(c, date)) else "" end)
         let a = label(a, x, top, 11.0, date_label, false)
         label(a, x +. width *. 0.38, top, 11.0, reading, true)
       end
@@ -1199,7 +1200,7 @@ mod Ur.Hud do
     let other = x +. column +. 8.0
     let a = label(a, x, y +. 57.0, 17.0, "Weather", true)
     let a = label(a, x, y +. 85.0, 12.0, "Today · " ++ S.weather_name(S.current_weather(c)) ++
-      " · " ++ int_to_string(S.temperature(c)) ++ " °C · Soil moisture " ++ int_to_string(c.soil_moisture) ++ "%", false)
+      " · " ++ int_to_string(S.temperature(c)) ++ " °C · Soil moisture " ++ int_to_string(c.soil_moisture) ++ "% · Sea " ++ Ur.Sea.metres(Ur.Sea.counted_on(c, today)), false)
     let wet = S.climate_rain(c)
     let heat = S.climate_heat(c)
     let wetness = if wet >= 4 do "Wetter" else if wet <= -4 do "Drier" else "Moderate rainfall" end end

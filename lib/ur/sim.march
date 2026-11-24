@@ -918,24 +918,41 @@ mod Ur.Sim do
         offshore_barrier(c, x + dx, z + dz, dx, dz, remaining - 1))
     end
   end
-  pfn coast_approach(c : City, x : Int, z : Int, dx : Int, dz : Int, distance : Int, crest : Int) : Int do
+  doc "The surge today's sea drives at water parcel [lot], quarter metres: nothing below 1.5 m of counted sea, then a quarter metre a 10 cm more, to 16 (4 m). Calm seas (the setting) drive none."
+  fn surge_at(c : City, lot : Int) : Int do if sea_storms(c) == 0 do 0 else clamp((sea_at(c, lot) - 150) / 10, 0, 16) end end
+  -- the level water reaches walking in from the sea along (dx, dz): the full
+  -- 16 for the geometric reach (drainage, tides), or today's surge when [sea]
+  pfn coast_approach(c : City, sea : Bool, x : Int, z : Int, dx : Int, dz : Int, distance : Int, crest : Int) : Int do
     if distance > 6 || x < 0 || x >= width() || z < 0 || z >= depth() do 0 else
       let lot = index(x, z)
       let h = get(c.heights, lot)
       let loss = (distance - 1) * (if dx != 0 && dz != 0 do 3 else 2 end)
       if crest + loss >= 16 || get(c.seawalls, lot) > 0 do 0
-      else if h == 0 do (if offshore_barrier(c, x + dx, z + dz, dx, dz, 3) do 0 else 16 - loss end)
+      else if h == 0 do
+        if offshore_barrier(c, x + dx, z + dz, dx, dz, 3) do 0 else
+          let level = (if sea do surge_at(c, lot) else 16 end) - loss
+          if level > crest do level else 0 end
+        end
       else if h >= 16 do 0
-      else coast_approach(c, x + dx, z + dz, dx, dz, distance + 1, if h > crest do h else crest end) end end end
+      else coast_approach(c, sea, x + dx, z + dz, dx, dz, distance + 1, if h > crest do h else crest end) end end end
     end
   end
-  pfn shore_level(c : City, x : Int, z : Int, arm : Int, best : Int) : Int do
-    if arm >= 9 || best == 16 do best else if arm == 4 do shore_level(c, x, z, arm + 1, best) else
+  pfn shore_go(c : City, sea : Bool, x : Int, z : Int, arm : Int, best : Int) : Int do
+    if arm >= 9 || best == 16 do best else if arm == 4 do shore_go(c, sea, x, z, arm + 1, best) else
       let dx = arm % 3 - 1
       let dz = arm / 3 - 1
-      let level = coast_approach(c, x + dx, z + dz, dx, dz, 1, 0)
-      shore_level(c, x, z, arm + 1, if level > best do level else best end)
+      let level = coast_approach(c, sea, x + dx, z + dz, dx, dz, 1, 0)
+      shore_go(c, sea, x, z, arm + 1, if level > best do level else best end)
     end end
+  end
+  pfn shore_level(c : City, x : Int, z : Int, arm : Int, best : Int) : Int do shore_go(c, false, x, z, arm, best) end
+  doc "How deep today's sea surge stands on land parcel [lot], quarter metres: the surge arriving from the worst direction over the shore's crest, less 10 on a street with a storm drain, none on a protected harbour's terminal."
+  fn sea_surge(c : City, lot : Int) : Int do
+    let h = get(c.heights, lot)
+    if h <= 0 || h >= 16 || protected_harbour(c, lot) do 0 else
+      let surge = clamp(shore_go(c, true, lot % width(), lot / width(), 0, 0) - h, 0, 16)
+      clamp(surge - (if get(c.storm_drains, lot) > 0 && get(c.roads, lot) > 0 do 10 else 0 end), 0, 16)
+    end
   end
   pfn basin_depth(c : City, i : Int, height : Int, arm : Int, rim : Int, high : Int) : Int do
     if arm >= 4 do if high >= 3 do clamp(rim - height, 0, 12) else 0 end else
@@ -958,7 +975,7 @@ mod Ur.Sim do
   fn floodplain_depth(c : City, lot : Int) : Int do
     let h = get(c.heights, lot)
     if h <= 0 do 0 else
-      let coastal = if h < 16 do clamp(shore_level(c, lot % width(), lot / width(), 0, 0) - h, 0, 16) else 0 end
+      let coastal = if h < 16 && !protected_harbour(c, lot) do clamp(shore_go(c, true, lot % width(), lot / width(), 0, 0) - h, 0, 16) else 0 end
       let basin = basin_depth(c, lot, h, 0, h + 6, 0)
       let local = if basin > 0 do clamp(basin - soil_absorption(c, lot) - nearby_absorption(c, lot, 0, 0), 0, 12) else 0 end
       let exposed = if coastal > local do coastal else local end
@@ -2807,6 +2824,15 @@ mod Ur.Sim do
   end
   doc "The Sea storms setting, 0 calm .. 4 harsh (2, Normal, for a setup saved before it existed)."
   fn sea_storms(c : City) : Int do if NativeArray.length_int(c.setup) > 7 do clamp(get(c.setup, 7), 0, 4) else 2 end end
+  doc "[c] with its Sea storms setting at [level] (0 calm .. 4 harsh), a setup saved before the setting growing to hold it."
+  fn set_sea_storms(c : City, level : Int) : City do
+    let setup = if NativeArray.length_int(c.setup) > 7 do c.setup else
+      let d = default_setup()
+      NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(d,
+        0, get(c.setup, 0)), 1, get(c.setup, 1)), 2, get(c.setup, 2)), 3, get(c.setup, 3)), 4, get(c.setup, 4)), 5, get(c.setup, 5)), 6, get(c.setup, 6))
+    end
+    { c with setup: NativeArray.set_int(setup, 7, clamp(level, 0, 4)) }
+  end
   doc "How much of the sea the city counts under its Sea storms setting, in percent: 50, 75, 100, 125, 160."
   fn sea_factor(c : City) : Int do
     match sea_storms(c) do
@@ -2877,8 +2903,33 @@ mod Ur.Sim do
       end
     end
   end
+  pfn surge_day_go(c : City, lot : Int, water : NativeIntArr, damage : NativeIntArr, active : Bool) : City do
+    if lot >= count() do { c with surface_water: water, flood_damage: damage, flood_active: active } else
+      let surge = sea_surge(c, lot)
+      let stored = get(water, lot)
+      if surge <= stored do surge_day_go(c, lot + 1, water, damage, active) else
+        let previous = get(damage, lot)
+        let building = get(c.buildings, lot) > 0 || get(c.plants, lot) > 0
+        let repairs = if building && surge >= 4 do clamp(2 + surge / 2, previous, 10) else previous end
+        surge_day_go(c, lot + 1, NativeArray.set_int(water, lot, surge), if repairs == previous do damage else NativeArray.set_int(damage, lot, repairs) end, true)
+      end
+    end
+  end
+  doc "Today's sea surge: low shore land facing a rough sea floods to the surge's depth for the day (and drains as standing water does)."
+  fn surge_day(c : City) : City do if sea_storms(c) == 0 do c else surge_day_go(c, 0, c.surface_water, c.flood_damage, c.flood_active) end end
   doc "Records each ferry route's status for the day and tells the player when one is slowed, suspended or running again."
   fn ferry_day(c : City) : City do ferry_day_go(c, 0) end
+  doc "The parcel inspector's line for ferry terminal [lot]: today's status, the crossing's sea against the route's rating, and the terminal's upgrades."
+  fn ferry_summary(c : City, lot : Int) : String do
+    let peer = get(c.ferries, lot) - 1
+    let status = match ferry_status(c, lot) do
+      2 -> "Ferry suspended"
+      1 -> "Ferry slowed (half cargo)"
+      _ -> "Ferry running"
+    end
+    let works = (if larger_ferry(c, lot) do " · Larger ferry" else "" end) ++ (if protected_harbour(c, lot) do " · Protected harbour" else "" end)
+    status ++ " · " ++ metres(crossing_sea(c, lot, peer)) ++ " m seas, rated " ++ metres(ferry_rating(c, lot)) ++ " m" ++ works
+  end
   doc "The terminal the ferry at [lot] links to today, or -1 when there is none or the route is suspended."
   fn ferry_peer(c : City, lot : Int) : Int do
     let peer = get(c.ferries, lot) - 1
@@ -3048,9 +3099,18 @@ mod Ur.Sim do
     let blessing = if deity == 1 do 120 else if deity == 2 do 135 else 100 end end
     potential * clamp(c.soil_moisture * 2, 0, 100) * blessing / 10000
   end
+  pfn worst_sea_beside(c : City, i : Int, d : Int, worst : Int) : Int do
+    if d >= 4 do worst else
+      let h = sea_at(c, neighbour(i, d))
+      worst_sea_beside(c, i, d + 1, if h > worst do h else worst end)
+    end
+  end
+  doc "Whether the sea off fishing plant [i] is too rough to fish fully today (over 2 m beside it)."
+  fn rough_fishing(c : City, i : Int) : Bool do worst_sea_beside(c, i, 0, sea_at(c, i)) > 200 end
   pfn catch_yield(c : City, i : Int) : Int do
     let blessing = if favor_god(c) == 4 do 135 else 100 end
-    (if food_island(c, i) == 2 do 224 else 128 end) * (80 + get(c.setup, 4) * 10) / 100 * (100 - pollution_at(c, i)) * blessing / 10000
+    let full = (if food_island(c, i) == 2 do 224 else 128 end) * (80 + get(c.setup, 4) * 10) / 100 * (100 - pollution_at(c, i)) * blessing / 10000
+    if rough_fishing(c, i) do full / 2 else full end
   end
   pfn catch_total(c : City, roads : NativeIntArr, i : Int, total : Int) : Int do
     if i >= count() do total else
@@ -6257,7 +6317,7 @@ mod Ur.Sim do
       parking_name(kind) ++ " · " ++ int_to_string(parking_spaces(kind)) ++ " spaces · $" ++ int_to_string(parking_fee(kind)) ++ " per visit" ++
         (if !valid(fleet_frontage(c, i, 0)) || building_access(c, st.routes, i) < 0 do " · Disconnected" else "" end)
     else if get(c.parks, i) > 0 do park_name(get(c.park_tiers, i)) ++ " · " ++ int_to_string(get(c.parks, i)) ++ " connected parcels"
-    else if get(c.ferries, i) > 0 do "Ferry terminal connected across the water"
+    else if get(c.ferries, i) > 0 do ferry_summary(c, i)
     else if valid(grade_peer(c, i)) do tool_name(grade_kind(c, i) + 49) ++ " portal · " ++ int_to_string(span_distance(i, grade_peer(c, i)) * 8) ++ " m"
     else if get(c.streetscape, i) > 0 do road_name(get(c.roads, i)) ++ " · " ++ tool_name(55 + get(c.streetscape, i))
     else if get(c.roads, i) > 0 do
@@ -7321,8 +7381,7 @@ mod Ur.Sim do
   fn coastal_depth(c : City, lot : Int) : Int do
     let h = get(c.heights, lot)
     if h <= 0 || h >= 16 do 0 else
-      let surge = clamp(shore_level(c, lot % width(), lot / width(), 0, 0) - h, 0, 16)
-      clamp(surge - (if get(c.storm_drains, lot) > 0 && get(c.roads, lot) > 0 do 10 else 0 end), 0, 16)
+      sea_surge(c, lot)
     end
   end
   -- after a watch: the standing water a storm surge leaves on the coast, flood
@@ -7678,7 +7737,7 @@ mod Ur.Sim do
     let city = if valid(city.harbour) && absolute_day(city) % 5 == 0 do update_facility_staff(city) else city end
     let city = open_religion_day(city)
     let day_number = waste_date(city)
-    let c = ferry_day(day_weather(city, weather_sites(city, 0, Nil)))
+    let c = surge_day(ferry_day(day_weather(city, weather_sites(city, 0, Nil))))
     let c = freight_day(sanitation_day(c, traffic, day_number), traffic, day_number)
     let day = c.calendar_day + 1
     let weekday = (c.street_day + 1) % 7

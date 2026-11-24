@@ -13,6 +13,8 @@ mod Ur do
   type FrameRate = { since : Float, drawn : Int, value : Int }
   type DayResult = { city : Ur.Sim.City, stats : Ur.Sim.Stats }
   type DayPlan = { completed : List(Int), task : Task(DayResult) }
+  -- the last exposure map and refracted swell from the sea job, which the day roll measures the coming day's sea from
+  type SeaView = { exposure : NativeF32Arr, swell : Option(Strata.Waves.Swell) }
   -- The ocean's slow work runs on workers (Task.async) and is collected with Task.poll, never waited on:
   -- the exposure map of the wind's sector, and the coast field after an edit that may move the shoreline.
   -- the sea job also refracts the swell round the coast (Ur.Sea.swell) for its sector and wavelength
@@ -144,9 +146,11 @@ mod Ur do
       None -> stale
     end
   end
-  pfn roll_day(c : Ur.Sim.City, traffic : NativeIntArr, completed : List(Int), flood_drill : Bool) : DayResult do
+  -- the coming day's sea (Ur.Sea.daily_seas) is measured on the day worker, from these
+  pfn roll_day(c : Ur.Sim.City, traffic : NativeIntArr, completed : List(Int), flood_drill : Bool, sea : SeaView) : DayResult do
     let runs = List.filter(c.waste_runs, fn run -> List.any(completed, fn site -> site == run.pickup))
-    let next = S.advance_day_with_traffic({ c with waste_runs: runs }, traffic)
+    let seas = Ur.Sea.daily_seas(c, Ur.Sea.next_height(c), sea.exposure, sea.swell)
+    let next = S.advance_day_with_traffic({ c with waste_runs: runs, sea_heights: seas }, traffic)
     let next = if flood_drill do Ur.Scenario.flood_backup_turn(next) else next end
     let day = Ur.Clock.close_day(c.month, next, traffic, true)
     let stats = match day.stats do
@@ -155,26 +159,26 @@ mod Ur do
     end
     { city: day.city, stats: stats }
   end
-  pfn start_day_plan(c : Ur.Sim.City, traffic : NativeIntArr, completed : List(Int), flood_drill : Bool) : Option(DayPlan) do
-    match Task.async(fn () -> roll_day(c, traffic, completed, flood_drill)) do
+  pfn start_day_plan(c : Ur.Sim.City, traffic : NativeIntArr, completed : List(Int), flood_drill : Bool, sea : SeaView) : Option(DayPlan) do
+    match Task.async(fn () -> roll_day(c, traffic, completed, flood_drill, sea)) do
       Ok(task) -> Some({ completed: completed, task: task })
       Err(_) -> None
     end
   end
-  pfn complete_day(plan : Option(DayPlan), c : Ur.Sim.City, traffic : NativeIntArr, completed : List(Int), flood_drill : Bool) : (DayResult, Bool) do
+  pfn complete_day(plan : Option(DayPlan), c : Ur.Sim.City, traffic : NativeIntArr, completed : List(Int), flood_drill : Bool, sea : SeaView) : (DayResult, Bool) do
     match plan do
       Some(prepared) ->
-        if prepared.completed != completed do (roll_day(c, traffic, completed, flood_drill), false) else
+        if prepared.completed != completed do (roll_day(c, traffic, completed, flood_drill, sea), false) else
           match Task.poll(prepared.task) do
             Some(Ok(result)) -> (result, true)
-            Some(Err(_)) -> (roll_day(c, traffic, completed, flood_drill), false)
+            Some(Err(_)) -> (roll_day(c, traffic, completed, flood_drill, sea), false)
             None -> match Task.await(prepared.task) do
               Ok(result) -> (result, false)
-              Err(_) -> (roll_day(c, traffic, completed, flood_drill), false)
+              Err(_) -> (roll_day(c, traffic, completed, flood_drill, sea), false)
             end
           end
         end
-      None -> (roll_day(c, traffic, completed, flood_drill), false)
+      None -> (roll_day(c, traffic, completed, flood_drill, sea), false)
     end
   end
   -- The coast job: collect it if done (drawing the change here, on the main thread), else keep waiting.
@@ -324,6 +328,11 @@ mod Ur do
       :resume -> { p with menu_open: false, confirm: :nothing, notice: "" }
       :quit -> { p with quit: true }
       :lighting -> { p with confirm: :lighting, setup_drag: -1, notice: "" }
+      :sea ->
+        -- the setting steps Calm .. Harsh and round again; the city counts it from the next day roll, so a roll already worked out is dropped
+        let level = (S.sea_storms(p.city) + 1) % 5
+        { p with city: S.set_sea_storms(p.city, level), day_plan: None, confirm: :nothing,
+          notice: "Sea storms: " ++ Menu.sea_name(level) ++ ". The city counts the sea this way from the next day." }
       :save_city ->
         let game = { city: stamp_clock(p.city, p.elapsed), cx: p.cx, cz: p.cz, zoom: p.zoom, yaw: p.yaw, paused: p.paused, speed: p.speed }
         let evacuation = Ur.Citizens.evacuation_trips(Ur.Citizens.snapshot(p.citizens))
@@ -405,19 +414,19 @@ mod Ur do
       if relit do Ur.Lighting.apply(lighting) else () end
       let leave_lighting = was_lighting && (light_row == 8 || pressed(keys, p.keys, 15))
       if leave_lighting && !Ur.Save.save_lighting(lighting) do () else () end
-      let drag = if !mouse do -1 else if !p.mouse && setup_row >= 0 && setup_row < 7 do setup_row
+      let drag = if !mouse do -1 else if !p.mouse && setup_row >= 0 && setup_row < 8 do setup_row
         else if !p.mouse && light_row >= 0 && light_row < 8 do light_row else p.setup_drag end end end
       let p = { p with setup_drag: drag, lighting: lighting, relight: p.relight || (relit && Ur.Lighting.window_lamps(lighting) != Ur.Lighting.window_lamps(p.lighting)),
         confirm: if leave_lighting do :nothing else p.confirm end }
-      let setup = if setup_row >= 0 && setup_row < 7 do
+      let setup = if setup_row >= 0 && setup_row < 8 do
         NativeArray.set_int(p.setup, Menu.setup_index(setup_row), if setup_row == 1 do S.clamp(setup_value + 1, 1, 4)
           else if setup_row == 5 do 16 + setup_value * 8 else setup_value end end)
       else p.setup end
-      let p = if setup_row == 10 do { p with seed_focus: true } else if setup_row >= 0 do { p with seed_focus: false } else p end end
-      let p = if setup_row == 8 || (p.confirm == :setup && pressed(keys, p.keys, 15)) do { p with confirm: :nothing }
-        else if setup_row == 7 do { p with world_seed: int_mod_euclid(Authority.must(System.now_ms()), 2147483646) + 1 }
+      let p = if setup_row == 20 do { p with seed_focus: true } else if setup_row >= 0 do { p with seed_focus: false } else p end end
+      let p = if setup_row == 18 || (p.confirm == :setup && pressed(keys, p.keys, 15)) do { p with confirm: :nothing }
+        else if setup_row == 17 do { p with world_seed: int_mod_euclid(Authority.must(System.now_ms()), 2147483646) + 1 }
         else { p with setup: setup } end end
-      let p = if setup_row == 9 do
+      let p = if setup_row == 19 do
         restore(p, { city: S.unclaimed_setup(p.world_seed, p.setup), cx: S.overview_x(), cz: S.overview_z(), zoom: S.overview_zoom(), yaw: 0.55, paused: true, speed: 1 }, Nil)
       else p end
       let action = if was_setup || setup_row >= 0 || was_lighting do :nothing
@@ -429,7 +438,7 @@ mod Ur do
       Ur.Scene.sea_state(Ur.Sea.state_at(next.city, next.elapsed), next.water_time)
       Ur.Scene.clouds(sky, next.elapsed, next.cloud_offset, next.peaks, next.city, next.forced_weather < 0 && !S.uniform_rain(next.city))
       Ur.Scene.camera(next.cx, next.cz, next.zoom, if h > 0.0 do w /. h else 1.6 end, next.yaw)
-      if Strata.Render.draw_ui(if next.confirm == :setup do Menu.draw_setup(next.setup, next.world_seed, next.seed_focus) else if next.confirm == :lighting do Menu.draw_lighting(next.lighting) else Menu.draw(p.boot, next.saved, next.confirm, next.notice, mx, my, next.city.world_seed) end end) do () else Ur.AppError.stop("Menu overflow") end
+      if Strata.Render.draw_ui(if next.confirm == :setup do Menu.draw_setup(next.setup, next.world_seed, next.seed_focus) else if next.confirm == :lighting do Menu.draw_lighting(next.lighting) else Menu.draw(p.boot, next.saved, next.confirm, next.notice, mx, my, next.city.world_seed, S.sea_storms(next.city)) end end) do () else Ur.AppError.stop("Menu overflow") end
       if p.limit > 0 && p.frame == p.limit - 1 do Vk.request_shot() else () end
       let drawn = p.drawn + (if Vk.frame() do 1 else 0 end)
       let fps = if next.menu_open do next.fps else { since: Vk.time(), drawn: drawn, value: -1 } end
@@ -813,7 +822,7 @@ mod Ur do
       let stats_undo = (wait.undo || undone) && (stats_landed || (midnight && undone))
       let day_plan = if Option.is_some(arrived) do None else day_plan end
       let (day, day_ready) = if midnight do
-        complete_day(day_plan, c, p.stats.traffic, p.sanitation.completed, p.flood_drill)
+        complete_day(day_plan, c, p.stats.traffic, p.sanitation.completed, p.flood_drill, { exposure: p.sea_exposure, swell: p.sea_field })
       else
         let stats = match arrived do
           Some(stats) -> stats
@@ -1052,7 +1061,7 @@ mod Ur do
       let day_plan = if midnight do None else
         if steps > 0 && !paused && Option.is_none(day_plan) && Option.is_none(c.shelter_demand) &&
           (List.is_empty(c.waste_runs) || S.street_hour(elapsed) >= 21) do
-          start_day_plan(c, st.traffic, sanitation.completed, p.flood_drill)
+          start_day_plan(c, st.traffic, sanitation.completed, p.flood_drill, { exposure: sea_exposure, swell: sea_field })
         else day_plan end
       end
       let render_start = if timing do Vk.time() else 0.0 end

@@ -79,6 +79,22 @@ mod SeaRulesTest do
     let told = S.ferry_day(cut)
     Test.assert_true(String.contains(told.message, "suspended"), "a suspension is announced")
     Test.assert_true(String.contains((S.ferry_day({ told with sea_heights: calm.sea_heights })).message, "running again"), "and so is the return")
+    -- surge: a low shore (1 m) facing the crossing's water
+    let low = { calm with heights: NativeArray.set_int(calm.heights, a, 4) }
+    let shore = fn (h : Int) -> { low with sea_heights: (seas_between(low, a, b, h)).sea_heights }
+    Test.assert_eq_int(S.sea_surge(shore(0), a), 0, "no sea, no surge")
+    Test.assert_eq_int(S.sea_surge(shore(150), a), 0, "ordinary seas drive no surge")
+    Test.assert_true(S.sea_surge(shore(250), a) > 0, "rough seas do")
+    Test.assert_true(S.sea_surge(shore(350), a) > S.sea_surge(shore(250), a), "and more the rougher they are")
+    let walled = { shore(350) with seawalls: NativeArray.set_int(low.seawalls, a + 1, 1) }
+    Test.assert_eq_int(S.sea_surge(walled, a), 0, "a seawall blocks it")
+    Test.assert_eq_int(S.sea_surge(with_storms(shore(350), 0), a), 0, "Calm seas drive no surge")
+    let flooded = S.surge_day(shore(350))
+    Test.assert_eq_int(S.get(flooded.surface_water, a), S.sea_surge(shore(350), a), "the day's surge stands on the shore")
+    Test.assert_true(S.ground_closed(flooded, a), "and closes it")
+    -- fishing
+    Test.assert_true(S.rough_fishing(shore(250), a), "2.5 m seas halve the catch")
+    Test.assert_true(!S.rough_fishing(shore(150), a), "1.5 m seas do not")
     Authority.must(println("Sea rules checks passed"))
   end
 end

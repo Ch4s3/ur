@@ -134,6 +134,15 @@ mod SeaTest do
     Authority.must(println("behind the seawall: " ++ float_to_string(calm) ++ ", without it: " ++ float_to_string(rough)))
     -- a 24 m wall in 30 m waves: the swell fills its lee in from both ends (Strata.Waves spreads a lee over half a wavelength)
     Test.assert_true(calm < 0.8 *. rough, "behind the seawall the swell is lower")
+    -- today's sea as the city counts it
+    let seas = W.daily_seas(c, 2.0, east, Some(open))
+    Test.assert_eq_int(S.get(seas, lee - 1), 0, "land has no sea")
+    let site_sea = S.get(seas, site)
+    Test.assert_true(site_sea > 100 && site_sea <= 260, "open water is near the sea's height, got " ++ int_to_string(site_sea))
+    Test.assert_true(S.get(seas, lee) < site_sea, "the lee is calmer than open water")
+    let walled_seas = W.daily_seas(c, 2.0, east, Some(walled))
+    Test.assert_true(S.get(walled_seas, S.index(sx + 2, sz)) < S.get(seas, S.index(sx + 2, sz)), "a breakwater calms the sea the city counts behind it")
+    Test.assert_true(W.next_height(c) > 0.0, "tomorrow has a sea")
     Authority.must(println("Sea checks passed"))
   end
 end
