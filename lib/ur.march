@@ -757,7 +757,7 @@ mod Ur do
     let metro = demo == 28
     let fire_demo = demo == 10
     let profile = Authority.must(Env.get_int("UR_PERF", 0)) > 0
-    let quad_capacity = S.clamp(Authority.must(Env.get_int("UR_QUAD_CAPACITY", if metro do 4194304 else 524288 end)), 524288, 4194304)
+    let quad_capacity = S.clamp(Authority.must(Env.get_int("UR_QUAD_CAPACITY", if metro do 4194304 else 1048576 end)), 524288, 4194304)
     let rain_replay = Authority.must(Env.get_int("UR_RAIN_REPLAY", 0))
     if rain_replay > 0 do rain_report(S.new(), rain_replay)
     else if drill == 2 do flood_backup_report(Ur.Scenario.flood_backup_start(), 9)
