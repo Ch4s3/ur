@@ -231,8 +231,9 @@ mod Ur.Landscape do
       let h = height(c, i % S.width() * 32 + x, i / S.width() * 32 + z)
       -- what grows here follows the island (Ur.Flora): zone, wind side, coast
       let kind = Ur.Flora.pick_at(site, c, h, seed)
-      let next = if Ur.Flora.mangrove_spot(site, c, i, h) && seed % 11 < 7 do
-        List.append(Ur.Trees.shape(Ur.Trees.mangrove(), x, z, if h > 0 do h else 0 end, seed), out)
+      let stand = Ur.Flora.mangrove_spot(c, i, h)
+      let next = if stand > 0 && seed % 11 < (if stand == 2 do 4 else 7 end) do
+        List.append(Ur.Trees.mangrove_stand(stand, x, z, seed), out)
         else if kind >= 0 && seed % 11 < 7 && S.grade_kind(c, S.grade_source(c, i)) != 1 do
         List.append(Ur.Trees.shape(kind, x, z, h, seed), out)
         else if h > 1 && seed % 5 == 0 do Cons(A.piece(x, h, z, 4, 2, 3, 2), Cons(A.piece(x + 1, h + 2, z, 2, 1, 2, 23), out))

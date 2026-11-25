@@ -154,6 +154,62 @@ mod IslandTreesTest do
     Test.assert_eq_int(List.length(Ur.Landscape.structures(on, S.index(45, 10), 0)), 0, "nor water with no land beside it")
     Test.assert_eq_int(List.length(Ur.Landscape.structures(on, S.index(20, 20), 0)), 0, "nor open sea")
   end
+  -- mangroves as a sea defence, and pollution
+  pfn defence(c : Ur.Sim.City) : Unit do
+    let zero = NativeArray.make_int(S.count(), 0)
+    let a = block(block(block(zero, 43, 47, 8, 8, 12), 43, 43, 8, 12, 12), 47, 47, 8, 12, 12)
+    -- a low shore parcel behind the stand at (44, 10)
+    let a = at(a, 43, 10, 4)
+    let stand = S.index(44, 10)
+    let shore = S.index(43, 10)
+    let bare = { c with heights: a, roads: zero, buildings: NativeArray.make_int(S.count(), 0), zones: NativeArray.make_int(S.count(), 0),
+      parks: NativeArray.make_int(S.count(), 0), plants: NativeArray.make_int(S.count(), 0), seawalls: NativeArray.make_int(S.count(), 0),
+      ferries: NativeArray.make_int(S.count(), 0), transit: NativeArray.make_int(S.count(), 0), grade_cover: NativeArray.make_int(S.count(), 0),
+      seabed: NativeArray.make_int(S.count(), 0), pollution: NativeArray.make_int(S.count(), 0), land_pollution: NativeArray.make_int(S.count(), 0),
+      mangrove_harm: NativeArray.make_int(S.count(), 0), harbour: -1, sea_counted: 2,
+      sea_heights: NativeArray.set_int(NativeArray.make_int(S.count(), 0), stand, 350) }
+    let on = { bare with world_seed: -1 }
+    let off = seeded(bare, first_mangrove_seed(bare, false, 1))
+    Test.assert_true(S.mangrove_water(on, stand), "a sheltered water parcel beside land holds a stand on a mangrove map")
+    Test.assert_true(!S.mangrove_water(off, stand), "not on other maps")
+    let one = NativeArray.set_int(NativeArray.make_int(S.count(), 0), stand, 1)
+    Test.assert_true(!S.mangrove_water({ on with seawalls: one }, stand), "not under a seawall")
+    Test.assert_true(!S.mangrove_water({ on with ferries: one }, stand), "nor on a ferry route")
+    Test.assert_true(!S.mangrove_water({ on with transit: one }, stand), "nor under transit")
+    Test.assert_true(!S.mangrove_water({ on with grade_cover: one }, stand), "nor under a crossing")
+    Test.assert_true(!S.mangrove_water({ on with seabed: NativeArray.set_int(zero, stand, 5) }, stand), "nor where the seabed was worked")
+    Test.assert_true(!S.mangrove_water(on, shore), "land holds none")
+    -- surge: 16 quarter metres arrive at the stand; the shore stands 4 high
+    Test.assert_eq_int(S.sea_surge(off, shore), 12, "without mangroves the surge floods the shore 3 m")
+    Test.assert_eq_int(S.sea_surge(on, shore), 4, "a living stand halves it")
+    let harmed = fn (h : Int) -> { on with mangrove_harm: NativeArray.set_int(NativeArray.make_int(S.count(), 0), stand, h) }
+    Test.assert_eq_int(S.sea_surge(harmed(60), shore), 8, "a thinned stand takes a quarter off")
+    Test.assert_eq_int(S.sea_surge(harmed(100), shore), 12, "a dead one nothing")
+    Test.assert_eq_int(S.mangrove_state(on, stand), 1, "living")
+    Test.assert_eq_int(S.mangrove_state(harmed(60), stand), 2, "thinned")
+    Test.assert_eq_int(S.mangrove_state(harmed(100), stand), 3, "dead")
+    Test.assert_eq_int(S.mangrove_state(on, shore), 0, "no stand on land")
+    -- pollution: foul water kills a stand in three months, and it says so; clean water regrows it slowly
+    let foul = { on with pollution: NativeArray.set_int(NativeArray.make_int(S.count(), 0), stand, 100) }
+    let m1 = S.mangrove_month(foul)
+    Test.assert_eq_int(S.get(m1.mangrove_harm, stand), 35, "foul water harms a stand")
+    let m3 = S.mangrove_month(S.mangrove_month(m1))
+    Test.assert_eq_int(S.mangrove_state(m3, stand), 3, "and kills it")
+    Test.assert_true(String.contains(m3.message, "Mangroves died"), "the death is announced: " ++ m3.message)
+    let clean = S.mangrove_month({ m3 with pollution: NativeArray.make_int(S.count(), 0) })
+    Test.assert_eq_int(S.get(clean.mangrove_harm, stand), 98, "clean water lets it regrow, slowly")
+    let calm = S.mangrove_month(on)
+    Test.assert_eq_int(S.get(calm.mangrove_harm, stand), 0, "a healthy stand in clean water stays healthy")
+    -- the harm is saved
+    match Ur.Save.decode_session(Ur.Save.encode_session({ game: { city: m1, cx: 0.0, cz: 0.0, zoom: 60.0, yaw: 0.55, paused: true, speed: 1 }, evacuation: Nil })) do
+      Ok(back) -> Test.assert_eq_int(S.get(back.game.city.mangrove_harm, stand), 35, "a stand's harm survives a save")
+      Err(e) -> Test.assert_true(false, "the save loads: " ++ e)
+    end
+    -- drawn as it is
+    let dead = Ur.Landscape.structures(harmed(100), stand, 0)
+    Test.assert_true(List.length(dead) > 0 && List.all(dead, fn p -> p.material == 23), "a dead stand is grey snags, no leaves")
+    Test.assert_true(List.any(Ur.Landscape.structures(harmed(60), stand, 0), fn p -> p.material == 22), "a thinned stand is paler")
+  end
   pfn first_mangrove_seed(c : Ur.Sim.City, want : Bool, s : Int) : Int do
     if Ur.Flora.mangrove_map(seeded(c, s)) == want do s else first_mangrove_seed(c, want, s + 1) end
   end
@@ -165,6 +221,7 @@ mod IslandTreesTest do
     shapes()
     choosing(c)
     mangroves(c)
+    defence(c)
     Authority.must(println("Island trees: all assertions passed"))
   end
 end

@@ -167,6 +167,14 @@ mod Ur.Trees do
       box(a, x + dx * 4 - rad, b + t + 3 + r(s, 30 + k, 3), z + dz * 4 - rad + r(s, 40 + k, 3) - 1, 2 * rad + 1, 2, 2 * rad, if r(s, 50 + k, 3) == 0 do 25 else 22 end))
   end
 
+  doc "A mangrove standing in the water at (x, z) as its stand is ([state] 1 living, 2 thinned: paler, 3 dead: grey snags of roots and trunk, no leaves)."
+  fn mangrove_stand(state : Int, x : Int, z : Int, seed : Int) : List(Ur.Architecture.Piece) do
+    let tree = mangrove_tree(x, z, 0, seed)
+    if state == 3 do List.map(List.filter(tree, fn p -> p.material == 13), fn p -> { p with material: 23 })
+    else if state == 2 do List.map(tree, fn p -> if p.material == 13 do p else { p with material: 22 } end)
+    else tree end end
+  end
+
   doc "A tree of [kind] with its trunk at (x, z) of a parcel, standing on ground [base], varied by [seed]: at most twelve pieces, clipped to the parcel."
   fn shape(kind : Int, x : Int, z : Int, base : Int, seed : Int) : List(Ur.Architecture.Piece) do
     match kind do

@@ -39,7 +39,7 @@ mod Ur.Sim do
     -- today's sea: the significant wave height in centimetres at each water parcel, measured each day (Ur.Sea.daily_seas); 0 on land
     sea_heights : NativeIntArr,
     -- per ferry terminal: bit 1 a larger ferry, bit 2 a protected harbour; bits 4-8 the route's status at the last day roll (0 running, 1 slowed, 2 suspended)
-    ferry_works : NativeIntArr,
+    ferry_works : NativeIntArr, mangrove_harm : NativeIntArr,
     -- the Sea storms level today's sea is counted at: the setting as it stood at the last day roll, so a change takes effect from the next day
     sea_counted : Int,
     pump_orders : NativeIntArr, surface_water : NativeIntArr, flood_damage : NativeIntArr, flood_active : Bool,
@@ -467,7 +467,7 @@ mod Ur.Sim do
   end
   pfn unclaimed_with_heights(heights : NativeIntArr) : City do
     let zero = NativeArray.make_int(count(), 0)
-    { households: new_households(), economy: new_economy(), utility_service: zero, milestones: NativeArray.make_int(64, 0), facility_staff: NativeArray.make_int(count(), 0), facility_expansion: NativeArray.make_int(count(), 0), shelter_demand: None, census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(count(), 0), religion: new_religion(), climate_seed: 0, rain_uniform: false, watch: 1, rain_now: NativeArray.make_int(count(), 0), storms: Nil, air: Ur.Air.empty(), world_seed: -1, setup: default_setup(), founders: 0, storm_drains: zero, seawalls: zero, seabed: NativeArray.make_int(count(), 0), sea_heights: NativeArray.make_int(count(), 0), ferry_works: NativeArray.make_int(count(), 0), sea_counted: 2, pump_orders: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, soil_moisture: 70, pumping_cost: 0, battery: 0, hour: 9, grades: NativeArray.make_int(count(), 0), grade_cover: NativeArray.make_int(count(), 0), parks: NativeArray.make_int(count(), 0), park_tiers: NativeArray.make_int(count(), 0), streetscape: NativeArray.make_int(count(), 0), sidewalk_items: NativeArray.make_int(count(), 0), campus: NativeArray.make_int(count(), 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(count(), 0), empty_homes: NativeArray.make_int(count(), 0), home_arrivals: NativeArray.make_int(count(), 0), housing_search: zero, newcomer_grace: zero, neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(count(), 0), property_status: NativeArray.make_int(count(), 0), property_arrears: NativeArray.make_int(count(), 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(count(), 0), calendar_day: 0, clock_ms: 675, street_day: 0, car_free_days: NativeArray.make_int(count(), 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(count(), 0), quiet_areas: NativeArray.make_int(count(), 0), storefronts: NativeArray.make_int(count(), 0), footfall: NativeArray.make_int(count(), 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, freight: None, shop_stock: zero, shop_sales: zero, shop_delivered: zero, shop_imports: 0, shipments: Nil, harbour: -1, founding_map: true, heights: heights, roads: zero, tolls: zero, public_parking: zero,
+    { households: new_households(), economy: new_economy(), utility_service: zero, milestones: NativeArray.make_int(64, 0), facility_staff: NativeArray.make_int(count(), 0), facility_expansion: NativeArray.make_int(count(), 0), shelter_demand: None, census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(count(), 0), religion: new_religion(), climate_seed: 0, rain_uniform: false, watch: 1, rain_now: NativeArray.make_int(count(), 0), storms: Nil, air: Ur.Air.empty(), world_seed: -1, setup: default_setup(), founders: 0, storm_drains: zero, seawalls: zero, seabed: NativeArray.make_int(count(), 0), sea_heights: NativeArray.make_int(count(), 0), ferry_works: NativeArray.make_int(count(), 0), mangrove_harm: NativeArray.make_int(count(), 0), sea_counted: 2, pump_orders: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, soil_moisture: 70, pumping_cost: 0, battery: 0, hour: 9, grades: NativeArray.make_int(count(), 0), grade_cover: NativeArray.make_int(count(), 0), parks: NativeArray.make_int(count(), 0), park_tiers: NativeArray.make_int(count(), 0), streetscape: NativeArray.make_int(count(), 0), sidewalk_items: NativeArray.make_int(count(), 0), campus: NativeArray.make_int(count(), 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(count(), 0), empty_homes: NativeArray.make_int(count(), 0), home_arrivals: NativeArray.make_int(count(), 0), housing_search: zero, newcomer_grace: zero, neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(count(), 0), property_status: NativeArray.make_int(count(), 0), property_arrears: NativeArray.make_int(count(), 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(count(), 0), calendar_day: 0, clock_ms: 675, street_day: 0, car_free_days: NativeArray.make_int(count(), 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(count(), 0), quiet_areas: NativeArray.make_int(count(), 0), storefronts: NativeArray.make_int(count(), 0), footfall: NativeArray.make_int(count(), 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, freight: None, shop_stock: zero, shop_sales: zero, shop_delivered: zero, shop_imports: 0, shipments: Nil, harbour: -1, founding_map: true, heights: heights, roads: zero, tolls: zero, public_parking: zero,
       transit: zero, stops: zero, ferries: zero, ferry_start: -1, service: NativeArray.make_int(count(), 1), bus_headways: NativeArray.make_int(count(), 0), bus_fare: 1,
       zones: zero, density: NativeArray.make_int(count(), 3), nuisance: NativeArray.make_int(count(), 3),
       buildings: zero, housing_losses: zero, business_losses: zero, construction: zero, plants: zero, paused_facilities: zero, pipes: zero, grid: zero, pollution: zero, land_pollution: zero, air_pollution: zero,
@@ -501,7 +501,7 @@ mod Ur.Sim do
   end
   fn new() : City do
     let zero = NativeArray.make_int(count(), 0)
-    seed({ households: new_households(), economy: new_economy(), utility_service: zero, milestones: NativeArray.make_int(64, 0), facility_staff: NativeArray.make_int(count(), 0), facility_expansion: NativeArray.make_int(count(), 0), shelter_demand: None, census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(count(), 0), religion: new_religion(), climate_seed: 0, rain_uniform: false, watch: 0, rain_now: NativeArray.make_int(count(), 0), storms: Nil, air: Ur.Air.empty(), world_seed: -1, setup: default_setup(), founders: 0, storm_drains: zero, seawalls: zero, seabed: NativeArray.make_int(count(), 0), sea_heights: NativeArray.make_int(count(), 0), ferry_works: NativeArray.make_int(count(), 0), sea_counted: 2, pump_orders: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, soil_moisture: 70, pumping_cost: 0, battery: 0, hour: 9, grades: NativeArray.make_int(count(), 0), grade_cover: NativeArray.make_int(count(), 0), parks: NativeArray.make_int(count(), 0), park_tiers: NativeArray.make_int(count(), 0), streetscape: NativeArray.make_int(count(), 0), sidewalk_items: NativeArray.make_int(count(), 0), campus: NativeArray.make_int(count(), 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(count(), 0), empty_homes: NativeArray.make_int(count(), 0), home_arrivals: NativeArray.make_int(count(), 0), housing_search: zero, newcomer_grace: zero, neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(count(), 0), property_status: NativeArray.make_int(count(), 0), property_arrears: NativeArray.make_int(count(), 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(count(), 0), calendar_day: 0, clock_ms: 0, street_day: 0, car_free_days: NativeArray.make_int(count(), 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(count(), 0), quiet_areas: NativeArray.make_int(count(), 0), storefronts: NativeArray.make_int(count(), 0), footfall: NativeArray.make_int(count(), 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, freight: None, shop_stock: NativeArray.make_int(count(), 0), shop_sales: NativeArray.set_int(NativeArray.make_int(count(), 0), index(8, 20), 8), shop_delivered: NativeArray.make_int(count(), 0), shop_imports: 0, shipments: Nil, harbour: index(9, 21), founding_map: false, heights: terrain_fill(NativeArray.make_int(count(), 0), 0), roads: NativeArray.make_int(count(), 0), tolls: NativeArray.make_int(count(), 0), public_parking: NativeArray.make_int(count(), 0), transit: NativeArray.make_int(count(), 0), stops: NativeArray.make_int(count(), 0), ferries: NativeArray.make_int(count(), 0), ferry_start: -1, service: NativeArray.make_int(count(), 1), bus_headways: NativeArray.make_int(count(), 0), bus_fare: 1,
+    seed({ households: new_households(), economy: new_economy(), utility_service: zero, milestones: NativeArray.make_int(64, 0), facility_staff: NativeArray.make_int(count(), 0), facility_expansion: NativeArray.make_int(count(), 0), shelter_demand: None, census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(count(), 0), religion: new_religion(), climate_seed: 0, rain_uniform: false, watch: 0, rain_now: NativeArray.make_int(count(), 0), storms: Nil, air: Ur.Air.empty(), world_seed: -1, setup: default_setup(), founders: 0, storm_drains: zero, seawalls: zero, seabed: NativeArray.make_int(count(), 0), sea_heights: NativeArray.make_int(count(), 0), ferry_works: NativeArray.make_int(count(), 0), mangrove_harm: NativeArray.make_int(count(), 0), sea_counted: 2, pump_orders: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, soil_moisture: 70, pumping_cost: 0, battery: 0, hour: 9, grades: NativeArray.make_int(count(), 0), grade_cover: NativeArray.make_int(count(), 0), parks: NativeArray.make_int(count(), 0), park_tiers: NativeArray.make_int(count(), 0), streetscape: NativeArray.make_int(count(), 0), sidewalk_items: NativeArray.make_int(count(), 0), campus: NativeArray.make_int(count(), 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(count(), 0), empty_homes: NativeArray.make_int(count(), 0), home_arrivals: NativeArray.make_int(count(), 0), housing_search: zero, newcomer_grace: zero, neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(count(), 0), property_status: NativeArray.make_int(count(), 0), property_arrears: NativeArray.make_int(count(), 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(count(), 0), calendar_day: 0, clock_ms: 0, street_day: 0, car_free_days: NativeArray.make_int(count(), 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(count(), 0), quiet_areas: NativeArray.make_int(count(), 0), storefronts: NativeArray.make_int(count(), 0), footfall: NativeArray.make_int(count(), 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, freight: None, shop_stock: NativeArray.make_int(count(), 0), shop_sales: NativeArray.set_int(NativeArray.make_int(count(), 0), index(8, 20), 8), shop_delivered: NativeArray.make_int(count(), 0), shop_imports: 0, shipments: Nil, harbour: index(9, 21), founding_map: false, heights: terrain_fill(NativeArray.make_int(count(), 0), 0), roads: NativeArray.make_int(count(), 0), tolls: NativeArray.make_int(count(), 0), public_parking: NativeArray.make_int(count(), 0), transit: NativeArray.make_int(count(), 0), stops: NativeArray.make_int(count(), 0), ferries: NativeArray.make_int(count(), 0), ferry_start: -1, service: NativeArray.make_int(count(), 1), bus_headways: NativeArray.make_int(count(), 0), bus_fare: 1,
       zones: NativeArray.make_int(count(), 0), density: NativeArray.make_int(count(), 3), nuisance: NativeArray.make_int(count(), 3), buildings: NativeArray.make_int(count(), 0), housing_losses: NativeArray.make_int(count(), 0), business_losses: NativeArray.make_int(count(), 0), construction: NativeArray.make_int(count(), 0),
       plants: NativeArray.set_int(NativeArray.set_int(NativeArray.make_int(count(), 0), index(8, 21), 1), index(9, 22), 3),
       paused_facilities: NativeArray.make_int(count(), 0), pipes: NativeArray.set_int(NativeArray.make_int(count(), 0), index(9, 21), 1), grid: NativeArray.make_int(count(), 0), pollution: NativeArray.make_int(count(), 0), land_pollution: NativeArray.make_int(count(), 0), air_pollution: NativeArray.make_int(count(), 0), trash: 0, waste_live: false, waste_bins: NativeArray.make_int(count(), 0), waste_stock: NativeArray.make_int(count(), 0), waste_sites: NativeArray.make_int(count(), 0), waste_last: NativeArray.make_int(count(), 0), waste_log: NativeArray.make_int(count(), 0), waste_runs: Nil,
@@ -937,6 +937,67 @@ mod Ur.Sim do
   end
   fn severe_rain(c : City) : Bool do current_weather(c) == 4 end
 
+  doc "Whether the map's sheltered shores carry mangroves: about one map in three, and the founding map."
+  fn mangrove_map(c : City) : Bool do c.world_seed < 0 || Strata.Seed.mix(c.world_seed, 1301) % 3 == 0 end
+  pfn ray_open(c : City, x : Int, z : Int, a : Float, i : Int) : Bool do
+    if i > 8 do true else
+      let rx = x + float_to_int(Math.floor(int_to_float(i) *. Math.cos(a) +. 0.5))
+      let rz = z + float_to_int(Math.floor(int_to_float(i) *. Math.sin(a) +. 0.5))
+      if rx < 0 || rz < 0 || rx >= width() || rz >= depth() do true
+      else if get(c.heights, index(rx, rz)) > 0 do false else ray_open(c, x, z, a, i + 1) end end
+    end
+  end
+  doc "Whether [lot] lies in sheltered water: of 16 rays from it, each 8 parcels long, at most 5 meet no land (past the map's edge is open sea)."
+  fn sheltered(c : City, lot : Int) : Bool do
+    let x = lot % width()
+    let z = lot / width()
+    List.length(List.filter(List.range(0, 16), fn k -> ray_open(c, x, z, int_to_float(k) *. 0.392699082, 1))) <= 5
+  end
+  pfn land_beside(c : City, lot : Int, d : Int) : Bool do
+    if d >= 4 do false else
+      let n = neighbour(lot, d)
+      if valid(n) && get(c.heights, n) > 0 do true else land_beside(c, lot, d + 1) end
+    end
+  end
+  doc "Whether water parcel [lot] holds a mangrove stand (living or dead): a mangrove map, sheltered water beside land, and clear water: no seawall, ferry route, transit, crossing or worked seabed, not the harbour. Drawing and the surge both go by this."
+  fn mangrove_water(c : City, lot : Int) : Bool do
+    if !valid(lot) || get(c.heights, lot) > 0 || !mangrove_map(c) || lot == c.harbour do false
+    else if get(c.seawalls, lot) > 0 || get(c.ferries, lot) > 0 || get(c.transit, lot) > 0 || get(c.grade_cover, lot) > 0 || get(c.seabed, lot) > 0 do false
+    else land_beside(c, lot, 0) && sheltered(c, lot) end end
+  end
+  doc "The stand on [lot]: 0 none, 1 living, 2 thinned (harm 50+), 3 dead (harm 100)."
+  fn mangrove_state(c : City, lot : Int) : Int do
+    if !mangrove_water(c, lot) do 0 else
+      let harm = if NativeArray.length_int(c.mangrove_harm) > lot do get(c.mangrove_harm, lot) else 0 end
+      if harm >= 100 do 3 else if harm >= 50 do 2 else 1 end end
+    end
+  end
+  -- Mangroves break the waves Ur's surge is made of: field studies find wave
+  -- height cut by about half to two thirds in the first 100 m of forest
+  -- (their effect on still-water surge is only a few cm a km). A living
+  -- stand halves the surge walking in through it, a thinned one takes a
+  -- quarter off, a dead one nothing.
+  pfn mangrove_damp(c : City, lot : Int, surge : Int) : Int do
+    match mangrove_state(c, lot) do 1 -> surge / 2 | 2 -> surge * 3 / 4 | _ -> surge end
+  end
+  pfn mangrove_go(c : City, i : Int, harm : NativeIntArr, died : Int) : (NativeIntArr, Int) do
+    if i >= count() do (harm, died) else
+      if !mangrove_water(c, i) do mangrove_go(c, i + 1, harm, died) else
+        let was = get(harm, i)
+        let p = pollution_at(c, i)
+        let now = if p > 30 do clamp(was + (p - 30) / 2, 0, 100) else if p <= 15 do clamp(was - 2, 0, 100) else was end end
+        mangrove_go(c, i + 1, NativeArray.set_int(harm, i, now), died + (if was < 100 && now >= 100 do 1 else 0 end))
+      end
+    end
+  end
+  doc "A month on the mangrove stands: coastal water pollution (pollution_at) over 30 harms a stand by half the excess, water at 15 or under lets it regrow 2 a month; a stand that dies is announced."
+  fn mangrove_month(c : City) : City do
+    let start = if NativeArray.length_int(c.mangrove_harm) == count() do c.mangrove_harm else NativeArray.make_int(count(), 0) end
+    let (harm, died) = mangrove_go(c, 0, start, 0)
+    let c = { c with mangrove_harm: harm }
+    if died > 0 do { c with message: "Mangroves died in polluted water: the shore behind them has lost its storm buffer." } else c end
+  end
+
   -- Look for open water within six parcels. Higher ground and seawalls
   -- interrupt an approach. An unprotected approach can still admit water.
   pfn offshore_barrier(c : City, x : Int, z : Int, dx : Int, dz : Int, remaining : Int) : Bool do
@@ -958,7 +1019,7 @@ mod Ur.Sim do
       if crest + loss >= 16 || get(c.seawalls, lot) > 0 do 0
       else if h == 0 do
         if offshore_barrier(c, x + dx, z + dz, dx, dz, 3) do 0 else
-          let level = (if sea do surge_at(c, lot) else 16 end) - loss
+          let level = (if sea do mangrove_damp(c, lot, surge_at(c, lot)) else 16 end) - loss
           if level > crest do level else 0 end
         end
       else if h >= 16 do 0
@@ -7260,6 +7321,8 @@ mod Ur.Sim do
     let incident_month = simulate_with_health(incident_city, traffic, labor, health_pressure(c))
     let damaged = apply_building_fires(incident_city, incident_month.calls)
     let next = { damaged with calendar_day: next.calendar_day }
+    -- pollution harms the mangrove stands, and clean water regrows them
+    let next = mangrove_month(next)
     let (arrears, recovered) = property_ledger(next, 0, c.property_arrears, 0)
     let receipts = recovered + c.property_sales
     let finance = { month: next.month, revenue: monthly.revenue + receipts, budget: monthly, construction: c.construction_spend,

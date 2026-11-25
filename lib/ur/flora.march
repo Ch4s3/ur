@@ -13,9 +13,7 @@ mod Ur.Flora do
     if c.world_seed < 0 do 0.42 else Strata.Seed.unit(Strata.Seed.mix(c.world_seed, 1303)) *. 6.2831853 end
   end
   doc "Whether the map's sheltered shores carry mangroves: about one map in three, and the founding map."
-  fn mangrove_map(c : Ur.Sim.City) : Bool do
-    c.world_seed < 0 || Strata.Seed.mix(c.world_seed, 1301) % 3 == 0
-  end
+  fn mangrove_map(c : Ur.Sim.City) : Bool do S.mangrove_map(c) end
   doc "Whether the map's lee slopes carry a pine stand, as on Hispaniola: about one map in three (drawn apart from mangroves); not the founding map."
   fn pine_map(c : Ur.Sim.City) : Bool do
     c.world_seed >= 0 && Strata.Seed.mix(c.world_seed, 1302) % 3 == 0
@@ -77,14 +75,6 @@ mod Ur.Flora do
     end
   end
 
-  pfn ray_open(c : Ur.Sim.City, x : Int, z : Int, a : Float, i : Int) : Bool do
-    if i > 8 do true else
-      let rx = x + float_to_int(Math.floor(int_to_float(i) *. Math.cos(a) +. 0.5))
-      let rz = z + float_to_int(Math.floor(int_to_float(i) *. Math.sin(a) +. 0.5))
-      if rx < 0 || rz < 0 || rx >= S.width() || rz >= S.depth() do true
-      else if land(c, rx, rz) > 0 do false else ray_open(c, x, z, a, i + 1) end end
-    end
-  end
   doc "What a parcel's trees are chosen from, worked out once a parcel: (the massif's peak, its side of the wind, whether it is sheltered, whether it is on the coast)."
   fn site(c : Ur.Sim.City, lot : Int) : (Int, Int, Bool, Bool) do
     (massif_peak(c, lot), wind_side(c, lot), sheltered(c, lot), S.coastal(c, lot))
@@ -107,21 +97,11 @@ mod Ur.Flora do
     end
   end
 
-  doc "Whether a spot [h] voxels high on [lot] grows mangroves: on a mangrove map, where the parcel is sheltered, either in water beside land or on the lowest sand (h 1..4) of a coastal parcel."
-  fn mangrove_spot(site : (Int, Int, Bool, Bool), c : Ur.Sim.City, lot : Int, h : Int) : Bool do
-    let (_, _, shelter, coastal) = site
-    if !shelter || !mangrove_map(c) do false
-    else if h <= 0 do
-      let x = lot % S.width()
-      let z = lot / S.width()
-      land(c, x + 1, z) > 0 || land(c, x - 1, z) > 0 || land(c, x, z + 1) > 0 || land(c, x, z - 1) > 0
-    else coastal && h <= 4 end end
+  doc "The mangrove stand a spot [h] voxels high on [lot] shows: 0 none, 1 living, 2 thinned, 3 dead (Ur.Sim.mangrove_state). Mangroves stand in water only, so what is drawn is what defends the shore."
+  fn mangrove_spot(c : Ur.Sim.City, lot : Int, h : Int) : Int do
+    if h > 0 do 0 else S.mangrove_state(c, lot) end
   end
 
-  doc "Whether [lot] lies in sheltered water: of 16 rays from it, each 8 parcels long, at most 5 meet no land (past the map's edge is open sea)."
-  fn sheltered(c : Ur.Sim.City, lot : Int) : Bool do
-    let x = lot % S.width()
-    let z = lot / S.width()
-    List.length(List.filter(List.range(0, 16), fn k -> ray_open(c, x, z, int_to_float(k) *. 0.392699082, 1))) <= 5
-  end
+  doc "Whether [lot] lies in sheltered water (Ur.Sim.sheltered)."
+  fn sheltered(c : Ur.Sim.City, lot : Int) : Bool do S.sheltered(c, lot) end
 end
