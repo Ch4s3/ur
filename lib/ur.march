@@ -980,7 +980,9 @@ mod Ur do
       -- compared with the city the previous stats describe (stats_from), which is last frame's
       -- city unless an edit's stats were pending
       let rebuild = stats_undo || evacuation_update || operation_changed || ((stats_landed || due || day_changed || building_day || flood_day) &&
-        (st.people != p.stats.people || S.households_changed(c.households, stats_from.households) || S.assignments_changed(p.stats.job_matches, st.job_matches) || Ur.Citizens.education_changed(c, stats_from) || Ur.Citizens.changed(c, stats_from, 0)))
+        (st.people != p.stats.people || c.tax != stats_from.tax || S.wage_rate(st.labor) != S.wage_rate(p.stats.labor) ||
+         Ur.Citizens.transit_service_changed(st.running_transit, p.stats.running_transit, 0) ||
+         S.households_changed(c.households, stats_from.households) || S.assignments_changed(p.stats.job_matches, st.job_matches) || Ur.Citizens.education_changed(c, stats_from) || Ur.Citizens.changed(c, stats_from, 0)))
       -- A weekday change alone leaves the roster as it is: timed rests end by midnight (see
       -- Citizens.resting), so every sleeper re-checks the new day's schedule as it wakes, and
       -- the weekday rules (working hours, car-free streets) are read each step. Re-indexing all

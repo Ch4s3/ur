@@ -385,6 +385,84 @@ mod CitizenMovementTest do
     Test.assert_true(Math.abs(wait_of(step(exact, start, 0.0)) -. 0.9) < 0.000001, "including the early ones")
   end
 
+  pfn car_test_hire(home : Int, work : Int) : Ur.Sim.JobMatch do
+    { home: home, origin: home, workplace: work, rank: 4, workers: 1, minutes: 20, board: -1 }
+  end
+  pfn car_purchases() : Unit do
+    let zero = NativeArray.make_int(S.count(), 0)
+    let home = S.index(10, 20)
+    let nearby = S.index(11, 20)
+    let far = S.index(18, 20)
+    let board = S.index(10, 19)
+    let alight = S.index(18, 19)
+    let street = List.map(List.range(9, 20), fn x -> S.index(x, 19))
+    let roads = List.fold_left(street, zero, fn (roads, lot) -> NativeArray.set_int(roads, lot, 2))
+    let base = S.new()
+    let c = { base with harbour: S.index(9, 19), roads: roads, heights: NativeArray.make_int(S.count(), 24),
+      zones: NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(zero, home, 1), nearby, 2), far, 2),
+      buildings: NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(zero, home, 1), nearby, 1), far, 1) }
+    let nearby_hire = car_test_hire(home, nearby)
+    let far_hire = car_test_hire(home, far)
+    let refresh = fn (city, old, hires) -> Ur.Citizens.refresh_with(city, old, S.access(city), S.population(city), hires)
+    let owners = fn people -> List.filter(people, fn p -> p.parking != 0)
+    let nearby_workers = refresh(c, Nil, [nearby_hire])
+    Test.assert_true(List.any(nearby_workers, fn p -> p.work == nearby), "the nearby job is assigned")
+    Test.assert_true(List.is_empty(owners(nearby_workers)), "nearby jobs and unemployment leave residents car-free")
+    let commuters = owners(refresh(c, nearby_workers, [far_hire]))
+    Test.assert_eq_int(List.length(commuters), 1, "the only car buyer is the long-distance commuter")
+    Test.assert_eq_int((first(commuters)).work, far, "the commuter owns the new car")
+    let transit = List.fold_left(street, zero, fn (modes, lot) -> NativeArray.set_int(modes, lot, 2))
+    let served = { c with transit: transit, stops: NativeArray.set_int(NativeArray.set_int(zero, board, 2), alight, 2) }
+    Test.assert_true(List.is_empty(owners(refresh(served, Nil, [far_hire]))), "a bus to work removes the reason to buy a car")
+    let nightlife = NativeArray.set_int(zero, far, 2)
+    let leisure = { c with storefronts: nightlife }
+    let wealthy = { leisure with business_sector: NativeArray.set_int(zero, nearby, 4) }
+    Test.assert_true(List.is_empty(owners(refresh(leisure, Nil, [nearby_hire]))), "ordinary pay and a bar leave residents car-free")
+    let wealthy_without_bar = { wealthy with storefronts: zero }
+    let before = refresh(wealthy_without_bar, Nil, [nearby_hire])
+    Test.assert_true(List.is_empty(owners(before)), "high pay alone leaves residents car-free")
+    let after = refresh(wealthy, before, [nearby_hire])
+    Test.assert_eq_int(List.length(owners(after)), 1, "the high earner buys a car for the bar")
+    let car_free = List.map(after, fn person -> { person with parking: 0 })
+    let old_roster = Ur.Citizens.index(wealthy, car_free, 0.0)
+    let changes = Ur.Citizens.refresh_changes(old_roster, refresh(wealthy, car_free, [nearby_hire]))
+    let live = Ur.Citizens.apply_changes(wealthy, old_roster, changes)
+    Test.assert_eq_int(List.length(owners(Ur.Citizens.snapshot(live))), 1, "a purchase during a rebuild reaches the live roster")
+    let owner = first(owners(after))
+    let occupant = { owner with id: owner.id + 1000 }
+    let occupied = Ur.Citizens.index(wealthy, List.append(car_free, [occupant]), 0.0)
+    let live = Ur.Citizens.apply_changes(wealthy, occupied, changes)
+    Test.assert_eq_int(List.length(owners(Ur.Citizens.snapshot(live))), 1, "a live parking reservation wins over a background purchase")
+    let served_leisure = { wealthy with transit: served.transit, stops: served.stops }
+    Test.assert_true(List.is_empty(owners(refresh(served_leisure, Nil, [nearby_hire]))), "a bus to the bar removes the reason to buy a car")
+    Test.assert_eq_int(List.length(owners(refresh(served_leisure, after, [nearby_hire]))), 1, "a resident keeps a car they already own")
+
+    let parks = { wealthy_without_bar with parks: NativeArray.set_int(zero, far, 1), street_day: 5,
+      buildings: NativeArray.set_int(c.buildings, far, 0), zones: NativeArray.set_int(c.zones, far, 0),
+      ground_areas: NativeArray.set_int(zero, nearby, 1) }
+    let modest = { parks with business_sector: zero }
+    Test.assert_true(List.is_empty(owners(refresh(modest, Nil, [nearby_hire]))), "park access alone does not justify a car on ordinary pay")
+    let park_owners = owners(refresh(parks, Nil, [nearby_hire]))
+    Test.assert_eq_int(List.length(park_owners), 1, "the high earner buys a car for the off-transit park")
+    let visitor = { first(park_owners) with wait: 0.0 }
+    let departed = first(Ur.Citizens.step_with(parks, zero, [visitor], S.day_seconds() *. 0.45, 0.05))
+    Test.assert_true(departed.target == far && departed.by_car, "the owner sets out for the park by car")
+    let parked = { departed with location: far, route: Nil, parking: departed.arrival, arrival: 0,
+      by_car: false, car_phase: 0, wait: 0.0 }
+    let returning = first(Ur.Citizens.step_with(parks, zero, [parked], S.day_seconds() *. 0.85, 0.05))
+    Test.assert_true(returning.target == home && returning.by_car, "the owner can drive home from the park's curb")
+    let served_park = { parks with transit: served.transit, stops: served.stops }
+    Test.assert_true(List.is_empty(owners(refresh(served_park, Nil, [nearby_hire]))), "a bus to the park removes the reason to buy a car")
+    let footpath = S.index(14, 19)
+    let walk_only = { parks with roads: NativeArray.set_int(roads, footpath, 0), transit: NativeArray.set_int(zero, footpath, 1) }
+    Test.assert_true(List.is_empty(owners(refresh(walk_only, Nil, [nearby_hire]))), "a park reached only on foot does not justify a car")
+    let closer_park = S.index(14, 20)
+    let mixed = { parks with parks: NativeArray.set_int(parks.parks, closer_park, 1), transit: transit,
+      stops: NativeArray.set_int(NativeArray.set_int(zero, board, 2), footpath, 2) }
+    let mixed_owners = owners(refresh(mixed, Nil, [nearby_hire]))
+    Test.assert_true(List.any(mixed_owners, fn p -> p.park == far), "a bus to the closer park still leaves the farther park as a reason to buy")
+  end
+
   -- Through a morning's car trips (parking taken, cars left, walks to and from them) the
   -- roster's running parking reservations stay equal to a recount of everyone holding one.
   pfn commute_reservations() : Unit do
@@ -502,6 +580,7 @@ mod CitizenMovementTest do
     coarse_walks(city, resident, empty)
     coarse_corner(city, resident, empty)
     deferred_steps(city, resident, empty)
+    car_purchases()
     commute_reservations()
     refresh_in_place()
     route_checks_match()

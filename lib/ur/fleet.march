@@ -92,12 +92,21 @@ mod Ur.Fleet do
     end
   end
 
+  pfn bus_routes(c : Ur.Sim.City, running : NativeIntArr) : List(Ur.Food.Trip) do
+    let depots = F.yard_routes(c, 23, 2)
+    let harbour = F.fleet_search(c, c.harbour, 2)
+    bus_lines(c, running, depots, harbour.next, NativeArray.make_int(S.count(), 0), 0, Nil)
+  end
+
+  fn passenger_routes(c : Ur.Sim.City, running : NativeIntArr) : List(Ur.Food.Trip) do
+    if !S.valid(c.harbour) do Nil else
+      List.append(bus_routes(c, running), rail_lines(c, running, NativeArray.make_int(S.count(), 0), 0, Nil))
+    end
+  end
+
   fn routes_with(c : Ur.Sim.City, running : NativeIntArr, network : Ur.Sim.BusNetwork) : List(Ur.Food.Trip) do
     if !S.valid(c.harbour) do Nil else
-      let depots = F.yard_routes(c, 23, 2)
-      let harbour = F.fleet_search(c, c.harbour, 2)
-      let buses = bus_lines(c, running, depots, harbour.next, NativeArray.make_int(S.count(), 0), 0, Nil)
-      let scheduled = List.flat_map(buses, fn bus ->
+      let scheduled = List.flat_map(bus_routes(c, running), fn bus ->
         let (_, terminal) = F.leg(bus.stops, bus.legs - 1)
         match S.bus_line_at(network, terminal) do
           Some(line) -> List.map(List.range(0, line.departures), fn _ -> bus)

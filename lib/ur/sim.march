@@ -2715,8 +2715,11 @@ mod Ur.Sim do
     end end end end
   end
   fn workforce(c : City, people : Int) : Int do D.workforce(c.census, people) end
+  fn base_wage(workers : Int, employed : Int) : Int do
+    if workers == 0 do 18 else 18 + clamp((employed * 100 / workers - 85) / 5, -3, 4) end
+  end
   fn wage_rate(labor : Labor) : Int do
-    if labor.workforce == 0 do 18 else 18 + clamp((labor.employed * 100 / labor.workforce - 85) / 5, -3, 4) end
+    base_wage(labor.workforce, labor.employed)
   end
   type JobMatch = { home : Int, origin : Int, workplace : Int, rank : Int, workers : Int, minutes : Int, board : Int }
   fn assignments_changed(before : List(JobMatch), after : List(JobMatch)) : Bool do
@@ -2831,12 +2834,15 @@ mod Ur.Sim do
       match_skills(c, network, sites, credentials, housing, skill - 1, matched)
     end
   end
+  fn matched_worker_wage(c : City, hire : JobMatch, base : Int) : Int do
+    let requirement = if (get(c.plants, hire.workplace) == 14 || get(c.plants, hire.workplace) == 22) && hire.rank == 2 do 2 else job_requirement(c, hire.workplace) end
+    base + credential_premium(requirement)
+  end
   pfn allocate_pay(c : City, matches : List(JobMatch), base : Int, pay : NativeIntArr) : NativeIntArr do
     match matches do
       Nil -> pay
       Cons(hire, rest) ->
-        let requirement = if (get(c.plants, hire.workplace) == 14 || get(c.plants, hire.workplace) == 22) && hire.rank == 2 do 2 else job_requirement(c, hire.workplace) end
-        let wages = hire.workers * (base + credential_premium(requirement))
+        let wages = hire.workers * matched_worker_wage(c, hire, base)
         allocate_pay(c, rest, base, NativeArray.set_int(pay, hire.home, get(pay, hire.home) + wages))
     end
   end
