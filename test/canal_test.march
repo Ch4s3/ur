@@ -77,10 +77,58 @@ mod CanalTest do
       "An approaching canal taxi requests the lift and waits for the road deck")
   end
 
+  pfn shore_silt() : Unit do
+    let c = fixture()
+    let sea = S.index(4, 10)
+    let mouth = S.index(5, 10)
+    let c = { c with heights: NativeArray.set_int(c.heights, sea, 0) }
+    let c = S.act(S.act(c, mouth, 127), S.index(6, 10), 127)
+    let x = 4 * 32 + 30
+    let z = 10 * 32 + 18
+    let ring = Ur.Ocean.ring() * 8
+    let cell = (z / 4 + ring) * Ur.Ocean.cells_wide() + x / 4 + ring
+    let silt = { c with sand_changes: NativeArray.make_int(1, cell * 512 + 2 * 128 + 1) }
+    let field = Ur.Ocean.field(silt)
+    Test.assert_true(Ur.Ocean.depth(field, x, z) >= 6 &&
+      Ur.Ocean.depth(field, x - 12, z) >= 6 && Ur.Ocean.depth(field, x + 4, z) >= 6,
+      "The canal bed and its seaward approach remain submerged through storm deposits")
+    let edge = 5 * 32
+    let north = 10 * 32 + 8
+    let south = 10 * 32 + 24
+    Test.assert_true(Ur.Ocean.canal_mouth_corner(field, edge, north) &&
+      Ur.Ocean.canal_mouth_corner(field, edge, south) && !Ur.Ocean.canal_mouth_corner(field, edge - 8, north) &&
+      !Ur.Ocean.canal_mouth_corner(field, edge, north - 8),
+      "The shoreline join follows the width of the canal mouth")
+    Test.assert_true(Ur.Ocean.canal_shelter_corner(field, edge, north) &&
+      Ur.Ocean.canal_shelter_corner(field, edge - 16, north) &&
+      !Ur.Ocean.canal_shelter_corner(field, edge - 24, north) &&
+      !Ur.Ocean.canal_shelter_corner(field, edge - 8, north - 8),
+      "Shelter extends out through the approach and falls off beside it and offshore")
+    let natural = Ur.Ocean.field({ silt with canals: NativeArray.make_int(S.count(), 0) })
+    let shoulder = Ur.Ocean.depth(field, x - 12, north - 2)
+    let old_shoulder = Ur.Ocean.depth(natural, x - 12, north - 2)
+    let expected = if old_shoulder > 0 && Ur.Ocean.kind(natural, x - 12, north - 2) == 0 do
+      Math.max_int(old_shoulder, S.canal_depth() - 2)
+    else old_shoulder end
+    Test.assert_eq_int(shoulder, expected, "The dredge slopes into the wet shelf and preserves dry banks")
+    let quad = Strata.Quad.pack0(8, 31, 16, 8, 8, 0)
+    let blended = Strata.Quad.with_ocean_shelter(quad, 10)
+    Test.assert_true(Strata.Quad.ocean_shelter(blended) == 10 && Strata.Quad.y_of(blended) == 31 &&
+      Strata.Quad.face_of(blended) == 0 && Strata.Quad.with_ocean_shelter(quad, 0) == quad,
+      "Inlet shading uses spare ocean bits and preserves the surface geometry")
+    let wall = { silt with seawalls: NativeArray.set_int(silt.seawalls, sea, 1) }
+    match Ur.Ocean.rebuild(field, silt, wall) do
+      Some(result) -> Test.assert_true(List.any(result.changed, fn lot -> lot == Ur.Ocean.padded_cell(4, 10)) &&
+        Ur.Ocean.depth(result.field, x, z) < 6, "Sealing the outlet removes the dredged approach")
+      None -> Test.assert_true(false, "A seawall across the outlet refreshes the ocean field")
+    end
+  end
+
   fn main(_cap : Cap(IO)) : Unit do
     navigation()
     flood_gate()
     movable_crossing()
+    shore_silt()
     Authority.must(println("Canal checks passed"))
   end
 end

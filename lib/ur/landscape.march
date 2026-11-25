@@ -75,7 +75,11 @@ mod Ur.Landscape do
         graded_height(h, before, after, along / 4 * 4 + 2)
       else if cut do h - 8
       else if S.public_work_stage(c, i) > 0 || S.valid(S.campus_root(c, i)) || S.building_offline(c, i) || S.get(c.parks, i) > 0 || (S.get(c.roads, i) > 0 && h > 0) || S.get(c.buildings, i) > 0 || S.get(c.construction, i) > 0 || S.get(c.plants, i) > 0 do h
-      else S.unbuilt_ground_height(c, x, z) end end end end end
+      else
+        let ground = S.unbuilt_ground_height(c, x, z)
+        if h == 0 && ground > 0 &&
+          S.canal_approach_cell(S.canal_approach_mask(c, i), int_mod_euclid(x, 32), int_mod_euclid(z, 32), 32) do 0 else ground end
+      end end end end end
     end
   end
   fn height(c : Ur.Sim.City, x : Int, z : Int) : Int do

@@ -27,7 +27,7 @@ mod Ur.Ocean do
   -- (0 open floor, 1 reef, 2 sand bar, 3 a reef the city built); [shelf] is the bare shelf's depth.
   -- [reef_type] is what the map's reefs are, from its temperature (Ur.Sim setup 2): 0 rocky, 1 mixed, 2 coral.
   -- [corals] are the coral templates its reefs are dotted with (Strata.Corals; none without reef), in Ur.Scene's material ids.
-  type Field = { floor : NativeIntArr, kind : NativeIntArr, shelf : NativeIntArr, reef_type : Int, corals : List(Strata.Template.Template) }
+  type Field = { floor : NativeIntArr, kind : NativeIntArr, shelf : NativeIntArr, reef_type : Int, corals : List(Strata.Template.Template), canals : NativeIntArr }
 
   doc "Ground cells across and down the map and its ring (8 to a parcel)."
   fn cells_wide() : Int do padded_width() * 8 end
@@ -139,6 +139,42 @@ mod Ur.Ocean do
     let land = seed(c, NativeArray.make_int(n, 0), 0)
     edited(c, Strata.Seabed.shelf(land, cells_wide(), cells_deep(), 4, 2, 3, 20, 63), land)
   end
+  -- Keep the engineered channel open through natural banks, sandbars and storm deposits.
+  pfn canal_beds(c : Ur.Sim.City, lot : Int, floor : NativeIntArr, kind : NativeIntArr) : (NativeIntArr, NativeIntArr) do
+    if lot >= S.count() do (floor, kind) else
+      let canal = S.canal_water(c, lot)
+      let approach = S.canal_approach_mask(c, lot)
+      if !canal && approach == 0 do canal_beds(c, lot + 1, floor, kind) else
+        let x = (lot % S.width() + ring()) * 8
+        let z = (lot / S.width() + ring()) * 8
+        let bed = Math.max_int(0, S.canal_depth() - S.canal_level(c, lot))
+        let (floor, kind) = List.fold_left(List.range(0, 64), (floor, kind), fn (state, cell) ->
+          let u = cell % 8 * 4 + 2
+          let v = cell / 8 * 4 + 2
+          let idx = (z + cell / 8) * cells_wide() + x + cell % 8
+          let (floor, kind) = state
+          if canal do
+            let depth = if S.canal_wet(c, lot, u, v) do bed else 0 end
+            (NativeArray.set_int(floor, idx, depth), NativeArray.set_int(kind, idx, 0))
+          else if S.canal_approach_cell(approach, u, v, 32) do
+            let depth = Math.max_int(S.canal_depth(), NativeArray.get_int(floor, idx))
+            let material = if S.canal_approach_cell(approach, u, v, 16) do 4 else 0 end
+            (NativeArray.set_int(floor, idx, depth), NativeArray.set_int(kind, idx, material))
+          else
+            -- A submerged shoulder eases the trench into the shelf. Keep dry
+            -- banks and existing reefs intact and leave the central draft alone.
+            let x_shoulder = int_and(approach, 3) != 0 && (v == 6 || v == 26)
+            let z_shoulder = int_and(approach, 12) != 0 && (u == 6 || u == 26)
+            let depth = NativeArray.get_int(floor, idx)
+            if (x_shoulder || z_shoulder) && depth > 0 && depth < S.canal_depth() - 2 &&
+              NativeArray.get_int(kind, idx) == 0 do
+              (NativeArray.set_int(floor, idx, S.canal_depth() - 2), kind)
+            else state end
+          end end)
+        canal_beds(c, lot + 1, floor, kind)
+      end
+    end
+  end
   doc "The sea floor of city [c]: a shelf 2 voxels deep at the shore deepening 3 voxels in 20 to 63, with the map's reefs and sand bars, the city's dredging and reefs, and the sand storms moved."
   fn field(c : Ur.Sim.City) : Field do
     let n = cells_wide() * cells_deep()
@@ -147,7 +183,9 @@ mod Ur.Ocean do
     -- the city's edits, then the sand storms moved over them: a dredged channel silts, and dredging it again digs deeper
     let ft = sand(edited(c, shelf, land), c.sand_changes, 0)
     let rt = reef_type(c)
-    { floor: ft.floor.depth, kind: ft.kind, shelf: shelf.depth, reef_type: rt, corals: if has_reef(ft.kind, 0) do coral_set(rt) else Nil end }
+    let (floor, kind) = canal_beds(c, 0, ft.floor.depth, ft.kind)
+    { floor: floor, kind: kind, shelf: shelf.depth, reef_type: rt,
+      corals: if has_reef(kind, 0) do coral_set(rt) else Nil end, canals: c.canals }
   end
 
   pfn shoal_cells(f : Field, px : Int, pz : Int, k : Int, least : Int, reef : Int) : (Int, Int) do
@@ -206,7 +244,7 @@ mod Ur.Ocean do
     let t = if NativeArray.length_int(c.setup) > 2 do NativeArray.get_int(c.setup, 2) else 2 end
     if t >= 3 do 2 else if t <= 1 do 0 else 1 end end
   end
-  doc "What the floor at voxel (x, z) is made of: 0 open floor, 1 reef, 2 sand bar; open floor off the field."
+  doc "What the floor at voxel (x, z) is made of: 0 open floor, 1 reef, 2 sand bar, 3 built reef, 4 canal mouth; open floor off the field."
   fn kind(f : Field, x : Int, z : Int) : Int do
     let cx = int_div_euclid(x, 4) + ring() * 8
     let cz = int_div_euclid(z, 4) + ring() * 8
@@ -239,12 +277,38 @@ mod Ur.Ocean do
     if k >= 64 do false else
       let cx = px * 8 + k % 8
       let cz = pz * 8 + k / 8
-      if cell_depth(a, cx, cz) != cell_depth(b, cx, cz) do true else cells_differ(a, b, px, pz, k + 1) end
+      let idx = cz * cells_wide() + cx
+      if cell_depth(a, cx, cz) != cell_depth(b, cx, cz) || NativeArray.get_int(a.kind, idx) != NativeArray.get_int(b.kind, idx) do true
+      else cells_differ(a, b, px, pz, k + 1) end
     end
   end
-  doc "Whether padded parcel [cell] (row-major over the map and its ring) has any cell whose water depth differs between [a] and [b]."
+  fn canal_parcel(f : Field, cell : Int) : Bool do
+    let x = cell % padded_width() - ring()
+    let z = cell / padded_width() - ring()
+    cell >= 0 && cell < ring_cells() && x >= 0 && x < S.width() && z >= 0 && z < S.depth() && S.get(f.canals, S.index(x, z)) > 0
+  end
+  pfn canal_sea_cell(f : Field, x : Int, z : Int) : Bool do
+    canal_parcel(f, padded_cell(int_div_euclid(x, 32), int_div_euclid(z, 32))) && depth(f, x, z) > 0
+  end
+  pfn canal_mouth_edge(f : Field, ax : Int, az : Int, bx : Int, bz : Int) : Bool do
+    (kind(f, ax, az) == 4 && canal_sea_cell(f, bx, bz)) ||
+      (kind(f, bx, bz) == 4 && canal_sea_cell(f, ax, az))
+  end
+  doc "A surface vertex belongs to the sheltered side of the inlet where its neighbouring cells connect sea-level canal water to the dredged approach."
+  fn canal_mouth_corner(f : Field, x : Int, z : Int) : Bool do
+    (x % 32 == 0 && (canal_mouth_edge(f, x - 2, z - 2, x + 2, z - 2) ||
+      canal_mouth_edge(f, x - 2, z + 2, x + 2, z + 2))) ||
+    (z % 32 == 0 && (canal_mouth_edge(f, x - 2, z - 2, x - 2, z + 2) ||
+      canal_mouth_edge(f, x + 2, z - 2, x + 2, z + 2)))
+  end
+  doc "Whether an inlet surface vertex touches the sheltered reach of the dredged approach."
+  fn canal_shelter_corner(f : Field, x : Int, z : Int) : Bool do
+    kind(f, x - 2, z - 2) == 4 || kind(f, x + 2, z - 2) == 4 ||
+      kind(f, x - 2, z + 2) == 4 || kind(f, x + 2, z + 2) == 4
+  end
+  doc "Whether the water depth, seabed material or canal ownership of padded parcel [cell] differs between [a] and [b]."
   fn parcel_changed(a : Field, b : Field, cell : Int) : Bool do
-    cells_differ(a, b, cell % padded_width(), cell / padded_width(), 0)
+    canal_parcel(a, cell) != canal_parcel(b, cell) || cells_differ(a, b, cell % padded_width(), cell / padded_width(), 0)
   end
   doc "Padded parcel index of map parcel (px, pz); px, pz may lie in the ring (-13..)."
   fn padded_cell(px : Int, pz : Int) : Int do (pz + ring()) * padded_width() + px + ring() end
@@ -269,10 +333,11 @@ mod Ur.Ocean do
   pfn touched_from(a : Ur.Sim.City, b : Ur.Sim.City, i : Int) : Bool do
     if i >= S.count() do false else
       let moved = if low_or_shore(a, i, 0) do cells_wet_differ(a, b, i, 0) else if low_or_shore(b, i, 0) do cells_wet_differ(a, b, i, 0) else false end end
-      if moved do true else touched_from(a, b, i + 1) end
+      if moved || S.canal_water(a, i) != S.canal_water(b, i) ||
+        S.canal_approach_mask(a, i) != S.canal_approach_mask(b, i) do true else touched_from(a, b, i + 1) end
     end
   end
-  doc "Whether any ground cell turned from land to water or back between [a] and [b]: the edits (heights, buildings, roads, grading) after which the ocean must be rebuilt."
+  doc "Whether land and water coverage or canal ownership changed between [a] and [b], requiring an ocean rebuild."
   fn coast_touched(a : Ur.Sim.City, b : Ur.Sim.City) : Bool do touched_from(a, b, 0) end
 
   pfn walls_from(a : Ur.Sim.City, b : Ur.Sim.City, i : Int) : Bool do

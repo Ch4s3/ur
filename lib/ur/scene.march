@@ -26,6 +26,8 @@ mod Ur.Scene do
     let f = face(e, x, y, z + d - 1, w, h, 4, tex)
     face(f, x, y, z, w, h, 5, tex)
   end
+  pfn canal_material() : Int do 44 end
+  pfn material_count() : Int do canal_material() + 1 end
   pfn colour(i : Int) : (Int, Int, Int) do
     match i do
       0 -> (108, 157, 92)
@@ -73,6 +75,7 @@ mod Ur.Scene do
       41 -> (232, 236, 48)
       42 -> (255, 160, 0)
       43 -> (255, 255, 236)
+      44 -> (44, 101, 103)
       _ -> (93, 142, 91)
     end
   end
@@ -93,12 +96,12 @@ mod Ur.Scene do
     end
   end
   pfn palette(i : Int, r : Strata.Blocks.Registry) : Strata.Blocks.Registry do
-    if i >= 44 do r else
+    if i >= material_count() do r else
       let (red, green, blue) = colour(i)
-      let alpha = if i >= 32 && i <= 34 do 122 - (i - 32) * 31 else 255 end
+      let alpha = if i == canal_material() do 214 else if i >= 32 && i <= 34 do 122 - (i - 32) * 31 else 255 end end
       let a = pixels(NativeArray.make_u8(1024, alpha), i, 0, red, green, blue)
       if !Vk.texture_set(i, a) do Ur.AppError.stop("Material texture upload failed") else () end
-      let roughness = if i == 3 do 65 else if i == 9 || i == 19 do 116 else 245 end end
+      let roughness = if i == canal_material() do 28 else if i == 3 do 65 else if i == 9 || i == 19 do 116 else 245 end end end
       let d = Strata.Blocks.with_material(Strata.Blocks.with_faces(Strata.Blocks.def(), i, i, i), roughness, 0)
       let d = match i do
         20 -> Strata.Blocks.with_emission(d, 118, 235, 215, 45)
@@ -680,7 +683,7 @@ mod Ur.Scene do
     end
   end
   fn setup() : Unit do
-    if !Vk.set_light_box(29, 2) || !Vk.textures_create(16, 44) do Ur.AppError.stop("Could not allocate Strata materials and lighting") else () end
+    if !Vk.set_light_box(29, 2) || !Vk.textures_create(16, material_count()) do Ur.AppError.stop("Could not allocate Strata materials and lighting") else () end
     let r = palette(0, Strata.Blocks.empty())
     if !Vk.textures_commit() || !Strata.Render.upload_blocks(r) do Ur.AppError.stop("Could not upload Strata materials") else () end
     sea(0)
@@ -855,37 +858,33 @@ mod Ur.Scene do
       end
     end
   end
-  pfn flood_water(hs : NativeIntArr, probe : FloodProbe, channel_floor : Int, y : Int, i : Int, mesh : Mesh) : Mesh do
+  pfn canal_surface(mesh : Mesh, x : Int, y : Int, z : Int) : Mesh do
+    let tex = canal_material()
+    let at = mesh.quads * 2
+    let words = NativeArray.set_i32(mesh.words, at, Q.with_drop(Q.pack0(x, y, z, 4, 4, 0), 6))
+    { words: NativeArray.set_i32(words, at + 1, Q.pack1(tex, 255, tex + 1)), quads: mesh.quads + 1 }
+  end
+  pfn parcel_water(c : Ur.Sim.City, lot : Int, hs : NativeIntArr, probe : FloodProbe, channel : Bool, y : Int, i : Int, mesh : Mesh) : Mesh do
     if i >= 64 do mesh else
       let x = i % 8 * 4
       let z = i / 8 * 4
       let h = NativeArray.get_int(hs, 11 + i % 8 + i / 8 * 10)
-      -- Ordinary sea is drawn elsewhere. A submerged canal bed still needs its surge surface.
-      let ground = if h <= 0 && channel_floor > 0 do channel_floor else h end
-      let (level, depth) = flood_at(probe, x + 2, z + 2, ground)
-      let mesh = if depth == 0 || level < y || level >= y + 32 do mesh else
+      let wet = channel && S.canal_wet(c, lot, x + 2, z + 2)
+      let canal_level = if wet do S.canal_level(c, lot) else -1 end
+      let ground = if wet do Math.max_int(1, canal_level - S.canal_depth()) else h end
+      let (flood_level, depth) = flood_at(probe, x + 2, z + 2, ground)
+      let flooded = depth > 0 && flood_level >= canal_level
+      let level = if flooded do flood_level else canal_level end
+      let mesh = if level <= 0 || level < y || level >= y + 32 do mesh
+      else if channel do canal_surface(mesh, x, level - y, z) else
         let concentration = S.clamp(depth * 4 + 15, 0, 63)
         let packed = concentration * (1 + 64 + 4096 + 262144)
         let w0 = Q.with_drop(Q.pack0(x, level - y, z, 4, 4, 0), 6)
         let n = mesh.quads * 2
         let words = NativeArray.set_i32(mesh.words, n, w0)
         { words: NativeArray.set_i32(words, n + 1, Q.pack1(packed % 65536, packed / 65536, 252)), quads: mesh.quads + 1 }
-      end
-      flood_water(hs, probe, channel_floor, y, i + 1, mesh)
-    end
-  end
-  pfn canal_water(c : Ur.Sim.City, lot : Int, probe : FloodProbe, level : Int, at : Int, mesh : Mesh) : Mesh do
-    if at >= 64 do mesh else
-      let x = at % 8 * 4
-      let z = at / 8 * 4
-      let (flood, _) = flood_at(probe, x + 2, z + 2, Math.max_int(1, S.canal_level(c, lot) - 6))
-      let mesh = if S.canal_wet(c, lot, x + 2, z + 2) && flood <= S.canal_level(c, lot) do
-        let packed = 54 * (1 + 64 + 4096 + 262144)
-        let n = mesh.quads * 2
-        let words = NativeArray.set_i32(mesh.words, n, Q.with_drop(Q.pack0(x, level, z, 4, 4, 0), 6))
-        { words: NativeArray.set_i32(words, n + 1, Q.pack1(packed % 65536, packed / 65536, 252)), quads: mesh.quads + 1 }
-      else mesh end
-      canal_water(c, lot, probe, level, at + 1, mesh)
+      end end
+      parcel_water(c, lot, hs, probe, channel, y, i + 1, mesh)
     end
   end
   pfn upload(slot : Int, x : Int, y : Int, z : Int, m : Mesh, water : Mesh, light : NativeU8Arr) : Unit do
@@ -899,14 +898,15 @@ mod Ur.Scene do
       let slot = if layer < 4 do i * 4 + layer else high_slot(i, layer) end
       let flood = probe.high >= y && probe.low < y + 32
       let level = S.canal_level(c, i)
-      let channel = S.canal_water(c, i) && level >= y && level < y + 32
+      let channel = S.canal_water(c, i) && level > 0 && level >= y && level < y + 32
       if peak > y || occupied(parts, y) || flood || channel do
         let m = surface(empty(), hs, x, z, y, 0)
         let a = terrain_light(NativeArray.make_u8(32768, 0), hs, y, 0)
         let (mesh, light) = pieces(m, a, parts, y, false, false, Vk.lamp_shadow(27))
-        let water = if flood || channel do { words: NativeArray.make_i32(if flood && channel do 256 else 128 end, 0), quads: 0 } else { mesh with quads: 0 } end
-        let water = if channel do canal_water(c, i, probe, level - y, 0, water) else water end
-        let water = if flood do flood_water(hs, probe, if S.canal_water(c, i) do 1 else 0 end, y, 0, water) else water end
+        let water = if flood || channel do
+          let water = { words: NativeArray.make_i32(128, 0), quads: 0 }
+          parcel_water(c, i, hs, probe, S.canal_water(c, i), y, 0, water)
+        else { mesh with quads: 0 } end
         upload(slot, x, y, z, mesh, water, light)
       else Vk.chunk_free(slot) end
       layers(c, i, x, z, hs, peak, parts, probe, layer + 1)
@@ -1121,29 +1121,45 @@ mod Ur.Scene do
   -- The sea's surface over a padded parcel: ocean quads (Strata.Quad.ocean1)
   -- at sea level, the top of layer y -32. Each 8-voxel patch with water
   -- carries the depth at its corners; a parcel deep all over is one quad.
-  pfn ocean_quad(m : Mesh, x : Int, z : Int, size : Int, d00 : Int, d10 : Int, d01 : Int, d11 : Int) : Mesh do
+  pfn ocean_surface_quad(m : Mesh, x : Int, z : Int, size : Int, water : Int, shelter : Int) : Mesh do
     let n = m.quads * 2
-    let words = NativeArray.set_i32(m.words, n, Q.pack0(x, 31, z, size, size, 0))
-    { words: NativeArray.set_i32(words, n + 1, Q.ocean1(d00, d10, d01, d11)), quads: m.quads + 1 }
+    let w0 = Q.with_ocean_shelter(Q.pack0(x, 31, z, size, size, 0), shelter)
+    let words = NativeArray.set_i32(m.words, n, w0)
+    { words: NativeArray.set_i32(words, n + 1, water), quads: m.quads + 1 }
+  end
+  pfn inlet_corner(f : Ur.Ocean.Field, x : Int, z : Int, bit : Int) : Int do
+    if Ur.Ocean.canal_shelter_corner(f, x, z) do bit else 0 end
+  end
+  pfn ocean_patch(m : Mesh, f : Ur.Ocean.Field, x : Int, z : Int, u : Int, v : Int, canal : Bool) : Mesh do
+    let a = x + u
+    let b = z + v
+    let shelter = if canal do 15 else inlet_corner(f, a, b, 1) + inlet_corner(f, a + 8, b, 2) +
+      inlet_corner(f, a, b + 8, 4) + inlet_corner(f, a + 8, b + 8, 8) end
+    let water = Q.ocean1(Ur.Ocean.corner_depth(f, a, b), Ur.Ocean.corner_depth(f, a + 8, b),
+      Ur.Ocean.corner_depth(f, a, b + 8), Ur.Ocean.corner_depth(f, a + 8, b + 8))
+    ocean_surface_quad(m, u, v, 8, water, shelter)
   end
   pfn all_deep(f : Ur.Ocean.Field, x : Int, z : Int, i : Int) : Bool do
-    if i >= 25 do true else if Ur.Ocean.depth(f, x + i % 5 * 8, z + i / 5 * 8) != 63 do false else all_deep(f, x, z, i + 1) end end
+    if i >= 25 do true else
+      let u = x + i % 5 * 8
+      let v = z + i / 5 * 8
+      Ur.Ocean.depth(f, u, v) == 63 && !Ur.Ocean.canal_shelter_corner(f, u, v) && all_deep(f, x, z, i + 1)
+    end
   end
-  pfn patches(m : Mesh, f : Ur.Ocean.Field, x : Int, z : Int, i : Int) : Mesh do
+  pfn patches(m : Mesh, f : Ur.Ocean.Field, x : Int, z : Int, i : Int, canal : Bool) : Mesh do
     if i >= 16 do m else
       let u = i % 4 * 8
       let v = i / 4 * 8
       let wet = Ur.Ocean.depth(f, x + u + 2, z + v + 2) > 0 || Ur.Ocean.depth(f, x + u + 6, z + v + 2) > 0 ||
         Ur.Ocean.depth(f, x + u + 2, z + v + 6) > 0 || Ur.Ocean.depth(f, x + u + 6, z + v + 6) > 0
-      let m = if !wet do m else
-        ocean_quad(m, u, v, 8, Ur.Ocean.corner_depth(f, x + u, z + v), Ur.Ocean.corner_depth(f, x + u + 8, z + v),
-          Ur.Ocean.corner_depth(f, x + u, z + v + 8), Ur.Ocean.corner_depth(f, x + u + 8, z + v + 8))
-      end
-      patches(m, f, x, z, i + 1)
+      let m = if wet do ocean_patch(m, f, x, z, u, v, canal) else m end
+      patches(m, f, x, z, i + 1, canal)
     end
   end
-  pfn sea_surface(f : Ur.Ocean.Field, x : Int, z : Int) : Mesh do
-    if all_deep(f, x, z, 0) do ocean_quad(empty(), 0, 0, 32, 63, 63, 63, 63) else patches(empty(), f, x, z, 0) end
+  -- Use identical patch sizes and depth samples on both sides of a sea-level inlet.
+  pfn sea_surface(f : Ur.Ocean.Field, x : Int, z : Int, canal : Bool) : Mesh do
+    if !canal && all_deep(f, x, z, 0) do ocean_surface_quad(empty(), 0, 0, 32, Q.ocean1(63, 63, 63, 63), 0)
+    else patches(empty(), f, x, z, 0, canal) end
   end
   fn seabed_parcel(f : Ur.Ocean.Field, cell : Int) : Unit do
     let px = cell % Ur.Ocean.padded_width() - Ur.Ocean.ring()
@@ -1158,7 +1174,7 @@ mod Ur.Scene do
       let ks = seabed_kinds(f, x, z, NativeArray.make_int(100, 0), 0)
       let bed = seabed(empty(), f, hs, ks, -32)
       let top = with_corals(bed, f, x, z)
-      let surface = sea_surface(f, x, z)
+      let surface = sea_surface(f, x, z, Ur.Ocean.canal_parcel(f, cell))
       let light = terrain_light(NativeArray.make_u8(32768, 0), hs, -32, 0)
       -- corals are many small faces: where Strata has no room left for them, the reef is drawn bare rather than the game stopping
       if top.quads != bed.quads && !try_upload_ocean(Ur.Ocean.seabed_slot(cell, 0), x, -32, z, top, surface, light) do

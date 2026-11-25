@@ -1130,12 +1130,37 @@ mod Ur.Sim do
 
   fn canal_tool(tool : Int) : Bool do tool >= 127 && tool <= 132 end
   fn canal_water(c : City, lot : Int) : Bool do get(c.canals, lot) > 0 end
-  fn canal_level(c : City, lot : Int) : Int do
-    clamp(get(c.heights, lot) - 2, 0, 96) / 8 * 8
+  fn canal_open_sea(c : City, lot : Int) : Bool do
+    valid(lot) && get(c.heights, lot) == 0 && get(c.seawalls, lot) == 0
   end
+  pfn canal_lock_outlet(c : City, lot : Int, side : Int) : Bool do
+    canal_open_sea(c, neighbour(lot, side)) && canal_water(c, neighbour(lot, opposite(side)))
+  end
+  fn canal_level(c : City, lot : Int) : Int do
+    let sea_lock = get(c.canals, lot) == 2 &&
+      List.any([0, 1, 2, 3], fn side -> canal_lock_outlet(c, lot, side))
+    if sea_lock do 0 else clamp(get(c.heights, lot) - 2, 0, 96) / 8 * 8 end
+  end
+  fn canal_outlet(c : City, lot : Int, side : Int) : Bool do
+    canal_water(c, lot) && canal_open_sea(c, neighbour(lot, side)) &&
+      (if get(c.canals, lot) == 2 do canal_lock_outlet(c, lot, side) else canal_level(c, lot) == 0 end)
+  end
+  -- One bit per side of a sea parcel where a canal opens into it.
+  fn canal_approach_mask(c : City, sea : Int) : Int do
+    if !canal_open_sea(c, sea) do 0 else
+      (if canal_outlet(c, neighbour(sea, 0), 1) do 1 else 0 end) +
+      (if canal_outlet(c, neighbour(sea, 1), 0) do 2 else 0 end) +
+      (if canal_outlet(c, neighbour(sea, 2), 3) do 4 else 0 end) +
+      (if canal_outlet(c, neighbour(sea, 3), 2) do 8 else 0 end)
+    end
+  end
+  fn canal_approach_cell(mask : Int, x : Int, z : Int, reach : Int) : Bool do
+    (z >= 8 && z < 24 && ((x < reach && int_and(mask, 1) != 0) || (x >= 32 - reach && int_and(mask, 2) != 0))) ||
+    (x >= 8 && x < 24 && ((z < reach && int_and(mask, 4) != 0) || (z >= 32 - reach && int_and(mask, 8) != 0)))
+  end
+  fn canal_depth() : Int do 6 end
   fn canal_arm(c : City, lot : Int, arm : Int) : Bool do
-    let other = neighbour(lot, arm)
-    canal_water(c, other) || (valid(other) && get(c.heights, other) == 0 && canal_level(c, lot) == 0)
+    canal_water(c, neighbour(lot, arm)) || canal_outlet(c, lot, arm)
   end
   fn canal_wet(c : City, lot : Int, x : Int, z : Int) : Bool do
     let across = x >= 8 && x < 24
