@@ -1026,10 +1026,12 @@ mod Ur.Sim do
       let rx = x + float_to_int(Math.floor(int_to_float(i) *. Math.cos(a) +. 0.5))
       let rz = z + float_to_int(Math.floor(int_to_float(i) *. Math.sin(a) +. 0.5))
       if rx < 0 || rz < 0 || rx >= width() || rz >= depth() do true
-      else if get(c.heights, index(rx, rz)) > 0 do false else ray_open(c, x, z, a, i + 1) end end
+      else if get(c.heights, index(rx, rz)) > 0 || reef_breaks(c, index(rx, rz)) do false else ray_open(c, x, z, a, i + 1) end end
     end
   end
-  doc "Whether [lot] lies in sheltered water: of 16 rays from it, each 8 parcels long, at most 5 meet no land (past the map's edge is open sea)."
+  -- a reef whose top is within 2 m of the surface breaks the swell, as land does: water inside a reef is sheltered (a mangrove cay)
+  pfn reef_breaks(c : City, i : Int) : Bool do get(c.sea_reefs, i) == 1 && get(c.sea_shoals, i) <= 8 end
+  doc "Whether [lot] lies in sheltered water: of 16 rays from it, each 8 parcels long, at most 5 meet neither land nor a reef within 2 m of the surface (past the map's edge is open sea)."
   fn sheltered(c : City, lot : Int) : Bool do
     let x = lot % width()
     let z = lot / width()
@@ -1041,11 +1043,36 @@ mod Ur.Sim do
       if valid(n) && get(c.heights, n) > 0 do true else land_beside(c, lot, d + 1) end
     end
   end
-  doc "Whether water parcel [lot] holds a mangrove stand (living or dead): a mangrove map, sheltered water beside land, and clear water: no seawall, ferry route, transit, crossing or worked seabed, not the harbour. Drawing and the surge both go by this."
+  doc "Whether water parcel [lot] holds a mangrove stand (living or dead): a mangrove map, sheltered water beside land (sheltered by land or a shallow reef), no further than 8 parcels up a river, and clear water: no seawall, ferry route, transit, crossing or worked seabed, not the harbour. Drawing and the surge both go by this."
   fn mangrove_water(c : City, lot : Int) : Bool do
     if !valid(lot) || get(c.heights, lot) > 0 || !mangrove_map(c) || lot == c.harbour do false
     else if get(c.seawalls, lot) > 0 || get(c.ferries, lot) > 0 || get(c.transit, lot) > 0 || get(c.grade_cover, lot) > 0 || get(c.seabed, lot) > 0 do false
-    else land_beside(c, lot, 0) && sheltered(c, lot) end end
+    else
+      -- a river's banks shelter it to the mouth; past 8 parcels upstream it runs fresh
+      let reach = river_reach(c, lot)
+      if reach > 8 do false else land_beside(c, lot, 0) && (reach >= 0 || sheltered(c, lot)) end
+    end end
+  end
+  doc "How many parcels upstream of its mouth water parcel [lot] lies in a seeded island's river (0 at the mouth), or -1 if it is not river water."
+  fn river_reach(c : City, lot : Int) : Int do
+    if !valid(lot) || get(c.heights, lot) > 0 || c.world_seed < 0 || !c.founding_map do -1 else
+      let shape = island_shape(c.world_seed)
+      if !shape.river do -1 else
+        let x = lot % width()
+        let z = lot / width()
+        match mouth_go(c, shape, 19) do
+          Cons(m, _) ->
+            let mz = m / width()
+            if x >= 38 || z < 18 || z > mz || int_abs(x - river_column(shape, z)) > 1 do -1 else mz - z end
+          Nil -> -1
+        end
+      end
+    end
+  end
+  doc "How thickly a mangrove stand on [lot] grows, out of 11 spots' chances: 7 on the coast and at a river's mouth, thinning to 2 eight parcels upstream, where the river runs fresh and no mangroves grow."
+  fn mangrove_density(c : City, lot : Int) : Int do
+    let reach = river_reach(c, lot)
+    if reach < 0 do 7 else 7 - reach * 5 / 8 end
   end
   doc "The stand on [lot]: 0 none, 1 living, 2 thinned (harm 50+), 3 dead (harm 100)."
   fn mangrove_state(c : City, lot : Int) : Int do

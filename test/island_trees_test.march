@@ -210,6 +210,43 @@ mod IslandTreesTest do
     Test.assert_true(List.length(dead) > 0 && List.all(dead, fn p -> p.material == 23), "a dead stand is grey snags, no leaves")
     Test.assert_true(List.any(Ur.Landscape.structures(harmed(60), stand, 0), fn p -> p.material == 22), "a thinned stand is paler")
   end
+  -- reefs shelter a small island; rivers carry mangroves only up their salty reach
+  pfn reefs_and_rivers(c : Ur.Sim.City) : Unit do
+    let zero = NativeArray.make_int(S.count(), 0)
+    -- a 2 x 2 islet out at sea, (30, 30)..(31, 31); the water beside it at (32, 30)
+    let a = block(zero, 30, 31, 30, 31, 10)
+    let islet = seeded({ c with heights: a, seawalls: zero, ferries: zero, transit: zero, grade_cover: zero, seabed: zero, harbour: -1,
+      sea_shoals: NativeArray.make_int(S.count(), 63), sea_reefs: NativeArray.make_int(S.count(), 0) }, first_mangrove_seed(c, true, 1))
+    let water = S.index(32, 30)
+    Test.assert_true(!S.sheltered(islet, water), "a bare islet in open sea is exposed")
+    Test.assert_true(!S.mangrove_water(islet, water), "and grows no mangroves")
+    -- a reef ring three parcels out round the islet, its top 1 m down
+    let ring = List.filter(List.range(0, S.count()), fn i ->
+      let dx = i % S.width() - 30
+      let dz = i / S.width() - 30
+      (dx == -3 || dx == 4 || dz == -3 || dz == 4) && dx >= -3 && dx <= 4 && dz >= -3 && dz <= 4)
+    let reefed = { islet with sea_reefs: List.fold_left(ring, NativeArray.make_int(S.count(), 0), fn (r, i) -> NativeArray.set_int(r, i, 1)),
+      sea_shoals: List.fold_left(ring, NativeArray.make_int(S.count(), 63), fn (r, i) -> NativeArray.set_int(r, i, 4)) }
+    Test.assert_true(S.sheltered(reefed, water), "a reef near the surface shelters the water inside it")
+    Test.assert_true(S.mangrove_water(reefed, water), "so the islet grows a mangrove ring, as a cay does")
+    let deep = { reefed with sea_shoals: List.fold_left(ring, NativeArray.make_int(S.count(), 63), fn (r, i) -> NativeArray.set_int(r, i, 30)) }
+    Test.assert_true(!S.sheltered(deep, water), "a reef 7 m down breaks no swell")
+    -- a generated map with a river and mangroves
+    let river = S.unclaimed_setup(river_seed(c, 3), S.default_setup())
+    let reaches = List.filter(List.range(0, S.count()), fn i -> S.river_reach(river, i) >= 0)
+    Test.assert_true(List.any(reaches, fn i -> S.river_reach(river, i) == 0), "the river has a mouth")
+    Test.assert_true(List.any(reaches, fn i -> S.river_reach(river, i) > 8), "and runs more than 8 parcels inland")
+    Test.assert_true(List.all(reaches, fn i -> S.river_reach(river, i) <= 8 || !S.mangrove_water(river, i)), "no mangroves where the river runs fresh")
+    Test.assert_true(List.any(reaches, fn i -> S.river_reach(river, i) <= 2 && S.mangrove_water(river, i)), "mangroves at the mouth")
+    Test.assert_eq_int(S.mangrove_density(river, S.index(0, 0)), 7, "a coastal stand is full")
+    Test.assert_true(List.all(reaches, fn i -> List.all(reaches, fn j ->
+      S.river_reach(river, i) >= S.river_reach(river, j) || S.mangrove_density(river, i) >= S.mangrove_density(river, j))), "stands thin upstream")
+    Test.assert_true(List.any(reaches, fn i -> S.river_reach(river, i) == 8 && S.mangrove_density(river, i) < 7), "sparse at the limit")
+  end
+  -- a seed whose map has a river and mangroves
+  pfn river_seed(c : Ur.Sim.City, s : Int) : Int do
+    if s % 3 == 0 && Ur.Flora.mangrove_map(seeded(c, s)) do s else river_seed(c, s + 1) end
+  end
   pfn first_mangrove_seed(c : Ur.Sim.City, want : Bool, s : Int) : Int do
     if Ur.Flora.mangrove_map(seeded(c, s)) == want do s else first_mangrove_seed(c, want, s + 1) end
   end
@@ -222,6 +259,7 @@ mod IslandTreesTest do
     choosing(c)
     mangroves(c)
     defence(c)
+    reefs_and_rivers(c)
     Authority.must(println("Island trees: all assertions passed"))
   end
 end
