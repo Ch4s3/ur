@@ -59,16 +59,23 @@ quarter-metre elevation steps. Buildings use quarter-metre detail throughout.
 
 ## Planning streets and crossings
 
-Choose a street type in **Roads → Streets**. **Quick street** builds on
-release. **Plan street** lets you click to add waypoints and drag any pin
-to revise the route. Hover a placed waypoint and press **R** to flip its
-incoming bend, or flip the live end of the route. Hold **Alt** to preview
-the other bend and **Shift** to bypass snapping. **N** toggles snapping.
+Choose a street type in **Roads → Streets**. **Straight** locks the route to
+one map axis. Click the start and end, then press **Enter** to build and
+start the next segment from the end. **Quick bend** builds on drag release.
+In **Waypoints**, click to add pins and drag them to revise the route.
+Hover a pin and press **R** to flip its incoming bend, or flip the live end
+of the route. Hold **Alt** to preview the other bend. The guided tools snap
+to existing streets and alignment guides. Hold **Shift** to bypass snapping,
+or press **N** to toggle it.
+
+The preview shows the proposed street footprint and flags blocked parcels.
+Surface dead ends have rounded turning areas kept clear of curb parking.
+Extending a dead end turns it into a through street or junction.
 
 Use **Block** or **Grid** to drag a layout, then drag either corner to resize
 it. Grid spacing is in parcels. The layout leaves frontage between the
 outer road and the last interior street. Green markers identify new frontage.
-**Replace street** selects a corridor between junctions. Click farther along
+**Replace** selects a corridor between junctions. Click farther along
 a connected street to extend it. Orange markers identify attached infrastructure.
 
 In **Roads → Crossings**, choose an **Overpass**, **Underpass**, or **Road
@@ -79,8 +86,9 @@ The Road crossings layer shows built routes through terrain or water.
 Press **T** or choose **Layers → Crossings → Tunnel cutaway** to open the
 terrain and water above built tunnels. Press **T** again to restore the surface.
 
-Press **Enter** or click **Build** to confirm a draft, **Escape** or right-click
-to cancel, and **Z** to undo a confirmed project in one step.
+Press **Enter** or click **Build** to confirm a draft. Right-click or press
+**Backspace** to remove its last pin. **Escape** cancels the draft, and **Z**
+undoes a confirmed project in one step.
 
 ```sh
 UR_DEMO=29 UR_ROAD_DEMO=1 ./run.sh
@@ -506,6 +514,12 @@ Construction previews show a cost and outline before release. Drag roads and
 utilities along a route, or drag out a zoning rectangle. A blocked parcel
 rejects the whole gesture. Undo restores the city to the moment before the
 gesture, including the treasury and simulation month.
+
+Placing a public building pays for and reserves its site. The preview shows
+the work days required. Resident crews take the oldest reachable projects
+first, and each crew advances one project per game day. Buildings open and
+unlock their milestones when construction finishes. Inspect any site to see
+its progress or why it is waiting. Bulldozing a site cancels the order.
 
 See the [design](docs/superpowers/specs/2026-11-13-first-playable.md),
 [implementation plan](docs/superpowers/plans/2026-11-13-first-playable.md), and

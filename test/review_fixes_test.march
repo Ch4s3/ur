@@ -1,0 +1,60 @@
+-- Review fixes: the floor a loaded city is measured on, storms over an out-of-date floor, and the player's own reefs.
+mod ReviewFixesTest do
+  needs IO
+  needs IO.Console
+  alias Ur.Sim as S
+  alias Ur.Ocean as O
+
+  -- the first water parcel of [c] at least 3 parcels from land on every side
+  pfn open_water(c : Ur.Sim.City, i : Int) : Int do
+    if i >= S.count() do -1 else
+      let x = i % S.width()
+      let z = i / S.width()
+      let clear = x >= 3 && z >= 3 && x < S.width() - 3 && z < S.depth() - 3 && all_water(c, x - 3, z - 3, 0)
+      if clear do i else open_water(c, i + 1) end
+    end
+  end
+  pfn all_water(c : Ur.Sim.City, x0 : Int, z0 : Int, k : Int) : Bool do
+    if k >= 49 do true else if S.get(c.heights, S.index(x0 + k % 7, z0 + k / 7)) > 0 do false else all_water(c, x0, z0, k + 1) end end
+  end
+  -- the first water parcel whose centre is 2..4 m deep over open floor, 3 parcels or more from the map's edge
+  pfn shallow_water(c : Ur.Sim.City, f : Ur.Ocean.Field, i : Int) : Int do
+    if i >= S.count() do -1 else
+      let x = i % S.width()
+      let z = i / S.width()
+      let d = centre_depth(f, i)
+      if S.get(c.heights, i) == 0 && x >= 3 && z >= 3 && d >= 8 && d <= 16 && O.kind(f, x * 32 + 16, z * 32 + 16) == 0 do i else shallow_water(c, f, i + 1) end
+    end
+  end
+  pfn centre_depth(f : Ur.Ocean.Field, lot : Int) : Int do O.depth(f, lot % S.width() * 32 + 16, lot / S.width() * 32 + 16) end
+
+  fn main(_cap : Cap(IO)) : Unit do
+    -- C1: loading an old save over the classic map: the floor must be rebuilt
+    let boot = S.unclaimed()
+    Test.assert_true(O.floor_differs(boot, { boot with sea_features: 0 }), "an old save's floor differs from the booted map's")
+    Test.assert_true(O.floor_differs(boot, S.unclaimed_seeded(3)), "another map's floor differs")
+    Test.assert_true(O.floor_differs(boot, { boot with sand_changes: NativeArray.make_int(1, 512 * 1000 + 64 + 3) }), "another storm history's floor differs")
+    Test.assert_false(O.floor_differs(boot, boot), "the same city's floor does not")
+
+    -- I1: a storm handed a floor from before the player's dredge keeps the dredge
+    let c = S.unclaimed_seeded(7)
+    let stale = O.field(c)
+    let lot = shallow_water(c, stale, 0)
+    Test.assert_true(lot >= 0, "seed 7 has shallow open floor")
+    let dredged = { c with seabed: NativeArray.set_int(c.seabed, lot, 40), sea_run: 4, sand_peak: 400, sand_sector: 4 }
+    let after = Ur.Sand.storm(dredged, stale)
+    Test.assert_true(centre_depth(O.field(after), lot) >= 36, "the dredge survives the storm, got " ++ int_to_string(centre_depth(O.field(after), lot)))
+
+    -- I2: the player's reef is reef: fish count it, storms leave it
+    let reefed = { c with seabed: NativeArray.set_int(c.seabed, lot, 68) }
+    let f = O.field(reefed)
+    let x = lot % S.width() * 32 + 16
+    let z = lot / S.width() * 32 + 16
+    Test.assert_true(O.kind(f, x, z) != 0, "a built reef is not open floor")
+    let hab = Ur.Fish.habitat(reefed, f)
+    Test.assert_true(S.get(hab, lot) >= 2000000, "a built reef holds more fish than shelf, got " ++ int_to_string(S.get(hab, lot)))
+    let stormed = Ur.Sand.storm({ reefed with sea_run: 6, sand_peak: 450, sand_sector: 4 }, f)
+    Test.assert_eq_int(O.depth(O.field(stormed), x, z), O.depth(f, x, z), "a storm leaves the built reef as it was")
+    Authority.must(println("Review fix checks passed"))
+  end
+end

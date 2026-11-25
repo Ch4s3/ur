@@ -9,11 +9,13 @@ mod Ur.Clock do
   type Day = { city : Ur.Sim.City, stats : Option(Ur.Sim.Stats) }
 
   -- Finish a day `Ur.Sim.advance_day_with_traffic` has already simulated.
-  -- `month` is the calendar month before that day. `live` keeps a statistics
-  -- snapshot every day; otherwise one is taken only when the month closes.
-  fn close_day(month : Int, next : Ur.Sim.City, traffic : NativeIntArr, live : Bool) : Day do
-    let due = next.month != month
+  -- `live` keeps a statistics snapshot every day; otherwise one is taken
+  -- only when the month closes.
+  fn close_day(before : Ur.Sim.City, next : Ur.Sim.City, traffic : NativeIntArr, live : Bool) : Day do
+    let due = next.month != before.month
     let next = if due do Ur.Treasury.close_month(next) else next end
+    let completed = List.length(next.public_works) < List.length(before.public_works)
+    let next = if completed do Ur.Council.settle(next) else next end
     let next = Ur.Council.observe_religion(next)
     let next = if due do next else S.drift_pollution(next, traffic) end
     if due || live do
@@ -25,7 +27,7 @@ mod Ur.Clock do
 
   -- Advance one day under the given road load.
   fn step(c : Ur.Sim.City, traffic : NativeIntArr, live : Bool) : Day do
-    close_day(c.month, S.advance_day_with_traffic(c, traffic), traffic, live)
+    close_day(c, S.advance_day_with_traffic(c, traffic), traffic, live)
   end
 
   -- Advance one day under the road load the morning's city produces, which

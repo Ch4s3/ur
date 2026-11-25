@@ -283,11 +283,12 @@ mod Ur.Hud do
       let note = if !S.building_offline(c, hover) && S.retail_kind(c, hover) > 0 do
         "Food stock " ++ int_to_string(S.get(c.shop_stock, hover)) ++ "   ·   Delivered " ++ int_to_string(S.get(c.shop_delivered, hover)) ++
         (if S.get(c.shop_sales, hover) < 8 do "   ·   Shortage" else "" end)
+      else if S.get(c.heights, hover) == 0 && Ur.Fish.inspect(c, hover) != "" do Ur.Fish.inspect(c, hover)
       else if S.freshwater(c, hover) do "Freshwater aquifer"
       else if S.geothermal(c, hover) do "Geothermal field"
       else if S.get(c.pipes, hover) > 0 do "Water pipe installed"
       else if S.get(c.grid, hover) > 0 do "Power line installed"
-      else "" end end end end end
+      else "" end end end end end end
       let a = label(a, x, top +. 455.0, 11.0, note, true)
       let a = if zone > 0 do
         let a = label(a, x, top +. 474.0, 11.0, S.ground_name(S.ground_at(c, hover)) ++ " · " ++ S.quiet_name(S.quiet_at(c, hover)), false)
@@ -1839,8 +1840,9 @@ mod Ur.Hud do
     let y = y -. planner_top(w, h)
     if x < 0.0 || x >= 422.0 || y < 0.0 || y >= (if S.grade_tool(tool) do 172.0 else if mode == 0 do 36.0 else if mode == 4 do 144.0 else 120.0 end end end) do -1
     else if S.grade_tool(tool) && y < 32.0 do if x < 102.0 do 50 else if x < 204.0 do 51 else if x < 306.0 do 52 else 0 end end end
-    else if !S.grade_tool(tool) && y < 32.0 do
-      if x < 90.0 do 1 else if x < 174.0 do 2 else if x < 242.0 do 3 else if x < 304.0 do 4 else 5 end end end end
+    else if !S.grade_tool(tool) && y >= 4.0 && y < 29.0 do
+      if x < 76.0 do 11 else if x < 146.0 do 1 else if x < 237.0 do 2
+      else if x < 291.0 do 3 else if x < 345.0 do 4 else 5 end end end end end
     else if y >= 38.0 && y < 66.0 do
       if x < 102.0 do 6 else if x < 180.0 do 7 else if x < 266.0 do 8
       else if mode == 3 && !S.grade_tool(tool) do (if x < 306.0 do 9 else if x >= 382.0 do 10 else 0 end end)
@@ -1848,8 +1850,10 @@ mod Ur.Hud do
     else 0 end end end end
   end
   pfn planner_button(u : Strata.Ui.Ui, x : Float, y : Float, width : Float, name : String, enabled : Bool) : Strata.Ui.Ui do
-    let colour = if enabled do (0.15, 0.29, 0.33, 1.0) else (0.071, 0.14, 0.17, 1.0) end
-    label(U.rect(u, 0, x, y, width -. 3.0, 25.0, colour), x +. 7.0, y +. 5.0, 11.0, name, enabled)
+    let colour = if enabled do (0.14, 0.31, 0.33, 1.0) else (0.071, 0.14, 0.17, 1.0) end
+    let u = U.rect(u, 0, x, y, width -. 3.0, 25.0, colour)
+    let u = if enabled do U.rect(u, 0, x, y +. 23.0, width -. 3.0, 2.0, (0.38, 0.78, 0.72, 1.0)) else u end
+    label(u, x +. 7.0, y +. 5.0, 11.0, name, enabled)
   end
   pfn crossing_profile(u : Strata.Ui.Ui, p : Ur.Build.Preview, a : Int, b : Int, x : Float, y : Float, i : Int) : Strata.Ui.Ui do
     if i >= 46 do u else
@@ -1887,15 +1891,16 @@ mod Ur.Hud do
       let u = planner_button(u, x +. 104.0, y +. 4.0, 98.0, "Underpass", tool == 51)
       planner_button(u, x +. 206.0, y +. 4.0, 104.0, "Road tunnel", tool == 52)
     else
-      let u = planner_button(u, x +. 4.0, y +. 4.0, 86.0, "Quick street", d.mode == 0)
-      let u = planner_button(u, x +. 90.0, y +. 4.0, 84.0, "Plan street", d.mode == 1)
-      let u = planner_button(u, x +. 174.0, y +. 4.0, 68.0, "Block", d.mode == 2)
-      let u = planner_button(u, x +. 242.0, y +. 4.0, 62.0, "Grid", d.mode == 3)
-      planner_button(u, x +. 304.0, y +. 4.0, 114.0, "Replace street", d.mode == 4)
+      let u = planner_button(u, x +. 4.0, y +. 4.0, 72.0, "Straight", d.mode == Ur.Build.straight_mode())
+      let u = planner_button(u, x +. 76.0, y +. 4.0, 70.0, "Quick bend", d.mode == 0)
+      let u = planner_button(u, x +. 146.0, y +. 4.0, 91.0, "Waypoints", d.mode == 1)
+      let u = planner_button(u, x +. 237.0, y +. 4.0, 54.0, "Block", d.mode == 2)
+      let u = planner_button(u, x +. 291.0, y +. 4.0, 54.0, "Grid", d.mode == 3)
+      planner_button(u, x +. 345.0, y +. 4.0, 73.0, "Replace", d.mode == 4)
     end
     if height == 36.0 do u else
       let points = List.length(d.points)
-      let ready = points >= (if crossing do 2 else 1 end) && p.valid && p.changed
+      let ready = points >= Ur.Build.confirm_points(tool, d.mode) && p.valid && p.changed
       let u = planner_button(u, x +. 4.0, y +. 38.0, 98.0, "Build [Enter]", ready)
       let u = planner_button(u, x +. 102.0, y +. 38.0, 78.0, "Cancel", points > 0)
       let u = planner_button(u, x +. 180.0, y +. 38.0, 86.0, "Snap [N]", d.snap)
@@ -1905,9 +1910,10 @@ mod Ur.Hud do
         planner_button(u, x +. 382.0, y +. 38.0, 36.0, "+", true)
       else u end
       let help = if crossing do "Set two portals on the same axis. Drag either to adjust."
-        else if d.mode == 1 do "Click waypoints · Drag to move · Alt previews bend · R flips · Shift bypasses snap"
+        else if d.mode == Ur.Build.straight_mode() do "Click a start and end · Enter builds and continues from the end"
+        else if d.mode == 1 do "Click to add pins · Drag to move · R flips bend · Right-click removes last"
         else if d.mode == 4 do "Click a street between junctions. Click farther along to extend."
-        else "Drag out the corners. Drag either corner to resize." end end end
+        else "Drag out the corners. Drag either corner to resize." end end end end
       let u = label(u, x +. 8.0, y +. 70.0, 10.0, help, false)
       let quote = if S.valid(Ur.Build.start_point(d)) do Ur.Build.quote(p, tool) else "" end
       let u = if quote == "" do u else

@@ -86,6 +86,53 @@ mod RoadPlanningTest do
   pfn solid_at(parts : List(Ur.Architecture.Piece), x : Int, y : Int, z : Int) : Bool do
     List.any(parts, fn p -> x >= p.x && x < p.x + p.w && y >= p.y && y < p.y + p.h && z >= p.z && z < p.z + p.d)
   end
+  pfn turnaround() : Unit do
+    let c = fixture()
+    let end_lot = S.index(8, 10)
+    let c = (RoadBuild.preview(c, 1, S.index(3, 10), end_lot)).city
+    let end_parts = Ur.Landscape.portal_street(c, end_lot, 10)
+    Test.assert_true(solid_at(end_parts, 0, 10, 16) && solid_at(end_parts, 18, 10, 3) &&
+      solid_at(end_parts, 28, 10, 16) && !solid_at(end_parts, 31, 10, 16) &&
+      !solid_at(end_parts, 29, 10, 3), "A local dead end widens into a round bulb inside its parcel")
+    let from = S.index(7, 10)
+    let curb = List.filter(end_parts, fn p -> p.material == 24)
+    List.each([0, 1, 2, 3], fn spot ->
+      let (x, z) = S.sidewalk_point(c, end_lot, spot)
+      Test.assert_true(solid_at(curb, x, 11, z), "Sidewalk fixtures stay on the curb around the bulb"))
+    List.each([0.0, Math.pi() *. 0.5, Math.pi()], fn angle ->
+      let (x, z, dx, dz) = Ur.Scene.turnaround_pose(from, end_lot, angle)
+      let lx = x -. 256.0
+      let lz = z -. 320.0
+      Test.assert_true(solid_at(end_parts, float_to_int(lx +. dx *. 5.0), 10, float_to_int(lz +. dz *. 5.0)) &&
+        solid_at(end_parts, float_to_int(lx -. dx *. 5.0), 10, float_to_int(lz -. dz *. 5.0)),
+        "A vehicle follows the turnaround inside the paved bulb"))
+    let next = S.index(9, 10)
+    let continued = (RoadBuild.preview(c, 1, end_lot, next)).city
+    let through = Ur.Landscape.portal_street(continued, end_lot, 10)
+    Test.assert_true(solid_at(through, 31, 10, 16) && !solid_at(through, 18, 10, 3),
+      "Extending a street restores its through lanes")
+    let junction = (RoadBuild.preview(continued, 1, end_lot, S.index(8, 11))).city
+    let parts = Ur.Landscape.portal_street(junction, end_lot, 10)
+    Test.assert_true(solid_at(parts, 0, 10, 16) && solid_at(parts, 31, 10, 16) &&
+      solid_at(parts, 16, 10, 31) && !solid_at(parts, 16, 10, 0) &&
+      !solid_at(parts, 0, 10, 0), "A T-junction leaves its closed frontage and corners unpaved")
+  end
+  pfn straight_street() : Unit do
+    let c = fixture()
+    let a = S.index(3, 10)
+    let wanted = S.index(7, 12)
+    let b = S.index(7, 10)
+    let d = { RoadBuild.new_draft() with mode: 5, points: [{ lot: a, flip: false }], target: wanted }
+    Test.assert_eq_int(RoadBuild.confirm_points(1, d.mode), 2, "Straight street requires a pinned start and end")
+    let p = RoadBuild.planned(c, 1, d, false)
+    Test.assert_true(p.valid && p.length == 40 && p.cost == 300 && S.get(p.city.roads, b) == 1 &&
+      S.get(p.city.roads, wanted) == 0, "Straight street constrains the quote and build to one axis")
+    let view = { w: 1000.0, h: 640.0, cx: 44.0, cz: 84.0, zoom: 50.0, yaw: 0.0 }
+    let interior = S.index(5, 10)
+    let (x, y) = Ur.Scene.world_point(view, 176.0, 10.0, 336.0)
+    Test.assert_eq_int(Ur.Scene.road_snap(p.city, view, interior, -1, x, y, false), interior,
+      "Snapping finds an interior road parcel for a T-junction")
+  end
   pfn tunnels() : Unit do
     let c = fixture()
     let a = S.index(3, 10)
@@ -167,6 +214,8 @@ mod RoadPlanningTest do
     surface()
     layouts()
     replace()
+    turnaround()
+    straight_street()
     tunnels()
     Authority.must(println("Road planning checks passed"))
   end

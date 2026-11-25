@@ -208,8 +208,9 @@ mod UrTest do
     let garage = Ur.Build.preview(with_unlocks(tower, [27]), 89, occupied, occupied)
     Test.assert_true(garage.valid && garage.changed && garage.cost > S.cost(c, occupied, 88), "build the most expensive garage under an occupied parcel")
     Test.assert_eq_int(S.get(garage.city.buildings, occupied), S.get(c.buildings, occupied), "underground construction preserves the building above")
+    Test.assert_eq_int(S.get(garage.city.public_parking, occupied), 0, "A planned garage has no spaces until it opens")
     let cleared = Ur.Build.preview(garage.city, 90, occupied, occupied)
-    Test.assert_true(cleared.valid && cleared.changed && S.get(cleared.city.public_parking, occupied) == 0, "remove underground parking through the build tool")
+    Test.assert_true(cleared.valid && cleared.changed && Option.is_none(S.public_work_at(cleared.city, occupied)), "Remove parking cancels an underground garage order")
     Test.assert_true(S.environment_score(surface.city, lot) < S.environment_score(tower, lot), "surface lots have the larger livability penalty")
     Test.assert_true((S.stats(surface.city)).budget.parking_income > 0, "passing traffic pays to park")
     let city = Ur.Clock.month(garage.city)
@@ -313,13 +314,14 @@ mod UrTest do
     let plan = Ur.Build.preview(university, 82, faculty, faculty)
     Test.assert_true(plan.valid && plan.cost == 1900, "a connected mid-game university can add medicine")
     Test.assert_eq_int(S.campus_root(plan.city, faculty), root, "the faculty belongs to the university")
-    Test.assert_eq_int(S.program_at(plan.city, faculty), 4, "the new building teaches medicine")
-    Test.assert_eq_int(S.program_at(S.act(plan.city, faculty, 7), root), 3, "a faculty can be removed by itself")
-    Test.assert_eq_int(S.get((S.act(plan.city, root, 7)).plants, faculty), 0, "removing the university clears its faculty")
-    let data = NativeArray.set_int(NativeArray.set_int(plan.city.education, 180, 16), 7, 16)
+    Test.assert_eq_int(S.program_at(plan.city, faculty), -1, "A planned faculty is closed for construction")
+    Test.assert_eq_int(S.program_at(S.act(plan.city, faculty, 7), root), 3, "A faculty order can be cancelled by itself")
+    Test.assert_true(Option.is_none(S.public_work_at(S.act(plan.city, root, 7), faculty)), "Removing the university cancels its faculty order")
+    let built = S.act(university, faculty, 82)
+    let data = NativeArray.set_int(NativeArray.set_int(built.education, 180, 16), 7, 16)
     -- A new faculty opens unstaffed; give it its full lecturing staff.
-    let lecturers = S.facility_jobs(S.get(plan.city.plants, faculty)) + 1
-    let city = { plan.city with education: data, month: 0, facility_staff: NativeArray.set_int(plan.city.facility_staff, faculty, lecturers) }
+    let lecturers = S.facility_jobs(S.get(built.plants, faculty)) + 1
+    let city = { built with education: data, month: 0, facility_staff: NativeArray.set_int(built.facility_staff, faculty, lecturers) }
     let stats = S.stats(city)
     let admitted = S.advance_education(city, stats.routes, stats.labor, stats.people)
     Test.assert_eq_int(S.specialist_enrolled(admitted, 4), 8, "some graduates enter the postgraduate cohort")
@@ -385,9 +387,10 @@ mod UrTest do
     let solar = Ur.Build.preview(c, 21, solar_lot, solar_lot)
     let well = Ur.Build.preview(solar.city, 9, well_lot, well_lot)
     Test.assert_true(solar.valid && solar.changed && well.valid && well.changed, "solar arrays and wells can be placed without street frontage")
-    let active = S.stats(well.city)
+    let built = S.act(S.act(c, solar_lot, 21), well_lot, 9)
+    let active = S.stats(built)
     Test.assert_true(active.generation.solar > 0 && active.services.wells == 384, "off-road sites supply the connected grid and pipes")
-    let cut = S.act(S.act(well.city, start.harbour, 27), start.harbour, 19)
+    let cut = S.act(S.act(built, start.harbour, 27), start.harbour, 19)
     let inactive = S.stats(cut)
     Test.assert_true(inactive.generation.solar == 0 && inactive.services.wells == 0, "off-road utilities still need their network connections")
   end

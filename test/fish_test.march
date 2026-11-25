@@ -1,0 +1,92 @@
+-- Fish: habitat sets the catch, stocks grow and spread, and fishing too hard runs them down.
+mod FishTest do
+  needs IO
+  needs IO.Console
+  alias Ur.Sim as S
+  alias Ur.Ocean as O
+
+  pfn shelf() : Int do 1000000 end
+  pfn coral() : Int do 100 * 1000000 / 35 end
+  pfn sum(a : NativeIntArr, i : Int, t : Int) : Int do if i >= NativeArray.length_int(a) do t else sum(a, i + 1, t + NativeArray.get_int(a, i)) end end
+  pfn same_as(a : NativeIntArr, b : NativeIntArr, i : Int) : Bool do
+    if i >= NativeArray.length_int(a) do true else if NativeArray.get_int(a, i) != NativeArray.get_int(b, i) do false else same_as(a, b, i + 1) end end
+  end
+  pfn first_water(c : Ur.Sim.City, i : Int) : Int do if S.get(c.heights, i) == 0 && S.get(c.heights, i + 1) == 0 do i else first_water(c, i + 1) end end
+  pfn first_land_locked(c : Ur.Sim.City, i : Int) : Int do
+    if i >= S.count() do -1
+    else if S.get(c.heights, i) > 0 && List.is_empty(S.fishing_water(c, i)) do i
+    else first_land_locked(c, i + 1) end end
+  end
+
+  fn main(_cap : Cap(IO)) : Unit do
+    -- habitat sets the catch
+    Test.assert_eq_int(S.fish_catch_base(100), 128, "full plain shelf lands today's base 128")
+    let reef_base = S.fish_catch_base(coral() / 10000)
+    Test.assert_true(reef_base >= 205 && reef_base <= 230, "a full coral run lands about 216, got " ++ int_to_string(reef_base))
+    Test.assert_true(S.fish_catch_base(28) < 75, "deep water lands about 68")
+
+    -- the stock model
+    Test.assert_true(Ur.Fish.grow(500000, shelf()) > 500000, "a half-full stock grows")
+    Test.assert_eq_int(Ur.Fish.grow(0, shelf()), 0, "no fish, none born")
+    Test.assert_true(Ur.Fish.grow(shelf(), shelf()) <= shelf(), "never past what the water holds")
+    let one3 = Ur.Fish.simulate_run(shelf(), 4, 1, 1080, 100)
+    let one2 = Ur.Fish.simulate_run(shelf(), 4, 1, 720, 100)
+    Test.assert_true(one3 >= 65 && one3 <= 85 && int_abs(one3 - one2) <= 5, "one fishery on shelf holds steady near three quarters: " ++ int_to_string(one2) ++ " then " ++ int_to_string(one3))
+    let two1 = Ur.Fish.simulate_run(shelf(), 4, 2, 360, 100)
+    let two4 = Ur.Fish.simulate_run(shelf(), 4, 2, 1440, 100)
+    Test.assert_true(two1 > 55 && two4 < 50, "two sharing a run decline slowly: " ++ int_to_string(two1) ++ " after a year, " ++ int_to_string(two4) ++ " after four")
+    let three = Ur.Fish.simulate_run(shelf(), 4, 3, 720, 100)
+    Test.assert_true(three < 33, "three overfish within two years: " ++ int_to_string(three))
+    let reef2 = Ur.Fish.simulate_run(coral(), 4, 2, 1080, 100)
+    Test.assert_true(reef2 >= 65 && reef2 <= 85, "reef water carries twice the pressure: two hold " ++ int_to_string(reef2))
+    Test.assert_true(Ur.Fish.simulate_run(shelf(), 4, 0, 360, 33) < 80 && Ur.Fish.simulate_run(shelf(), 4, 0, 720, 33) >= 80, "left alone, a third recovers to 80% in one to two years")
+
+    -- spreading: a full parcel beside an empty one shares, and no fish are made or lost
+    let c = S.unclaimed()
+    let w = first_water(c, 0)
+    let cap = NativeArray.set_int(NativeArray.set_int(NativeArray.make_int(S.count(), 0), w, shelf()), w + 1, shelf())
+    let fish = NativeArray.set_int(NativeArray.make_int(S.count(), 0), w, shelf())
+    let spread = Ur.Fish.spread(fish, cap)
+    Test.assert_true(S.get(spread, w + 1) > 0, "the empty parcel gains fish")
+    Test.assert_eq_int(sum(spread, 0, 0), shelf(), "and none are made or lost")
+
+    -- a day on the classic map: stocks start full, and reefs hold more than plain shelf
+    let f = O.field(c)
+    let hab = Ur.Fish.habitat(c, f)
+    let today = Ur.Fish.day(c, hab)
+    Test.assert_true(sum(today.fish, 0, 0) > 0, "the first day fills the sea")
+    Test.assert_true(S.get(today.fish_capacity, w) > 0, "open water can hold fish")
+    Test.assert_eq_int(S.get(today.fish_capacity, S.index(20, 22)), 0, "land holds none")
+
+    -- a fishery with no open water catches nothing
+    let dry = first_land_locked(c, 0)
+    Test.assert_true(dry >= 0, "there is a parcel with no water beside it")
+    Test.assert_eq_int(S.fish_density(c, dry), 0, "its water holds no fish")
+
+    -- a city saved before reefs and fish fishes as before
+    let old = { c with sea_features: 0 }
+    Test.assert_true(same_as((Ur.Fish.day(old, hab)).fish, old.fish, 0), "its day leaves the fish alone")
+
+    -- the fish layer colours water and skips land; the inspector reads a water parcel
+    Test.assert_eq_int(Ur.Fish.layer_material(today, S.index(20, 22)), -1, "no colour on land")
+    Test.assert_true(Ur.Fish.layer_material(today, w) >= 0, "water is coloured")
+    Test.assert_true(String.contains(Ur.Fish.inspect(today, w), "Fish: "), "the inspector shows the fish: " ++ Ur.Fish.inspect(today, w))
+
+    -- an overfished reef warns once, and again when it recovers
+    let reef_hab = NativeArray.set_int(NativeArray.set_int(NativeArray.make_int(S.count(), 0), w, 2 * shelf()), w + 1, 2 * shelf())
+    let low = { today with calendar_day: 1, message: "", fish: NativeArray.set_int(NativeArray.set_int(NativeArray.make_int(S.count(), 0), w, 100000), w + 1, 100000) }
+    let warned = Ur.Fish.day(low, reef_hab)
+    Test.assert_true(String.contains(warned.message, "overfished"), "a reef under a third warns: " ++ warned.message)
+    let again = Ur.Fish.day({ warned with message: "" }, reef_hab)
+    Test.assert_false(String.contains(again.message, "overfished"), "but only once")
+    let full = { warned with message: "", fish: NativeArray.set_int(NativeArray.set_int(NativeArray.make_int(S.count(), 0), w, 2 * shelf()), w + 1, 2 * shelf()) }
+    Test.assert_true(String.contains((Ur.Fish.day(full, reef_hab)).message, "recovered"), "and says when it has recovered")
+
+    -- the stock is saved
+    match Ur.Save.decode_session(Ur.Save.encode_session({ game: { city: today, cx: 0.0, cz: 0.0, zoom: 60.0, yaw: 0.55, paused: true, speed: 1 }, evacuation: Nil })) do
+      Ok(back) -> Test.assert_eq_int(S.get(back.game.city.fish, w), S.get(today.fish, w), "fish survive a save")
+      Err(e) -> Test.assert_true(false, "the save loads: " ++ e)
+    end
+    Authority.must(println("Fish checks passed"))
+  end
+end

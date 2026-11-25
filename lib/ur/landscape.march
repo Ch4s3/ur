@@ -69,7 +69,7 @@ mod Ur.Landscape do
         let along = int_mod_euclid(if axis == 0 do x else z end, 32)
         graded_height(h, before, after, along / 4 * 4 + 2)
       else if cut do h - 8
-      else if S.valid(S.campus_root(c, i)) || S.building_offline(c, i) || S.get(c.parks, i) > 0 || (S.get(c.roads, i) > 0 && h > 0) || S.get(c.buildings, i) > 0 || S.get(c.construction, i) > 0 || S.get(c.plants, i) > 0 do h
+      else if S.public_work_stage(c, i) > 0 || S.valid(S.campus_root(c, i)) || S.building_offline(c, i) || S.get(c.parks, i) > 0 || (S.get(c.roads, i) > 0 && h > 0) || S.get(c.buildings, i) > 0 || S.get(c.construction, i) > 0 || S.get(c.plants, i) > 0 do h
       else
         let gx = int_div_euclid(x - 16, 32)
         let gz = int_div_euclid(z - 16, 32)
@@ -102,13 +102,13 @@ mod Ur.Landscape do
     else 0 end end end end end
   end
   fn side_material(h : Int) : Int do if h > 28 do 2 else if h <= 5 do 16 else 1 end end end
-  pfn crosswalk(n : Int, deck : Int, side : Int, out : List(Ur.Architecture.Piece)) : List(Ur.Architecture.Piece) do
-    if n >= 6 do out else
-      let offset = 5 + n * 4
+  pfn crosswalk(n : Int, deck : Int, side : Int, width : Int, out : List(Ur.Architecture.Piece)) : List(Ur.Architecture.Piece) do
+    if n >= width / 2 do out else
+      let offset = 17 - width + n * 4
       let edge = if side % 2 == 0 do 3 else 28 end
       let stripe = if side < 2 do A.piece(edge, deck + 1, offset, 2, 1, 2, 8)
         else A.piece(offset, deck + 1, edge, 2, 1, 2, 8) end
-      crosswalk(n + 1, deck, side, Cons(stripe, out))
+      crosswalk(n + 1, deck, side, width, Cons(stripe, out))
     end
   end
   -- Quarter-circle centre line at radius 16. Each scanline merges equal
@@ -121,7 +121,7 @@ mod Ur.Landscape do
     let inner = 32 - width
     let outer = 32 + width
     if squared < (inner - 4) * (inner - 4) || squared >= (outer + 4) * (outer + 4) do -1
-    else if squared < inner * inner || squared >= outer * outer do 17
+    else if squared < inner * inner || squared >= outer * outer do 24
     else if kind == 3 do (if squared >= 30 * 30 && squared < 34 * 34 do 17 else 16 end)
     else if kind == 2 && squared >= 30 * 30 && squared < 34 * 34 do 10
     else if kind == 2 && ((squared >= 17 * 17 && squared < 19 * 19) ||
@@ -135,12 +135,57 @@ mod Ur.Landscape do
     let out = if !changed || material < 0 || start == x do out else
       let px = if horizontal == 0 do start else 32 - x end
       let pz = if vertical == 2 do z else 31 - z end
-      Cons(A.piece(px, deck, pz, x - start, if material == 17 do 2 else 1 end, 1, material), out)
+      Cons(A.piece(px, deck, pz, x - start, if material == 17 || material == 24 do 2 else 1 end, 1, material), out)
     end
     if x >= 32 do out else curve_row(kind, deck, horizontal, vertical, x + 1, z, if changed do x else start end, next, out) end
   end
   pfn curve(kind : Int, deck : Int, horizontal : Int, vertical : Int, z : Int, out : List(Ur.Architecture.Piece)) : List(Ur.Architecture.Piece) do
     if z >= 32 do out else curve(kind, deck, horizontal, vertical, z + 1, curve_row(kind, deck, horizontal, vertical, 0, z, 0, -1, out)) end
+  end
+  type StreetArms = { west : Bool, east : Bool, north : Bool, south : Bool }
+  pfn shaped_surface(c : Ur.Sim.City, i : Int) : Bool do
+    S.get(c.heights, i) > 0 && i != c.harbour && !S.valid(S.grade_peer(c, i)) && S.get(c.transit, i) != 3
+  end
+  pfn street_area(arms : StreetArms, width : Int, radius : Int, x : Int, z : Int) : Bool do
+    let horizontal = if x < 0 do arms.west else arms.east end
+    let vertical = if z < 0 do arms.north else arms.south end
+    let dx = int_abs(x)
+    let dz = int_abs(z)
+    let corner_x = width + 4 - dx
+    let corner_z = width + 4 - dz
+    (horizontal && dz < width) || (vertical && dx < width) || x * x + z * z < radius * radius ||
+    (horizontal && vertical && corner_x > 0 && corner_z > 0 && corner_x * corner_x + corner_z * corner_z > 16)
+  end
+  pfn street_surface(kind : Int, arms : StreetArms, width : Int, radius : Int, bulb : Bool, x : Int, z : Int) : Int do
+    if !street_area(arms, width, radius, x, z) do
+      if street_area(arms, width + 4, radius + (if bulb do 3 else 4 end), x, z) do 24 else -1 end
+    else
+      -- Stop the dividing line at the throat so the whole bulb is usable.
+      let lead = (x < -22 && arms.west) || (x > 22 && arms.east)
+      let across = (z < -22 && arms.north) || (z > 22 && arms.south)
+      let divider = (lead && (z == -1 || (kind != 1 && z == 1))) ||
+        (across && (x == -1 || (kind != 1 && x == 1)))
+      if bulb && divider do
+        if kind == 3 do 17 else if kind == 2 do 10 else 8 end end
+      else if kind == 3 do 16 else 4 end end
+    end
+  end
+  pfn street_surface_row(kind : Int, arms : StreetArms, width : Int, radius : Int, bulb : Bool, deck : Int,
+    x : Int, z : Int, start : Int, material : Int, out : List(Ur.Architecture.Piece)) : List(Ur.Architecture.Piece) do
+    let next = if x < 32 do street_surface(kind, arms, width, radius, bulb, x * 2 - 31, z * 2 - 31) else -1 end
+    let changed = next != material
+    let out = if changed && material >= 0 do
+      Cons(A.piece(start, deck, z, x - start, if material == 24 do 2 else 1 end, 1, material), out)
+    else out end
+    if x == 32 do out else
+      street_surface_row(kind, arms, width, radius, bulb, deck, x + 1, z, if changed do x else start end, next, out)
+    end
+  end
+  pfn shaped_street(kind : Int, arms : StreetArms, bulb : Bool, deck : Int) : List(Ur.Architecture.Piece) do
+    let width = S.road_half_width(kind) * 2
+    let radius = if bulb && kind < 3 do 28 else width end
+    List.fold_left(List.range(0, 32), Nil, fn (out, z) ->
+      street_surface_row(kind, arms, width, radius, bulb, deck, 0, z, 0, -1, out))
   end
   pfn straight_edge(east : Bool, side : Int, deck : Int, width : Int, thickness : Int, colour : Int, out : List(Ur.Architecture.Piece)) : List(Ur.Architecture.Piece) do
     if east do Cons(A.piece(0, deck, side, width, 1, thickness, colour), out)
@@ -177,21 +222,28 @@ mod Ur.Landscape do
     let east = west_link || east_link || (bore >= 0 && bore < 2)
     let north = north_link || south_link || bore >= 2
     let junction = east && north && h > 0
+    let arms = List.length(List.filter([west_link, east_link, north_link, south_link], fn linked -> linked))
+    let shaped = shaped_surface(c, i)
+    let bulb = shaped && arms <= 1
     let deck = if h == 0 do 2 else h end
     -- A curve meets the centre of the next parcel edge. Straight segments
     -- use the same width, including the raised walking edge.
     let colour = if kind == 3 do 16 else 4 end
     let width = S.road_half_width(kind)
-    let a = if junction || h == 0 do Cons(A.piece(0, deck, 0, 32, 1, 32, colour), Nil)
+    let a = if bulb || (shaped && junction) do
+      shaped_street(kind, { west: west_link, east: east_link, north: north_link, south: south_link }, bulb, deck)
+      else if junction || h == 0 do Cons(A.piece(0, deck, 0, 32, 1, 32, colour), Nil)
       else straight_edge(east, 16 - width, deck, 32, width * 2, colour, Nil) end
-    let a = if junction || h == 0 do a else
-      let a = straight_edge(east, 14 - width, deck + 1, 32, 2, 17, a)
-      straight_edge(east, 16 + width, deck + 1, 32, 2, 17, a)
     end
-    let a = if kind == 2 && !junction do straight_edge(east, 15, deck + 1, 32, 2, 10, a)
-      else if kind == 3 && !junction do straight_edge(east, 15, deck + 1, 32, 2, 17, a)
+    let a = if bulb || junction || h == 0 do a else
+      let a = straight_edge(east, 14 - width, deck + 1, 32, 2, 24, a)
+      straight_edge(east, 16 + width, deck + 1, 32, 2, 24, a)
+    end
+    let marked = !junction && !bulb
+    let a = if kind == 2 && marked do straight_edge(east, 15, deck + 1, 32, 2, 10, a)
+      else if kind == 3 && marked do straight_edge(east, 15, deck + 1, 32, 2, 17, a)
       else a end end
-    let a = if kind == 2 && !junction do
+    let a = if kind == 2 && marked do
       let a = lane_dash(east, deck, 8, 4, a)
       let a = lane_dash(east, deck, 8, 20, a)
       let a = lane_dash(east, deck, 23, 4, a)
@@ -201,13 +253,13 @@ mod Ur.Landscape do
       let (x, z) = if east do (20, 1) else (1, 20) end
       Cons(A.piece(x, deck + 1, z, 1, 8, 1, 13), Cons(A.piece(x, deck + 8, z, 3, 2, 3, 10), a))
     end
-    let a = if kind == 1 && east && !junction do Cons(A.piece(2, deck + 1, 15, 7, 1, 1, 8), Cons(A.piece(22, deck + 1, 15, 7, 1, 1, 8), a)) else a end
-    let a = if kind == 1 && !junction && (north || !east) do Cons(A.piece(15, deck + 1, 2, 1, 1, 7, 8), Cons(A.piece(15, deck + 1, 22, 1, 1, 7, 8), a)) else a end
+    let a = if kind == 1 && east && marked do Cons(A.piece(2, deck + 1, 15, 7, 1, 1, 8), Cons(A.piece(22, deck + 1, 15, 7, 1, 1, 8), a)) else a end
+    let a = if kind == 1 && marked && (north || !east) do Cons(A.piece(15, deck + 1, 2, 1, 1, 7, 8), Cons(A.piece(15, deck + 1, 22, 1, 1, 7, 8), a)) else a end
     if junction && kind != 3 do
-      let a = if west_link do crosswalk(0, deck, 0, a) else a end
-      let a = if east_link do crosswalk(0, deck, 1, a) else a end
-      let a = if north_link do crosswalk(0, deck, 2, a) else a end
-      if south_link do crosswalk(0, deck, 3, a) else a end
+      let a = if west_link do crosswalk(0, deck, 0, width, a) else a end
+      let a = if east_link do crosswalk(0, deck, 1, width, a) else a end
+      let a = if north_link do crosswalk(0, deck, 2, width, a) else a end
+      if south_link do crosswalk(0, deck, 3, width, a) else a end
     else if h == 0 do
       let a = if east do Cons(A.piece(0, deck + 2, 1, 32, 2, 1, 8), Cons(A.piece(0, deck + 2, 30, 32, 2, 1, 8), a)) else a end
       let a = if north || !east do Cons(A.piece(1, deck + 2, 0, 1, 2, 32, 8), Cons(A.piece(30, deck + 2, 0, 1, 2, 32, 8), a)) else a end
@@ -742,7 +794,9 @@ mod Ur.Landscape do
     let zone = S.get(c.zones, i)
     let root = S.campus_root(c, i)
     let kind = S.get(c.plants, i)
-    if S.faculty_rank(kind) >= 4 do
+    let work = S.public_work_stage(c, i)
+    if work > 0 && b == 0 && kind == 0 do shift(A.worksite(0, work, Nil), h)
+    else if S.faculty_rank(kind) >= 4 do
       let base = Cons(A.piece(0, 0, 0, 32, 1, 32, 21), Cons(A.piece(11, 1, 26, 10, 1, 6, 16), Nil))
       let parts = if kind == 41 do facility(kind) else faculty(kind, base) end
       shift(A.orient(parts, faculty_frontage(c, i, root, 0)), h)
@@ -808,7 +862,7 @@ mod Ur.Landscape do
       shift(A.orient(parts, side), h)
     else if zone > 0 do zone_edge(c, i, 0, if zone == 1 do 11 else if zone == 4 do 10 else 12 end end, Nil)
     else if !c.founding_map && i % S.width() == 9 && i / S.width() >= 22 && i / S.width() <= 25 do harbour_piece(i / S.width(), h)
-    else vegetation(c, i, Ur.Flora.site(c, i), 0, Nil) end end end end end end end end end end
+    else vegetation(c, i, Ur.Flora.site(c, i), 0, Nil) end end end end end end end end end end end
   end
   pfn tunnel_approach(c : Ur.Sim.City, lot : Int, peer : Int, z : Int, ground : Int) : List(Ur.Architecture.Piece) do
     if z >= 16 do Nil else
@@ -1032,8 +1086,9 @@ mod Ur.Landscape do
       let deck = S.get(c.heights, i)
       let east = S.street_link(c, i, 0) || S.street_link(c, i, 1)
       let north = S.street_link(c, i, 2) || S.street_link(c, i, 3)
-      let x = if east && !north do 16 else 3 end
-      let z = if north && !east do 16 else 3 end
+      let bulb = S.street_end_arm(c, i)
+      let x = if bulb >= 2 do 1 else if east && !north do 16 else 3 end end
+      let z = if bulb >= 0 && bulb < 2 do 1 else if north && !east do 16 else 3 end end
       let lens = if lighting / 4 % 2 == 1 do 28 else 8 end
       Cons(A.piece(x, deck + 1, z, 1, 12, 1, 13), Cons(A.piece(x, deck + 12, z, 3, 1, 2, lens), base))
     else base end

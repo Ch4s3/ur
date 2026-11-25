@@ -251,7 +251,7 @@ mod Ur.Citizens do
         if S.motor_street(c, S.neighbour(road, side)) do S.opposite(side) else side end
       end
       let (corner, _) = S.road_turn(c, road)
-      let curb_allowed = corner < 0 && !S.motor_street(c, S.neighbour(road, edge))
+      let curb_allowed = corner < 0 && S.street_end_arm(c, road) < 0 && !S.motor_street(c, S.neighbour(road, edge))
       let curb = { private_bay with kind: 0, edge: edge }
       let second = { curb with bay: 1 }
       if kind > 0 && !holds_key(keys, parking_key(private_bay)) do Some(private_bay)
@@ -277,7 +277,8 @@ mod Ur.Citizens do
   pfn valid_parking(c : Ur.Sim.City, p : Parking) : Bool do
     S.motor_street(c, p.road) && (if p.kind >= 3 do
       S.get(c.public_parking, p.site) == p.kind - 2 && p.road == S.fleet_frontage(c, p.site, 0)
-    else (p.kind == 0 && (p.bay != 0 || S.waste_bin_edge(c, p.road) != p.edge)) || (p.kind > 0 && p.kind == home_parking(c, p.lot) && p.road == S.fleet_frontage(c, p.lot, 0)) end)
+    else (p.kind == 0 && S.street_end_arm(c, p.road) < 0 && (p.bay != 0 || S.waste_bin_edge(c, p.road) != p.edge)) ||
+      (p.kind > 0 && p.kind == home_parking(c, p.lot) && p.road == S.fleet_frontage(c, p.lot, 0)) end)
   end
   pfn owned_parking(c : Ur.Sim.City, old : Option(Citizen)) : Option(Parking) do
     match old do

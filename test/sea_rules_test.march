@@ -103,6 +103,28 @@ mod SeaRulesTest do
     let q = S.index(15, 12)
     let lumpy = { c with sea_heights: NativeArray.set_int(NativeArray.set_int(NativeArray.make_int(S.count(), 0), S.index(12, 10), 500), S.index(13, 12), 100) }
     Test.assert_eq_int(S.crossing_sea(lumpy, p, q), S.crossing_sea(lumpy, q, p), "a crossing reads the same sea from either end")
+    -- the draft: water too shallow under a crossing closes or slows it (sea_shoals: the shallowest feature under each parcel, 63 none)
+    let mid = a + (b - a) / 2
+    let shoal = fn (v : Int) -> { calm with sea_shoals: NativeArray.set_int(NativeArray.make_int(S.count(), 63), mid, v) }
+    Test.assert_eq_int(S.ferry_status(shoal(2), a), 3, "a bar 0.5 m under the crossing closes a standard ferry")
+    Test.assert_eq_int(S.ferry_status(shoal(7), a), 1, "water just over its 1.5 m draft slows it")
+    Test.assert_eq_int(S.ferry_status(shoal(63), a), 0, "the bare shelf never closes a route")
+    let deep_draft = S.act({ shoal(8) with cash: 100000 }, a, 122)
+    Test.assert_eq_int(S.ferry_status(deep_draft, a), 3, "a larger ferry needs 2.5 m: 2 m closes it")
+    Test.assert_eq_int(S.ferry_status(shoal(8), a), 1, "where a standard ferry only slows")
+    let both = { shoal(7) with sea_heights: rough.sea_heights }
+    Test.assert_eq_int(S.ferry_status(both, a), 2, "rough seas and a shallow crossing: the worse wins")
+    Test.assert_eq_int(S.ferry_peer(shoal(2), a), -1, "a closed route links nowhere")
+    let grounded = S.ferry_day(shoal(2))
+    Test.assert_true(String.contains(grounded.message, "closed") && String.contains(grounded.message, "0.5 m"), "the closure is announced with the depth: " ++ grounded.message)
+    Test.assert_true(String.contains(S.ferry_summary(shoal(2), a), "too shallow"), "the inspector says why")
+    -- the shoals are saved, so the rule holds right after a load; an old save reads no shoals
+    match Ur.Save.decode_session(Ur.Save.encode_session({ game: { city: shoal(2), cx: 0.0, cz: 0.0, zoom: 60.0, yaw: 0.55, paused: true, speed: 1 }, evacuation: Nil })) do
+      Ok(back) -> Test.assert_eq_int(S.ferry_status(back.game.city, a), 3, "closed right after a load, before any day roll")
+      Err(e) -> Test.assert_true(false, "the save loads: " ++ e)
+    end
+    let fresh = S.new()
+    Test.assert_eq_int(S.get(fresh.sea_shoals, mid), 63, "a new city has no shoals")
     Authority.must(println("Sea rules checks passed"))
   end
 end
