@@ -1,0 +1,146 @@
+mod UtilityAffordancesTest do
+  needs IO
+  needs IO.Console
+  alias Ur.Sim as S
+  alias Ur.UtilitiesNetwork as Net
+  alias Ur.UtilityView as View
+
+  pfn delivery(capacity : Int, supply : Int) : Ur.Sim.UtilityDelivery do
+    let source = S.index(10, 10)
+    let feeder = S.index(11, 10)
+    let end_of_line = S.index(12, 10)
+    let building = S.index(12, 11)
+    let island = S.index(18, 10)
+    let zero = NativeArray.make_int(S.count(), 0)
+    let segments = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(
+      zero, source, 16), feeder, capacity), end_of_line, 16), island, 8)
+    let supplied = Net.add_source(Net.new(S.width(), S.count(), segments), source, supply)
+    let (flow, received) = Net.draw(supplied, building, 7)
+    { flow: flow, connections: Net.connected(supplied), total: received,
+      demand: NativeArray.set_int(zero, building, 7), delivered: NativeArray.set_int(zero, building, received),
+      sites: NativeArray.set_int(zero, source, supply) }
+  end
+
+  pfn network_checks(c : Ur.Sim.City, st : Ur.Sim.Stats, low : Ur.Sim.UtilityReport) : Unit do
+    let building = S.index(12, 11)
+    let feeder = S.index(11, 10)
+    let island = S.index(18, 10)
+    let network = View.inspect(c, { st with utilities: low }, 2, building)
+    Test.assert_eq_int(network.tap, S.index(12, 10), "Inspect the actual tap, not a nearby arbitrary tile")
+    Test.assert_eq_int(network.limit, feeder, "Jump points to the saturated segment whose capacity would improve service")
+    Test.assert_true(network.reason == "Feeder at capacity", "Separate a transfer bottleneck from a lack of generation")
+    Test.assert_eq_int(S.get(network.members, feeder), 1, "The whole selected network is highlighted")
+    Test.assert_eq_int(S.get(network.members, island), 0, "The disconnected grid is excluded")
+    Test.assert_eq_int(network.demand, 7, "Count loads carried by this network")
+    Test.assert_eq_int(network.delivered, 3, "Report the actual delivery in the selected network")
+    Test.assert_eq_int(network.spare, 9, "Spare generation can coexist with a transfer bottleneck")
+    let spur = S.index(10, 9)
+    let flow = low.electric.flow
+    let extended = { flow with capacity: NativeArray.set_int(flow.capacity, spur, 1) }
+    let (busy_spur, spur_service) = Net.draw(extended, spur, 1)
+    Test.assert_eq_int(spur_service, 1, "The inspection fixture has a second saturated segment")
+    Test.assert_eq_int(Net.binding_segment(busy_spur, network.tap), feeder, "Jump selects the limiting feeder among multiple full segments")
+    Test.assert_eq_int(Net.binding_segment((delivery(8, 12)).flow, network.tap), -1, "A reachable residual unit rules out a binding segment")
+    let out_of_reach = View.inspect(c, { st with utilities: low }, 2, S.index(16, 16))
+    Test.assert_true(out_of_reach.reason == "No line in reach", "Explain missing physical grid reach")
+    let dark = View.inspect(c, { st with utilities: low }, 2, island)
+    Test.assert_true(dark.reason == "Line has no live source", "Identify a physical grid whose sources are offline")
+    let exhausted = View.inspect(c, { st with utilities: { low with electric: delivery(3, 3) } }, 2, building)
+    Test.assert_eq_int(exhausted.limit, -1, "A full line cannot be blamed when no supply remains")
+    Test.assert_true(exhausted.reason == "Available generation is exhausted", "Explain a source shortage")
+  end
+
+  pfn preview_checks(c : Ur.Sim.City, low : Ur.Sim.UtilityReport, repaired : Ur.Sim.UtilityReport) : Unit do
+    let building = S.index(12, 11)
+    let repair = View.impact(low, repaired, c, 2)
+    Test.assert_eq_int(repair.gained, 1, "A repair counts each newly served building once")
+    Test.assert_eq_int(S.get(repair.marks, building), 1, "The forecast marks the affected building")
+    let partial = View.impact(low, { low with electric: delivery(4, 12) }, c, 2)
+    Test.assert_eq_int(S.get(partial.marks, building), 3, "An improvement short of full service is preserved")
+    Test.assert_eq_int(partial.gained, 0, "Partial gains do not count as full restoration")
+    let clinic = { c with plants: NativeArray.set_int(c.plants, building, 19) }
+    let outage = View.impact(repaired, low, clinic, 2)
+    Test.assert_eq_int(outage.lost, 1, "Preview a loss of full service")
+    Test.assert_eq_int(outage.critical, 1, "Flag a clinic losing service")
+    Test.assert_true(List.any(outage.critical_lots, fn lot -> lot == building), "Name the clinic parcel in a critical cut")
+    Test.assert_eq_int(List.length(repair.critical_lots), 0, "Restored delivery does not require cut confirmation")
+    let pipe_before = { low with water: low.electric, sewer: repaired.electric }
+    let pipe_after = { low with water: repaired.electric, sewer: low.electric }
+    let water = View.impact(pipe_before, pipe_after, c, 1)
+    let sewage = View.impact(pipe_before, pipe_after, c, 31)
+    Test.assert_eq_int(S.get(water.marks, building), 1, "A shared pipe preview can show the water outcome")
+    Test.assert_eq_int(S.get(sewage.marks, building), 2, "The sewage preview uses collection delivery, independently of water supply")
+    let well = S.index(10, 10)
+    let site = { c with plants: NativeArray.set_int(c.plants, well, 3) }
+    let supply = pipe_before.water
+    let disconnected = { pipe_before with water: { supply with sites: NativeArray.set_int(supply.sites, well, 0) } }
+    let outage = View.impact(pipe_before, disconnected, site, 1)
+    Test.assert_eq_int(S.get(outage.marks, well), 2, "Losing offered output marks the unmetered well as disconnected")
+    Test.assert_eq_int(outage.critical, 1, "The loss of a well flags one critical facility")
+    Test.assert_true(List.any(outage.critical_lots, fn lot -> lot == well), "Name affected unmetered sources")
+    let recovered = View.impact(disconnected, pipe_before, site, 1)
+    Test.assert_eq_int(S.get(recovered.marks, well), 1, "Restoring offered output marks the well as recovered")
+    let reduced = { pipe_before with water: { supply with sites: NativeArray.set_int(supply.sites, well, 6) } }
+    let partial = View.impact(pipe_before, reduced, site, 1)
+    Test.assert_eq_int(S.get(partial.marks, well), 4, "A well with reduced output retains partial service")
+  end
+
+  pfn repair_checks() : Unit do
+    let city = Ur.Scenario.feeder_demo()
+    let stats = S.stats(city)
+    let lot = Ur.Scenario.feeder_demo_site()
+    let inspection = View.inspect(city, stats, 2, lot)
+    match View.repair(city, stats, 2, inspection) do
+      Some(plan) ->
+        Test.assert_eq_int(plan.tool, 97, "A capacity-constrained project can draft a feeder upgrade")
+        Test.assert_eq_int(plan.target, Ur.Scenario.feeder_demo_link(), "The repair targets the limiting feeder")
+        Test.assert_eq_int(S.get(city.grid, plan.target), 1, "Preparing the repair leaves the installed grid untouched")
+      None -> panic("Expected a repair for the feeder demo")
+    end
+    let clinic = S.index(12, 18)
+    let city = { city with plants: NativeArray.set_int(city.plants, clinic, 19) }
+    let stats = S.stats(city)
+    let inspection = View.inspect(city, stats, 2, clinic)
+    match View.repair(city, stats, 2, inspection) do
+      Some(plan) ->
+        Test.assert_eq_int(plan.tool, 26, "An off-grid unmetered clinic can draft a line extension")
+        Test.assert_eq_int(plan.target, clinic, "The extension reaches the facility")
+      None -> panic("Expected a line extension for the off-grid clinic")
+    end
+  end
+
+  pfn history_checks(c : Ur.Sim.City, st : Ur.Sim.Stats, low : Ur.Sim.UtilityReport, repaired : Ur.Sim.UtilityReport) : Unit do
+    let building = S.index(12, 11)
+    let network = View.inspect(c, { st with utilities: repaired }, 2, building)
+    let history = View.remember(View.remember(Nil, 10, low), 20, repaired)
+    let history = View.remember(history, 20, low)
+    match View.trend(history, 2, network) do
+      [_, latest] -> Test.assert_eq_int(latest.delivered, 3, "A new report replaces the sample for the same hour")
+      _ -> panic("Expected two distinct sample times")
+    end
+    let history = View.remember(history, 15, repaired)
+    match View.trend(history, 2, network) do
+      [first, last] ->
+        Test.assert_eq_int(first.stamp, 10, "The chart orders samples by time")
+        Test.assert_eq_int(first.delivered, 3, "The chart retains the older shortage")
+        Test.assert_eq_int(last.stamp, 15, "Undo discards future samples")
+        Test.assert_eq_int(last.delivered, 7, "The chart uses the updated served total")
+      _ -> panic("Expected two samples after undo")
+    end
+    let repeated = List.fold_left(List.range(0, 40), Nil, fn (items, stamp) -> View.remember(items, stamp, repaired))
+    Test.assert_eq_int(List.length(repeated), 24, "Utility samples stay bounded over a long session")
+  end
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let city = S.new()
+    let stats = S.stats(city)
+    let zero = NativeArray.make_int(S.count(), 0)
+    let low = { stats.utilities with electric: delivery(3, 12), facility_demand: zero, facility_delivered: zero }
+    let repaired = { low with electric: delivery(8, 12) }
+    network_checks(city, stats, low)
+    preview_checks(city, low, repaired)
+    repair_checks()
+    history_checks(city, stats, low, repaired)
+    Authority.must(println("Utility affordance checks passed"))
+  end
+end
