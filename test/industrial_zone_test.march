@@ -37,7 +37,13 @@ mod IndustrialZoneTest do
       buildings: NativeArray.set_int(zoned.buildings, lot, 1), business_sector: NativeArray.set_int(zoned.business_sector, lot, 2) }
     Test.assert_eq_int(S.job_requirement(manufacturer, lot), 2, "Manufacturers hire trade graduates")
     Test.assert_true(S.industrial_power(manufacturer, lot) > S.industrial_power(zoned, lot), "Manufacturers demand more electricity than workshops")
-    Test.assert_eq_str(S.building_name(manufacturer, lot), "Manufacturer", "Inspector identifies the manufacturer")
+    Test.assert_eq_str(S.building_name(manufacturer, lot), "Assembly plant", "Inspector identifies the assembly plant")
+    let seafood = { manufacturer with business_sector: NativeArray.set_int(manufacturer.business_sector, lot, 3) }
+    let fabrication = { manufacturer with business_sector: NativeArray.set_int(manufacturer.business_sector, lot, 4) }
+    Test.assert_eq_str(S.building_name(seafood, lot), "Seafood processor", "Saved seafood code has its own building name")
+    Test.assert_eq_str(S.building_name(fabrication, lot), "Fabrication works", "Saved fabrication code has its own building name")
+    Test.assert_eq_int(S.lot_nuisance(seafood, lot), 2, "Seafood production is compatible with commercial limits")
+    Test.assert_eq_int(S.lot_nuisance(fabrication, lot), 3, "Fabrication requires industrial limits")
     let built = { zoned with buildings: NativeArray.set_int(zoned.buildings, lot, 1) }
     let office = { built with zones: NativeArray.set_int(built.zones, lot, 2) }
     let rezoned = S.act(built, lot, 2)

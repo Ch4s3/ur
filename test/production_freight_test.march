@@ -1,0 +1,110 @@
+mod ProductionFreightTest do
+  needs IO
+  needs IO.Console
+  needs IO.Clock
+  needs IO.Process
+  needs IO.FileRead
+  needs IO.FileWrite
+  alias Ur.ProductionFreight as Production
+
+  pfn freight(_from : Int, _to : Int) : Option(Ur.ProductionFreight.CargoRoute) do
+    Some({ path: [1, 2], limits: [(1, 6)], days: 1, fee: 0 })
+  end
+  pfn settlement() : Unit do
+    let seller = Production.open_site(1, 1, 0)
+    let buyer = Production.open_site(2, 2, 100)
+    let filled = Production.deposit(seller, Production.crops(), 10, 40, 9)
+    let state = { Production.empty() with sites: [filled, buyer], next_generation: 3 }
+    let order = { from: 1, to: 2, item: Production.crops(), units: 8, price: 7, duty: 0 }
+    let state = Production.dispatch(state, 9, [order], freight)
+    let source = unwrap(Production.site(state, 1))
+    let destination = unwrap(Production.site(state, 2))
+    Test.assert_eq_int(Production.units(source, Production.crops()), 4, "Capacity caps the units removed from the supplier shelf")
+    Test.assert_eq_int(Production.units(destination, Production.crops()), 0, "In-transit goods cannot be consumed")
+    Test.assert_eq_int(destination.reserved, 42, "Budget is reserved for loaded units")
+    let city = { Ur.Sim.new() with production_freight: state }
+    let snapshot = { city: city, cx: 0.0, cz: 0.0, zoom: 52.0, yaw: 0.5, paused: true, speed: 1 }
+    let restored = match Ur.Save.decode(Ur.Save.encode(snapshot)) do
+      Ok(loaded) -> loaded.city.production_freight
+      Err(message) -> panic(message)
+    end
+    let next = Production.receive(restored, 10, fn _ -> true, fn _ -> 3)
+    let destination = unwrap(Production.site(next, 2))
+    Test.assert_eq_int(Production.units(destination, Production.crops()), 3, "Handling cap permits partial unloading")
+    Test.assert_eq_int(destination.wallet, 79, "Buyer pays only for accepted cargo")
+    let paid = unwrap(Production.site(next, 1))
+    Test.assert_eq_int(paid.sales, 21, "Supplier revenue matches the buyer payment")
+    let replaced = Production.replace_sites(next, [unwrap(Production.site(next, 1)), Production.open_site(2, 3, 100)])
+    let recovered = Production.receive(replaced, 11, fn _ -> true, fn _ -> 20)
+    Test.assert_eq_int(Production.units(unwrap(Production.site(recovered, 2)), Production.crops()), 0, "A replacement tenant cannot receive the old order")
+    Test.assert_eq_int(Production.units(unwrap(Production.site(recovered, 1)), Production.crops()), 7, "Rejected cargo returns to the seller")
+    let received_again = Production.receive(next, 10, fn _ -> true, fn _ -> 20)
+    Test.assert_eq_int(Production.units(unwrap(Production.site(received_again, 2)), Production.crops()), 3, "Replaying a day does not unload again")
+  end
+  pfn shared_capacity() : Unit do
+    let harvest = Production.deposit(Production.open_site(1, 1, 100), Production.crops(), 10, 10, 9)
+    let fishery = Production.deposit(Production.open_site(2, 2, 100), Production.catch(), 10, 10, 9)
+    let initial = { Production.empty() with sites: [harvest, fishery], next_generation: 3 }
+    let state = Production.dispatch(initial, 9, [
+      { from: 1, to: 2, item: Production.crops(), units: 5, price: 1, duty: 0 },
+      { from: 2, to: 1, item: Production.catch(), units: 5, price: 1, duty: 0 }], freight)
+    let cargo = List.fold_left(state.shipments, 0, fn (total, trip) -> total + trip.cargo.units)
+    Test.assert_eq_int(cargo, 6, "Both directions share the same link capacity")
+    let blocked = Production.receive(state, 10, fn _ -> false, fn _ -> 20)
+    Test.assert_eq_int(List.length(blocked.shipments), 2, "A closed link holds both shipments")
+    let resumed = Production.receive(blocked, 14, fn _ -> true, fn _ -> 20)
+    let seller = unwrap(Production.site(resumed, 2))
+    Test.assert_eq_int(resumed.lost, 1, "Perishable stock in a delayed shipment expires")
+    Test.assert_eq_int(seller.reserved, 0, "The accepted order releases the reservation")
+    Test.assert_eq_int(seller.sales, 0, "Spoiled units do not earn revenue")
+  end
+
+  pfn city_chain() : Unit do
+    -- The managed island fixture reserves space for fuel. Exercise the
+    -- mainland manufacturing route separately from that priority policy.
+    let c = { Ur.Scenario.industry_demo() with freight: None }
+    let zero = NativeArray.make_int(Ur.Sim.count() * 4, 0)
+    let day_one = Ur.Sim.production_day(c, zero, 1)
+    let fabrication = Ur.Sim.index(12, 15)
+    let found = List.find(day_one.production_freight.shipments, fn cargo ->
+      cargo.destination == fabrication && Production.key(cargo.cargo.item) == 4)
+    Test.assert_true(Option.is_some(found), "A connected fabrication works orders bulk materials from the harbour")
+    let found = unwrap(found)
+    Test.assert_true(found.origin == c.harbour && found.cargo.units > 0, "The bulk materials leave a real supplier")
+    let day_two = Ur.Sim.production_day(day_one, zero, 2)
+    let factory = unwrap(Ur.Sim.production_at(day_two, fabrication))
+    Test.assert_true(factory.produced > 0 || Production.units(factory, Production.bulk_materials()) > 0,
+      "Landed stock reaches the factory shelf or its production line")
+    Test.assert_eq_int(day_two.production_freight.last_day, 2, "The city records its freight settlement day")
+  end
+
+  pfn migrate_managed_voyage() : Unit do
+    let city = Ur.Scenario.industry_demo()
+    let route = unwrap(city.freight)
+    let voyage = { id: 11, left: 1, age: 0, food: { units: 4, value: 20 }, fuel: 8, waste: 2 }
+    let city = { city with freight: Some({ route with voyage: Some(voyage), next_id: 12 }) }
+    let zero = NativeArray.make_int(Ur.Sim.count() * 4, 0)
+    let settled = Ur.Sim.production_day(city, zero, 1)
+    let landed = List.find(settled.production_freight.movements, fn item ->
+      item.arrived && item.from == route.island && item.to == route.market)
+    Test.assert_true(Option.is_some(landed), "A saved voyage with one day left lands on its scheduled day")
+    let landed = unwrap(landed)
+    Test.assert_eq_int(landed.units, 4, "Migration retains the freight quantity")
+    let snapshot = { city: settled, cx: 118.0, cz: 132.0, zoom: 64.0, yaw: 0.55, paused: true, speed: 1 }
+    let loaded = match Ur.Save.decode(Ur.Save.encode(snapshot)) do
+      Ok(restored) -> restored.city
+      Err(message) -> panic(message)
+    end
+    let direct = Ur.Sim.production_day(settled, zero, 2)
+    let resumed = Ur.Sim.production_day(loaded, zero, 2)
+    Test.assert_eq_int(resumed.production_freight.next_id, direct.production_freight.next_id, "Reload preserves dispatch sequencing")
+    Test.assert_eq_int(resumed.production_freight.duties, direct.production_freight.duties, "Reload does not repeat settlement")
+  end
+
+  fn main(_cap : Cap(IO)) : Unit do
+    settlement()
+    shared_capacity()
+    city_chain()
+    migrate_managed_voyage()
+  end
+end

@@ -103,7 +103,11 @@ mod Ur.Fish do
       let fish = if !S.fishery_working(c, routes, i) do fish else
         let run = S.fishing_water(c, i)
         let held = List.fold_left(run, 0, fn (a, j) -> a + S.get(fish, j))
-        take_go(fish, run, float_to_int(int_to_float(S.catch_yield(c, i)) *. take_per_catch() *. int_to_float(full_shelf()) /. 1000.0), held)
+        let caught = match S.production_at(c, i) do
+          Some(site) -> site.produced * 8
+          None -> S.catch_yield(c, i)
+        end
+        take_go(fish, run, float_to_int(int_to_float(caught) *. take_per_catch() *. int_to_float(full_shelf()) /. 1000.0), held)
       end
       harvest_go(c, routes, fish, i + 1)
     end

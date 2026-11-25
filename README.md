@@ -246,15 +246,25 @@ and pollution fall on the flats above and next door. Lowering the limit stops
 a workshop building from growing until the limit is raised again.
 
 Use **Zoning → Land use → Industrial zone** to reserve land for private
-industry. Buildings grow when connected roads, workers, utilities, and market
-conditions support them. Industrial buildings consume more electricity and
-water than ordinary workplaces, and active sites release air and land pollution
-and neighborhood noise. Workshops, food processors and manufacturers emerge
-from local food production and the availability of trade graduates, with
-different power needs and emissions. Their revenue and emissions scale with
-the number of workers actually assigned to the site. Their businesses pay wages and operating costs and can close during prolonged
-losses or utility outages. Industrial goods and dedicated production deliveries
-are not yet modeled.
+industry. Workshops, produce packers, seafood processors, fabrication works,
+and assembly plants have their own building forms and loading bays. Nearby
+farms and fisheries attract food processors. Heavy industry also needs trained
+workers and the Industrial nuisance limit.
+
+An operating factory needs workers, utilities, materials, and room for output.
+Farms and fisheries supply raw food to processors and shops. Fabrication works
+turn bulk materials into parts for workshops and assembly plants. Local
+businesses buy manufactured goods, and the harbour imports inputs and provides
+an export market. Warehouses buffer cargo closer to customers.
+
+Inspect an industrial site to see input and output stock, why production
+stopped, and the status of incoming cargo. Shipments use roads, ferries, and
+cargo-capable canals. A delay can leave cargo in transit while a factory uses
+up its stock. Industrial shipments share cargo capacity with food, fuel, and
+waste on the configured freight service.
+
+Run `UR_DEMO=9 UR_INDUSTRIAL_DEMO=1 ./run.sh` for the coastal production
+district. Inspect the plants on the mainland road and the crossing at 18, 16.
 
 ## Civic services
 

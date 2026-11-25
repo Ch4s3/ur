@@ -5,6 +5,7 @@
 -- is derived from the city's seed, so a city replays the same way.
 mod Ur.Market do
   alias Ur.Sim as S
+  alias Ur.Industry as Industry
 
   fn shares() : Int do 1000 end
   fn history_months() : Int do 120 end
@@ -14,15 +15,15 @@ mod Ur.Market do
     match sector do
       1 -> "Office"
       2 -> "Specialist office"
-      3 -> "Workshop"
-      4 -> "Food processor"
-      5 -> "Manufacturer"
+      3 | 4 | 5 | 6 | 7 ->
+        let profile = Industry.profile(Industry.kind(sector - 3))
+        profile.name
       _ -> "Retail"
     end
   end
   fn sector_of(c : Ur.Sim.City, lot : Int) : Int do
     let zone = S.get(c.zones, lot)
-    if zone == 4 do 3 + S.clamp(S.get(c.business_sector, lot), 0, 2)
+    if zone == 4 do 3 + Industry.code(Industry.kind(S.get(c.business_sector, lot)))
     else if S.live_work(c, lot) do 3
     else if S.retail(c, lot) > 0 do 0
     else if S.get(c.business_sector, lot) > 0 do 2 else 1 end end end end

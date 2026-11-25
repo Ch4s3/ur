@@ -1,0 +1,40 @@
+mod Ur.Industry do
+  type IndustrialKind = Workshop | ProducePacker | AssemblyPlant | SeafoodProcessor | FabricationWorks
+  type Profile = { name : String, nuisance : Int, credential : Int, power : Int, water : Int, emissions : Int }
+  fn kind(code : Int) : IndustrialKind do
+    match code do
+      1 -> ProducePacker
+      2 -> AssemblyPlant
+      3 -> SeafoodProcessor
+      4 -> FabricationWorks
+      _ -> Workshop
+    end
+  end
+  fn code(kind : IndustrialKind) : Int do
+    match kind do
+      Workshop -> 0
+      ProducePacker -> 1
+      AssemblyPlant -> 2
+      SeafoodProcessor -> 3
+      FabricationWorks -> 4
+    end
+  end
+  fn profile(kind : IndustrialKind) : Profile do
+    match kind do
+      Workshop -> { name: "Workshop", nuisance: 1, credential: 0, power: 8, water: 6, emissions: 0 }
+      ProducePacker -> { name: "Produce packer", nuisance: 2, credential: 0, power: 12, water: 8, emissions: 1 }
+      SeafoodProcessor -> { name: "Seafood processor", nuisance: 2, credential: 0, power: 13, water: 10, emissions: 1 }
+      AssemblyPlant -> { name: "Assembly plant", nuisance: 3, credential: 2, power: 16, water: 8, emissions: 2 }
+      FabricationWorks -> { name: "Fabrication works", nuisance: 3, credential: 2, power: 18, water: 10, emissions: 3 }
+    end
+  end
+  fn recipe(kind : IndustrialKind) : Ur.ProductionFreight.ProductionRecipe do
+    match kind do
+      Workshop -> { input: Ur.ProductionFreight.parts(), output: Ur.ProductionFreight.workshop_goods(), used: 1, made: 1 }
+      ProducePacker -> { input: Ur.ProductionFreight.crops(), output: Ur.ProductionFreight.packed_produce(), used: 2, made: 1 }
+      SeafoodProcessor -> { input: Ur.ProductionFreight.catch(), output: Ur.ProductionFreight.chilled_seafood(), used: 2, made: 1 }
+      FabricationWorks -> { input: Ur.ProductionFreight.bulk_materials(), output: Ur.ProductionFreight.parts(), used: 2, made: 1 }
+      AssemblyPlant -> { input: Ur.ProductionFreight.parts(), output: Ur.ProductionFreight.finished_goods(), used: 2, made: 1 }
+    end
+  end
+end

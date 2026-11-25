@@ -149,7 +149,7 @@ mod Ur.Food do
         let adjacent = S.neighbour(a, S.direction(a, b)) == b
         if ferry || S.grade_link(c, a, b) || (adjacent && int_abs(S.get(c.heights, a) - S.get(c.heights, b)) <= 12) do
           match rest do
-            Nil -> (!S.building_offline(c, b) && S.retail_kind(c, b) > 0) || b == c.harbour
+            Nil -> (!S.building_offline(c, b) && (S.retail_kind(c, b) > 0 || Option.is_some(S.production_at(c, b)))) || b == c.harbour
             _ -> (S.motor_road(c, b) || (S.get(c.ferries, b) > 0 && !S.ground_closed(c, b))) && route_open(c, Cons(b, rest))
           end
         else false end
@@ -180,7 +180,7 @@ mod Ur.Food do
       Nil -> out
       Cons(load, rest) ->
         let kind = S.get(c.plants, load.source)
-        if (load.source == c.harbour || kind == 5 || kind == 6) && !S.ground_closed(c, load.source) &&
+        if (load.source == c.harbour || kind == 5 || kind == 6 || Option.is_some(S.production_at(c, load.source))) && !S.ground_closed(c, load.source) &&
           !S.building_offline(c, load.source) && route_open(c, load.stops) do
           let trip = warehouse_trip(c, links, load)
           shipping(c, links, rest, left - 1, Cons(trip, out))

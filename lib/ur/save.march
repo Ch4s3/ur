@@ -5,6 +5,7 @@ mod Ur.Save do
   needs IO.FileWrite
   needs IO.Process
   alias Ur.Sim as S
+  alias Ur.ProductionFreight as Production
   type Game = { city : Ur.Sim.City, cx : Float, cz : Float, zoom : Float, yaw : Float, paused : Bool, speed : Int }
   type Session = { game : Game, evacuation : List(Ur.Citizens.EvacuationTrip) }
 
@@ -391,9 +392,135 @@ mod Ur.Save do
     let? food = decode_inventory(raw_food)
     let? fuel = freight_number(j, "fuel")
     let? waste = freight_number(j, "waste")
-    if id > 0 && left >= 0 && left <= 2 && age >= 0 && fuel >= 0 && fuel <= 24 && waste >= 0 && waste <= 64 do
+    if id > 0 && left >= 0 && left <= 12 && age >= 0 && fuel >= 0 && fuel <= 24 && waste >= 0 && waste <= 64 do
       Ok({ id: id, left: left, age: age, food: food, fuel: fuel, waste: waste })
     else Err("Invalid freight voyage.") end
+  end
+  pfn encode_production_stock(v : Ur.ProductionFreight.CargoStock) : Json.JsonValue do
+    Json.encode_object([
+      ("item", Json.encode_int(Production.key(v.item))),
+      ("units", Json.encode_int(v.units)),
+      ("value", Json.encode_int(v.value)),
+      ("born", Json.encode_int(v.born))])
+  end
+  pfn decode_production_stock(j : Json.JsonValue) : Result(Ur.ProductionFreight.CargoStock, String) do
+    let? item = freight_number(j, "item")
+    let? units = freight_number(j, "units")
+    let? value = freight_number(j, "value")
+    let? born = freight_number(j, "born")
+    if item < 0 || item > 10 || units <= 0 || value < 0 || born < 0 do Err("Invalid production freight stock.") else
+      Ok({ item: Production.commodity(item), units: units, value: value, born: born })
+    end
+  end
+  pfn encode_production_site(v : Ur.ProductionFreight.CargoSite) : Json.JsonValue do
+    Json.encode_object([
+      ("lot", Json.encode_int(v.lot)),
+      ("generation", Json.encode_int(v.generation)),
+      ("wallet", Json.encode_int(v.wallet)),
+      ("reserved", Json.encode_int(v.reserved)),
+      ("sales", Json.encode_int(v.sales)),
+      ("costs", Json.encode_int(v.costs)),
+      ("produced", Json.encode_int(v.produced)),
+      ("sold", Json.encode_int(v.sold)),
+      ("food", Json.encode_int(v.food)),
+      ("farm_food", Json.encode_int(v.farm_food)),
+      ("fish_food", Json.encode_int(v.fish_food)),
+      ("status", Json.encode_int(v.status)),
+      ("room", Json.encode_int(v.room)),
+      ("stock", Json.encode_array(List.map(v.stock, encode_production_stock)))])
+  end
+  pfn decode_production_site(j : Json.JsonValue) : Result(Ur.ProductionFreight.CargoSite, String) do
+    let? lot = freight_number(j, "lot")
+    let? generation = freight_number(j, "generation")
+    let? wallet = freight_number(j, "wallet")
+    let? reserved = freight_number(j, "reserved")
+    let? sales = freight_number(j, "sales")
+    let? costs = freight_number(j, "costs")
+    let? produced = freight_number(j, "produced")
+    let? sold = freight_number(j, "sold")
+    let? food = freight_number(j, "food")
+    let? farm_food = opt_int(j, "farm_food", 0)
+    let? fish_food = opt_int(j, "fish_food", 0)
+    let? status = freight_number(j, "status")
+    let? room = freight_number(j, "room")
+    let? raw_stock = field(j, "stock")
+    let? stock = items(raw_stock, decode_production_stock, 1024)
+    if !S.valid(lot) || generation <= 0 || wallet < 0 || reserved < 0 || reserved > wallet || sales < 0 || costs < 0 || produced < 0 || sold < 0 || food < 0 || farm_food < 0 || fish_food < 0 || farm_food + fish_food > food || status < 0 || room <= 0 do Err("Invalid production freight site.") else
+      Ok({ lot: lot, generation: generation, wallet: wallet, reserved: reserved, sales: sales, costs: costs, produced: produced, sold: sold, food: food, farm_food: farm_food, fish_food: fish_food, status: status, room: room, stock: stock })
+    end
+  end
+  pfn encode_production_trip(v : Ur.ProductionFreight.CargoShipment) : Json.JsonValue do
+    Json.encode_object([
+      ("id", Json.encode_int(v.id)),
+      ("origin", Json.encode_int(v.origin)),
+      ("destination", Json.encode_int(v.destination)),
+      ("seller", Json.encode_int(v.seller)),
+      ("buyer", Json.encode_int(v.buyer)),
+      ("left", Json.encode_int(v.left)),
+      ("started", Json.encode_int(v.started)),
+      ("price", Json.encode_int(v.price)),
+      ("duty", Json.encode_int(v.duty)),
+      ("fee", Json.encode_int(v.fee)),
+      ("prepaid", Json.encode_int(if v.prepaid do 1 else 0 end)),
+      ("cargo", encode_production_stock(v.cargo)),
+      ("path", Json.encode_array(List.map(v.path, Json.encode_int)))])
+  end
+  pfn decode_production_trip(j : Json.JsonValue) : Result(Ur.ProductionFreight.CargoShipment, String) do
+    let? id = freight_number(j, "id")
+    let? origin = freight_number(j, "origin")
+    let? destination = freight_number(j, "destination")
+    let? seller = freight_number(j, "seller")
+    let? buyer = freight_number(j, "buyer")
+    let? left = freight_number(j, "left")
+    let? started = freight_number(j, "started")
+    let? price = freight_number(j, "price")
+    let? duty = freight_number(j, "duty")
+    let? fee = freight_number(j, "fee")
+    let? prepaid = opt_int(j, "prepaid", 0)
+    let? raw_cargo = field(j, "cargo")
+    let? cargo = decode_production_stock(raw_cargo)
+    let? raw_path = field(j, "path")
+    let? path = items(raw_path, parcel, S.count())
+    if id <= 0 || !S.valid(origin) || !S.valid(destination) || seller <= 0 || buyer <= 0 || left < 1 || left > 32 || started < 0 || price < 0 || duty < 0 || fee < 0 || List.length(path) < 2 do Err("Invalid production freight trip.") else
+      Ok({ id: id, origin: origin, destination: destination, seller: seller, buyer: buyer, left: left, started: started, price: price, duty: duty, fee: fee, prepaid: prepaid == 1, cargo: cargo, path: path })
+    end
+  end
+  pfn production_ids(sites : List(Ur.ProductionFreight.CargoSite), trips : List(Ur.ProductionFreight.CargoShipment), next_id : Int, next_generation : Int) : Bool do
+    let lots = List.map(sites, fn site -> site.lot)
+    let generations = List.map(sites, fn site -> site.generation)
+    let ids = List.map(trips, fn trip -> trip.id)
+    List.length(List.dedup(lots)) == List.length(lots) &&
+      List.length(List.dedup(generations)) == List.length(generations) &&
+      List.length(List.dedup(ids)) == List.length(ids) &&
+      List.all(generations, fn id -> id < next_generation) && List.all(ids, fn id -> id < next_id)
+  end
+  pfn encode_production_state(v : Ur.ProductionFreight.ProductionState) : Json.JsonValue do
+    Json.encode_object([
+      ("last_day", Json.encode_int(v.last_day)),
+      ("dispatch_day", Json.encode_int(v.dispatch_day)),
+      ("next_id", Json.encode_int(v.next_id)),
+      ("next_generation", Json.encode_int(v.next_generation)),
+      ("lost", Json.encode_int(v.lost)),
+      ("duties", Json.encode_int(v.duties)),
+      ("month_days", Json.encode_int(v.month_days)),
+      ("sites", Json.encode_array(List.map(v.sites, encode_production_site))),
+      ("shipments", Json.encode_array(List.map(v.shipments, encode_production_trip)))])
+  end
+  pfn decode_production_state(j : Json.JsonValue) : Result(Ur.ProductionFreight.ProductionState, String) do
+    let? last_day = freight_number(j, "last_day")
+    let? dispatch_day = freight_number(j, "dispatch_day")
+    let? next_id = freight_number(j, "next_id")
+    let? next_generation = freight_number(j, "next_generation")
+    let? lost = freight_number(j, "lost")
+    let? duties = freight_number(j, "duties")
+    let? month_days = freight_number(j, "month_days")
+    let? raw_sites = field(j, "sites")
+    let? sites = items(raw_sites, decode_production_site, S.count())
+    let? raw_shipments = field(j, "shipments")
+    let? shipments = items(raw_shipments, decode_production_trip, S.count() * 8)
+    if last_day < -1 || dispatch_day < -1 || next_id <= 0 || next_generation <= 0 || lost < 0 || duties < 0 || month_days < 0 || month_days > 31 || !production_ids(sites, shipments, next_id, next_generation) do Err("Invalid production freight state.") else
+      Ok({ last_day: last_day, dispatch_day: dispatch_day, next_id: next_id, next_generation: next_generation, lost: lost, duties: duties, month_days: month_days, sites: sites, shipments: shipments, movements: Nil })
+    end
   end
   pfn encode_freight(v : Ur.FreightNetwork.Route) : Json.JsonValue do
     let voyage = match v.voyage do
@@ -817,6 +944,7 @@ mod Ur.Save do
       Cons(("land_pollution", enc_array(v.land_pollution, NativeArray.length_int(v.land_pollution) - 1, Nil)),
       Cons(("founding_map", Json.encode_bool(v.founding_map)),
       Cons(("expansion", encode_expansion(v.expansion)),
+      Cons(("production_freight", encode_production_state(v.production_freight)),
       Cons(("shipments", Json.encode_array(List.map(v.shipments, encode_shipment))),
       Cons(("crime_history", Json.encode_array(List.map(v.crime_history, encode_crime))),
       Cons(("livability_history", Json.encode_array(List.map(v.livability_history, encode_livability))),
@@ -868,7 +996,7 @@ mod Ur.Save do
       Cons(("soil_moisture", Json.encode_int(v.soil_moisture)),
       Cons(("pumping_cost", Json.encode_int(v.pumping_cost)),
       Cons(("battery", Json.encode_int(v.battery)),
-      Cons(("message", Json.encode_string(v.message)), Nil))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+      Cons(("message", Json.encode_string(v.message)), Nil)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
   end
   pfn encode_cell(c : Ur.Rain.Cell) : Json.JsonValue do
     Json.encode_array([Json.encode_number(c.x), Json.encode_number(c.z), Json.encode_number(c.vx), Json.encode_number(c.vz),
@@ -1230,6 +1358,10 @@ mod Ur.Save do
     let? founding_map = boolean(raw_founding_map)
     let? raw_expansion = field(j, "expansion")
     let? expansion = decode_expansion(raw_expansion)
+    let? production_freight = match Json.get(j, "production_freight") do
+      Some(raw) -> decode_production_state(raw)
+      None -> Ok(Production.empty())
+    end
     let? raw_shipments = field(j, "shipments")
     let? shipments = items(raw_shipments, decode_shipment, S.count())
     let? raw_finance_history = field(j, "finance_history")
@@ -1261,7 +1393,7 @@ mod Ur.Save do
       density: density, nuisance: nuisance, buildings: buildings, housing_losses: housing_losses,
       business_losses: business_losses, construction: construction, plants: plants, paused_facilities: paused_facilities, pipes: pipes,
       grid: grid, pollution: pollution, land_pollution: land_pollution, air_pollution: air_pollution, founding_map: founding_map,
-      expansion: expansion, shipments: shipments, finance_history: finance_history, economy: economy, market_history: market_history, campus: campus, households: S.new_households(), utility_service: utility_service, shelter_demand: None, census: census, population_history: population_history, immigration: S.clamp(immigration, 0, 2), education: education, specializations: specializations, business_sector: business_sector, empty_homes: empty_homes, home_arrivals: home_arrivals, housing_search: housing_search, newcomer_grace: newcomer_grace, neighborhood_rents: neighborhood_rents, rent_pressure: rent_pressure, business_age: business_age, property_status: property_status, property_arrears: property_arrears, property_sales: property_sales, crime_history: crime_history, livability_history: livability_history, message: message }))
+      expansion: expansion, production_freight: production_freight, shipments: shipments, finance_history: finance_history, economy: economy, market_history: market_history, campus: campus, households: S.new_households(), utility_service: utility_service, shelter_demand: None, census: census, population_history: population_history, immigration: S.clamp(immigration, 0, 2), education: education, specializations: specializations, business_sector: business_sector, empty_homes: empty_homes, home_arrivals: home_arrivals, housing_search: housing_search, newcomer_grace: newcomer_grace, neighborhood_rents: neighborhood_rents, rent_pressure: rent_pressure, business_age: business_age, property_status: property_status, property_arrears: property_arrears, property_sales: property_sales, crime_history: crime_history, livability_history: livability_history, message: message }))
     end
   end
   pfn encode_game(v : Game) : Json.JsonValue do

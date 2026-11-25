@@ -1,0 +1,333 @@
+-- Private cargo is kept apart from public cash. Amounts are integer dollars
+-- and cargo ages are absolute simulation days.
+mod Ur.ProductionFreight do
+  type CargoCommodity = Crops | Catch | PackedProduce | ChilledSeafood | BulkMaterials | Parts | WorkshopGoods | FinishedGoods | Fuel | Waste | LegacyFood
+  type CargoStock = { item : CargoCommodity, units : Int, value : Int, born : Int }
+  type CargoSite = { lot : Int, generation : Int, stock : List(CargoStock), wallet : Int, reserved : Int,
+    sales : Int, costs : Int, produced : Int, sold : Int, food : Int, farm_food : Int, fish_food : Int, status : Int, room : Int }
+  type CargoRoute = { path : List(Int), limits : List((Int, Int)), days : Int, fee : Int }
+  type CargoOrder = { from : Int, to : Int, item : CargoCommodity, units : Int, price : Int, duty : Int }
+  type CargoShipment = { id : Int, origin : Int, destination : Int, seller : Int, buyer : Int,
+    cargo : CargoStock, path : List(Int), left : Int, started : Int, price : Int, duty : Int, fee : Int, prepaid : Bool }
+  type CargoMovement = { from : Int, to : Int, item : CargoCommodity, units : Int, path : List(Int), arrived : Bool }
+  type ProductionState = { sites : List(CargoSite), shipments : List(CargoShipment), movements : List(CargoMovement),
+    last_day : Int, dispatch_day : Int, next_id : Int, next_generation : Int, lost : Int, duties : Int, month_days : Int }
+  type ProductionRecipe = { input : CargoCommodity, output : CargoCommodity, used : Int, made : Int }
+
+  fn commodity(key : Int) : CargoCommodity do
+    match key do
+      0 -> Crops
+      1 -> Catch
+      2 -> PackedProduce
+      3 -> ChilledSeafood
+      4 -> BulkMaterials
+      5 -> Parts
+      6 -> WorkshopGoods
+      7 -> FinishedGoods
+      8 -> Fuel
+      9 -> Waste
+      _ -> LegacyFood
+    end
+  end
+  fn key(item : CargoCommodity) : Int do
+    match item do
+      Crops -> 0
+      Catch -> 1
+      PackedProduce -> 2
+      ChilledSeafood -> 3
+      BulkMaterials -> 4
+      Parts -> 5
+      WorkshopGoods -> 6
+      FinishedGoods -> 7
+      Fuel -> 8
+      Waste -> 9
+      LegacyFood -> 10
+    end
+  end
+  fn name(item : CargoCommodity) : String do
+    match item do
+      Crops -> "Crops"
+      Catch -> "Catch"
+      PackedProduce -> "Packed produce"
+      ChilledSeafood -> "Chilled seafood"
+      BulkMaterials -> "Bulk materials"
+      Parts -> "Parts"
+      WorkshopGoods -> "Workshop goods"
+      FinishedGoods -> "Finished goods"
+      Fuel -> "Fuel"
+      Waste -> "Waste"
+      LegacyFood -> "Food"
+    end
+  end
+  fn crops() : CargoCommodity do Crops end
+  fn catch() : CargoCommodity do Catch end
+  fn packed_produce() : CargoCommodity do PackedProduce end
+  fn chilled_seafood() : CargoCommodity do ChilledSeafood end
+  fn bulk_materials() : CargoCommodity do BulkMaterials end
+  fn parts() : CargoCommodity do Parts end
+  fn workshop_goods() : CargoCommodity do WorkshopGoods end
+  fn finished_goods() : CargoCommodity do FinishedGoods end
+  fn fuel() : CargoCommodity do Fuel end
+  fn waste() : CargoCommodity do Waste end
+  fn legacy_food() : CargoCommodity do LegacyFood end
+  fn price_for(item : CargoCommodity) : Int do
+    match item do
+      Crops | Catch -> 2
+      PackedProduce | ChilledSeafood -> 8
+      LegacyFood | BulkMaterials -> 3
+      Parts -> 9
+      WorkshopGoods -> 17
+      FinishedGoods -> 28
+      Fuel | Waste -> 2
+    end
+  end
+  fn food_units(item : CargoCommodity) : Int do
+    match item do
+      Crops | Catch | LegacyFood -> 1
+      PackedProduce | ChilledSeafood -> 2
+      _ -> 0
+    end
+  end
+  fn space(item : CargoCommodity) : Int do
+    match item do
+      BulkMaterials | FinishedGoods | Waste -> 2
+      _ -> 1
+    end
+  end
+  fn shelf_life(item : CargoCommodity) : Int do
+    match item do
+      Catch -> 5
+      Crops | LegacyFood -> 7
+      PackedProduce | ChilledSeafood -> 12
+      _ -> 0
+    end
+  end
+  pfn expired(stock : CargoStock, day : Int) : Bool do
+    let life = shelf_life(stock.item)
+    life > 0 && day - stock.born >= life
+  end
+  fn empty() : ProductionState do
+    { sites: Nil, shipments: Nil, movements: Nil, last_day: -1, dispatch_day: -1,
+      next_id: 1, next_generation: 1, lost: 0, duties: 0, month_days: 0 }
+  end
+  fn open_site(lot : Int, generation : Int, wallet : Int) : CargoSite do
+    { lot: lot, generation: generation, stock: Nil, wallet: wallet, reserved: 0, sales: 0, costs: 0,
+      produced: 0, sold: 0, food: 0, farm_food: 0, fish_food: 0, status: 0, room: 64 }
+  end
+  fn replace_sites(state : ProductionState, sites : List(CargoSite)) : ProductionState do { state with sites: sites } end
+  fn site(state : ProductionState, lot : Int) : Option(CargoSite) do List.find(state.sites, fn entry -> entry.lot == lot) end
+  pfn write_site(state : ProductionState, entry : CargoSite) : ProductionState do
+    { state with sites: List.map(state.sites, fn old -> if old.lot == entry.lot do entry else old end) }
+  end
+  pfn min(a : Int, b : Int) : Int do if a < b do a else b end end
+  pfn max(a : Int, b : Int) : Int do if a > b do a else b end end
+  fn units(site : CargoSite, item : CargoCommodity) : Int do
+    List.fold_left(site.stock, 0, fn (acc, stock) -> if key(stock.item) == key(item) do acc + stock.units else acc end)
+  end
+  fn food_stock(site : CargoSite) : Int do
+    List.fold_left(site.stock, 0, fn (total, stock) -> total + stock.units * food_units(stock.item))
+  end
+  fn storage_left(site : CargoSite) : Int do
+    max(0, site.room - List.fold_left(site.stock, 0, fn (used, stock) -> used + stock.units * space(stock.item)))
+  end
+  fn deposit(site : CargoSite, item : CargoCommodity, units : Int, value : Int, day : Int) : CargoSite do
+    if units <= 0 do site else
+      { site with stock: List.append(site.stock, [{ item: item, units: units, value: value, born: day }]) }
+    end
+  end
+  pfn take_stock(xs : List(CargoStock), wanted : Int, cargo : CargoStock) : (List(CargoStock), CargoStock) do
+    if wanted <= 0 do (xs, cargo) else
+      match xs do
+        Nil -> (Nil, cargo)
+        Cons(stock, rest) ->
+          let amount = if key(stock.item) == key(cargo.item) do min(stock.units, wanted) else 0 end
+          let value = if amount > 0 do stock.value * amount / stock.units else 0 end
+          let combined = { cargo with units: cargo.units + amount, value: cargo.value + value,
+            born: if amount > 0 do min(cargo.born, stock.born) else cargo.born end }
+          let (tail, loaded) = take_stock(rest, wanted - amount, combined)
+          let stock = { stock with units: stock.units - amount, value: stock.value - value }
+          (if stock.units > 0 do Cons(stock, tail) else tail end, loaded)
+      end
+    end
+  end
+  pfn take(site : CargoSite, item : CargoCommodity, wanted : Int, day : Int) : (CargoSite, CargoStock) do
+    let (remaining, cargo) = take_stock(site.stock, wanted, { item: item, units: 0, value: 0, born: day })
+    ({ site with stock: remaining }, cargo)
+  end
+  fn produce(site : CargoSite, recipe : ProductionRecipe, capacity : Int, day : Int) : CargoSite do
+    let free = storage_left(site)
+    let extra = recipe.made * space(recipe.output) - recipe.used * space(recipe.input)
+    let batches = min(capacity, units(site, recipe.input) / recipe.used)
+    let batches = if extra > 0 do min(batches, free / extra) else batches end
+    let (remaining, input) = take(site, recipe.input, batches * recipe.used, day)
+    let produced = batches * recipe.made
+    let next = deposit(remaining, recipe.output, produced, input.value, day)
+    { next with produced: produced, status: if produced > 0 do 1 else if units(site, recipe.input) < recipe.used do 2 else 3 end end }
+  end
+  fn sell(site : CargoSite, item : CargoCommodity, requested : Int, price : Int, day : Int) : CargoSite do
+    let (remaining, sold) = take(site, item, requested, day)
+    let proceeds = sold.units * price
+    let food = sold.units * food_units(item)
+    let farm = match item do
+      Crops | PackedProduce -> food
+      _ -> 0
+    end
+    let fish = match item do
+      Catch | ChilledSeafood -> food
+      _ -> 0
+    end
+    { remaining with wallet: remaining.wallet + proceeds, sales: remaining.sales + proceeds, costs: remaining.costs + sold.value,
+      sold: remaining.sold + sold.units, food: remaining.food + food,
+      farm_food: remaining.farm_food + farm, fish_food: remaining.fish_food + fish }
+  end
+  fn consume(site : CargoSite, item : CargoCommodity, units : Int, day : Int) : CargoSite do
+    let (next, used) = take(site, item, units, day)
+    { next with costs: next.costs + used.value }
+  end
+  fn retire(state : ProductionState, lot : Int) : ProductionState do
+    match site(state, lot) do
+      Some(entry) ->
+        let lost = List.fold_left(entry.stock, state.lost, fn (total, stock) -> total + stock.units)
+        { state with lost: lost, sites: List.filter(state.sites, fn entry -> entry.lot != lot) }
+      None -> state
+    end
+  end
+  fn available(used : Map(Int, Int), limits : List((Int, Int)), room : Int) : Int do
+    List.fold_left(limits, room, fn (remaining, limit) ->
+      let (id, capacity) = limit
+      min(remaining, max(0, capacity - unwrap_or(Map.get(used, id, Map.int_cmp), 0))))
+  end
+  fn reserve(used : Map(Int, Int), limits : List((Int, Int)), amount : Int) : Map(Int, Int) do
+    List.fold_left(limits, used, fn (held, limit) ->
+      let (id, _) = limit
+      Map.insert(held, id, unwrap_or(Map.get(held, id, Map.int_cmp), 0) + amount, Map.int_cmp))
+  end
+  pfn load_order(state : ProductionState, order : CargoOrder, route : CargoRoute, day : Int, used : Map(Int, Int)) : (ProductionState, Map(Int, Int)) do
+    match (site(state, order.from), site(state, order.to)) do
+      (Some(seller), Some(buyer)) ->
+        let cost = order.price + order.duty + route.fee
+        let budget = if cost > 0 do max(0, buyer.wallet - buyer.reserved) / cost else order.units end
+        let carried = List.fold_left(state.shipments, 0, fn (n, trip) ->
+          if trip.buyer == buyer.generation && trip.destination == buyer.lot do n + trip.cargo.units * space(trip.cargo.item) else n end)
+        let room = max(0, storage_left(buyer) - carried)
+        let ordered_today = List.fold_left(state.shipments, 0, fn (total, trip) ->
+          if trip.started == day && trip.buyer == buyer.generation && key(trip.cargo.item) == key(order.item) do
+            total + trip.cargo.units
+          else total end)
+        let units = min(budget, min(order.units - ordered_today, available(used, route.limits, room) / space(order.item)))
+        if units <= 0 || seller.lot == buyer.lot do (state, used) else
+          let (seller, cargo) = take(seller, order.item, units, day)
+          if cargo.units <= 0 do (state, used) else
+            let buyer = { buyer with reserved: buyer.reserved + cargo.units * cost }
+            let state = write_site(write_site(state, seller), buyer)
+            let loaded = { id: state.next_id, origin: seller.lot, destination: buyer.lot,
+              seller: seller.generation, buyer: buyer.generation, cargo: cargo, path: route.path,
+              left: max(1, route.days), started: day, price: order.price, duty: order.duty, fee: route.fee, prepaid: false }
+            let moved = { from: seller.lot, to: buyer.lot, item: order.item, units: cargo.units, path: route.path, arrived: false }
+            ({ state with shipments: List.append(state.shipments, [loaded]), movements: Cons(moved, state.movements),
+              next_id: state.next_id + 1 }, reserve(used, route.limits, cargo.units * space(order.item)))
+          end
+        end
+      _ -> (state, used)
+    end
+  end
+  fn dispatch_with_reservations(state : ProductionState, day : Int, orders : List(CargoOrder), route : Int -> Int -> Option(CargoRoute), reserved : Map(Int, Int)) : ProductionState do
+    if day <= state.dispatch_day do state else
+      let (next, _) = List.fold_left(orders, (state, reserved), fn (acc, order) ->
+        let (current, used) = acc
+        match route(order.from, order.to) do
+          Some(path) -> load_order(current, order, path, day, used)
+          None -> (current, used)
+        end)
+      { next with dispatch_day: day }
+    end
+  end
+  fn dispatch(state : ProductionState, day : Int, orders : List(CargoOrder), route : Int -> Int -> Option(CargoRoute)) : ProductionState do
+    dispatch_with_reservations(state, day, orders, route, Map.empty())
+  end
+  pfn active(state : ProductionState, lot : Int, generation : Int) : Option(CargoSite) do
+    match site(state, lot) do
+      Some(entry) -> if entry.generation == generation do Some(entry) else None end
+      None -> None
+    end
+  end
+  pfn price(trip : CargoShipment) : Int do trip.price + trip.duty + trip.fee end
+  pfn abandon(state : ProductionState, trip : CargoShipment, buyer : Option(CargoSite), day : Int, reachable : Bool) : ProductionState do
+    let state = match buyer do
+      Some(entry) -> write_site(state, { entry with reserved: max(0, entry.reserved - trip.cargo.units * price(trip)) })
+      None -> state
+    end
+    let stock = trip.cargo
+    let returned = if reachable && !expired(stock, day) do
+      match active(state, trip.origin, trip.seller) do
+        Some(seller) ->
+          let fit = min(stock.units, storage_left(seller) / space(stock.item))
+          Some((deposit(seller, stock.item, fit, stock.value * fit / stock.units, stock.born), fit))
+        None -> None
+      end
+    else None end
+    match returned do
+      Some((seller, units)) ->
+        let loss = stock.value - stock.value * units / stock.units
+        write_site({ state with lost: state.lost + stock.units - units }, { seller with costs: seller.costs + loss })
+      None ->
+        let next = { state with lost: state.lost + stock.units }
+        match active(next, trip.origin, trip.seller) do
+          Some(seller) -> write_site(next, { seller with costs: seller.costs + stock.value })
+          None -> next
+        end
+    end
+  end
+  pfn accept(state : ProductionState, trip : CargoShipment, buyer : CargoSite, units : Int) : (ProductionState, CargoShipment) do
+    let stock = trip.cargo
+    let basis = stock.value * units / stock.units
+    let cost = units * price(trip)
+    let buyer = deposit(buyer, stock.item, units, if trip.prepaid do basis else cost end, stock.born)
+    let state = write_site(state, { buyer with wallet: max(0, buyer.wallet - cost), reserved: max(0, buyer.reserved - cost) })
+    let state = if trip.prepaid do state else match active(state, trip.origin, trip.seller) do
+      Some(seller) -> write_site(state, { seller with wallet: seller.wallet + units * trip.price,
+        sales: seller.sales + units * trip.price, costs: seller.costs + basis })
+      None -> state
+    end end
+    let arrived = { from: trip.origin, to: trip.destination, item: stock.item, units: units, path: trip.path, arrived: true }
+    let moves = if units > 0 do Cons(arrived, state.movements) else state.movements end
+    ({ state with duties: state.duties + units * trip.duty, movements: moves },
+      { trip with cargo: { stock with units: stock.units - units, value: stock.value - basis } })
+  end
+  fn receive(state : ProductionState, day : Int, connected : CargoShipment -> Bool, handling : Int -> Int) : ProductionState do
+    if day <= state.last_day do state else
+      let state = { state with last_day: day, month_days: state.month_days + 1, movements: Nil }
+      let (state, waiting, _) = List.fold_left(state.shipments, (state, Nil, Map.empty()), fn (acc, trip) ->
+        let (current, waiting, used) = acc
+        let buyer = active(current, trip.destination, trip.buyer)
+        let reachable = connected(trip)
+        let seller_gone = !trip.prepaid && Option.is_none(active(current, trip.origin, trip.seller))
+        if expired(trip.cargo, day) || day - trip.started > 15 || Option.is_none(buyer) || seller_gone do
+          (abandon(current, trip, buyer, day, reachable), waiting, used)
+        else if !reachable || trip.started >= day do (current, Cons(trip, waiting), used)
+        else if trip.left > 1 do (current, Cons({ trip with left: trip.left - 1 }, waiting), used)
+        else
+          let buyer = unwrap(buyer)
+          let room = max(0, handling(buyer.lot) - unwrap_or(Map.get(used, buyer.lot, Map.int_cmp), 0))
+          let weight = space(trip.cargo.item)
+          let units = min(trip.cargo.units, min(room, storage_left(buyer)) / weight)
+          let (current, rest) = accept(current, trip, buyer, units)
+          (current, if rest.cargo.units > 0 do Cons(rest, waiting) else waiting end,
+            Map.insert(used, buyer.lot, handling(buyer.lot) - room + units * weight, Map.int_cmp))
+        end end end)
+      { state with shipments: List.reverse(waiting) }
+    end
+  end
+  fn age_stock(state : ProductionState, day : Int) : ProductionState do
+    List.fold_left(state.sites, state, fn (current, entry) ->
+      let (lost, kept) = List.partition(entry.stock, fn stock -> expired(stock, day))
+      let units = List.fold_left(lost, 0, fn (total, stock) -> total + stock.units)
+      let value = List.fold_left(lost, 0, fn (total, stock) -> total + stock.value)
+      if units == 0 do current else
+        write_site({ current with lost: current.lost + units }, { entry with stock: kept, costs: entry.costs + value })
+      end)
+  end
+  fn reset_month(state : ProductionState) : ProductionState do
+    { state with duties: 0, month_days: 0, sites: List.map(state.sites, fn entry -> { entry with sales: 0, costs: 0 }) }
+  end
+end

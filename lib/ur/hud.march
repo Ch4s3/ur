@@ -242,6 +242,51 @@ mod Ur.Hud do
       if action == 3 do label(a, left, y +. 29.0, 10.0, if active do "Clears building for redevelopment" else "Road connection required" end, false) else a end
     end
   end
+  fn production_partner_at(c : Ur.Sim.City, lot : Int, mx : Float, my : Float, w : Float, h : Float) : Int do
+    let x = menu_x(w) +. 18.0
+    let y = menu_y(h) +. 372.0
+    if my < y || my >= y +. 18.0 || mx < x || mx >= x +. 216.0 do -1
+    else S.production_partner(c, lot, mx < x +. 108.0) end
+  end
+  pfn production_partner_button(a : Strata.Ui.Ui, x : Float, y : Float, lot : Int, title : String) : Strata.Ui.Ui do
+    if !S.valid(lot) do a else
+      let a = U.rect(a, 0, x, y, 102.0, 18.0, (0.16, 0.30, 0.34, 1.0))
+      let location = int_to_string(lot % S.width()) ++ "/" ++ int_to_string(lot / S.width())
+      label(a, x +. 5.0, y +. 3.0, 10.0, title ++ " " ++ location, true)
+    end
+  end
+  pfn production_detail(c : Ur.Sim.City, lot : Int) : String do
+    match S.production_at(c, lot) do
+      None -> ""
+      Some(site) ->
+        let inbound = List.find(c.production_freight.shipments, fn cargo -> cargo.destination == lot)
+        let route = match inbound do
+          Some(cargo) ->
+            let eta = if S.production_route_open(c, cargo.path) do int_to_string(cargo.left) ++ "d" else "route blocked" end
+            " · " ++ int_to_string(cargo.cargo.units) ++ " " ++ Ur.ProductionFreight.name(cargo.cargo.item) ++ " inbound (" ++ eta ++ ")"
+          None -> ""
+        end
+        match S.industry_at(c, lot) do
+          Some(kind) ->
+            let recipe = S.production_recipe(kind)
+            let reason = match site.status do
+              1 -> ""
+              2 -> " · Waiting for inputs"
+              3 -> " · Storage full"
+              4 -> " · Utilities or access offline"
+              5 -> " · Short of workers"
+              _ -> ""
+            end
+            Ur.ProductionFreight.name(recipe.input) ++ " " ++ int_to_string(Ur.ProductionFreight.units(site, recipe.input)) ++ " · " ++
+              Ur.ProductionFreight.name(recipe.output) ++ " " ++ int_to_string(Ur.ProductionFreight.units(site, recipe.output)) ++ reason ++ route
+          None ->
+            if S.retail_kind(c, lot) > 0 do "Food stock " ++ int_to_string(Ur.ProductionFreight.food_stock(site)) ++
+              " · Sold " ++ int_to_string(site.food) ++ " today" ++ route
+            else if site.produced > 0 do int_to_string(site.produced) ++ " produced today" ++ route
+            else route end end
+        end
+    end
+  end
   pfn parcel(a : Strata.Ui.Ui, c : Ur.Sim.City, st : Ur.Sim.Stats, x : Float, top : Float, hover : Int, reason : String) : Strata.Ui.Ui do
     if !S.valid(hover) do prose(a, x, top +. 190.0, 14.0, "Click a parcel to inspect it.") else
       let name = S.building_name(c, hover)
@@ -280,7 +325,9 @@ mod Ur.Hud do
         let a = account_line(a, x, top +. 404.0, "Business net", S.business_accounts(c, st.routes, st.labor, st.people, st.work, hover))
         label(a, x, top +. 438.0, 11.0, S.shop_market_reason(c, st, hover), S.business_closed(c, hover) || S.storefront(c, hover) == 3)
       else a end
-      let note = if !S.building_offline(c, hover) && S.retail_kind(c, hover) > 0 do
+      let production = production_detail(c, hover)
+      let note = if production != "" do production
+      else if !S.building_offline(c, hover) && S.retail_kind(c, hover) > 0 do
         "Food stock " ++ int_to_string(S.get(c.shop_stock, hover)) ++ "   ·   Delivered " ++ int_to_string(S.get(c.shop_delivered, hover)) ++
         (if S.get(c.shop_sales, hover) < 8 do "   ·   Shortage" else "" end)
       else if S.get(c.heights, hover) == 0 && Ur.Fish.inspect(c, hover) != "" do Ur.Fish.inspect(c, hover)
@@ -288,7 +335,7 @@ mod Ur.Hud do
       else if S.geothermal(c, hover) do "Geothermal field"
       else if S.get(c.pipes, hover) > 0 do "Water pipe installed"
       else if S.get(c.grid, hover) > 0 do "Power line installed"
-      else "" end end end end end end
+      else "" end end end end end end end
       let a = label(a, x, top +. 455.0, 11.0, note, true)
       let a = if zone > 0 do
         let a = label(a, x, top +. 474.0, 11.0, S.ground_name(S.ground_at(c, hover)) ++ " · " ++ S.quiet_name(S.quiet_at(c, hover)), false)
@@ -1262,6 +1309,8 @@ mod Ur.Hud do
       match tab do
         1 ->
           let a = parcel(a, c, st, inset, top, hover, reason)
+          let a = production_partner_button(a, inset, y +. 372.0, S.production_partner(c, hover, true), "Supplier")
+          let a = production_partner_button(a, inset +. 108.0, y +. 372.0, S.production_partner(c, hover, false), "Buyer")
           if S.temple_tier(c, hover) > 0 do finance_button(a, inset, y +. 190.0, 138.0, "Temple details", true) else a end
         2 ->
           let a = finance_button(services(a, st, inset, top, width), right_button, y +. 51.0, 128.0, "Education and skills", true)

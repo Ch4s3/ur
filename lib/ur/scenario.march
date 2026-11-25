@@ -268,16 +268,37 @@ mod Ur.Scenario do
     end
   end
   fn emergency_bay_demo() : Ur.Sim.City do show_emergency_bays(emergency_district(), 0) end
+  pfn industrial_demo_lot(c : Ur.Sim.City, lot : Int, sector : Int, floors : Int, zone : Int) : Ur.Sim.City do
+    { c with heights: NativeArray.set_int(c.heights, lot, 16),
+      plants: NativeArray.set_int(c.plants, lot, 0),
+      zones: NativeArray.set_int(c.zones, lot, zone),
+      business_sector: NativeArray.set_int(c.business_sector, lot, sector),
+      buildings: NativeArray.set_int(c.buildings, lot, floors),
+      density: NativeArray.set_int(c.density, lot, floors),
+      storefronts: NativeArray.set_int(c.storefronts, lot, 0),
+      facility_staff: NativeArray.set_int(c.facility_staff, lot, 8 * floors + 1) }
+  end
   fn industry_demo() : Ur.Sim.City do
-    let c = emergency_bay_demo()
-    let first = S.index(31, 21)
-    let second = S.index(32, 21)
-    { c with founding_map: false,
-      plants: NativeArray.set_int(NativeArray.set_int(c.plants, first, 0), second, 0),
-      zones: NativeArray.set_int(NativeArray.set_int(c.zones, first, 4), second, 4),
-      business_sector: NativeArray.set_int(NativeArray.set_int(c.business_sector, first, 1), second, 2),
-      buildings: NativeArray.set_int(NativeArray.set_int(c.buildings, first, 1), second, 2),
-      storefronts: NativeArray.set_int(NativeArray.set_int(c.storefronts, first, 0), second, 0) }
+    let c = freight_demo()
+    let homes = [S.index(10, 13), S.index(11, 13), S.index(12, 13), S.index(13, 13)]
+    let c = List.fold_left(homes, c, fn (city, lot) -> industrial_demo_lot(city, lot, 0, 1, 1))
+    let offices = [S.index(14, 13), S.index(15, 13), S.index(13, 15)]
+    let c = List.fold_left(offices, c, fn (city, lot) -> industrial_demo_lot(city, lot, 0, 1, 2))
+    let c = industrial_demo_lot(c, S.index(10, 15), 0, 0, 0)
+    let c = { c with education: NativeArray.set_int(c.education, 2, 24) }
+    let c = industrial_demo_lot(c, S.index(12, 17), 1, 1, 4)
+    let c = industrial_demo_lot(c, S.index(14, 17), 3, 1, 4)
+    let c = industrial_demo_lot(c, S.index(12, 15), 4, 1, 4)
+    let c = industrial_demo_lot(c, S.index(14, 15), 2, 2, 4)
+    let c = industrial_demo_lot(c, S.index(16, 17), 1, 2, 3)
+    let c = industrial_demo_lot(c, S.index(11, 17), 0, 1, 4)
+    let farm = S.index(11, 15)
+    let depot = S.index(17, 17)
+    let c = industrial_demo_lot(c, farm, 0, 0, 0)
+    let freight = Option.map(c.freight, fn route -> { route with priority: 1 })
+    let sites = NativeArray.set_int(NativeArray.set_int(c.plants, farm, 5), depot, 24)
+    let heights = NativeArray.set_int(NativeArray.set_int(c.heights, farm, 16), depot, 16)
+    { c with plants: sites, heights: heights, freight: freight, message: "Inspect the packing and assembly sites along the mainland road. The seafood chain uses the crossing at 18, 16." }
   end
   fn community_demo() : Ur.Sim.City do
     let c = emergency_bay_demo()
