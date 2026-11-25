@@ -1,8 +1,10 @@
 mod Ur.Landscape do
   alias Ur.Sim as S
   alias Ur.Architecture as A
+  alias Ur.RoadSurface as RoadSurface
   pfn road_axis(c : Ur.Sim.City, lot : Int) : Int do
-    if !S.valid(lot) || S.get(c.heights, lot) == 0 || S.get(c.roads, lot) == 0 || S.valid(S.grade_peer(c, lot)) do -1 else
+    if !S.valid(lot) || S.get(c.heights, lot) == 0 || S.get(c.roads, lot) == 0 ||
+      S.get(c.road_shapes, lot) != 0 || S.valid(S.grade_peer(c, lot)) do -1 else
       let east = S.street_link(c, lot, 0) || S.street_link(c, lot, 1)
       let north = S.street_link(c, lot, 2) || S.street_link(c, lot, 3)
       if east && !north do 0 else if north && !east do 2 else -1 end end
@@ -64,29 +66,15 @@ mod Ur.Landscape do
       let cut = S.valid(grade) && S.grade_kind(c, grade) == 2 && S.get(c.roads, i) == 0 &&
         S.get(c.buildings, i) == 0 && S.get(c.plants, i) == 0 && S.get(c.construction, i) == 0 && cross_axis >= 10 && cross_axis < 22
       let (axis, before, after) = road_profile(c, i)
-      if portal_cut do S.clamp(portal_floor(c, i, other, S.clamp(inward + 2, 0, 16)) - 1, 0, h)
+      if S.canal_water(c, i) do
+        if S.canal_wet(c, i, int_mod_euclid(x, 32), int_mod_euclid(z, 32)) do S.canal_level(c, i) - 6 else h end
+      else if portal_cut do S.clamp(portal_floor(c, i, other, S.clamp(inward + 2, 0, 16)) - 1, 0, h)
       else if axis >= 0 do
         let along = int_mod_euclid(if axis == 0 do x else z end, 32)
         graded_height(h, before, after, along / 4 * 4 + 2)
       else if cut do h - 8
       else if S.public_work_stage(c, i) > 0 || S.valid(S.campus_root(c, i)) || S.building_offline(c, i) || S.get(c.parks, i) > 0 || (S.get(c.roads, i) > 0 && h > 0) || S.get(c.buildings, i) > 0 || S.get(c.construction, i) > 0 || S.get(c.plants, i) > 0 do h
-      else
-        let gx = int_div_euclid(x - 16, 32)
-        let gz = int_div_euclid(z - 16, 32)
-        let u = int_mod_euclid(x - 16, 32)
-        let v = int_mod_euclid(z - 16, 32)
-        let lo = sample(c, gx, gz) * (32 - u) + sample(c, gx + 1, gz) * u
-        let hi = sample(c, gx, gz + 1) * (32 - u) + sample(c, gx + 1, gz + 1) * u
-        let hill = (lo * (32 - v) + hi * v) / 1024
-        let detail = float_to_int(Math.sin(int_to_float(x) *. 0.077 +. Math.sin(int_to_float(z) *. 0.044)) *. 2.8 +. Math.sin(int_to_float(z) *. 0.156 +. int_to_float(x) *. 0.027) *. 1.8)
-        S.clamp(hill + detail, 0, 96)
-      end end end end
-    end
-  end
-  pfn sample(c : Ur.Sim.City, x : Int, z : Int) : Int do
-    if x < 0 || z < 0 || x >= S.width() || z >= S.depth() do -7 else
-      let h = S.get(c.heights, S.index(x, z))
-      if h == 0 do -7 else h end
+      else S.unbuilt_ground_height(c, x, z) end end end end end
     end
   end
   fn height(c : Ur.Sim.City, x : Int, z : Int) : Int do
@@ -135,7 +123,7 @@ mod Ur.Landscape do
     let out = if !changed || material < 0 || start == x do out else
       let px = if horizontal == 0 do start else 32 - x end
       let pz = if vertical == 2 do z else 31 - z end
-      Cons(A.piece(px, deck, pz, x - start, if material == 17 || material == 24 do 2 else 1 end, 1, material), out)
+      Cons(A.piece(px, deck, pz, x - start, if material == 24 do 2 else 1 end, 1, material), out)
     end
     if x >= 32 do out else curve_row(kind, deck, horizontal, vertical, x + 1, z, if changed do x else start end, next, out) end
   end
@@ -191,9 +179,9 @@ mod Ur.Landscape do
     if east do Cons(A.piece(0, deck, side, width, 1, thickness, colour), out)
     else Cons(A.piece(side, deck, 0, thickness, 1, width, colour), out) end
   end
-  pfn lane_dash(east : Bool, deck : Int, side : Int, start : Int, out : List(Ur.Architecture.Piece)) : List(Ur.Architecture.Piece) do
-    if east do Cons(A.piece(start, deck + 1, side, 6, 1, 1, 8), out)
-    else Cons(A.piece(side, deck + 1, start, 1, 1, 6, 8), out) end
+  pfn lane_dash(east : Bool, deck : Int, side : Int, start : Int, length : Int) : Ur.Architecture.Piece do
+    if east do A.piece(start, deck, side, length, 1, 1, 8)
+    else A.piece(side, deck, start, 1, 1, length, 8) end
   end
   pfn grade_piece(p : Ur.Architecture.Piece, axis : Int, h : Int, before : Int, after : Int, at : Int,
     out : List(Ur.Architecture.Piece)) : List(Ur.Architecture.Piece) do
@@ -239,22 +227,21 @@ mod Ur.Landscape do
       let a = straight_edge(east, 14 - width, deck + 1, 32, 2, 24, a)
       straight_edge(east, 16 + width, deck + 1, 32, 2, 24, a)
     end
-    let marked = !junction && !bulb
-    let a = if kind == 2 && marked do straight_edge(east, 15, deck + 1, 32, 2, 10, a)
-      else if kind == 3 && marked do straight_edge(east, 15, deck + 1, 32, 2, 17, a)
-      else a end end
-    let a = if kind == 2 && marked do
-      let a = lane_dash(east, deck, 8, 4, a)
-      let a = lane_dash(east, deck, 8, 20, a)
-      let a = lane_dash(east, deck, 23, 4, a)
-      lane_dash(east, deck, 23, 20, a)
-    else a end
+    let marks = if bulb || junction do Nil
+      else if kind == 1 do
+        let m = if east do [lane_dash(true, deck, 15, 2, 7), lane_dash(true, deck, 15, 22, 7)] else Nil end
+        if north || !east do Cons(lane_dash(false, deck, 15, 2, 7), Cons(lane_dash(false, deck, 15, 22, 7), m)) else m end
+      else if kind == 2 do
+        straight_edge(east, 15, deck, 32, 2, 10, [
+          lane_dash(east, deck, 8, 4, 6), lane_dash(east, deck, 8, 20, 6),
+          lane_dash(east, deck, 23, 4, 6), lane_dash(east, deck, 23, 20, 6)])
+      else straight_edge(east, 15, deck, 32, 2, 17, Nil) end end end
+    -- Replace the asphalt under the paint so the top faces share a height without overlapping.
+    let a = List.fold_left(marks, a, fn (parts, mark) -> Cons(mark, cut_road_pieces(parts, mark)))
     let a = if S.get(c.tolls, i) == 0 do a else
       let (x, z) = if east do (20, 1) else (1, 20) end
       Cons(A.piece(x, deck + 1, z, 1, 8, 1, 13), Cons(A.piece(x, deck + 8, z, 3, 2, 3, 10), a))
     end
-    let a = if kind == 1 && east && marked do Cons(A.piece(2, deck + 1, 15, 7, 1, 1, 8), Cons(A.piece(22, deck + 1, 15, 7, 1, 1, 8), a)) else a end
-    let a = if kind == 1 && marked && (north || !east) do Cons(A.piece(15, deck + 1, 2, 1, 1, 7, 8), Cons(A.piece(15, deck + 1, 22, 1, 1, 7, 8), a)) else a end
     if junction && kind != 3 do
       let a = if west_link do crosswalk(0, deck, 0, width, a) else a end
       let a = if east_link do crosswalk(0, deck, 1, width, a) else a end
@@ -717,7 +704,7 @@ mod Ur.Landscape do
     let side = if S.valid(road) do S.direction(i, road) else frontage(c, i, 0) end
     shift(A.orient(A.public_parking(S.get(c.public_parking, i)), side), S.get(c.heights, i))
   end
-  pfn trim_portal_road(parts : List(Ur.Architecture.Piece), cut : Ur.Architecture.Piece) : List(Ur.Architecture.Piece) do
+  pfn cut_road_pieces(parts : List(Ur.Architecture.Piece), cut : Ur.Architecture.Piece) : List(Ur.Architecture.Piece) do
     List.flat_map(parts, fn p ->
       let left = S.clamp(cut.x, p.x, p.x + p.w)
       let right = S.clamp(cut.x + cut.w, p.x, p.x + p.w)
@@ -738,11 +725,15 @@ mod Ur.Landscape do
     else if side == bore || S.street_link(c, lot, side) do trim_closed_arms(c, lot, bore, side + 1, inset, parts)
     else
       let guide = A.orient([A.piece(0, 0, 32 - inset, 32, 1, inset, 0)], side)
-      let parts = match guide do Nil -> parts | Cons(cut, _) -> trim_portal_road(parts, cut) end
+      let parts = match guide do Nil -> parts | Cons(cut, _) -> cut_road_pieces(parts, cut) end
       trim_closed_arms(c, lot, bore, side + 1, inset, parts)
     end end
   end
+  fn street_edge(c : Ur.Sim.City, lot : Int, direction : Int) : (Int, Int) do
+    RoadSurface.edge(c, lot, direction)
+  end
   fn portal_street(c : Ur.Sim.City, lot : Int, h : Int) : List(Ur.Architecture.Piece) do
+    if RoadSurface.uses_curve(c, lot) do RoadSurface.pieces(c, lot, true) else
     let parts = road(c, lot, h)
     let peer = S.grade_peer(c, lot)
     if S.mountain_tunnel(c, lot, peer) do
@@ -753,8 +744,8 @@ mod Ur.Landscape do
     else if S.grade_kind(c, lot) == 3 && S.valid(peer) && !portal_crossed_by_street(c, lot, peer) do
       let side = S.opposite(S.direction(lot, peer))
       let guide = A.orient([A.piece(4, 0, 0, 24, 1, 16, 0)], side)
-      match guide do Nil -> parts | Cons(cut, _) -> trim_portal_road(parts, cut) end
-    else parts end end
+      match guide do Nil -> parts | Cons(cut, _) -> cut_road_pieces(parts, cut) end
+    else parts end end end
   end
   -- Three clear street-facing vehicle openings; the back wall is recessed so
   -- the bays remain legible instead of reading as a narrow side attachment.
@@ -913,6 +904,27 @@ mod Ur.Landscape do
       A.orient(List.append(arch, tunnel_approach(c, lot, peer, 0, ground)), side)
     end end
   end
+  pfn bridge_axis_piece(east : Bool, u : Int, y : Int, v : Int, run : Int, h : Int, breadth : Int, material : Int) : Ur.Architecture.Piece do
+    if east do A.piece(u, y, v, run, h, breadth, material)
+    else A.piece(v, y, u, breadth, h, run, material) end
+  end
+  pfn drawbridge_hinge(c : Ur.Sim.City, i : Int, first : Int, last : Int, side : Int, east : Bool,
+    base : List(Ur.Architecture.Piece)) : List(Ur.Architecture.Piece) do
+    let outside = if side > 0 do 0 else 28 end
+    let edge = if side > 0 do 0 else 32 end
+    let station = S.span_distance(first, i) * 32 - 16 + edge
+    let span = S.span_distance(first, last) * 32
+    let hinge = float_to_int(Math.floor(S.grade_surface(c, first, last, int_to_float(station) /. int_to_float(span)))) + 1
+    let ground = if S.canal_water(c, i) do S.canal_level(c, i) else S.get(c.heights, i) end
+    let footing = bridge_axis_piece(east, outside, ground, 8, 4, Math.max_int(1, hinge - 2 - ground), 16, 17)
+    let cap = bridge_axis_piece(east, outside, hinge - 2, 6, 4, 2, 20, 24)
+    let left = bridge_axis_piece(east, outside, hinge - 2, 5, 4, 5, 3, 19)
+    let right = bridge_axis_piece(east, outside, hinge - 2, 24, 4, 5, 3, 19)
+    let pin = if side > 0 do outside else outside + 2 end
+    let left_pin = bridge_axis_piece(east, pin, hinge, 4, 2, 2, 1, 10)
+    let right_pin = bridge_axis_piece(east, pin, hinge, 27, 2, 2, 1, 10)
+    List.append([footing, cap, left, right, left_pin, right_pin], base)
+  end
   pfn grade_parts(c : Ur.Sim.City, i : Int, lighting : Int, base : List(Ur.Architecture.Piece)) : List(Ur.Architecture.Piece) do
     let a = S.grade_source(c, i)
     let b = S.grade_peer(c, a)
@@ -921,9 +933,29 @@ mod Ur.Landscape do
       let h = S.get(c.heights, i)
       let kind = S.grade_kind(c, a)
       if kind == 1 do
-        let pillar_height = float_to_int(S.grade_surface(c, a, b, int_to_float(S.span_distance(a, i)) /. int_to_float(S.span_distance(a, b)))) - h
-        if i != a && i != b && S.get(c.roads, i) == 0 && pillar_height > 2 do Cons(A.piece(13, h, 13, 6, pillar_height, 6, 17), base)
-        else base end
+        let style = S.bridge_style(c, a)
+        let offset = S.span_distance(a, i)
+        let span = S.span_distance(a, b)
+        let pillar_height = float_to_int(S.grade_surface(c, a, b, int_to_float(offset) /. int_to_float(span))) - h
+        let side = S.drawbridge_leaf_side(c, i)
+        if side != 0 do drawbridge_hinge(c, i, Math.min_int(a, b), Math.max_int(a, b), side, east, base)
+        else if !S.bridge_pier(c, i) || pillar_height <= 2 do base
+        else if style == 0 do Cons(A.piece(13, h, 13, 6, pillar_height, 6, 17), base)
+        else
+          let cap = if east do A.piece(12, h + pillar_height - 2, 10, 8, 2, 12, 24)
+            else A.piece(10, h + pillar_height - 2, 12, 12, 2, 8, 24) end
+          let pier = Cons(cap, Cons(A.piece(13, h, 13, 6, pillar_height - 2, 6, 17), base))
+          if style != 2 do pier else
+            let tower = pillar_height + 30
+            let front = if east do A.piece(14, h, 5, 4, tower, 3, 17)
+              else A.piece(5, h, 14, 3, tower, 4, 17) end
+            let back = if east do A.piece(14, h, 24, 4, tower, 3, 17)
+              else A.piece(24, h, 14, 3, tower, 4, 17) end
+            let beam = if east do A.piece(14, h + tower - 3, 5, 4, 3, 22, 24)
+              else A.piece(5, h + tower - 3, 14, 22, 3, 4, 24) end
+            Cons(front, Cons(back, Cons(beam, pier)))
+          end
+        end end end
       else if kind == 3 && (i == a || i == b) do
         List.append(tunnel_portal(c, i, if i == a do b else a end, lighting >= 8), base)
       else if i == a || i == b do
@@ -1078,11 +1110,57 @@ mod Ur.Landscape do
       Cons(A.piece(11, 16, z, 10, 2, end_z - z, 24), Cons(A.piece(12, 0, z, 8, 16, end_z - z, 2), base))
     else base end
   end
+  pfn canal_bank(c : Ur.Sim.City, i : Int, at : Int, parts : List(Ur.Architecture.Piece)) : List(Ur.Architecture.Piece) do
+    if at >= 16 do parts else
+      let x = at % 4 * 8
+      let z = at / 4 * 8
+      let parts = if S.canal_wet(c, i, x + 4, z + 4) do parts
+        else Cons(A.piece(x, S.get(c.heights, i), z, 8, 1, 8, 24), parts) end
+      canal_bank(c, i, at + 1, parts)
+    end
+  end
+  pfn canal_piece(east : Bool, u : Int, y : Int, v : Int, length : Int, h : Int, breadth : Int, material : Int) : Ur.Architecture.Piece do
+    if east do A.piece(u, y, v, length, h, breadth, material)
+    else A.piece(v, y, u, breadth, h, length, material) end
+  end
+  pfn canal_parts(c : Ur.Sim.City, i : Int) : List(Ur.Architecture.Piece) do
+    let east = S.canal_arm(c, i, 0) || S.canal_arm(c, i, 1)
+    let bank = S.get(c.heights, i)
+    let water = S.canal_level(c, i)
+    let kind = S.get(c.canals, i)
+    let dock = S.get(c.canal_docks, i)
+    let works = if kind == 2 do [
+      canal_piece(east, 4, water, 8, 24, bank - water + 2, 2, 13),
+      canal_piece(east, 4, water, 22, 24, bank - water + 2, 2, 13),
+      canal_piece(east, 4, bank, 9, 1, 3, 2, 7),
+      canal_piece(east, 27, bank, 21, 1, 3, 2, 7)
+    ] else if kind >= 3 do [
+      canal_piece(east, 15, bank, 7, 2, 9, 3, 13),
+      canal_piece(east, 15, bank, 22, 2, 9, 3, 13),
+      canal_piece(east, 15, if kind == 4 do water else bank + 5 end, 8, 2,
+        if kind == 4 do bank - water + 3 else 3 end, 16, 7)
+    ] else if dock > 0 do [
+      canal_piece(east, 5, water + 1, 7, 22, 1, 5, 5),
+      canal_piece(east, 9, bank + 1, 6, 1, 5, 1, 13),
+      canal_piece(east, 9, bank + 5, 6, 12, 1, 2, if dock == 1 do 7 else 10 end)
+    ] else Nil end end end
+    canal_bank(c, i, 0, works)
+  end
   fn structures(c : Ur.Sim.City, i : Int, lighting : Int) : List(Ur.Architecture.Piece) do
-    let base = if S.get(c.seawalls, i) > 0 do seawall_parts(c, i)
-      else if S.get(c.parks, i) > 0 do park(c, i) else buildings_and_land(c, i, lighting) end end
+    let base = if S.canal_water(c, i) do canal_parts(c, i)
+      else if S.get(c.seawalls, i) > 0 do seawall_parts(c, i)
+      else if S.get(c.parks, i) > 0 do park(c, i) else buildings_and_land(c, i, lighting) end end end
+    let spill = RoadSurface.pieces(c, i, false)
+    let base = if List.is_empty(spill) do base else
+      -- Street shoulders displace natural decorations in their neighboring parcel.
+      let clear = List.filter(base, fn piece -> !List.any(spill, fn paving ->
+        piece.x < paving.x + paving.w && piece.x + piece.w > paving.x &&
+        piece.z < paving.z + paving.d && piece.z + piece.d > paving.z))
+      List.append(spill, clear)
+    end
     let base = if S.get(c.public_parking, i) == 3 do List.append(base, parking_pieces(c, i)) else base end
-    let base = if S.get(c.roads, i) > 0 && S.get(c.heights, i) > 0 && (i % S.width() + i / S.width()) % 2 == 0 do
+    let base = if S.get(c.roads, i) > 0 && S.get(c.heights, i) > 0 &&
+      S.get(c.road_shapes, i) == 0 && (i % S.width() + i / S.width()) % 2 == 0 do
       let deck = S.get(c.heights, i)
       let east = S.street_link(c, i, 0) || S.street_link(c, i, 1)
       let north = S.street_link(c, i, 2) || S.street_link(c, i, 3)

@@ -1,0 +1,136 @@
+mod ShipBridgesTest do
+  needs IO
+  needs IO.Console
+  alias Ur.Sim as S
+
+  pfn coast(x : Int, first : Int, last : Int, heights : NativeIntArr) : NativeIntArr do
+    if x >= last do heights
+    else coast(x + 1, first, last, NativeArray.set_int(heights, S.index(x, 12), if x > first do 0 else 8 end)) end
+  end
+  pfn fixture(first : Int, last : Int) : Ur.Sim.City do
+    let c = S.new()
+    let a = S.index(first, 12)
+    let b = S.index(last, 12)
+    let zero = NativeArray.make_int(S.count(), 0)
+    let heights = coast(first, first, last, NativeArray.make_int(S.count(), 8))
+    { c with heights: heights, roads: NativeArray.set_int(NativeArray.set_int(zero, a, 1), b, 1),
+      buildings: zero, zones: zero, plants: zero, cash: 100000 }
+  end
+  pfn bus_progress(c : Ur.Sim.City, a : Int, b : Int, progress : Float, tick : Int) : Float do
+    let empty = NativeArray.make_int(S.count(), 0)
+    let run = { slot: 0, trip: { mode: 2, stops: [a, b], legs: 1, source: a }, progress: progress, stop_wait: 0.0 }
+    match Ur.Fleet.step_at(c, empty, [run], Nil, 0.0, 0.25, false, empty, tick) do
+      Cons(next, _) -> next.progress
+      Nil -> -1.0
+    end
+  end
+  pfn nearby(a : (Float, Float, Float), b : (Float, Float, Float)) : Bool do
+    let (ax, ay, az) = a
+    let (bx, by, bz) = b
+    Math.abs(ax -. bx) < 0.001 && Math.abs(ay -. by) < 0.001 && Math.abs(az -. bz) < 0.001
+  end
+  pfn hinges(c : Ur.Sim.City, first : Int, second : Int) : Unit do
+    match (Ur.Scene.bridge_deck(c, first, 0.0), Ur.Scene.bridge_deck(c, second, 0.0),
+      Ur.Scene.bridge_deck(c, first, 1.0), Ur.Scene.bridge_deck(c, second, 1.0)) do
+      (Some(left), Some(right), Some(open_left), Some(open_right)) ->
+        let left_length = int_to_float(left.cells) *. left.scale
+        let right_length = int_to_float(right.cells) *. right.scale
+        let left_top = 2.0 *. left.scale
+        let right_top = 2.0 *. right.scale
+        Test.assert_true(nearby(Ur.Scene.deck_point(left, left_length, left_top),
+          Ur.Scene.deck_point(right, 0.0, right_top)), "The closed leaves meet at the centre deck seam")
+        Test.assert_true(nearby(Ur.Scene.deck_point(left, 0.0, left_top),
+          Ur.Scene.deck_point(open_left, 0.0, left_top)) &&
+          nearby(Ur.Scene.deck_point(right, right_length, right_top),
+            Ur.Scene.deck_point(open_right, right_length, right_top)),
+          "Both outer hinges stay attached while the leaves rise")
+        let (_, left_tip, _) = Ur.Scene.deck_point(open_left, left_length, left_top)
+        let (_, right_tip, _) = Ur.Scene.deck_point(open_right, 0.0, right_top)
+        let (_, left_hinge, _) = Ur.Scene.deck_point(left, 0.0, left_top)
+        let (_, right_hinge, _) = Ur.Scene.deck_point(right, right_length, right_top)
+        Test.assert_true(open_left.pitch > 1.2 && open_right.pitch < -1.2 &&
+          left_tip > left_hinge +. 22.0 && right_tip > right_hinge +. 22.0,
+          "The opposite leaves tilt upward about their banks")
+      _ -> Test.assert_true(false, "Both drawbridge leaves have deck geometry")
+    end
+  end
+  fn main(_cap : Cap(IO)) : Unit do
+    let first = S.index(2, 12)
+    let last = S.index(41, 12)
+    let center = S.index(21, 12)
+    let c = fixture(2, 41)
+    let suspension = S.build_grade_with_rise(c, first, last, 125, 22)
+    Test.assert_true(S.grade_link(suspension, first, last) && S.bridge_style(suspension, first) == 2 &&
+      S.bridge_air_clearance(suspension, center) >= 72, "A long suspension bridge leaves room for large ships")
+    Test.assert_true(S.crossing_navigation(suspension, S.index(21, 10), S.index(21, 14), 72) == -1 &&
+      S.crossing_navigation(suspension, S.index(11, 10), S.index(11, 14), 12) == -2,
+      "Ships can sail through the main span and route around its towers")
+    let middle = S.index(7, 12)
+    let lift_end = S.index(12, 12)
+    let lift = S.build_grade_with_rise(fixture(2, 12), first, lift_end, 126, 2)
+    Test.assert_true(S.grade_link(lift, first, lift_end) && S.movable_leaf(lift, middle),
+      "A movable bridge installs a lift over its channel")
+    hinges(lift, S.index(6, 12), middle)
+    Test.assert_true(S.bridge_air_clearance(lift, middle) >= 40 &&
+      S.bridge_air_clearance_at(lift, middle, 31, 16) == 0,
+      "Ships have clearance through the channel and steer clear of the hinge footing")
+    let north = S.index(12, 2)
+    let south = S.index(12, 12)
+    let heights = List.fold_left(List.range(3, 12), NativeArray.make_int(S.count(), 8),
+      fn (heights, z) -> NativeArray.set_int(heights, S.index(12, z), 0))
+    let roads = NativeArray.set_int(NativeArray.set_int(lift.roads, north, 1), south, 1)
+    let vertical = S.build_grade_with_rise({ fixture(2, 12) with heights: heights, roads: roads }, north, south, 126, 2)
+    hinges(vertical, S.index(12, 6), S.index(12, 7))
+    let busy = Map.insert(Map.empty(), first, true, Map.int_cmp)
+    let clear = Map.empty()
+    let upstream = S.index(7, 8)
+    let downstream = S.index(7, 16)
+    let boats = Ur.Lift.vessel(lift, upstream, [upstream, downstream], 1.0)
+    let idle = Ur.Lift.step(lift, Nil, busy, 200.0)
+    Test.assert_true(S.bridge_road_open(idle, first, lift_end) && !S.bridge_ship_open(idle, middle),
+      "A bridge with no approaching vessel stays open to roads")
+    let approach = Ur.Lift.step(idle, boats, busy, 3.0)
+    let queued = Ur.Lift.step(approach, boats, busy, 20.0)
+    Test.assert_true(!S.bridge_road_open(queued, first, lift_end) && S.bridge_opening(queued, middle) == 0.0,
+      "An approaching ship closes both road entrances and waits for an occupied deck")
+    let held = match (S.lift_passenger(queued, upstream, downstream, 0.1),
+      S.lift_passenger(approach, upstream, downstream, 0.1)) do
+      (Some(a), Some(b)) -> a == b && a > 0.0
+      _ -> false
+    end
+    Test.assert_true(held, "The ship holds its approach while the deck drains")
+    Test.assert_true(bus_progress(queued, first, lift_end, 0.35, 0) == 0.35 &&
+      bus_progress(queued, first, lift_end, 0.50, 0) > 0.50,
+      "Buses wait at the portal and buses already on the span clear it")
+    let roads = Ur.Lift.empty_service_frame()
+    let (closed_stop, _) = Ur.Lift.service_drive(queued, roads, 0, [first, lift_end], 0.5)
+    let (_, across) = Ur.Lift.service_drive(idle, roads, 0, [first, lift_end], 0.5)
+    let (draining_step, draining) = Ur.Lift.service_drive(queued, Ur.Lift.service_frame(across), 0, [first, lift_end], 0.75)
+    Test.assert_true(closed_stop == 0.0 && draining_step == 0.75 &&
+      Option.is_some(Map.get(Ur.Lift.service_occupancy(lift, draining, clear), first, Map.int_cmp)),
+      "Service vehicles wait outside a closed lift and count as occupants if already on it")
+    let open_deck = Ur.Lift.step(queued, boats, clear, 1.5)
+    Test.assert_true(S.bridge_ship_open(open_deck, middle) && S.bridge_opening(open_deck, middle) == 1.0 &&
+      !S.bridge_road_open(open_deck, lift_end, first), "The clear deck raises for the waiting ship")
+    let through = Ur.Lift.step(open_deck, boats, clear, 1.0)
+    let lowering = Ur.Lift.step(through, boats, clear, 0.6)
+    Test.assert_true(!S.bridge_road_open(lowering, first, lift_end) && S.bridge_opening(lowering, middle) < 1.0,
+      "The bridge lowers after the ship clears")
+    let reopened = Ur.Lift.step(lowering, boats, clear, 2.0)
+    Test.assert_true(S.bridge_road_open(reopened, lift_end, first) && S.bridge_opening(reopened, middle) == 0.0,
+      "The road reopens in both directions once the deck is down")
+    let berthed = Ur.Lift.step(reopened, boats, clear, 12.0)
+    let returning = Ur.Lift.step(berthed, boats, clear, 3.0)
+    let reverse = Ur.Lift.step(returning, boats, busy, 3.0)
+    Test.assert_true(S.bridge_road_open(berthed, first, lift_end) &&
+      !S.bridge_road_open(reverse, lift_end, first) && !S.bridge_ship_open(reverse, middle),
+      "A returning ship issues a new request from the opposite approach")
+    let short_route = Ur.Lift.vessel(lift, upstream, [upstream, middle], 1.0)
+    let approach = Ur.Lift.step(lift, short_route, clear, 10.0)
+    let berthed = Ur.Lift.step(approach, short_route, clear, 10.0)
+    let waiting = Ur.Lift.step(berthed, short_route, clear, 2.0)
+    Test.assert_true(S.bridge_ship_open(waiting, middle) && !S.bridge_road_open(waiting, first, lift_end),
+      "A vessel berthed under the leaf holds the lift open until its hull leaves")
+    Authority.must(println("Ship bridge checks passed"))
+  end
+end

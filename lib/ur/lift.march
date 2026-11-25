@@ -1,0 +1,210 @@
+mod Ur.Lift do
+  alias Ur.Sim as S
+
+  type ShipWindow = { portal : Int, entry : Float, exit : Float, lead : Float }
+  type Vessel = { source : Int, speed : Float, windows : List(ShipWindow) }
+
+  pfn windows_in_leg(c : Ur.Sim.City, a : Int, b : Int, offset : Float, length : Float,
+    steps : Int, at : Int, out : List(ShipWindow)) : List(ShipWindow) do
+    if at > steps do out else
+      let lot = S.water_route_lot(a, b, at, steps)
+      let out = if S.movable_leaf(c, lot) do
+        let start = offset +. int_to_float(at - 1) /. int_to_float(steps) *. length
+        let finish = offset +. int_to_float(at + 1) /. int_to_float(steps) *. length
+        let source = S.grade_source(c, lot)
+        let portal = S.lift_portal(c, source, S.grade_peer(c, source))
+        -- Include the bow and stern and request before reaching the stop point.
+        let entry = start -. 0.55
+        let exit = finish +. 0.55
+        match out do
+          Cons(last, rest) ->
+            if last.portal == portal && last.exit >= entry do Cons({ last with exit: exit }, rest)
+            else Cons({ portal: portal, entry: entry, exit: exit, lead: 1.25 }, out) end
+          Nil -> [{ portal: portal, entry: entry, exit: exit, lead: 1.25 }]
+        end
+      else out end
+      windows_in_leg(c, a, b, offset, length, steps, at + 1, out)
+    end
+  end
+
+  pfn leg_length(a : Int, b : Int) : Float do
+    let dx = a % S.width() - b % S.width()
+    let dz = a / S.width() - b / S.width()
+    Math.sqrt(int_to_float(dx * dx + dz * dz))
+  end
+
+  pfn route_windows(c : Ur.Sim.City, path : List(Int), offset : Float,
+    out : List(ShipWindow)) : (Float, List(ShipWindow)) do
+    match path do
+      Cons(a, Cons(b, tail)) ->
+        let length = leg_length(a, b)
+        let out = if a == b do out else windows_in_leg(c, a, b, offset, length, S.water_route_samples(a, b), 0, out) end
+        route_windows(c, Cons(b, tail), offset +. length, out)
+      _ -> (offset, out)
+    end
+  end
+
+  fn vessel(c : Ur.Sim.City, source : Int, stops : List(Int), speed : Float) : List(Vessel) do
+    let (length, windows) = route_windows(c, stops, 0.0, Nil)
+    if List.is_empty(windows) do Nil else
+      let windows = List.map(List.reverse(windows), fn w -> { w with
+        entry: w.entry /. length, exit: w.exit /. length, lead: w.lead /. length })
+      [{ source: source, speed: speed /. length, windows: windows }]
+    end
+  end
+
+  fn fishing_legs(c : Ur.Sim.City, stops : List(Int), legs : Int) : Int do
+    match stops do
+      Nil -> legs
+      Cons(lot, rest) ->
+        if S.bridge_air_clearance(c, lot) < 10 do legs else fishing_legs(c, rest, legs + 1) end
+    end
+  end
+
+  pfn ferry_routes(c : Ur.Sim.City, lot : Int, found : List(Vessel)) : List(Vessel) do
+    if lot >= S.count() do found else
+      let peer = S.get(c.ferries, lot) - 1
+      let found = if peer <= lot || !S.valid(peer) do found else
+        let canal = S.get(c.canal_docks, lot) > 0
+        let path = if canal do S.canal_service_path(c, lot, peer)
+          else if S.ferry_status(c, lot) < 2 do [lot, peer] else Nil end end
+        List.append(vessel(c, lot, path, if canal do 0.64 else 0.85 end), found)
+      end
+      ferry_routes(c, lot + 1, found)
+    end
+  end
+
+  fn routes(c : Ur.Sim.City, food : List(Ur.Food.Trip)) : List(Vessel) do
+    let fishing = List.flat_map(food, fn trip ->
+      if trip.mode != 8 do Nil else
+        let legs = fishing_legs(c, List.drop(trip.stops, 1), 0)
+        vessel(c, S.count() + trip.source, List.take(trip.stops, legs + 1), 0.42)
+      end)
+    ferry_routes(c, 0, fishing)
+  end
+
+  pfn voyage(positions : Map(Int, Ur.Sim.VesselMotion), source : Int) : Ur.Sim.VesselMotion do
+    match Map.get(positions, source, Map.int_cmp) do
+      Some(motion) -> motion
+      None -> { progress: 0.0, outbound: true, moored: 0.0 }
+    end
+  end
+
+  pfn interval(w : ShipWindow, outward : Bool) : (Float, Float) do
+    if outward do (w.entry, w.exit) else (1.0 -. w.exit, 1.0 -. w.entry) end
+  end
+
+  pfn requests(boats : List(Vessel), positions : Map(Int, Ur.Sim.VesselMotion)) : Map(Int, Bool) do
+    List.fold_left(boats, Map.empty(), fn (out, boat) ->
+      let motion = voyage(positions, boat.source)
+      List.fold_left(boat.windows, out, fn (out, w) ->
+        let (entry, exit) = interval(w, motion.outbound)
+        let margin = if motion.moored > 0.0 do 0.0 else w.lead end
+        if motion.progress >= entry -. margin && motion.progress < exit do Map.insert(out, w.portal, true, Map.int_cmp)
+        else out end))
+  end
+
+  pfn lift_advance(previous : Option(Float), requested : Bool, occupied : Bool, dt : Float) : Option(Float) do
+    let amount = match previous do Some(amount) -> amount | None -> 0.0 end
+    let delta = dt /. 1.5
+    if requested do
+      if occupied || Option.is_none(previous) do Some(amount)
+      else Some(Math.min_float(1.0, amount +. delta)) end
+    else if amount > delta do Some(amount -. delta)
+    else None end end
+  end
+
+  pfn ship_advance(c : Ur.Sim.City, boat : Vessel, motion : Ur.Sim.VesselMotion, dt : Float) : Ur.Sim.VesselMotion do
+    if motion.moored > 0.0 do { motion with moored: Math.max_float(0.0, motion.moored -. dt) } else
+      let proposed = Math.min_float(1.0, motion.progress +. boat.speed *. dt)
+      let allowed = List.fold_left(boat.windows, proposed, fn (limit, w) ->
+        let (entry, exit) = interval(w, motion.outbound)
+        if motion.progress < exit && limit > entry && S.lift_amount(c, w.portal) < 1.0 do
+          Math.min_float(limit, Math.max_float(entry, motion.progress))
+        else limit end)
+      if allowed >= 1.0 do { motion with progress: 0.0, outbound: !motion.outbound, moored: 3.0 }
+      else { motion with progress: allowed } end
+    end
+  end
+
+  fn step(c : Ur.Sim.City, boats : List(Vessel), occupied : Map(Int, Bool), dt : Float) : Ur.Sim.City do
+    let requested = requests(boats, c.lift_vessels)
+    let gates = Map.fold(requested, c.lift_decks, fn (gates, portal, _) ->
+      if Option.is_some(Map.get(gates, portal, Map.int_cmp)) do gates
+      else Map.insert(gates, portal, 0.0, Map.int_cmp) end)
+    let decks = Map.fold(gates, Map.empty(), fn (decks, portal, _) ->
+      let wanted = Option.is_some(Map.get(requested, portal, Map.int_cmp))
+      let busy = Option.is_some(Map.get(occupied, portal, Map.int_cmp))
+      if !S.movable_bridge(c, portal) do decks else
+        match lift_advance(Map.get(c.lift_decks, portal, Map.int_cmp), wanted, busy, dt) do
+          Some(amount) -> Map.insert(decks, portal, amount, Map.int_cmp)
+          None -> decks
+        end
+      end)
+    let live = { c with lift_decks: decks }
+    let positions = List.fold_left(boats, Map.empty(), fn (out, boat) ->
+      Map.insert(out, boat.source, ship_advance(live, boat, voyage(c.lift_vessels, boat.source), dt), Map.int_cmp))
+    let decks = Map.fold(requests(boats, positions), decks, fn (decks, portal, _) ->
+      if Option.is_some(Map.get(decks, portal, Map.int_cmp)) do decks
+      else Map.insert(decks, portal, 0.0, Map.int_cmp) end)
+    { live with lift_decks: decks, lift_vessels: positions }
+  end
+  -- The other road agents already keep a route cursor. Time-driven service
+  -- vehicles need one too so they can wait at a lift portal.
+  type ServiceDrive = { route : List(Int), desired : Float, position : Float }
+  type ServiceRoads = { before : Map(Int, ServiceDrive), current : Map(Int, ServiceDrive) }
+
+  fn service_frame(before : ServiceRoads) : ServiceRoads do
+    { before: before.current, current: Map.empty() }
+  end
+
+  fn empty_service_frame() : ServiceRoads do
+    { before: Map.empty(), current: Map.empty() }
+  end
+
+  pfn uses_lift(c : Ur.Sim.City, route : List(Int)) : Bool do
+    match route do
+      Cons(a, Cons(b, rest)) -> S.lift_portal(c, a, b) >= 0 || uses_lift(c, Cons(b, rest))
+      _ -> false
+    end
+  end
+
+  pfn road_limit(c : Ur.Sim.City, route : List(Int), leg : Float, from : Float, target : Float) : Float do
+    match route do
+      Cons(a, Cons(b, rest)) ->
+        if target <= leg do target
+        else if from <= leg && !S.bridge_road_open(c, a, b) do leg
+        else road_limit(c, Cons(b, rest), leg +. 1.0, from, target) end end
+      _ -> target
+    end
+  end
+
+  fn service_drive(c : Ur.Sim.City, roads : ServiceRoads, slot : Int, route : List(Int), desired : Float) : (Float, ServiceRoads) do
+    if !uses_lift(c, route) do (desired, roads) else
+      let (from, target) = match Map.get(roads.before, slot, Map.int_cmp) do
+        Some(old) ->
+          if old.route == route && desired >= old.desired do (old.position, old.position +. (desired -. old.desired))
+          else (0.0, desired) end
+        None -> (0.0, desired)
+      end
+      let position = road_limit(c, route, 0.0, from, target)
+      let drive = { route: route, desired: desired, position: position }
+      (position, { roads with current: Map.insert(roads.current, slot, drive, Map.int_cmp) })
+    end
+  end
+
+  fn service_position(roads : ServiceRoads, slot : Int, fallback : Float) : Float do
+    match Map.get(roads.current, slot, Map.int_cmp) do Some(drive) -> drive.position | None -> fallback end
+  end
+
+  fn service_occupancy(c : Ur.Sim.City, roads : ServiceRoads, busy : Map(Int, Bool)) : Map(Int, Bool) do
+    Map.fold(roads.current, busy, fn (busy, _, drive) ->
+      let leg = float_to_int(drive.position)
+      if drive.position <= int_to_float(leg) do busy else
+        let (a, b) = Ur.Food.leg(drive.route, leg)
+        let portal = S.lift_portal(c, a, b)
+        if portal < 0 do busy else Map.insert(busy, portal, true, Map.int_cmp) end
+      end)
+  end
+
+end

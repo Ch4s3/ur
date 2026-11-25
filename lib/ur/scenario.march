@@ -202,7 +202,7 @@ mod Ur.Scenario do
   end
 
   type RoadDemo = { city : Ur.Sim.City, draft : Ur.Build.Draft, tool : Int, cx : Float, cz : Float, zoom : Float }
-  pfn road_point(x : Int, z : Int) : Ur.Build.Point do { lot: S.index(x, z), flip: false } end
+  pfn road_point(x : Int, z : Int) : Ur.Build.Point do Ur.Build.point(S.index(x, z), false) end
   fn road_planning(kind : Int, built : Bool) : RoadDemo do
     let base = S.new()
     let base = road_demo_path({ base with clock_ms: 825, cash: 24000 }, [S.index(10, 16), S.index(11, 16)], 1)

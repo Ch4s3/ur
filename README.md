@@ -61,7 +61,12 @@ quarter-metre elevation steps. Buildings use quarter-metre detail throughout.
 
 Choose a street type in **Roads → Streets**. **Straight** locks the route to
 one map axis. Click the start and end, then press **Enter** to build and
-start the next segment from the end. **Quick bend** builds on drag release.
+start the next segment from the end. **Diagonal** uses the same controls for
+any heading. **Curve** takes three pins: start, bend handle, and end.
+Drag any pin to revise the curve. In **Freeform**, drag to sketch a route and
+release to review it before building. The pavement, sidewalks, and vehicles
+follow the off-grid route. The parcels it crosses still provide connections,
+zoning frontage, and pricing. **Quick bend** builds on drag release.
 In **Waypoints**, click to add pins and drag them to revise the route.
 Hover a pin and press **R** to flip its incoming bend, or flip the live end
 of the route. Hold **Alt** to preview the other bend. The guided tools snap
@@ -78,8 +83,21 @@ outer road and the last interior street. Green markers identify new frontage.
 **Replace** selects a corridor between junctions. Click farther along
 a connected street to extend it. Orange markers identify attached infrastructure.
 
-In **Roads → Crossings**, choose an **Overpass**, **Underpass**, or **Road
-tunnel**. Place two portals on the same axis, then drag either portal to move it.
+In **Roads → Crossings**, choose **Road bridge** for spans up to 256 m.
+Pin two existing local streets or avenues on the same axis. Use **−** and
+**+** to set the deck 2–16 m above the higher approach and inspect the
+profile before building. Higher decks need longer ramps.
+
+Choose **Suspension bridge** for spans up to 448 m and a deck rise of 12–32 m.
+Ships need enough clearance below the deck and a route between the towers.
+Choose **Drawbridge** for spans up to 80 m and a closed deck rise of 2–8 m.
+Place the middle of the bridge over the channel. An approaching vessel
+closes the road entrances. Once traffic clears, two leaves pivot up from
+their hinges and open the channel at the middle. The road reopens when
+the vessel has passed and the leaves meet again.
+
+For shorter fixed crossings, choose an **Overpass**, **Underpass**, or
+**Road tunnel**. Place two portals on the same axis, then drag either portal to move it.
 Mountain tunnels meet the approach streets at grade. Tunnels under water
 descend through recessed ramps. The profile shows where each road goes underground.
 The Road crossings layer shows built routes through terrain or water.
@@ -97,6 +115,19 @@ UR_DEMO=29 UR_ROAD_DEMO=1 ./run.sh
 Choose **1** for the harbour route, **2** for a grid, **3** for a mountain
 tunnel, or **4** for a channel tunnel. Add `UR_ROAD_BUILT=1` to start with
 the selected project built.
+
+### Canals
+
+Open **Roads → Canals** and drag **Dig canal** through clear, unzoned land.
+Connected parcels form a channel with sidewalks. Place a **Navigation lock**
+on a straight reach where canal levels change. To start a **Water taxi**
+route, select two connected canal banks. **Freight quay** routes also need an
+adjacent street at both ends.
+
+Storm surge can enter through a sea-level opening and spill onto nearby
+low ground. Use **Flood barrier** at the opening to install a gate, then
+click it again with the same tool to close or reopen it. Closing the gate
+blocks both incoming surge and vessels using that reach.
 
 ## Founding a city
 

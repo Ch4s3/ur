@@ -15,8 +15,10 @@ mod Ur.Food do
   end
 
   pfn visit(c : Ur.Sim.City, r : Routes, i : Int, d : Int, mode : Int) : Routes do
-    if d >= 5 do r else
-      let j = if d == 4 do S.grade_peer(c, i) else S.neighbour(i, d) end
+    if d >= 6 do r else
+      let j = if d < 4 do S.neighbour(i, d)
+        else if d == 4 do S.grade_peer(c, i)
+        else if mode == 0 || mode == 4 do S.canal_taxi_peer(c, i) else -1 end end end
       let open = match mode do
         1 -> S.motor_road(c, j)
         2 -> S.motor_street(c, j)
@@ -25,7 +27,7 @@ mod Ur.Food do
         5 | 6 -> d < 4 && S.transit_link(c, i, j, mode - 2)
         _ -> walkable(c, j)
       end
-      let r = if open && S.get(r.next, j) < 0 && (mode == 6 || d == 4 || int_abs(S.get(c.heights, i) - S.get(c.heights, j)) <= 12) do
+      let r = if open && S.get(r.next, j) < 0 && (mode == 6 || d >= 4 || int_abs(S.get(c.heights, i) - S.get(c.heights, j)) <= 12) do
         enqueue(r, j, i)
       else r end
       visit(c, r, i, d + 1, mode)
