@@ -1,0 +1,119 @@
+-- Additional colony silhouettes for Ur's coral gardens, on the seabed grid.
+mod Ur.ReefArt do
+  fn new_species() : Int do 9 end
+
+  pfn squared(x : Float, z : Float) : Float do x *. x +. z *. z end
+
+  pfn scroll(x : Float, y : Int, z : Float, seed : Int) : Int do
+    let r = Math.sqrt(squared(x, z))
+    let ripple = 0.4 *. Math.sin(Math.atan2(z, x) *. 5.0 +. int_to_float(seed % 7))
+    let plates = List.find([0, 1, 2], fn tier ->
+      let max_r = int_to_float(5 - tier) +. ripple
+      let rim = 1 + tier * 2 + float_to_int(r *. 0.55)
+      r <= max_r && (y == rim || y + 1 == rim))
+    match plates do
+      Some(tier) -> if r > int_to_float(4 - tier) +. ripple do 2 else 1 end
+      None -> if r <= 1.7 && y <= 6 do 1 else 0 end
+    end
+  end
+
+  pfn pillars(x : Float, y : Int, z : Float, seed : Int) : Int do
+    let rise = int_mod_euclid(seed, 3)
+    if y <= 1 && squared(x, z) <= 12.0 do 1 else
+      let fingers = [(0.0, 0.0, 9 + rise), (2.0, 1.0, 5 + rise), (-2.0, 1.0, 7),
+        (0.0, -2.0, 6 + rise), (1.0, 3.0, 4)]
+      match List.find(fingers, fn f -> match f do (a, b, top) ->
+        let radius = if y + 1 >= top do 1.0 else 1.65 end
+        y <= top && squared(x -. a, z -. b) <= radius *. radius end) do
+        Some((_, _, top)) -> if y + 1 >= top do 2 else 1 end
+        None -> 0
+      end
+    end
+  end
+
+  pfn cup(x : Float, y : Int, z : Float, seed : Int) : Int do
+    let top = 6 + int_mod_euclid(seed, 3)
+    let r = Math.sqrt(squared(x, z *. 1.13))
+    let edge = 1.6 +. int_to_float(y) *. 0.47 +. Math.sin(Math.atan2(z, x) *. 6.0) *. 0.32
+    if y > top || r > edge || (y >= 3 && r < edge -. 1.42) do 0
+    else if y + 1 >= top || (y >= 3 && r < edge -. 0.8) do 2 else 1 end end
+  end
+
+  fn template(form : Int, seed : Int, main : Int, accent : Int) : Strata.Template.Template do
+    if form >= 3 do Ur.BranchingCoral.template(form - 3, seed, main, accent) else
+      let side = 13
+      let height = 12
+      let cells = List.fold_left(List.range(0, side * side * height), NativeArray.make_i32(side * side * height, 0), fn (ids, i) ->
+        let x = int_to_float(i % side - 6)
+        let y = i / side % height
+        let z = int_to_float(i / (side * height) - 6)
+        let material = match form do
+          0 -> scroll(x, y, z, seed)
+          1 -> pillars(x, y, z, seed)
+          _ -> cup(x, y, z, seed)
+        end
+        if material == 0 do ids else NativeArray.set_i32(ids, i, if material == 1 do main else accent end) end)
+      Strata.Template.make(side, height, side, cells, 0.25)
+    end
+  end
+  fn texture_count() : Int do 49 end
+
+  fn colour(i : Int) : (Int, Int, Int) do
+    match i do
+      38 -> (255, 136, 64)
+      39 -> (255, 72, 140)
+      40 -> (176, 72, 255)
+      41 -> (232, 236, 48)
+      42 -> (255, 160, 0)
+      43 -> (255, 255, 236)
+      45 -> (196, 102, 233)
+      46 -> (53, 242, 194)
+      47 -> (254, 106, 102)
+      48 -> (252, 222, 168)
+      _ -> (93, 142, 91)
+    end
+  end
+
+  -- Each reef mixes the silhouettes and keeps their palettes varied by colony.
+  pfn coral_colours(sp : Int, variant : Int) : (Int, Int) do
+    match sp do
+      0 -> if variant % 3 == 0 do (47, 43) else (38, 43) end
+      1 -> if variant % 3 == 0 do (46, 37) else (41, 37) end
+      2 -> if variant % 3 == 0 do (45, 43) else (40, 43) end
+      3 -> (40, 39)
+      4 -> (42, 38)
+      5 -> if variant % 3 == 0 do (45, 48) else (39, 43) end
+      6 -> if variant % 3 == 0 do (42, 48) else (46, 43) end
+      7 -> if variant % 3 == 0 do (47, 48) else (38, 46) end
+      8 -> if variant % 3 == 0 do (47, 43) else (39, 48) end
+      9 -> if variant % 3 == 0 do (45, 43) else (46, 48) end
+      10 -> if variant % 3 == 0 do (42, 43) else (46, 41) end
+      11 -> if variant % 3 == 0 do (47, 48) else (40, 43) end
+      12 -> if variant % 3 == 0 do (39, 48) else (46, 43) end
+      _ -> if variant % 3 == 0 do (42, 48) else (45, 41) end
+    end
+  end
+
+  pfn coral_go(species : List(Int), k : Int, out : List(Strata.Template.Template)) : List(Strata.Template.Template) do
+    match species do
+      Nil -> out
+      Cons(sp, rest) ->
+        let (main, accent) = coral_colours(sp, k)
+        let base = Strata.Corals.species_count()
+        let seed = 31 * k + sp
+        let t = if sp < base do Strata.Corals.build(sp, seed, 0.25, main, accent)
+          else template(sp - base, seed, main, accent) end
+        coral_go(rest, k + 1, Cons(t, out))
+    end
+  end
+
+  doc "Reef templates by climate. Warm reefs use every form, mixed reefs include thickets, branching fans and bottlebrushes among cups, scrolls and rock, and cold reefs remain rocky."
+  fn coral_set(reef_type : Int) : List(Strata.Template.Template) do
+    if reef_type == 0 do List.map([0, 1, 2], fn k -> Strata.Corals.build(1, 500 + k, 0.25, 37, 13))
+    else if reef_type == 1 do List.append(coral_go([1, 1, 3, 3, 4, 4, 5, 7, 10, 10, 12, 12, 13], 0, Nil), List.map([0, 1], fn k -> Strata.Corals.build(1, 500 + k, 0.25, 37, 13)))
+    else
+      let kinds = Strata.Corals.species_count() + new_species()
+      coral_go(List.flat_map(List.range(0, kinds), fn sp -> [sp, sp, sp]), 0, Nil)
+    end end
+  end
+end

@@ -8,26 +8,9 @@ mod Ur.Scene do
   alias Strata.Quad as Q
   alias Ur.Sim as S
   alias Ur.Landscape as L
-  type Mesh = { words : NativeI32Arr, quads : Int }
-  pfn empty() : Mesh do { words: NativeArray.make_i32(8192, 0), quads: 0 } end
-  -- The fields are read out before the sets, so a Mesh handed over whole leaves [words] one
-  -- reference and the sets write in place instead of copying the mesh per quad.
-  pfn face(m : Mesh, x : Int, y : Int, z : Int, w : Int, h : Int, direction : Int, tex : Int) : Mesh do
-    let quads = m.quads
-    let words = m.words
-    let n = quads * 2
-    { words: NativeArray.set_i32(NativeArray.set_i32(words, n, Q.pack0(x, y, z, w, h, direction)), n + 1, Q.pack1(tex, 255, tex + 1)), quads: quads + 1 }
-  end
-  pfn box(m : Mesh, x : Int, y : Int, z : Int, w : Int, h : Int, d : Int, tex : Int) : Mesh do
-    let a = face(m, x, y + h - 1, z, w, d, 0, tex)
-    let b = face(a, x, y, z, w, d, 1, tex)
-    let c = face(b, x + w - 1, y, z, d, h, 2, tex)
-    let e = face(c, x, y, z, d, h, 3, tex)
-    let f = face(e, x, y, z + d - 1, w, h, 4, tex)
-    face(f, x, y, z, w, h, 5, tex)
-  end
+  import Ur.SceneMesh.{empty, face, box, vehicle_body}
   pfn canal_material() : Int do 44 end
-  pfn material_count() : Int do canal_material() + 1 end
+  pfn material_count() : Int do Ur.ReefArt.texture_count() end
   pfn colour(i : Int) : (Int, Int, Int) do
     match i do
       0 -> (108, 157, 92)
@@ -68,15 +51,8 @@ mod Ur.Scene do
       35 -> (248, 106, 27)
       36 -> (255, 154, 32)
       37 -> (92, 112, 96)
-      -- corals: saturated well past their colours in air, so they still show through the water's tint
-      38 -> (255, 136, 64)
-      39 -> (255, 72, 140)
-      40 -> (176, 72, 255)
-      41 -> (232, 236, 48)
-      42 -> (255, 160, 0)
-      43 -> (255, 255, 236)
       44 -> (44, 101, 103)
-      _ -> (93, 142, 91)
+      _ -> Ur.ReefArt.colour(i)
     end
   end
   pfn pixels(a : NativeU8Arr, tex : Int, j : Int, r : Int, g : Int, b : Int) : NativeU8Arr do
@@ -150,7 +126,7 @@ mod Ur.Scene do
   pfn near_water(px : Int, pz : Int) : Bool do
     px >= 0 - Ur.Ocean.ring() && px < S.width() + Ur.Ocean.ring() && pz >= 0 - Ur.Ocean.ring() && pz < S.depth() + Ur.Ocean.ring()
   end
-  pfn far_row(m : Mesh, ox : Int, oz : Int, v : Int, u : Int, start : Int) : Mesh do
+  pfn far_row(m : Ur.SceneMesh.Mesh, ox : Int, oz : Int, v : Int, u : Int, start : Int) : Ur.SceneMesh.Mesh do
     let open = u < 32 && !near_water(ox + u, oz + v)
     if open && start < 0 do far_row(m, ox, oz, v, u + 1, u)
     else if open do far_row(m, ox, oz, v, u + 1, start)
@@ -162,7 +138,7 @@ mod Ur.Scene do
       if u >= 32 do m else far_row(m, ox, oz, v, u + 1, -1) end
     end end
   end
-  pfn far_sea(ox : Int, oz : Int, v : Int, m : Mesh) : Mesh do
+  pfn far_sea(ox : Int, oz : Int, v : Int, m : Ur.SceneMesh.Mesh) : Ur.SceneMesh.Mesh do
     if v >= 32 do m else far_sea(ox, oz, v + 1, far_row(m, ox, oz, v, 0, -1)) end
   end
   pfn sea(i : Int) : Unit do
@@ -203,7 +179,7 @@ mod Ur.Scene do
       tunnel_lot(c, i) || section_shoulder(c, x, z, side, 1, S.get(c.heights, i))
     end
   end
-  pfn sea_rows(c : Ur.Sim.City, ox : Int, oz : Int, row : Int, col : Int, start : Int, m : Mesh, side : Int) : Mesh do
+  pfn sea_rows(c : Ur.Sim.City, ox : Int, oz : Int, row : Int, col : Int, start : Int, m : Ur.SceneMesh.Mesh, side : Int) : Ur.SceneMesh.Mesh do
     if row >= 32 do m else
       let gap = col == 32 || section_cut(c, ox + col, oz + row, side)
       let m = if gap && col > start do face(m, start, 0, row, col - start, 1, 0, 3) else m end
@@ -339,7 +315,8 @@ mod Ur.Scene do
   pfn raised_slot(i : Int) : Int do power_marker_base() + S.count() * 2 + i end
   -- Strata's shadow handles have a smaller range than its mesh slots.
   pfn raised_shadow(i : Int) : Int do i * 4 + 3 end
-  fn chunk_slots() : Int do raised_slot(S.count()) end
+  fn wildlife_base() : Int do raised_slot(S.count()) end
+  fn chunk_slots() : Int do wildlife_base() + Ur.WildlifeRender.slots() end
   -- a parcel's fifth and sixth layers of terrain (32 to 48 m), for the tallest mountains
   pfn high_slot(i : Int, layer : Int) : Int do Ur.Ocean.slot_count() + cloud_bodies() + i * 2 + layer - 4 end
   pfn cloud_slot(i : Int) : Int do Ur.Ocean.slot_count() + i end
@@ -485,14 +462,14 @@ mod Ur.Scene do
   -- byte), how far out from the middle (the texture's low byte), and its
   -- type's thinness and darkness (the texture's high byte): Strata darkens
   -- the base, thins the outskirts and veils, and greys rain clouds.
-  pfn cloud_face(m : Mesh, x : Int, y : Int, z : Int, direction : Int, top : Int, look : Int) : Mesh do
+  pfn cloud_face(m : Ur.SceneMesh.Mesh, x : Int, y : Int, z : Int, direction : Int, top : Int, look : Int) : Ur.SceneMesh.Mesh do
     let n = m.quads * 2
     let height = S.clamp(y * 255 / (if top < 1 do 1 else top end), 0, 255)
     let out = S.clamp(float_to_int(math_sqrt(int_to_float((x - 16) * (x - 16) + (z - 16) * (z - 16))) *. 16.0), 0, 255)
     let words = NativeArray.set_i32(m.words, n, Q.pack0(x, y, z, 1, 1, direction))
     { words: NativeArray.set_i32(words, n + 1, Q.pack1(out + 256 * look, height, 250)), quads: m.quads + 1 }
   end
-  pfn cloud_mesh(g : NativeU8Arr, top : Int, look : Int, i : Int, m : Mesh) : Mesh do
+  pfn cloud_mesh(g : NativeU8Arr, top : Int, look : Int, i : Int, m : Ur.SceneMesh.Mesh) : Ur.SceneMesh.Mesh do
     if i == 32768 do m else
       let x = i % 32
       let y = i / 32 % 32
@@ -741,12 +718,12 @@ mod Ur.Scene do
       heights(c, x, z, NativeArray.set_int(a, i, L.height(c, x + (i % 10 - 1) * 4, z + (i / 10 - 1) * 4)), i + 1)
     end
   end
-  pfn wall(m : Mesh, x : Int, z : Int, bottom : Int, top : Int, layer : Int, dir : Int, tex : Int) : Mesh do
+  pfn wall(m : Ur.SceneMesh.Mesh, x : Int, z : Int, bottom : Int, top : Int, layer : Int, dir : Int, tex : Int) : Ur.SceneMesh.Mesh do
     let low = S.clamp(bottom - layer, 0, 32)
     let high = S.clamp(top - layer, 0, 32)
     if low >= high do m else face(m, x, low, z, 4, high - low, dir, tex) end
   end
-  pfn surface(m : Mesh, hs : NativeIntArr, wx : Int, wz : Int, y : Int, i : Int) : Mesh do
+  pfn surface(m : Ur.SceneMesh.Mesh, hs : NativeIntArr, wx : Int, wz : Int, y : Int, i : Int) : Ur.SceneMesh.Mesh do
     if i >= 64 do m else
       let x = i % 8 * 4
       let z = i / 8 * 4
@@ -781,7 +758,7 @@ mod Ur.Scene do
     end
   end
   -- [every]: each lit window and shopfront is a lamp (building light shadows on); else the first of each in the chunk stands for all.
-  pfn pieces(m : Mesh, a : NativeU8Arr, parts : List(Ur.Architecture.Piece), y : Int, window : Bool, shop : Bool, every : Bool) : (Mesh, NativeU8Arr) do
+  pfn pieces(m : Ur.SceneMesh.Mesh, a : NativeU8Arr, parts : List(Ur.Architecture.Piece), y : Int, window : Bool, shop : Bool, every : Bool) : (Ur.SceneMesh.Mesh, NativeU8Arr) do
     match parts do
       Nil -> (m, a)
       Cons(p, rest) ->
@@ -858,13 +835,13 @@ mod Ur.Scene do
       end
     end
   end
-  pfn canal_surface(mesh : Mesh, x : Int, y : Int, z : Int) : Mesh do
+  pfn canal_surface(mesh : Ur.SceneMesh.Mesh, x : Int, y : Int, z : Int) : Ur.SceneMesh.Mesh do
     let tex = canal_material()
     let at = mesh.quads * 2
     let words = NativeArray.set_i32(mesh.words, at, Q.with_drop(Q.pack0(x, y, z, 4, 4, 0), 6))
     { words: NativeArray.set_i32(words, at + 1, Q.pack1(tex, 255, tex + 1)), quads: mesh.quads + 1 }
   end
-  pfn parcel_water(c : Ur.Sim.City, lot : Int, hs : NativeIntArr, probe : FloodProbe, channel : Bool, y : Int, i : Int, mesh : Mesh) : Mesh do
+  pfn parcel_water(c : Ur.Sim.City, lot : Int, hs : NativeIntArr, probe : FloodProbe, channel : Bool, y : Int, i : Int, mesh : Ur.SceneMesh.Mesh) : Ur.SceneMesh.Mesh do
     if i >= 64 do mesh else
       let x = i % 8 * 4
       let z = i / 8 * 4
@@ -887,7 +864,7 @@ mod Ur.Scene do
       parcel_water(c, lot, hs, probe, channel, y, i + 1, mesh)
     end
   end
-  pfn upload(slot : Int, x : Int, y : Int, z : Int, m : Mesh, water : Mesh, light : NativeU8Arr) : Unit do
+  pfn upload(slot : Int, x : Int, y : Int, z : Int, m : Ur.SceneMesh.Mesh, water : Ur.SceneMesh.Mesh, light : NativeU8Arr) : Unit do
     if Vk.chunk_begin(slot, x, y, z, 0) && Vk.chunk_part(0, m.words, m.quads) &&
       (water.quads == 0 || Vk.chunk_part(2, water.words, water.quads)) && Vk.chunk_light(light, NativeArray.length_u8(light)) && Vk.chunk_commit() do ()
     else Ur.AppError.stop("Strata refused a world mesh upload") end
@@ -931,101 +908,10 @@ mod Ur.Scene do
     if kind == 1 || kind == 3 do 37 else if kind == 2 do 5 else seabed_material(h) end end
   end
 
-  -- ── Corals on the reefs (Strata.Corals, built with the field: Ur.Ocean.Field.corals) ──
-  -- A reef is dotted with corals on a 2 m grid: each spot on reef holds one with the reef type's chance, its species,
-  -- variant and turn hashed from the spot, so every parcel sees the same corals along its edges. A coral stands on the
-  -- floor and is cut below the surface; the voxels inside this parcel's layer (y -32..-1) are drawn, a face wherever
-  -- the neighbour is empty.
-  pfn coral_chance(reef_type : Int) : Float do if reef_type == 2 do 0.6 else if reef_type == 1 do 0.35 else 0.2 end end end
-  pfn coral_put(grid : NativeI32Arr, x : Int, z : Int, t : Strata.Template.Template, bx : Int, by : Int, bz : Int, rot : Int, i : Int) : NativeI32Arr do
-    let sx = Strata.Template.t_sx(t)
-    let sy = Strata.Template.t_sy(t)
-    let sz = Strata.Template.t_sz(t)
-    if i >= sx * sy * sz do grid else
-      let id = NativeArray.get_i32(Strata.Template.t_ids(t), i)
-      let grid = if id == 0 do grid else
-        let tx = i % sx
-        let ty = i / sx % sy
-        let tz = i / (sx * sy)
-        let (rx, rz) = match rot % 4 do
-          0 -> (tx, tz)
-          1 -> (sz - 1 - tz, tx)
-          2 -> (sx - 1 - tx, sz - 1 - tz)
-          _ -> (tz, sx - 1 - tx)
-        end
-        let lx = bx + rx - x
-        let wy = by + ty
-        let lz = bz + rz - z
-        -- below the surface (a voxel of water over it at least), inside this parcel's layer
-        if wy > -2 || wy < -32 || lx < 0 || lz < 0 || lx >= 32 || lz >= 32 do grid
-        else NativeArray.set_i32(grid, lx + 32 * ((wy + 32) + 32 * lz), id) end
-      end
-      coral_put(grid, x, z, t, bx, by, bz, rot, i + 1)
-    end
-  end
-  -- the corals whose spots lie within 2 m of parcel corner (x, z) (voxels) and its far side, into a 32 x 32 x 32 grid of ids
-  pfn coral_spots(f : Ur.Ocean.Field, grid : NativeI32Arr, x : Int, z : Int, gx : Int, gz : Int, placed : Int) : (NativeI32Arr, Int) do
-    let gx1 = int_div_euclid(x, 8) + 5
-    if gz > int_div_euclid(z, 8) + 4 do (grid, placed)
-    else if gx > gx1 do coral_spots(f, grid, x, z, int_div_euclid(x, 8) - 1, gz + 1, placed)
-    else
-      -- the spot's middle voxel, on the 2 m grid
-      let vx = gx * 8 + 4
-      let vz = gz * 8 + 4
-      let h = Strata.Seed.cell(97, 0, gx, 0, gz)
-      let d = Ur.Ocean.depth(f, vx, vz)
-      let n = List.length(f.corals)
-      if n == 0 || Ur.Ocean.kind(f, vx, vz) != 1 || d < 3 || Strata.Seed.unit(h) >= coral_chance(f.reef_type) do coral_spots(f, grid, x, z, gx + 1, gz, placed) else
-        let t = List.nth(f.corals, int_mod_euclid(Strata.Seed.mix(h, 1), n))
-        let half = Strata.Corals.half(t)
-        let rot = int_mod_euclid(Strata.Seed.mix(h, 2), 4)
-        coral_spots(f, coral_put(grid, x, z, t, vx - half, 0 - d, vz - half, rot, 0), x, z, gx + 1, gz, placed + 1)
-      end
-    end end
-  end
-  pfn coral_at(grid : NativeI32Arr, x : Int, y : Int, z : Int) : Int do
-    if x < 0 || y < 0 || z < 0 || x >= 32 || y >= 32 || z >= 32 do 0 else NativeArray.get_i32(grid, x + 32 * (y + 32 * z)) end
-  end
-  pfn coral_faces(m : Mesh, grid : NativeI32Arr, i : Int) : Mesh do
-    -- a parcel's corals stop at 12000 faces: the mesh holds no more
-    if i >= 32768 || m.quads >= 12000 do m else
-      let id = NativeArray.get_i32(grid, i)
-      let m = if id == 0 do m else
-        let x = i % 32
-        let y = i / 32 % 32
-        let z = i / 1024
-        let m = if coral_at(grid, x, y + 1, z) == 0 do face(m, x, y, z, 1, 1, 0, id) else m end
-        let m = if coral_at(grid, x, y - 1, z) == 0 do face(m, x, y, z, 1, 1, 1, id) else m end
-        let m = if coral_at(grid, x + 1, y, z) == 0 do face(m, x, y, z, 1, 1, 2, id) else m end
-        let m = if coral_at(grid, x - 1, y, z) == 0 do face(m, x, y, z, 1, 1, 3, id) else m end
-        let m = if coral_at(grid, x, y, z + 1) == 0 do face(m, x, y, z, 1, 1, 4, id) else m end
-        if coral_at(grid, x, y, z - 1) == 0 do face(m, x, y, z, 1, 1, 5, id) else m end
-      end
-      coral_faces(m, grid, i + 1)
-    end
-  end
-  -- the seabed mesh with the parcel's corals added: a mesh big enough for them when there are any
-  pfn with_corals(m : Mesh, f : Ur.Ocean.Field, x : Int, z : Int) : Mesh do
-    if List.is_empty(f.corals) do m else
-      let (grid, placed) = coral_spots(f, NativeArray.make_i32(32768, 0), x, z, int_div_euclid(x, 8) - 1, int_div_euclid(z, 8) - 1, 0)
-      if placed == 0 do m else
-        let big = { words: NativeArray.make_i32(24064, 0), quads: 0 }
-        let big = copy_quads(big, m, 0)
-        coral_faces(big, grid, 0)
-      end
-    end
-  end
-  pfn copy_quads(into : Mesh, from : Mesh, k : Int) : Mesh do
-    if k >= from.quads do into else
-      let n = into.quads * 2
-      let words = NativeArray.set_i32(NativeArray.set_i32(into.words, n, NativeArray.get_i32(from.words, k * 2)), n + 1, NativeArray.get_i32(from.words, k * 2 + 1))
-      copy_quads({ words: words, quads: into.quads + 1 }, from, k + 1)
-    end
-  end
   pfn floor_limit() : Int do -20 end
   pfn sea_h(hs : NativeIntArr, u : Int, v : Int) : Int do NativeArray.get_int(hs, 11 + u + v * 10) end
   -- A face run along x from cell u0 to u1 (exclusive) of row v.
-  pfn sea_wall(m : Mesh, u0 : Int, u1 : Int, v : Int, bottom : Int, top : Int, y : Int, dir : Int) : Mesh do
+  pfn sea_wall(m : Ur.SceneMesh.Mesh, u0 : Int, u1 : Int, v : Int, bottom : Int, top : Int, y : Int, dir : Int) : Ur.SceneMesh.Mesh do
     let low = S.clamp(bottom - y, 0, 32)
     let high = S.clamp(top - y, 0, 32)
     if low >= high do m else face(m, u0 * 4, low, v * 4 + (if dir == 4 do 3 else 0 end), (u1 - u0) * 4, high - low, dir, seabed_material(top)) end
@@ -1043,7 +929,7 @@ mod Ur.Scene do
   pfn cell_material(f : Ur.Ocean.Field, hs : NativeIntArr, ks : NativeIntArr, u : Int, v : Int) : Int do
     bed_material(f, sea_h(hs, u, v), NativeArray.get_int(ks, 11 + u + v * 10), u, v)
   end
-  pfn top_runs(m : Mesh, f : Ur.Ocean.Field, hs : NativeIntArr, ks : NativeIntArr, y : Int, v : Int, u : Int, start : Int) : Mesh do
+  pfn top_runs(m : Ur.SceneMesh.Mesh, f : Ur.Ocean.Field, hs : NativeIntArr, ks : NativeIntArr, y : Int, v : Int, u : Int, start : Int) : Ur.SceneMesh.Mesh do
     let key = if start < 8 do top_key(hs, start, v, y) else 1 end
     let mat = if start < 8 do cell_material(f, hs, ks, start, v) else 0 end
     if u < 8 && top_key(hs, u, v, y) == key && cell_material(f, hs, ks, u, v) == mat do top_runs(m, f, hs, ks, y, v, u + 1, start) else
@@ -1051,14 +937,14 @@ mod Ur.Scene do
       if u >= 8 do m else top_runs(m, f, hs, ks, y, v, u + 1, u) end
     end
   end
-  pfn z_runs(m : Mesh, hs : NativeIntArr, y : Int, v : Int, dv : Int, dir : Int, u : Int, start : Int) : Mesh do
+  pfn z_runs(m : Ur.SceneMesh.Mesh, hs : NativeIntArr, y : Int, v : Int, dv : Int, dir : Int, u : Int, start : Int) : Ur.SceneMesh.Mesh do
     let key = if start < 8 do wall_key(hs, start, v, dv) else 1000000 end
     if u < 8 && wall_key(hs, u, v, dv) == key do z_runs(m, hs, y, v, dv, dir, u + 1, start) else
       let m = if start < 8 && key != 1000000 do sea_wall(m, start, u, v, sea_h(hs, start, v + dv), sea_h(hs, start, v), y, dir) else m end
       if u >= 8 do m else z_runs(m, hs, y, v, dv, dir, u + 1, u) end
     end
   end
-  pfn x_walls(m : Mesh, hs : NativeIntArr, y : Int, i : Int) : Mesh do
+  pfn x_walls(m : Ur.SceneMesh.Mesh, hs : NativeIntArr, y : Int, i : Int) : Ur.SceneMesh.Mesh do
     if i >= 64 do m else
       let x = i % 8 * 4
       let z = i / 8 * 4
@@ -1070,7 +956,7 @@ mod Ur.Scene do
       x_walls(m, hs, y, i + 1)
     end
   end
-  pfn seabed_rows(m : Mesh, f : Ur.Ocean.Field, hs : NativeIntArr, ks : NativeIntArr, y : Int, v : Int) : Mesh do
+  pfn seabed_rows(m : Ur.SceneMesh.Mesh, f : Ur.Ocean.Field, hs : NativeIntArr, ks : NativeIntArr, y : Int, v : Int) : Ur.SceneMesh.Mesh do
     if v >= 8 do m else
       let m = top_runs(m, f, hs, ks, y, v, 0, 0)
       let m = z_runs(m, hs, y, v, 1, 4, 0, 0)
@@ -1079,13 +965,13 @@ mod Ur.Scene do
   end
   -- The seabed in layer [y]: tops and +-z walls merged along each row, +-x walls a cell at a time.
   -- Nothing deeper than 5 m is drawn: the water there is nine-tenths opaque.
-  pfn seabed(m : Mesh, f : Ur.Ocean.Field, hs : NativeIntArr, ks : NativeIntArr, y : Int) : Mesh do
+  pfn seabed(m : Ur.SceneMesh.Mesh, f : Ur.Ocean.Field, hs : NativeIntArr, ks : NativeIntArr, y : Int) : Ur.SceneMesh.Mesh do
     x_walls(seabed_rows(m, f, hs, ks, y, 0), hs, y, 0)
   end
   -- Dry sand: a sand bar's crest a voxel or two above the sea, in the chunk over the seabed (y 0..31). Each dry cell is
   -- a column of pale sand from sea level to its height, walled where its neighbour is lower.
   pfn dry_h(hs : NativeIntArr, j : Int) : Int do S.clamp(NativeArray.get_int(hs, j), 0, 2) end
-  pfn dry_sand(m : Mesh, hs : NativeIntArr, i : Int) : Mesh do
+  pfn dry_sand(m : Ur.SceneMesh.Mesh, hs : NativeIntArr, i : Int) : Ur.SceneMesh.Mesh do
     if i >= 64 do m else
       let x = i % 8 * 4
       let z = i / 8 * 4
@@ -1106,7 +992,7 @@ mod Ur.Scene do
   pfn any_water(hs : NativeIntArr, i : Int) : Bool do
     if i >= 64 do false else if NativeArray.get_int(hs, 11 + i % 8 + i / 8 * 10) < 0 do true else any_water(hs, i + 1) end end
   end
-  pfn try_upload_ocean(slot : Int, x : Int, y : Int, z : Int, m : Mesh, surface : Mesh, light : NativeU8Arr) : Bool do
+  pfn try_upload_ocean(slot : Int, x : Int, y : Int, z : Int, m : Ur.SceneMesh.Mesh, surface : Ur.SceneMesh.Mesh, light : NativeU8Arr) : Bool do
     if m.quads == 0 && surface.quads == 0 do
       Vk.chunk_free(slot)
       true
@@ -1115,13 +1001,13 @@ mod Ur.Scene do
       -- a chunk of sea surface alone has no floor to shade or block light: it takes no light-volume page
       (m.quads == 0 || Vk.chunk_light(light, NativeArray.length_u8(light))) && Vk.chunk_commit() end
   end
-  pfn upload_ocean(slot : Int, x : Int, y : Int, z : Int, m : Mesh, surface : Mesh, light : NativeU8Arr) : Unit do
+  pfn upload_ocean(slot : Int, x : Int, y : Int, z : Int, m : Ur.SceneMesh.Mesh, surface : Ur.SceneMesh.Mesh, light : NativeU8Arr) : Unit do
     if try_upload_ocean(slot, x, y, z, m, surface, light) do () else Ur.AppError.stop("Strata refused a seabed mesh upload") end
   end
   -- The sea's surface over a padded parcel: ocean quads (Strata.Quad.ocean1)
   -- at sea level, the top of layer y -32. Each 8-voxel patch with water
   -- carries the depth at its corners; a parcel deep all over is one quad.
-  pfn ocean_surface_quad(m : Mesh, x : Int, z : Int, size : Int, water : Int, shelter : Int) : Mesh do
+  pfn ocean_surface_quad(m : Ur.SceneMesh.Mesh, x : Int, z : Int, size : Int, water : Int, shelter : Int) : Ur.SceneMesh.Mesh do
     let n = m.quads * 2
     let w0 = Q.with_ocean_shelter(Q.pack0(x, 31, z, size, size, 0), shelter)
     let words = NativeArray.set_i32(m.words, n, w0)
@@ -1130,7 +1016,7 @@ mod Ur.Scene do
   pfn inlet_corner(f : Ur.Ocean.Field, x : Int, z : Int, bit : Int) : Int do
     if Ur.Ocean.canal_shelter_corner(f, x, z) do bit else 0 end
   end
-  pfn ocean_patch(m : Mesh, f : Ur.Ocean.Field, x : Int, z : Int, u : Int, v : Int, canal : Bool) : Mesh do
+  pfn ocean_patch(m : Ur.SceneMesh.Mesh, f : Ur.Ocean.Field, x : Int, z : Int, u : Int, v : Int, canal : Bool) : Ur.SceneMesh.Mesh do
     let a = x + u
     let b = z + v
     let shelter = if canal do 15 else inlet_corner(f, a, b, 1) + inlet_corner(f, a + 8, b, 2) +
@@ -1146,7 +1032,7 @@ mod Ur.Scene do
       Ur.Ocean.depth(f, u, v) == 63 && !Ur.Ocean.canal_shelter_corner(f, u, v) && all_deep(f, x, z, i + 1)
     end
   end
-  pfn patches(m : Mesh, f : Ur.Ocean.Field, x : Int, z : Int, i : Int, canal : Bool) : Mesh do
+  pfn patches(m : Ur.SceneMesh.Mesh, f : Ur.Ocean.Field, x : Int, z : Int, i : Int, canal : Bool) : Ur.SceneMesh.Mesh do
     if i >= 16 do m else
       let u = i % 4 * 8
       let v = i / 4 * 8
@@ -1157,7 +1043,7 @@ mod Ur.Scene do
     end
   end
   -- Use identical patch sizes and depth samples on both sides of a sea-level inlet.
-  pfn sea_surface(f : Ur.Ocean.Field, x : Int, z : Int, canal : Bool) : Mesh do
+  pfn sea_surface(f : Ur.Ocean.Field, x : Int, z : Int, canal : Bool) : Ur.SceneMesh.Mesh do
     if !canal && all_deep(f, x, z, 0) do ocean_surface_quad(empty(), 0, 0, 32, Q.ocean1(63, 63, 63, 63), 0)
     else patches(empty(), f, x, z, 0, canal) end
   end
@@ -1173,7 +1059,7 @@ mod Ur.Scene do
     else
       let ks = seabed_kinds(f, x, z, NativeArray.make_int(100, 0), 0)
       let bed = seabed(empty(), f, hs, ks, -32)
-      let top = with_corals(bed, f, x, z)
+      let top = Ur.ReefRender.add(bed, f, x, z)
       let surface = sea_surface(f, x, z, Ur.Ocean.canal_parcel(f, cell))
       let light = terrain_light(NativeArray.make_u8(32768, 0), hs, -32, 0)
       -- corals are many small faces: where Strata has no room left for them, the reef is drawn bare rather than the game stopping
@@ -1308,7 +1194,7 @@ mod Ur.Scene do
     Vk.slot_pose(raised_slot(i), px, py, pz, sy *. sp, sy *. cp, cy *. sp, cy *. cp)
     Vk.body_place(raised_shadow(i), px, py, pz, sy *. sp, sy *. cp, cy *. sp, cy *. cp)
   end
-  pfn suspension_cables(m : Mesh, deck : RaisedDeck, at : Int) : Mesh do
+  pfn suspension_cables(m : Ur.SceneMesh.Mesh, deck : RaisedDeck, at : Int) : Ur.SceneMesh.Mesh do
     if at >= deck.cells do m else
       let w = S.clamp(deck.cells - at, 1, 8)
       let station = deck.middle - 16 + at + w / 2
@@ -1411,11 +1297,11 @@ mod Ur.Scene do
     let z = lot / S.width()
     List.any([-1, 0, 1], fn dz -> List.any([-1, 0, 1], fn dx -> section_cut(c, x + dx, z + dz, side)))
   end
-  pfn cross_strip(m : Mesh, east : Bool, along : Int, across : Int, y : Int, w : Int, tex : Int) : Mesh do
+  pfn cross_strip(m : Ur.SceneMesh.Mesh, east : Bool, along : Int, across : Int, y : Int, w : Int, tex : Int) : Ur.SceneMesh.Mesh do
     if east do face(m, along, y, across, 4, w, 0, tex)
     else face(m, across, y, along, w, 4, 0, tex) end
   end
-  pfn cross_wall(m : Mesh, east : Bool, along : Int, across : Int, y : Int, h : Int, front : Bool, tex : Int) : Mesh do
+  pfn cross_wall(m : Ur.SceneMesh.Mesh, east : Bool, along : Int, across : Int, y : Int, h : Int, front : Bool, tex : Int) : Ur.SceneMesh.Mesh do
     if east do face(m, along, y, across, 4, h, if front do 4 else 5 end, tex)
     else face(m, across, y, along, 4, h, if front do 2 else 3 end, tex) end
   end
@@ -1592,7 +1478,7 @@ mod Ur.Scene do
     let floods = if water_changed do flood_flags(old, c, 0, NativeArray.make_int(S.count(), 0)) else NativeArray.make_int(1, 0) end
     sync_parcels(old, c, i, force, structural, water_changed, { hour: old_hour, electric: old_power }, { hour: hour, electric: new_power }, signals, section, flags, floods)
   end
-  pfn preview_tiles(c : Ur.Sim.City, tiles : List(Int), stride : Int, index : Int, used : Int, mesh : Mesh) : Int do
+  pfn preview_tiles(c : Ur.Sim.City, tiles : List(Int), stride : Int, index : Int, used : Int, mesh : Ur.SceneMesh.Mesh) : Int do
     match tiles do
       Nil -> used
       Cons(i, rest) ->
@@ -1624,7 +1510,7 @@ mod Ur.Scene do
     clear_preview(used, old_count)
     used
   end
-  pfn road_outline(material : Int, margin : Int) : Mesh do
+  pfn road_outline(material : Int, margin : Int) : Ur.SceneMesh.Mesh do
     let far = 31 - margin
     let width = 32 - margin * 2
     let m = box({ words: NativeArray.make_i32(48, 0), quads: 0 }, margin, 1, margin, width, 1, 1, material)
@@ -1632,14 +1518,14 @@ mod Ur.Scene do
     let m = box(m, margin, 1, margin + 1, 1, 1, width - 2, material)
     box(m, far, 1, margin + 1, 1, 1, width - 2, material)
   end
-  pfn road_marker_at(i : Int, y : Int, slot : Int, mesh : Mesh) : Int do
+  pfn road_marker_at(i : Int, y : Int, slot : Int, mesh : Ur.SceneMesh.Mesh) : Int do
     if !S.valid(i) || slot >= 72 do slot else
       let x = i % S.width() * 32
       let z = i / S.width() * 32
       if Vk.chunk_begin(preview_slot(slot), x, y, z, 0) && Vk.chunk_part(0, mesh.words, mesh.quads) && Vk.chunk_commit() do slot + 1 else slot end
     end
   end
-  pfn road_marker(c : Ur.Sim.City, i : Int, slot : Int, mesh : Mesh) : Int do
+  pfn road_marker(c : Ur.Sim.City, i : Int, slot : Int, mesh : Ur.SceneMesh.Mesh) : Int do
     if !S.valid(i) do slot else
       road_marker_at(i, layer_floor(c, i % S.width() * 32, i / S.width() * 32) + 3, slot, mesh)
     end
@@ -1656,7 +1542,7 @@ mod Ur.Scene do
         road_marker(c, p.lot, slot, face(m, x, 2, z + 1, 1, 2, 0, 10))
     end
   end
-  pfn road_markers(c : Ur.Sim.City, tiles : List(Int), next : Int, stride : Int, offset : Int, mesh : Mesh) : Int do
+  pfn road_markers(c : Ur.Sim.City, tiles : List(Int), next : Int, stride : Int, offset : Int, mesh : Ur.SceneMesh.Mesh) : Int do
     match tiles do
       Nil -> next
       Cons(i, rest) ->
@@ -1666,7 +1552,7 @@ mod Ur.Scene do
         end
     end
   end
-  pfn road_stroke(c : Ur.Sim.City, mask : NativeIntArr, i : Int, material : Int) : Mesh do
+  pfn road_stroke(c : Ur.Sim.City, mask : NativeIntArr, i : Int, material : Int) : Ur.SceneMesh.Mesh do
     let mesh = face({ words: NativeArray.make_i32(10, 0), quads: 0 }, 12, 0, 12, 8, 8, 0, material)
     List.fold_left([0, 1, 2, 3], mesh, fn (m, arm) ->
       let j = S.neighbour(i, arm)
@@ -1679,7 +1565,7 @@ mod Ur.Scene do
         end
       end)
   end
-  pfn proposed_street(c : Ur.Sim.City, i : Int, material : Int) : Mesh do
+  pfn proposed_street(c : Ur.Sim.City, i : Int, material : Int) : Ur.SceneMesh.Mesh do
     let parts = L.portal_street(c, i, S.get(c.heights, i))
     let m = { words: NativeArray.make_i32(List.length(parts) * 2, 0), quads: 0 }
     List.fold_left(parts, m, fn (m, piece) ->
@@ -1764,24 +1650,23 @@ mod Ur.Scene do
     clear_preview(used, old_count)
     used
   end
-  pfn vehicle_body() : Mesh do { words: NativeArray.make_i32(432, 0), quads: 0 } end
-  pfn paired_trim(m : Mesh, x : Int, y : Int, w : Int, h : Int, breadth : Int, tex : Int) : Mesh do
+  pfn paired_trim(m : Ur.SceneMesh.Mesh, x : Int, y : Int, w : Int, h : Int, breadth : Int, tex : Int) : Ur.SceneMesh.Mesh do
     box(box(m, x, y, 0, w, h, 1, tex), x, y, breadth - 1, w, h, 1, tex)
   end
-  pfn running_gear(m : Mesh, length : Int, breadth : Int, wheel : Int) : Mesh do
+  pfn running_gear(m : Ur.SceneMesh.Mesh, length : Int, breadth : Int, wheel : Int) : Ur.SceneMesh.Mesh do
     let m = box(m, 0, 1, 1, length, 1, breadth - 2, 4)
     let m = paired_trim(m, 1, 0, wheel, 2, breadth, 4)
     paired_trim(m, length - wheel - 1, 0, wheel, 2, breadth, 4)
   end
-  pfn tram_windows(m : Mesh, x : Int, length : Int) : Mesh do
+  pfn tram_windows(m : Ur.SceneMesh.Mesh, x : Int, length : Int) : Ur.SceneMesh.Mesh do
     if x + 3 >= length do m else
       tram_windows(paired_trim(m, x, 4, 2, 2, 5, 9), x + 3, length)
     end
   end
-  pfn hull_box(m : Mesh, east : Bool, x : Int, y : Int, z : Int, w : Int, h : Int, d : Int, tex : Int) : Mesh do
+  pfn hull_box(m : Ur.SceneMesh.Mesh, east : Bool, x : Int, y : Int, z : Int, w : Int, h : Int, d : Int, tex : Int) : Ur.SceneMesh.Mesh do
     if east do box(m, x, y, z, w, h, d, tex) else box(m, z, y, x, d, h, w, tex) end
   end
-  pfn vessel_mesh(fishing : Bool, east : Bool) : Mesh do
+  pfn vessel_mesh(fishing : Bool, east : Bool) : Ur.SceneMesh.Mesh do
     let length = if fishing do 15 else 19 end
     let breadth = if fishing do 6 else 8 end
     let m = hull_box(vehicle_body(), east, 1, 0, 1, length - 3, 1, breadth - 2, 19)
@@ -1809,7 +1694,7 @@ mod Ur.Scene do
       hull_box(m, east, 2, 4, 2, 3, 1, breadth - 4, 13)
     end
   end
-  pfn vehicle_mesh(mode : Int) : Mesh do
+  pfn vehicle_mesh(mode : Int) : Ur.SceneMesh.Mesh do
     let tram = mode == 3
     let length = if tram do 16 else 10 end
     let colour = if tram do 6 else if mode == 2 do 10 else 7 end end
@@ -1826,7 +1711,7 @@ mod Ur.Scene do
     else paired_trim(m, 7, 4, 2, 2, 5, 19) end
   end
   -- [blocks]: whether walkers yield to it. Only a vehicle in traffic does; a parked car is street furniture.
-  pfn pose_vehicle(slot : Int, mesh : Mesh, x : Float, y : Float, z : Float, dx : Float, dz : Float, length : Float, width : Float, lights : Bool, blocks : Bool) : Unit do
+  pfn pose_vehicle(slot : Int, mesh : Ur.SceneMesh.Mesh, x : Float, y : Float, z : Float, dx : Float, dz : Float, length : Float, width : Float, lights : Bool, blocks : Bool) : Unit do
     let yaw = Math.atan2(0.0 -. dz, dx)
     let cosine = Math.cos(yaw)
     let sine = Math.sin(yaw)
@@ -1842,7 +1727,7 @@ mod Ur.Scene do
       if blocks do Vk.footprint(slot, x, y, z, cosine, 0.0 -. sine, length, width) else () end
     else Ur.AppError.stop("Vehicle pose upload failed") end
   end
-  pfn posed_vehicle(slot : Int, mesh : Mesh, x : Float, y : Float, z : Float, dx : Float, dz : Float, length : Float, width : Float) : Unit do
+  pfn posed_vehicle(slot : Int, mesh : Ur.SceneMesh.Mesh, x : Float, y : Float, z : Float, dx : Float, dz : Float, length : Float, width : Float) : Unit do
     pose_vehicle(slot, mesh, x, y, z, dx, dz, length, width, true, true)
   end
   fn begin_vehicle_lights(hour : Int) : Unit do
@@ -2000,7 +1885,7 @@ mod Ur.Scene do
     end end
   end
   -- A ferry is a body, posed every frame on the swell (float_ferries); a refresh uploads its mesh and sets it level.
-  pfn canal_boat_mesh(taxi : Bool) : Mesh do
+  pfn canal_boat_mesh(taxi : Bool) : Ur.SceneMesh.Mesh do
     if taxi do vessel_mesh(true, true) else
       let m = box(vehicle_body(), 1, 0, 1, 17, 1, 6, 19)
       let m = box(m, 0, 1, 0, 19, 2, 8, 13)
@@ -2073,22 +1958,6 @@ mod Ur.Scene do
     end
     end
   end
-  -- (x, y, z) turned by the unit quaternion (qx, qy, qz, qw)
-  pfn turn(qx : Float, qy : Float, qz : Float, qw : Float, x : Float, y : Float, z : Float) : (Float, Float, Float) do
-    let tx = 2.0 *. (qy *. z -. qz *. y)
-    let ty = 2.0 *. (qz *. x -. qx *. z)
-    let tz = 2.0 *. (qx *. y -. qy *. x)
-    (x +. qw *. tx +. (qy *. tz -. qz *. ty), y +. qw *. ty +. (qz *. tx -. qx *. tz), z +. qw *. tz +. (qx *. ty -. qy *. tx))
-  end
-  pfn exposure_at(exposure : NativeF32Arr, x : Float, z : Float) : Float do
-    let px = float_to_int(Math.floor(x /. 8.0))
-    let pz = float_to_int(Math.floor(z /. 8.0))
-    let r = Ur.Ocean.ring()
-    if px < 0 - r || pz < 0 - r || px >= S.width() + r || pz >= S.depth() + r do 1.0 else
-      let cell = Ur.Ocean.padded_cell(px, pz)
-      if cell < NativeArray.length_f32(exposure) do NativeArray.get_f32(exposure, cell) else 1.0 end
-    end
-  end
   doc "Pose each ferry on the sea (Strata.Waves' query of the waves the ocean shader draws): it rises and falls with the water under its middle and pitches and rolls with the sea's slope along and across its hull, from the heights at its bow, stern and sides, so it rides a long swell and shrugs off ripples shorter than itself. On a calm day it barely moves; in a storm it heaves and tips, never past 20 degrees. [waves] is this frame's sea state (Strata.Waves.sea_state), [field] the swell refracted round the coast that Strata draws, [exposure] the sea map handed to it (Ur.Sea.exposure), [water_time] the water's clock; [time] and [clock] place the boats as `vehicles` does."
   fn float_ferries(c : Ur.Sim.City, waves : Strata.Waves.SeaWaves, field : Option(Strata.Waves.Swell), exposure : NativeF32Arr, water_time : Float, time : Float, clock : Float, i : Int) : Unit do
     if i >= S.count() do () else
@@ -2103,7 +1972,7 @@ mod Ur.Scene do
             let (lx, lz) = if east do (half_l, half_b) else (half_b, half_l) end
             let cx = int_to_float(x) *. 0.25 +. lx
             let cz = int_to_float(z) *. 0.25 +. lz
-            let e = exposure_at(exposure, cx, cz)
+            let e = Ur.Sea.exposure_at(exposure, cx, cz)
             let sea = fn (px : Float, pz : Float) -> Strata.Waves.height(waves, field, e, px, pz, water_time)
             let mid = sea(cx, cz)
             let (ax, az) = if east do (1.0, 0.0) else (0.0, 1.0) end
@@ -2129,14 +1998,14 @@ mod Ur.Scene do
             let qz = 0.0 -. nx /. ql
             let qw = (1.0 +. ny) /. ql
             -- the low corner, so the hull's middle stays at (cx, heave, cz)
-            let (ox, oy, oz) = turn(qx, 0.0, qz, qw, lx, 0.0, lz)
+            let (ox, oy, oz) = Ur.SceneMesh.turn(qx, 0.0, qz, qw, lx, 0.0, lz)
             Vk.slot_pose(rotor_slot(i), cx -. ox, 0.25 +. heave -. oy, cz -. oz, qx, 0.0, qz, qw)
         end
       else () end end
       float_ferries(c, waves, field, exposure, water_time, time, clock, i + 1)
     end
   end
-  pfn rotor_mesh(step : Int, m : Mesh) : Mesh do
+  pfn rotor_mesh(step : Int, m : Ur.SceneMesh.Mesh) : Ur.SceneMesh.Mesh do
     if step == 10 do m else
       let material = if step >= 8 do 6 else 8 end
       let m = box(m, 15, 17 + step, 15, 2, 1, 2, material)
@@ -2183,7 +2052,7 @@ mod Ur.Scene do
       vehicles(c, old, phases, time, clock, dt, refresh, i + 1)
     end
   end
-  pfn trash_truck_mesh() : Mesh do
+  pfn trash_truck_mesh() : Ur.SceneMesh.Mesh do
     let mesh = running_gear(vehicle_body(), 11, 6, 2)
     let mesh = box(box(mesh, 7, 2, 1, 4, 3, 4, 8), 8, 5, 0, 3, 2, 6, 9)
     let mesh = paired_trim(mesh, 7, 2, 3, 3, 6, 8)
@@ -2196,7 +2065,7 @@ mod Ur.Scene do
     let mesh = box(mesh, 10, 3, 1, 1, 1, 4, 19)
     paired_trim(mesh, 10, 2, 1, 1, 6, 8)
   end
-  pfn delivery_mesh(mode : Int) : Mesh do
+  pfn delivery_mesh(mode : Int) : Ur.SceneMesh.Mesh do
     if mode == 7 do
       let m = running_gear(vehicle_body(), 8, 6, 2)
       let m = box(m, 0, 2, 0, 8, 1, 6, 10)
@@ -2312,7 +2181,7 @@ mod Ur.Scene do
     Vk.chunk_free(window_slot(slot, 0))
     Vk.chunk_free(window_slot(slot, 1))
   end
-  pfn flame_tongue(mesh : Mesh, x : Int, z : Int, phase : Float, strength : Int) : Mesh do
+  pfn flame_tongue(mesh : Ur.SceneMesh.Mesh, x : Int, z : Int, phase : Float, strength : Int) : Ur.SceneMesh.Mesh do
     let rise = strength + float_to_int((1.0 +. Math.sin(phase)) *. 2.4)
     let lean = float_to_int(Math.sin(phase +. 1.3) *. 2.0)
     let mesh = box(mesh, x - 2, 0, z - 2, 5, 2, 5, 30)
@@ -2322,7 +2191,7 @@ mod Ur.Scene do
     let mesh = box(mesh, x + lean, rise + 3, z, 1, 2, 1, 36)
     box(mesh, x - 2, 2, z - 2, 1, 2, 2, 28)
   end
-  pfn embers(mesh : Mesh, motion : Float, seed : Float, ember : Int) : Mesh do
+  pfn embers(mesh : Ur.SceneMesh.Mesh, motion : Float, seed : Float, ember : Int) : Ur.SceneMesh.Mesh do
     if ember == 6 do mesh else
       let phase = motion *. (1.3 +. int_to_float(ember) *. 0.23) +. seed +. int_to_float(ember) *. 0.38
       let t = phase -. Math.floor(phase)
@@ -2332,7 +2201,7 @@ mod Ur.Scene do
       embers(box(mesh, x, y, z, 1, 1, 1, if ember % 3 == 0 do 28 else 36 end), motion, seed, ember + 1)
     end
   end
-  pfn drifting_smoke(mesh : Mesh, wind : Ur.Sim.Wind, motion : Float, seed : Float, puff : Int) : Mesh do
+  pfn drifting_smoke(mesh : Ur.SceneMesh.Mesh, wind : Ur.Sim.Wind, motion : Float, seed : Float, puff : Int) : Ur.SceneMesh.Mesh do
     if puff == 4 do mesh else
       let phase = motion *. 1.8 +. int_to_float(puff) *. 0.25 +. seed
       let t = phase -. Math.floor(phase)
@@ -2362,7 +2231,7 @@ mod Ur.Scene do
         end
       end)
   end
-  pfn window_puffs(mesh : Mesh, east : Bool, wind : Ur.Sim.Wind, motion : Float, puff : Int) : Mesh do
+  pfn window_puffs(mesh : Ur.SceneMesh.Mesh, east : Bool, wind : Ur.Sim.Wind, motion : Float, puff : Int) : Ur.SceneMesh.Mesh do
     if puff == 5 do mesh else
       let phase = motion *. 1.4 +. int_to_float(puff) *. 0.20
       let t = phase -. Math.floor(phase)
@@ -2949,7 +2818,7 @@ mod Ur.Scene do
       closest_sidewalk(c, view, lot, mx, my, 0, -1, radius *. radius)
     end
   end
-  pfn sidewalk_marker_faces(c : Ur.Sim.City, lot : Int, selected : Int, valid : Bool, spot : Int, mesh : Mesh) : Mesh do
+  pfn sidewalk_marker_faces(c : Ur.Sim.City, lot : Int, selected : Int, valid : Bool, spot : Int, mesh : Ur.SceneMesh.Mesh) : Ur.SceneMesh.Mesh do
     if spot == 4 do mesh else
       let (x, z) = S.sidewalk_point(c, lot, spot)
       let mesh = if x < 0 do mesh else
@@ -3209,7 +3078,7 @@ mod Ur.Scene do
   end
   pfn walker_template_base() : Int do 6 * S.count() + 640 end
   pfn walker_templates() : Int do 3 * 4 * 3 * 2 * 2 end
-  pfn walker_mesh(kind : Int, coat_index : Int, skin_index : Int, hair : Int, gait : Int) : Mesh do
+  pfn walker_mesh(kind : Int, coat_index : Int, skin_index : Int, hair : Int, gait : Int) : Ur.SceneMesh.Mesh do
     let coat = match coat_index do
       0 -> 6
       1 -> 7
@@ -3739,20 +3608,20 @@ mod Ur.Scene do
   pfn layer_floor(c : Ur.Sim.City, x : Int, z : Int) : Int do
     high_ground(heights(c, x, z, NativeArray.make_int(100, 0), 0), 0, 0) + 3
   end
-  pfn layer_outline(tex : Int, m : Mesh) : Mesh do
+  pfn layer_outline(tex : Int, m : Ur.SceneMesh.Mesh) : Ur.SceneMesh.Mesh do
     let m = face(m, 0, 0, 0, 32, 3, 0, tex)
     let m = face(m, 0, 0, 29, 32, 3, 0, tex)
     let m = face(m, 0, 0, 3, 3, 26, 0, tex)
     face(m, 29, 0, 3, 3, 26, 0, tex)
   end
-  pfn water_reach(tex : Int) : Mesh do
+  pfn water_reach(tex : Int) : Ur.SceneMesh.Mesh do
     let m = { words: NativeArray.make_i32(16, 0), quads: 0 }
     List.fold_left([2, 24], m, fn (a, x) ->
       List.fold_left([2, 24], a, fn (b, z) ->
         let b = face(b, x, 0, if z == 2 do 2 else 28 end, 6, 2, 0, tex)
         face(b, if x == 2 do 2 else 28 end, 0, if z == 2 do 4 else 24 end, 2, 4, 0, tex)))
   end
-  pfn power_badge(tex : Int) : Mesh do
+  pfn power_badge(tex : Int) : Ur.SceneMesh.Mesh do
     let m = box({ words: NativeArray.make_i32(32, 0), quads: 0 }, 9, 0, 9, 14, 3, 14, tex)
     if tex == 30 do
       List.fold_left([0, 2, 4, 6, 8], m, fn (a, offset) ->
@@ -3779,7 +3648,7 @@ mod Ur.Scene do
     end
   end
   -- Project the utility network above the terrain so it is visible through the city view.
-  pfn utility_arms(c : Ur.Sim.City, network : NativeIntArr, i : Int, floor : Int, d : Int, pipe : Bool, tex : Int, m : Mesh) : Mesh do
+  pfn utility_arms(c : Ur.Sim.City, network : NativeIntArr, i : Int, floor : Int, d : Int, pipe : Bool, tex : Int, m : Ur.SceneMesh.Mesh) : Ur.SceneMesh.Mesh do
     if d >= 4 do m else
       let peer = S.neighbour(i, d)
       let m = if !S.valid(peer) || S.get(network, peer) == 0 do m else
@@ -3802,7 +3671,7 @@ mod Ur.Scene do
       utility_arms(c, network, i, floor, d + 1, pipe, tex, m)
     end
   end
-  pfn utility_mesh(c : Ur.Sim.City, i : Int, floor : Int, layer : Int, tex : Int) : Mesh do
+  pfn utility_mesh(c : Ur.Sim.City, i : Int, floor : Int, layer : Int, tex : Int) : Ur.SceneMesh.Mesh do
     let pipe = layer != 2
     let base = { words: NativeArray.make_i32(160, 0), quads: 0 }
     let tiles = if pipe do c.pipes else c.grid end
@@ -3812,7 +3681,7 @@ mod Ur.Scene do
     utility_arms(c, tiles, i, floor, 0, pipe, tex, hub)
   end
   pfn lane_heat(demand : Int) : Int do S.clamp(demand, 0, 36) * 63 / 36 end
-  pfn lane_quad(m : Mesh, x : Int, z : Int, w : Int, depth : Int, axis : Int, first : Int, last : Int, ends : Int) : Mesh do
+  pfn lane_quad(m : Ur.SceneMesh.Mesh, x : Int, z : Int, w : Int, depth : Int, axis : Int, first : Int, last : Int, ends : Int) : Ur.SceneMesh.Mesh do
     let n = m.quads * 2
     let words = NativeArray.set_i32(m.words, n, Q.with_drop(Q.pack0(x, 0, z, w, depth, 0), 6))
     let tag = 61440 + lane_heat(first) * 64 + lane_heat(last)
@@ -3821,7 +3690,7 @@ mod Ur.Scene do
   pfn lane_connected(c : Ur.Sim.City, i : Int, peer : Int) : Bool do
     S.motor_road(c, peer) && int_abs(S.get(c.heights, i) - S.get(c.heights, peer)) <= 12
   end
-  pfn lane_arms(c : Ur.Sim.City, traffic : NativeIntArr, i : Int, d : Int, m : Mesh) : Mesh do
+  pfn lane_arms(c : Ur.Sim.City, traffic : NativeIntArr, i : Int, d : Int, m : Ur.SceneMesh.Mesh) : Ur.SceneMesh.Mesh do
     if d >= 4 do m else
       let peer = S.neighbour(i, d)
       if !lane_connected(c, i, peer) do
@@ -3862,7 +3731,7 @@ mod Ur.Scene do
     if radius < (32 - width) * (32 - width) || radius >= (32 + width) * (32 + width) do 0
     else if radius < 1024 do 1 else 2 end end
   end
-  pfn curve_heat_row(kind : Int, horizontal : Int, vertical : Int, inner : Int, outer : Int, x : Int, z : Int, start : Int, lane : Int, m : Mesh) : Mesh do
+  pfn curve_heat_row(kind : Int, horizontal : Int, vertical : Int, inner : Int, outer : Int, x : Int, z : Int, start : Int, lane : Int, m : Ur.SceneMesh.Mesh) : Ur.SceneMesh.Mesh do
     let next = if x >= 32 do 0 else curve_lane(kind, x, z) end
     let m = if next == lane || lane == 0 || x == start do m else
       let px = if horizontal == 0 do start else 32 - x end
@@ -3872,11 +3741,11 @@ mod Ur.Scene do
     end
     if x >= 32 do m else curve_heat_row(kind, horizontal, vertical, inner, outer, x + 1, z, if next == lane do start else x end, next, m) end
   end
-  pfn curve_heat_rows(kind : Int, horizontal : Int, vertical : Int, inner : Int, outer : Int, z : Int, m : Mesh) : Mesh do
+  pfn curve_heat_rows(kind : Int, horizontal : Int, vertical : Int, inner : Int, outer : Int, z : Int, m : Ur.SceneMesh.Mesh) : Ur.SceneMesh.Mesh do
     if z >= 32 do m else curve_heat_rows(kind, horizontal, vertical, inner, outer, z + 1,
       curve_heat_row(kind, horizontal, vertical, inner, outer, 0, z, 0, 0, m)) end
   end
-  pfn traffic_mesh(c : Ur.Sim.City, traffic : NativeIntArr, i : Int) : Mesh do
+  pfn traffic_mesh(c : Ur.Sim.City, traffic : NativeIntArr, i : Int) : Ur.SceneMesh.Mesh do
     let (horizontal, vertical) = S.road_turn(c, i)
     -- A curved parcel has up to two runs per row, with two words per run.
     let mesh = { words: NativeArray.make_i32(if horizontal < 0 do 16 else 128 end, 0), quads: 0 }
@@ -3890,7 +3759,7 @@ mod Ur.Scene do
         if outside do across else back end, 0, mesh)
     end
   end
-  pfn street_policy_mesh(c : Ur.Sim.City, i : Int, tex : Int, d : Int, m : Mesh) : Mesh do
+  pfn street_policy_mesh(c : Ur.Sim.City, i : Int, tex : Int, d : Int, m : Ur.SceneMesh.Mesh) : Ur.SceneMesh.Mesh do
     if d >= 4 do m else
       let extent = if tex == 17 do 2 else 5 end
       let m = if !S.street_link(c, i, d) do m else
@@ -3899,7 +3768,7 @@ mod Ur.Scene do
       street_policy_mesh(c, i, tex, d + 1, m)
     end
   end
-  pfn ward_outline(c : Ur.Sim.City, i : Int, tex : Int, d : Int, m : Mesh) : Mesh do
+  pfn ward_outline(c : Ur.Sim.City, i : Int, tex : Int, d : Int, m : Ur.SceneMesh.Mesh) : Ur.SceneMesh.Mesh do
     if d == 4 do m else
       let peer = S.neighbour(i, d)
       let border = !S.valid(peer) || S.get(c.heights, peer) == 0 || Ur.Council.ward_at(c, peer) != Ur.Council.ward_at(c, i)
@@ -3909,7 +3778,7 @@ mod Ur.Scene do
       ward_outline(c, i, tex, d + 1, m)
     end
   end
-  pfn crossing_layer(c : Ur.Sim.City, lot : Int, tex : Int) : Mesh do
+  pfn crossing_layer(c : Ur.Sim.City, lot : Int, tex : Int) : Ur.SceneMesh.Mesh do
     let a = S.grade_source(c, lot)
     let b = S.grade_peer(c, a)
     let shaft = lot == a || lot == b
@@ -3942,7 +3811,7 @@ mod Ur.Scene do
   -- the skin climbs every step without gaps. Every quad carries the field at
   -- the corners of its column's 8-voxel cell; the shader blends them by
   -- world position, so the colour runs on smoothly across quads.
-  pfn skin_quad(m : Mesh, x : Int, y : Int, z : Int, w : Int, h : Int, dir : Int, w1 : Int) : Mesh do
+  pfn skin_quad(m : Ur.SceneMesh.Mesh, x : Int, y : Int, z : Int, w : Int, h : Int, dir : Int, w1 : Int) : Ur.SceneMesh.Mesh do
     -- a wall's second extent is its height: the part inside this band of the chunk is drawn
     let low = if dir >= 2 && y < 0 do 0 else y end
     let extent = if dir >= 2 do (if y + h > 32 do 32 else y + h end) - low else h end
@@ -3955,7 +3824,7 @@ mod Ur.Scene do
     end
   end
   -- the wall and lip toward a higher neighbour on side [d] (0 -x, 1 +x, 2 -z, 3 +z)
-  pfn skin_step(m : Mesh, u : Int, v : Int, h : Int, high : Int, floor : Int, d : Int, w1 : Int) : Mesh do
+  pfn skin_step(m : Ur.SceneMesh.Mesh, u : Int, v : Int, h : Int, high : Int, floor : Int, d : Int, w1 : Int) : Ur.SceneMesh.Mesh do
     if high <= h do m else
       let y = h - floor
       let top = high - floor
@@ -3968,7 +3837,7 @@ mod Ur.Scene do
       end
     end
   end
-  pfn gradient_quads(c : Ur.Sim.City, samples : NativeF32Arr, x : Int, z : Int, floor : Int, tag : Int, dry : Bool, n : Int, m : Mesh) : Mesh do
+  pfn gradient_quads(c : Ur.Sim.City, samples : NativeF32Arr, x : Int, z : Int, floor : Int, tag : Int, dry : Bool, n : Int, m : Ur.SceneMesh.Mesh) : Ur.SceneMesh.Mesh do
     if n == 64 do m else
       let u = n % 8 * 4
       let v = n / 8 * 4
@@ -4010,13 +3879,13 @@ mod Ur.Scene do
     end
   end
   type SkinField = { samples : NativeF32Arr, tag : Int, dry : Bool }
-  pfn skin_band(c : Ur.Sim.City, fields : List(SkinField), x : Int, z : Int, floor : Int, m : Mesh) : Mesh do
+  pfn skin_band(c : Ur.Sim.City, fields : List(SkinField), x : Int, z : Int, floor : Int, m : Ur.SceneMesh.Mesh) : Ur.SceneMesh.Mesh do
     match fields do
       Nil -> m
       Cons(f, rest) -> skin_band(c, rest, x, z, floor, gradient_quads(c, f.samples, x, z, floor, f.tag, f.dry, 0, m))
     end
   end
-  pfn skin_upload(slot : Int, x : Int, floor : Int, z : Int, mesh : Mesh) : Unit do
+  pfn skin_upload(slot : Int, x : Int, floor : Int, z : Int, mesh : Ur.SceneMesh.Mesh) : Unit do
     if mesh.quads == 0 do Vk.chunk_free(slot)
     else if Vk.chunk_begin(slot, x, floor, z, 0) && Vk.chunk_part(2, mesh.words, mesh.quads) && Vk.chunk_commit() do ()
     else Ur.AppError.stop("Gradient overlay upload failed") end end
@@ -4095,7 +3964,7 @@ mod Ur.Scene do
       flood_fields(c, lot + 1, { live: live, potential: potential })
     end
   end
-  pfn flood_map_mesh(c : Ur.Sim.City, x : Int, z : Int, floor : Int, active : FloodProbe, risk : FloodProbe, n : Int, mesh : Mesh) : Mesh do
+  pfn flood_map_mesh(c : Ur.Sim.City, x : Int, z : Int, floor : Int, active : FloodProbe, risk : FloodProbe, n : Int, mesh : Ur.SceneMesh.Mesh) : Ur.SceneMesh.Mesh do
     if n >= 64 do mesh else
       let u = n % 8 * 4
       let v = n / 8 * 4

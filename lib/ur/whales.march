@@ -1,0 +1,67 @@
+mod Ur.Whales do
+  needs IO.Console
+  needs IO.Process
+  needs IO.Foreign
+  needs Window
+  alias Strata.Ffi.Vk as Vk
+  alias Strata.Quad as Q
+  alias Ur.WildlifeMesh as Draw
+  import Ur.SceneMesh.{box, vehicle_body}
+
+  fn slots() : Int do 3 end
+  pfn whale_mesh(slot : Int, model : Int, geometry : Strata.Model.Geometry) : Unit do
+    let instance = NativeArray.set_i32(NativeArray.make_i32(2, 0), 0, Q.pack_instance0(0, 0, 0, model))
+    if Vk.model_set(model, Strata.Model.floats(geometry), Strata.Model.count(geometry)) &&
+      Vk.body_begin(slot) && Vk.chunk_part(3, instance, 1) && Vk.chunk_commit() do
+      Vk.slot_voxel(slot, 0.40)
+      Vk.chunk_show(slot, false)
+    else Ur.AppError.stop("Whale mesh upload failed") end
+  end
+  fn setup(base : Int) : Unit do
+    whale_mesh(base, 0, Ur.WhaleArt.body())
+    whale_mesh(base + 1, 1, Ur.WhaleArt.tail())
+
+    let spray = box(vehicle_body(), 3, 0, 3, 1, 5, 1, 43)
+    let spray = box(box(spray, 2, 5, 3, 1, 1, 1, 8), 4, 6, 3, 1, 1, 1, 43)
+    Draw.upload(base + 2, box(box(spray, 1, 7, 2, 1, 1, 1, 8), 6, 8, 4, 1, 1, 1, 43), 0.16)
+  end
+  fn hide(base : Int) : Unit do
+    Draw.show(base, false)
+    Draw.show(base + 1, false)
+    Draw.show(base + 2, false)
+    ()
+  end
+  pfn tail_splash(waves : Strata.Waves.SeaWaves, field : Option(Strata.Waves.Swell), exposure : NativeF32Arr,
+    x : Float, z : Float, dx : Float, dz : Float, now : Float) : Unit do
+    -- The flukes throw a taller jet in the middle and two low fans outward.
+    let y = Ur.Sea.surface_height(waves, field, exposure, x, z, now) +. 0.2
+    let _ = Vk.spray(x, y, z, 0.0 -. dx *. 1.0, 3.8, 0.0 -. dz *. 1.0, 32, 2.5, 0.90, 43)
+    let _ = Vk.spray(x +. dz *. 1.65, y, z -. dx *. 1.65, dz *. 2.9, 2.3, 0.0 -. dx *. 2.9, 23, 2.3, 0.72, 8)
+    let _ = Vk.spray(x -. dz *. 1.65, y, z +. dx *. 1.65, 0.0 -. dz *. 2.9, 2.3, dx *. 2.9, 23, 2.3, 0.72, 8)
+    ()
+  end
+  fn draw(base : Int, site : Ur.Wildlife.WildlifeSite, age : Float, before : Float, waves : Strata.Waves.SeaWaves,
+    field : Option(Strata.Waves.Swell), exposure : NativeF32Arr, now : Float) : Unit do
+    let p = Ur.Wildlife.whale_pose(site, age)
+    let y = Ur.Sea.surface_height(waves, field, exposure, p.x, p.z, now) +. p.y
+    let (dx, dz) = (Math.sin(site.heading), Math.cos(site.heading))
+    Draw.pose(base, p.x, y, p.z, site.heading, p.pitch, 0.0, 3.4, 1.8, 5.6)
+    let tail_offset = 4.7 *. Math.cos(p.pitch)
+    let kick = 0.18 *. Math.sin(age *. 2.8) +. 0.23 *. Ur.Wildlife.ease((age -. 4.2) /. 1.3)
+    let tail_pitch = p.pitch +. kick
+    let (tail_x, tail_z) = (p.x -. dx *. tail_offset, p.z -. dz *. tail_offset)
+    Draw.pose(base + 1, tail_x, y +. 4.7 *. Math.sin(p.pitch), tail_z, site.heading, tail_pitch, 0.0, 3.4, 0.8, 4.0)
+    if Ur.Wildlife.whale_splash_due(before, age) do
+      let trailing = 1.45 *. Math.cos(tail_pitch)
+      tail_splash(waves, field, exposure, tail_x -. dx *. trailing, tail_z -. dz *. trailing, dx, dz, now)
+    else () end
+    if age >= 2.55 && age < 3.75 do
+      let spread = Ur.Wildlife.ease((age -. 2.55) /. 0.7)
+      let voxel = 0.13 +. 0.13 *. spread
+      Vk.slot_voxel(base + 2, voxel)
+      Draw.pose(base + 2, p.x +. dx *. 2.85, y +. 0.95 +. 0.6 *. spread, p.z +. dz *. 2.85,
+        site.heading, 0.0, 0.14, voxel *. 3.5, 0.0, voxel *. 3.5)
+    else Draw.show(base + 2, false) end
+    ()
+  end
+end

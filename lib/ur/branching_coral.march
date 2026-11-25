@@ -1,0 +1,170 @@
+-- Forked coral silhouettes, built from tapering limbs in seabed voxel units.
+mod Ur.BranchingCoral do
+  type CoralLimb = CoralLimb(Float, Float, Float, Float, Float, Float, Float, Float, Bool)
+
+  pfn limb(start : (Int, Int, Int), finish : (Int, Int, Int), radius : Float, tip : Bool) : CoralLimb do
+    match (start, finish) do
+      ((x, y, z), (a, b, c)) ->
+        let dx = int_to_float(a - x)
+        let dy = int_to_float(b - y)
+        let dz = int_to_float(c - z)
+        CoralLimb(int_to_float(x), int_to_float(y), int_to_float(z), dx, dy, dz, dx *. dx +. dy *. dy +. dz *. dz, radius, tip)
+    end
+  end
+
+  pfn antlers(variation : Int) : List(CoralLimb) do
+    [
+      limb((0, 0, 0), (0, 3, 0), 1.65, false),
+      limb((0, 2, 0), (-3, 6, 0), 1.35, false),
+      limb((0, 3, 0), (3, 6, 0), 1.35, false),
+      limb((-3, 6, 0), (-5, 8 + variation, -1), 1.14, true),
+      limb((-3, 6, 0), (-2, 10, 1), 1.14, true),
+      limb((3, 6, 0), (5, 9, 0), 1.14, true),
+      limb((3, 6, 0), (2, 10 - variation, -1), 1.14, true),
+      limb((0, 2, 0), (0, 5, 3), 1.12, true)
+    ]
+  end
+
+  pfn candelabra(variation : Int) : List(CoralLimb) do
+    [
+      limb((0, 0, 0), (0, 4, 0), 1.60, false),
+      limb((0, 4, 0), (0, 10 + variation, -1), 1.23, true),
+      limb((0, 1, 0), (-4, 4, -1), 1.32, false),
+      limb((-4, 4, -1), (-4, 9, -2), 1.20, true),
+      limb((0, 2, 0), (4, 4, 0), 1.32, false),
+      limb((4, 4, 0), (4, 8 + variation, 0), 1.20, true),
+      limb((0, 1, 0), (1, 3, 4), 1.22, false),
+      limb((1, 3, 4), (2, 7, 4), 1.15, true),
+      limb((0, 2, 0), (-1, 3, -4), 1.22, false),
+      limb((-1, 3, -4), (-1, 7 + variation, -4), 1.15, true)
+    ]
+  end
+
+  pfn thicket(variation : Int) : List(CoralLimb) do
+    [
+      limb((0, 0, 0), (0, 2, 0), 1.70, false),
+      limb((0, 1, 0), (-3, 2, -2), 1.35, false),
+      limb((0, 1, 0), (3, 2, 2), 1.35, false),
+      limb((0, 1, 0), (-1, 2, 3), 1.27, false),
+      limb((0, 1, 0), (1, 2, -3), 1.27, false),
+      limb((-3, 2, -2), (-5, 4, -3), 1.16, true),
+      limb((-3, 2, -2), (-2, 5, -2), 1.16, true),
+      limb((3, 2, 2), (5, 4 + variation, 2), 1.16, true),
+      limb((3, 2, 2), (3, 4, 5), 1.16, true),
+      limb((-1, 2, 3), (-3, 4 + variation, 5), 1.16, true),
+      limb((-1, 2, 3), (0, 5, 5), 1.16, true),
+      limb((1, 2, -3), (3, 4, -5), 1.16, true),
+      limb((1, 2, -3), (0, 5, -5), 1.16, true)
+    ]
+  end
+
+  pfn quarter(x : Float, z : Float, turn : Int) : (Float, Float) do
+    match turn do
+      0 -> (x, z)
+      1 -> (0.0 -. z, x)
+      2 -> (0.0 -. x, 0.0 -. z)
+      _ -> (z, 0.0 -. x)
+    end
+  end
+
+  pfn rotated(branch : CoralLimb, turn : Int) : CoralLimb do
+    match branch do
+      CoralLimb(x, y, z, dx, dy, dz, length2, radius, tip) ->
+        let (x, z) = quarter(x, z, turn)
+        let (dx, dz) = quarter(dx, dz, turn)
+        CoralLimb(x, y, z, dx, dy, dz, length2, radius, tip)
+    end
+  end
+
+  pfn staghorn(variation : Int) : List(CoralLimb) do
+    let trunk = limb((0, 0, 0), (0, 11 + variation, 0), 1.50, true)
+    let branches = List.flat_map([0, 1, 2, 3], fn turn ->
+      let lift = (variation + turn) % 2
+      let elbow = (3, 4 + lift, 0)
+      let outer = (5, 6 + lift, 0)
+      let forks = [
+        limb((0, 2 + lift, 0), elbow, 1.28, false),
+        limb(elbow, outer, 1.18, false),
+        limb(outer, (7, 8 + lift, -1), 1.04, true),
+        limb(outer, (7, 7 + lift, 2), 1.04, true),
+        limb(elbow, (4, 9 + lift, -3), 1.05, true),
+        limb(elbow, (3, 8 + lift, 2), 1.05, true)
+      ]
+      List.map(forks, fn branch -> rotated(branch, turn)))
+    Cons(trunk, branches)
+  end
+
+  pfn lace_fan(variation : Int) : List(CoralLimb) do
+    let stem = limb((0, 0, 0), (0, 10 + variation, 0), 1.12, true)
+    let leaves = List.flat_map([-1, 1], fn side ->
+      let lift = if side == 1 do variation else 1 - variation end
+      let base = (0, 2, 0)
+      let inner = (3 * side, 4, 0)
+      let upper = (3 * side, 7, 0)
+      let outer = (5 * side, 5, 0)
+      [
+        limb(base, inner, 1.06, false),
+        limb(inner, upper, 1.04, false),
+        limb(upper, (2 * side, 10 + lift, 0), 1.01, true),
+        limb(upper, (4 * side, 10, 0), 1.01, true),
+        limb(inner, outer, 1.04, false),
+        limb(outer, (6 * side, 8 + lift, 0), 1.01, true),
+        limb(outer, (7 * side, 6, 0), 1.01, true),
+        limb(inner, (5 * side, 3 + lift, 1), 1.01, true)
+      ])
+    Cons(stem, leaves)
+  end
+
+  pfn bottlebrush(variation : Int) : List(CoralLimb) do
+    let spine = limb((0, 0, 0), (0, 11 + variation, 0), 1.36, true)
+    let whorls = List.flat_map([0, 1, 2], fn tier ->
+      let y = 1 + tier * 3
+      let reach = 5 - tier
+      let fork = (reach - 2, y + 1, 0)
+      let arms = [
+        limb((0, y, 0), fork, 1.13, false),
+        limb(fork, (reach, y + 2 + variation, -2), 1.05, true),
+        limb(fork, (reach, y + 1, 2), 1.05, true)
+      ]
+      List.flat_map([tier % 2, tier % 2 + 2], fn turn ->
+        List.map(arms, fn branch -> rotated(branch, turn))))
+    Cons(spine, whorls)
+  end
+
+  pfn voxel(limbs : List(CoralLimb), x : Float, y : Float, z : Float, main : Int, accent : Int) : Int do
+    match limbs do
+      Nil -> 0
+      Cons(CoralLimb(a, b, c, dx, dy, dz, length2, radius, tip), rest) ->
+        let (vx, vy, vz) = (x -. a, y -. b, z -. c)
+        let t = Math.max_float(0.0, Math.min_float(1.0, (vx *. dx +. vy *. dy +. vz *. dz) /. length2))
+        let (qx, qy, qz) = (vx -. t *. dx, vy -. t *. dy, vz -. t *. dz)
+        let r = Math.max_float(0.96, radius *. (1.0 -. 0.20 *. t))
+        if qx *. qx +. qy *. qy +. qz *. qz <= r *. r do
+          if tip && t >= 0.76 do accent else main end
+        else voxel(rest, x, y, z, main, accent) end
+    end
+  end
+
+  fn template(form : Int, seed : Int, main : Int, accent : Int) : Strata.Template.Template do
+    let variation = int_mod_euclid(seed, 2)
+    let arms = match form do
+      0 -> antlers(variation)
+      1 -> candelabra(variation)
+      2 -> thicket(variation)
+      3 -> staghorn(variation)
+      4 -> lace_fan(variation)
+      _ -> bottlebrush(variation)
+    end
+    let side = if form >= 3 do 17 else 13 end
+    let half = side / 2
+    let height = if form == 2 do 8 else 13 end
+    let count = side * side * height
+    let ids = List.fold_left(List.range(0, count), NativeArray.make_i32(count, 0), fn (ids, i) ->
+      let x = int_to_float(i % side - half)
+      let y = int_to_float(i / side % height)
+      let z = int_to_float(i / (side * height) - half)
+      let id = voxel(arms, x, y, z, main, accent)
+      if id == 0 do ids else NativeArray.set_i32(ids, i, id) end)
+    Strata.Template.make(side, height, side, ids, 0.25)
+  end
+end

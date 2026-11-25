@@ -1,0 +1,31 @@
+mod Ur.WildlifeMesh do
+  needs IO.Console
+  needs IO.Process
+  needs IO.Foreign
+  needs Window
+  alias Strata.Ffi.Vk as Vk
+
+  fn upload(slot : Int, mesh : Ur.SceneMesh.Mesh, voxel : Float) : Unit do
+    if Vk.body_begin(slot) && Vk.chunk_part(0, mesh.words, mesh.quads) && Vk.chunk_commit() do
+      Vk.slot_voxel(slot, voxel)
+      Vk.chunk_show(slot, false)
+    else Ur.AppError.stop("Wildlife mesh upload failed") end
+  end
+  fn show(slot : Int, shown : Bool) : Unit do Vk.chunk_show(slot, shown) end
+  fn pose(slot : Int, x : Float, y : Float, z : Float, yaw : Float, pitch : Float, roll : Float,
+    anchor_x : Float, anchor_y : Float, anchor_z : Float) : Unit do
+    let sy = Math.sin(yaw *. 0.5)
+    let cy = Math.cos(yaw *. 0.5)
+    let sp = Math.sin(pitch *. 0.5)
+    let cp = Math.cos(pitch *. 0.5)
+    let sr = Math.sin(roll *. 0.5)
+    let cr = Math.cos(roll *. 0.5)
+    let qx = cy *. sp *. cr +. sy *. cp *. sr
+    let qy = sy *. cp *. cr -. cy *. sp *. sr
+    let qz = cy *. cp *. sr -. sy *. sp *. cr
+    let qw = cy *. cp *. cr +. sy *. sp *. sr
+    let (ox, oy, oz) = Ur.SceneMesh.turn(qx, qy, qz, qw, anchor_x, anchor_y, anchor_z)
+    Vk.slot_pose(slot, x -. ox, y -. oy, z -. oz, qx, qy, qz, qw)
+    show(slot, true)
+  end
+end

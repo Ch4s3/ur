@@ -1,0 +1,29 @@
+mod Ur.SceneMesh do
+  alias Strata.Quad as Q
+
+  type Mesh = { words : NativeI32Arr, quads : Int }
+  fn empty() : Mesh do { words: NativeArray.make_i32(8192, 0), quads: 0 } end
+  -- The fields are read out before the sets, so a Mesh handed over whole leaves [words] one
+  -- reference and the sets write in place instead of copying the mesh per quad.
+  fn face(m : Mesh, x : Int, y : Int, z : Int, w : Int, h : Int, direction : Int, tex : Int) : Mesh do
+    let quads = m.quads
+    let words = m.words
+    let n = quads * 2
+    { words: NativeArray.set_i32(NativeArray.set_i32(words, n, Q.pack0(x, y, z, w, h, direction)), n + 1, Q.pack1(tex, 255, tex + 1)), quads: quads + 1 }
+  end
+  fn box(m : Mesh, x : Int, y : Int, z : Int, w : Int, h : Int, d : Int, tex : Int) : Mesh do
+    let a = face(m, x, y + h - 1, z, w, d, 0, tex)
+    let b = face(a, x, y, z, w, d, 1, tex)
+    let c = face(b, x + w - 1, y, z, d, h, 2, tex)
+    let e = face(c, x, y, z, d, h, 3, tex)
+    let f = face(e, x, y, z + d - 1, w, h, 4, tex)
+    face(f, x, y, z, w, h, 5, tex)
+  end
+  fn vehicle_body() : Mesh do { words: NativeArray.make_i32(432, 0), quads: 0 } end
+  fn turn(qx : Float, qy : Float, qz : Float, qw : Float, x : Float, y : Float, z : Float) : (Float, Float, Float) do
+    let tx = 2.0 *. (qy *. z -. qz *. y)
+    let ty = 2.0 *. (qz *. x -. qx *. z)
+    let tz = 2.0 *. (qx *. y -. qy *. x)
+    (x +. qw *. tx +. (qy *. tz -. qz *. ty), y +. qw *. ty +. (qz *. tx -. qx *. tz), z +. qw *. tz +. (qx *. ty -. qy *. tx))
+  end
+end

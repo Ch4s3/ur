@@ -1,0 +1,67 @@
+mod WildlifeTest do
+  needs IO
+  alias Ur.Wildlife as W
+  alias Ur.Sim as S
+  alias Ur.Ocean as O
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let site : Ur.Wildlife.WildlifeSite = { lot: 12, kind: :tree, x: 20.0, y: 8.0, z: 30.0, heading: 0.0 }
+    let incoming = W.bird_pose(site, 1.0)
+    let landed = W.bird_pose(site, 4.0)
+    let waiting = W.bird_pose(site, 5.5)
+    let outgoing = W.bird_pose(site, 8.0)
+    Test.assert_true(incoming.z < site.z && incoming.y > site.y && incoming.flight > 0.0, "bird approaches above its perch")
+    Test.assert_true(landed.x == site.x && landed.y == site.y && landed.z == site.z && landed.flight == 0.0, "bird touches down on the perch and folds its wings")
+    Test.assert_true(waiting.x == landed.x && waiting.y == landed.y && waiting.z == landed.z && waiting.flight == 0.0, "bird holds its perch")
+    Test.assert_true(outgoing.z > site.z && outgoing.y > site.y && outgoing.flight > 0.0, "bird takes off past the perch")
+
+    let whale = { site with kind: :whale, y: 0.0 }
+    let submerged = W.whale_pose(whale, 0.0)
+    let surfaced = W.whale_pose(whale, 3.0)
+    let diving = W.whale_pose(whale, 6.0)
+    let gone = W.whale_pose(whale, W.whale_duration())
+    Test.assert_true(surfaced.y > submerged.y && diving.z > surfaced.z && diving.pitch > 0.0 && gone.y <= submerged.y,
+      "whale rises, moves forward, then pitches down and submerges")
+
+    let impact = W.whale_splash_age()
+    Test.assert_true(!W.whale_splash_due(impact -. 0.2, impact -. 0.1), "the tail stays dry before it hits")
+    Test.assert_true(W.whale_splash_due(impact -. 0.1, impact +. 0.1), "a frame spanning tail impact emits a splash")
+    Test.assert_true(!W.whale_splash_due(impact, impact) && !W.whale_splash_due(impact +. 0.1, impact +. 0.2),
+      "holding or advancing past the impact emits no extra particles")
+
+    let shore : Ur.Turtles.TurtleRoute = { x: 20.0, z: 30.0, heading: 0.0, sweep: 1.0 }
+    let swimming = Ur.Turtles.turtle_pose(shore, 0.0)
+    let ashore = Ur.Turtles.turtle_pose(shore, 9.0)
+    let wandering = Ur.Turtles.turtle_pose(shore, 13.0)
+    let returning = Ur.Turtles.turtle_pose(shore, Ur.Turtles.turtle_duration())
+    Test.assert_true(swimming.z < shore.z && ashore.z > shore.z && wandering.x > ashore.x && returning.z < shore.z,
+      "a turtle swims in, changes course on the beach and returns to the water")
+
+    let c = S.new()
+    let i = S.index(12, 14)
+    let freestanding = { c with heights: NativeArray.set_int(c.heights, i, 12), roads: NativeArray.set_int(c.roads, i, 0),
+      buildings: NativeArray.set_int(c.buildings, i, 1), plants: NativeArray.set_int(c.plants, i, 0) }
+    Test.assert_true(Option.is_some(W.perch(freestanding, i, :roof)), "a building offers a roof perch")
+    let park = { freestanding with parks: NativeArray.set_int(freestanding.parks, i, 1) }
+    Test.assert_true(Option.is_some(W.perch(park, i, :tree)), "a park tree offers a canopy perch")
+
+    let ocean = O.field(c)
+    Test.assert_true(!W.whale_clear(c, ocean, 100.0, 116.0, 0.0), "whales stay off land")
+    Test.assert_true(W.whale_clear(c, ocean, -68.0, -68.0, 0.0), "whales can surface in the open sea beyond the island map")
+
+    let view : Ur.Wildlife.WildlifeView = { x: -68.0, z: -68.0, zoom: 24.0, aspect: 1.6, yaw: 0.55 }
+    let quiet = W.step(c, ocean, view, 0.0, W.empty(0.0), false)
+    let active = W.step(c, ocean, view, 7.0, quiet, false)
+    Test.assert_true(Option.is_none(quiet.bird.site) && Option.is_none(quiet.whale.site), "wildlife waits before starting")
+    Test.assert_true(Option.is_some(active.bird.site) && Option.is_some(active.whale.site), "close views can show both sightings")
+    Test.assert_true(Option.is_none(active.turtle.route), "turtles need a beach")
+    let shore_view = { view with x: 28.0, z: 116.0 }
+    let coastal = W.step(c, ocean, shore_view, 5.5, W.empty(0.0), false)
+    Test.assert_true(Option.is_some(coastal.turtle.route), "an unobstructed sandy coast offers a turtle route")
+    let wide = W.step(c, ocean, { view with zoom: 80.0 }, 7.0, active, false)
+    Test.assert_true(Option.is_none(wide.bird.site) && Option.is_none(wide.whale.site), "zooming out clears wildlife")
+    let after = W.step(c, ocean, view, 20.0, active, false)
+    Test.assert_true(Option.is_none(after.bird.site) && Option.is_none(after.whale.site) && after.whale.due > after.bird.due,
+      "sightings end and whales take longer to return")
+  end
+end

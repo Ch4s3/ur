@@ -214,31 +214,7 @@ mod Ur.Ocean do
   pfn has_reef(kind : NativeIntArr, i : Int) : Bool do
     if i >= NativeArray.length_int(kind) do false else if NativeArray.get_int(kind, i) == 1 do true else has_reef(kind, i + 1) end end
   end
-  -- (species, main, accent) in Ur.Scene's materials: 37 reef rock, 38 tan, 39 pink, 40 purple, 41 yellow-green, 42 orange, 43 pale tips
-  pfn coral_colours(sp : Int) : (Int, Int) do
-    match sp do
-      0 -> (38, 43)
-      1 -> (41, 37)
-      2 -> (40, 43)
-      3 -> (40, 39)
-      _ -> (42, 38)
-    end
-  end
-  pfn coral_go(species : List(Int), k : Int, out : List(Strata.Template.Template)) : List(Strata.Template.Template) do
-    match species do
-      Nil -> out
-      Cons(sp, rest) ->
-        let (main, accent) = coral_colours(sp)
-        let t = Strata.Corals.build(sp, 31 * k + sp, 0.25, main, accent)
-        coral_go(rest, k + 1, Cons(t, out))
-    end
-  end
-  doc "The coral templates a reef of [reef_type] is dotted with: a coral reef every species, three of each; a mixed one brains, fans and sponges among boulders; a rocky one boulders of reef rock alone."
-  fn coral_set(reef_type : Int) : List(Strata.Template.Template) do
-    if reef_type == 0 do List.map([0, 1, 2], fn k -> Strata.Corals.build(1, 500 + k, 0.25, 37, 13))
-    else if reef_type == 1 do List.append(coral_go([1, 1, 3, 3, 4, 4], 0, Nil), List.map([0, 1], fn k -> Strata.Corals.build(1, 500 + k, 0.25, 37, 13)))
-    else coral_go([0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4], 0, Nil) end end
-  end
+  fn coral_set(reef_type : Int) : List(Strata.Template.Template) do Ur.ReefArt.coral_set(reef_type) end
   doc "What city [c]'s reefs are, from its temperature setting: 0 rocky (0..1), 1 mixed (2), 2 coral (3..4)."
   fn reef_type(c : Ur.Sim.City) : Int do
     let t = if NativeArray.length_int(c.setup) > 2 do NativeArray.get_int(c.setup, 2) else 2 end

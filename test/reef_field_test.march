@@ -63,6 +63,25 @@ mod ReefFieldTest do
     let (bare, _) = O.shoals(old)
     Test.assert_false(any_below(bare, 63, 0), "the bare shelf has no shoals")
 
+    Test.assert_eq_int(List.length(O.coral_set(0)), 3, "cold reefs retain their rock templates")
+    let mixed = O.coral_set(1)
+    Test.assert_eq_int(List.length(mixed), 15, "mixed reefs include branching fans and bottlebrushes")
+    Test.assert_eq_int(List.length(List.filter(mixed, fn t -> Strata.Template.t_sx(t) == 17)), 3,
+      "mixed reefs contain three broad branching colonies")
+    Test.assert_eq_int(List.length(O.coral_set(2)), 42, "warm reefs offer fourteen forms in three variants")
+
+    let cup = Ur.ReefArt.template(2, 0, 47, 48)
+    let pillars = Ur.ReefArt.template(1, 0, 46, 43)
+    let centre = 6 + 13 * (5 + 12 * 6)
+    Test.assert_eq_int(NativeArray.get_i32(Strata.Template.t_ids(cup), centre), 0, "cup has a hollow centre")
+    Test.assert_true(NativeArray.get_i32(Strata.Template.t_ids(pillars), centre) > 0, "pillar has a solid centre stalk")
+
+    let antler = Ur.ReefArt.template(3, 0, 47, 43)
+    let tip = 4 + 13 * (10 + 13 * 7)
+    Test.assert_eq_int(NativeArray.get_i32(Strata.Template.t_ids(antler), tip), 43, "antler forks have pale tips")
+    Test.assert_true(List.any(mixed, fn t -> Strata.Template.t_sx(t) == 13 && Strata.Template.t_sy(t) == 8),
+      "mixed reefs include a shallow branching colony")
+
     -- saves keep the features version, and a save without it loads with none
     match Ur.Save.decode_session(Ur.Save.encode_session(game_of(seeded))) do
       Ok(s) -> Test.assert_eq_int(s.game.city.sea_features, 1, "sea_features survives a save")

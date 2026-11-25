@@ -1,0 +1,245 @@
+-- Ambient sightings live on the renderer's clock and only look up nearby scenery.
+mod Ur.Wildlife do
+  alias Ur.Sim as S
+  alias Ur.Landscape as L
+  alias Ur.Ocean as O
+
+  type WildlifeSite = { lot : Int, kind : Atom, x : Float, y : Float, z : Float, heading : Float }
+  type WildlifePose = { x : Float, y : Float, z : Float, pitch : Float, flight : Float }
+  type WildlifeView = { x : Float, z : Float, zoom : Float, aspect : Float, yaw : Float }
+  type SightingTrack = { due : Float, site : Option(WildlifeSite) }
+  type Sightings = { bird : SightingTrack, bird_kind : Int, whale : SightingTrack, turtle : Ur.Turtles.TurtleTrack }
+
+  fn empty(now : Float) : Sightings do
+    { bird: { due: now +. 1.5, site: None }, bird_kind: 0,
+      whale: { due: now +. 7.0, site: None }, turtle: Ur.Turtles.empty(now) }
+  end
+
+  fn close(view : WildlifeView) : Bool do view.zoom <= 48.0 end
+  fn bird_duration() : Float do 11.0 end
+  fn whale_duration() : Float do 8.0 end
+  fn whale_splash_age() : Float do 6.5 end
+
+  fn whale_splash_due(before : Float, age : Float) : Bool do
+    before < whale_splash_age() && age >= whale_splash_age()
+  end
+
+  fn ease(t : Float) : Float do
+    let q = Math.min_float(1.0, Math.max_float(0.0, t))
+    q *. q *. (3.0 -. 2.0 *. q)
+  end
+
+  fn bird_pose(site : WildlifeSite, age : Float) : WildlifePose do
+    -- Start and finish beyond the initial view, even for a perch near its edge.
+    let (along, rise, flight, pitch) = if site.kind == :flyby do
+      (age *. 10.0 -. 55.0, 9.0 +. Math.sin(age *. 0.55), 0.72, 0.0)
+    else if age < 4.0 do
+      let t = age /. 4.0
+      let left = 1.0 -. t
+      (0.0 -. (10.0 *. left +. 82.0 *. left *. left), 13.0 *. (1.0 -. ease(t)),
+        ease(left *. 12.0), 0.21 *. Math.sin(t *. 3.14159))
+    else if age < 6.5 do (0.0, 0.0, 0.0, 0.0)
+    else
+      let t = (age -. 6.5) /. 4.5
+      (9.0 *. t +. 83.0 *. t *. t, 15.0 *. ease(t),
+        ease(t *. 18.0), 0.0 -. 0.27 *. Math.sin(t *. 3.14159))
+    end end end
+    { x: site.x +. along *. Math.sin(site.heading), y: site.y +. rise,
+      z: site.z +. along *. Math.cos(site.heading), pitch: pitch, flight: flight }
+  end
+
+  fn whale_pose(site : WildlifeSite, age : Float) : WildlifePose do
+    let along = (age -. 4.0) *. 2.2
+    let rise = ease(age /. 2.8) *. (1.0 -. ease((age -. 4.8) /. 2.8))
+    let pitch = (0.0 -. 0.16) *. ease(age /. 1.6) *. (1.0 -. ease((age -. 1.6) /. 1.6))
+      +. 0.38 *. ease((age -. 4.0) /. 2.0) *. (1.0 -. ease((age -. 6.1) /. 1.9))
+    { x: site.x +. along *. Math.sin(site.heading), y: site.y -. 3.7 +. 3.83 *. rise,
+      z: site.z +. along *. Math.cos(site.heading), pitch: pitch, flight: 0.0 }
+  end
+
+  pfn canopy(p : Ur.Architecture.Piece) : Bool do
+    p.material == 11 || p.material == 14 || p.material == 21 || p.material == 22 || p.material == 25
+  end
+
+  pfn perch_piece(c : Ur.Sim.City, lot : Int, parts : List(Ur.Architecture.Piece), kind : Atom, p : Ur.Architecture.Piece) : Bool do
+    let x = p.x + p.w / 2
+    let z = p.z + p.d / 2
+    let y = p.y + p.h
+    let suitable = if kind == :tree do canopy(p) else p.w >= 4 && p.d >= 4 && !canopy(p) end
+    p.w >= 2 && p.d >= 2 && suitable &&
+      x >= 1 && z >= 1 && x <= 30 && z <= 30 &&
+      y >= L.height(c, lot % S.width() * 32 + x, lot / S.width() * 32 + z) + 4 &&
+      !List.any(parts, fn other -> other.y + other.h > y &&
+        x >= other.x && x < other.x + other.w && z >= other.z && z < other.z + other.d)
+  end
+
+  fn perch(c : Ur.Sim.City, lot : Int, kind : Atom) : Option(WildlifeSite) do
+    let built = S.get(c.buildings, lot) > 0 || (S.get(c.plants, lot) > 0 && !S.wind_turbine(S.get(c.plants, lot))) ||
+      lot == c.harbour || S.get(c.ferries, lot) > 0
+    let park = S.get(c.parks, lot) > 0
+    if !S.valid(lot) || S.get(c.heights, lot) <= 0 || S.canal_water(c, lot) ||
+      (if kind == :roof do !built || park else built && !park end) do None else
+      let parts = L.structures(c, lot, 0)
+      let best = List.fold_left(parts, None, fn (best : Option(Ur.Architecture.Piece), p) ->
+        let top = match best do Some(old) -> old.y + old.h | None -> -1 end
+        if p.y + p.h > top && perch_piece(c, lot, parts, kind, p) do Some(p) else best end)
+      match best do
+        None -> None
+        Some(p) -> Some({ lot: lot, kind: kind, x: int_to_float(lot % S.width() * 32 + p.x) *. 0.25 +. int_to_float(p.w) *. 0.125,
+          y: int_to_float(p.y + p.h) *. 0.25, z: int_to_float(lot / S.width() * 32 + p.z) *. 0.25 +. int_to_float(p.d) *. 0.125,
+          heading: 0.0 })
+      end
+    end
+  end
+
+  pfn whale_water(c : Ur.Sim.City, ocean : Ur.Ocean.Field, x : Float, z : Float) : Bool do
+    let vx = float_to_int(Math.floor(x)) * 4
+    let vz = float_to_int(Math.floor(z)) * 4
+    let px = int_div_euclid(vx, 32)
+    let pz = int_div_euclid(vz, 32)
+    let clear = if px >= 0 && pz >= 0 && px < S.width() && pz < S.depth() do
+      let i = S.index(px, pz)
+      S.get(c.heights, i) == 0 && S.get(c.seawalls, i) == 0 && S.get(c.ferries, i) == 0 &&
+        S.get(c.roads, i) == 0 && S.grade_kind(c, i) == 0 && !S.canal_water(c, i)
+    else true end
+    clear && O.corner_depth(ocean, vx, vz) >= 20
+  end
+
+  pfn whale_strip(c : Ur.Sim.City, ocean : Ur.Ocean.Field, x : Float, z : Float, dx : Float, dz : Float, along : Int) : Bool do
+    if along > 16 do true else
+      let px = x +. dx *. int_to_float(along)
+      let pz = z +. dz *. int_to_float(along)
+      whale_water(c, ocean, px, pz) &&
+        whale_water(c, ocean, px +. dz *. 1.8, pz -. dx *. 1.8) &&
+        whale_water(c, ocean, px -. dz *. 1.8, pz +. dx *. 1.8) &&
+        whale_water(c, ocean, px +. dz *. 3.6, pz -. dx *. 3.6) &&
+        whale_water(c, ocean, px -. dz *. 3.6, pz +. dx *. 3.6) &&
+        whale_strip(c, ocean, x, z, dx, dz, along + 1)
+    end
+  end
+
+  fn whale_clear(c : Ur.Sim.City, ocean : Ur.Ocean.Field, x : Float, z : Float, heading : Float) : Bool do
+    whale_strip(c, ocean, x, z, Math.sin(heading), Math.cos(heading), -16)
+  end
+
+  pfn in_view(view : WildlifeView, x : Float, y : Float, z : Float, margin : Float) : Bool do
+    let dx = x -. view.x
+    let dz = z -. view.z
+    let sy = Math.sin(view.yaw)
+    let cy = Math.cos(view.yaw)
+    let right = dx *. cy -. dz *. sy
+    let up = (y -. 3.0) *. 0.795 -. (dx *. sy +. dz *. cy) *. 0.607
+    Math.abs(right) <= view.zoom *. margin && Math.abs(up) <= view.zoom /. view.aspect *. margin
+  end
+
+  pfn x_lot(x : Float) : Int do float_to_int(Math.floor(x /. 8.0)) end
+
+  pfn bird_clear_at(c : Ur.Sim.City, site : WildlifeSite, age : Float) : Bool do
+    let pose = bird_pose(site, age)
+    let px = x_lot(pose.x)
+    let pz = x_lot(pose.z)
+    if px < 0 || pz < 0 || px >= S.width() || pz >= S.depth() do true else
+      let lot = S.index(px, pz)
+      let x = pose.x *. 4.0 -. int_to_float(px * 32)
+      let z = pose.z *. 4.0 -. int_to_float(pz * 32)
+      let y = (pose.y -. 0.20) *. 4.0
+      !List.any(L.structures(c, lot, 0), fn p ->
+        int_to_float(p.y + p.h) > y &&
+        x >= int_to_float(p.x) && x < int_to_float(p.x + p.w) &&
+        z >= int_to_float(p.z) && z < int_to_float(p.z + p.d))
+    end
+  end
+
+  pfn bird_path_clear(c : Ur.Sim.City, site : WildlifeSite) : Bool do
+    -- Check the low part of the approach and climb against nearby scene geometry.
+    List.all([2.4, 2.8, 3.2, 3.6, 7.0, 7.45, 7.9, 8.35], fn age -> bird_clear_at(c, site, age))
+  end
+
+  pfn bird_site(c : Ur.Sim.City, view : WildlifeView, kind : Atom, heading : Float, seed : Int, n : Int) : Option(WildlifeSite) do
+    if n >= 49 do None else
+      let k = int_mod_euclid(seed + n * 17, 49)
+      let x = x_lot(view.x) + k % 7 - 3
+      let z = x_lot(view.z) + k / 7 - 3
+      let site = if x >= 0 && z >= 0 && x < S.width() && z < S.depth() do perch(c, S.index(x, z), kind) else None end
+      match site do
+        Some(p) ->
+          let p = { p with heading: heading }
+          if in_view(view, p.x, p.y, p.z, 0.79) && bird_path_clear(c, p) do Some(p)
+          else bird_site(c, view, kind, heading, seed, n + 1) end
+        None -> bird_site(c, view, kind, heading, seed, n + 1)
+      end
+    end
+  end
+
+  pfn choose_bird(c : Ur.Sim.City, view : WildlifeView, seed : Int, heading : Float) : WildlifeSite do
+    let kind = if seed % 2 == 0 do :roof else :tree end
+    let found = match bird_site(c, view, kind, heading, seed, 0) do
+      Some(site) -> Some(site)
+      None -> bird_site(c, view, if kind == :roof do :tree else :roof end, heading, seed, 0)
+    end
+    match found do
+      Some(site) -> site
+      None ->
+        let y = int_to_float(L.height(c, float_to_int(view.x *. 4.0), float_to_int(view.z *. 4.0))) *. 0.25
+        { lot: -1, kind: :flyby, x: view.x, y: y, z: view.z, heading: heading }
+    end
+  end
+
+  pfn whale_site(c : Ur.Sim.City, ocean : Ur.Ocean.Field, view : WildlifeView, heading : Float, seed : Int, n : Int) : Option(WildlifeSite) do
+    if n >= 49 do None else
+      let k = int_mod_euclid(seed + n * 17, 49)
+      let x = int_to_float((x_lot(view.x) + k % 7 - 3) * 8 + 4)
+      let z = int_to_float((x_lot(view.z) + k / 7 - 3) * 8 + 4)
+      if in_view(view, x, 0.0, z, 0.74) && whale_clear(c, ocean, x, z, heading) do
+        Some({ lot: -1, kind: :whale, x: x, y: 0.0, z: z, heading: heading })
+      else whale_site(c, ocean, view, heading, seed, n + 1) end
+    end
+  end
+
+  pfn perch_still_there(c : Ur.Sim.City, site : WildlifeSite) : Bool do
+    if site.lot < 0 do true else
+      match perch(c, site.lot, site.kind) do
+        Some(p) -> p.x == site.x && p.y == site.y && p.z == site.z
+        None -> false
+      end
+    end
+  end
+
+  fn step(c : Ur.Sim.City, ocean : Ur.Ocean.Field, view : WildlifeView, now : Float, old : Sightings, changed : Bool) : Sightings do
+    if !close(view) do empty(now) else
+      let seed = Strata.Seed.mix(c.world_seed, float_to_int(now *. 10.0))
+      let heading = 1.5707963 -. view.yaw +. int_to_float(int_mod_euclid(seed, 41) - 20) *. 0.017 +
+        (if int_mod_euclid(seed, 4) < 2 do 0.0 else 3.14159265 end)
+      let bird = match old.bird.site do
+        Some(site) ->
+          if now -. old.bird.due >= bird_duration() || (changed && !perch_still_there(c, site)) do
+            { due: now +. 11.0 +. int_to_float(int_mod_euclid(seed, 10)), site: None }
+          else old.bird end
+        None ->
+          if now >= old.bird.due do { due: now, site: Some(choose_bird(c, view, seed, heading)) } else old.bird end
+      end
+      let whale = match old.whale.site do
+        Some(site) ->
+          if now -. old.whale.due >= whale_duration() || (changed && !whale_clear(c, ocean, site.x, site.z, site.heading)) do
+            { due: now +. 35.0 +. int_to_float(int_mod_euclid(seed, 24)), site: None }
+          else old.whale end
+        None ->
+          if now < old.whale.due do old.whale else
+            -- Let a passing whale travel across the frame so its back and tail read in profile.
+            match whale_site(c, ocean, view, heading +. 2.0 *. view.yaw, seed, 0) do
+              Some(site) -> { due: now, site: Some(site) }
+              None -> { due: now +. 5.0, site: None }
+            end
+          end
+      end
+      let bird_kind = match (old.bird.site, bird.site) do
+        (None, Some(site)) ->
+          int_mod_euclid(Strata.Seed.mix(seed, 73), if site.kind == :flyby && site.y <= 1.0 do 2 else 4 end)
+        _ -> old.bird_kind
+      end
+      let visible = fn (x : Float, y : Float, z : Float) -> in_view(view, x, y, z, 0.70)
+      let turtle = Ur.Turtles.step(c, ocean, view.x, view.z, visible, now, old.turtle, changed, seed)
+      { bird: bird, bird_kind: bird_kind, whale: whale, turtle: turtle }
+    end
+  end
+end

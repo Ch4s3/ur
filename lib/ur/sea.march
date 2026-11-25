@@ -181,4 +181,18 @@ mod Ur.Sea do
   end
   doc "A wave height in centimetres as metres to one place: 240 is \"2.4 m\"."
   fn metres(cm : Int) : String do int_to_string(cm / 100) ++ "." ++ int_to_string(cm % 100 / 10) ++ " m" end
+  fn exposure_at(exposure : NativeF32Arr, x : Float, z : Float) : Float do
+    let px = float_to_int(Math.floor(x /. 8.0))
+    let pz = float_to_int(Math.floor(z /. 8.0))
+    let r = Ur.Ocean.ring()
+    if px < 0 - r || pz < 0 - r || px >= S.width() + r || pz >= S.depth() + r do 1.0 else
+      let cell = Ur.Ocean.padded_cell(px, pz)
+      if cell < NativeArray.length_f32(exposure) do NativeArray.get_f32(exposure, cell) else 1.0 end
+    end
+  end
+
+  fn surface_height(waves : Strata.Waves.SeaWaves, field : Option(Strata.Waves.Swell), exposure : NativeF32Arr,
+    x : Float, z : Float, now : Float) : Float do
+    0.25 +. Strata.Waves.height(waves, field, exposure_at(exposure, x, z), x, z, now)
+  end
 end

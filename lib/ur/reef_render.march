@@ -1,0 +1,95 @@
+mod Ur.ReefRender do
+  import Ur.SceneMesh.{face}
+
+  -- ── Corals on the reefs (Strata.Corals, built with the field: Ur.Ocean.Field.corals) ──
+  -- A reef is dotted with corals on a 2 m grid: each spot on reef holds one with the reef type's chance, its species,
+  -- variant and turn hashed from the spot, so every parcel sees the same corals along its edges. A coral stands on the
+  -- floor and is cut below the surface; the voxels inside this parcel's layer (y -32..-1) are drawn, a face wherever
+  -- the neighbour is empty.
+  pfn coral_chance(reef_type : Int) : Float do if reef_type == 2 do 0.6 else if reef_type == 1 do 0.35 else 0.2 end end end
+  pfn coral_put(grid : NativeI32Arr, x : Int, z : Int, t : Strata.Template.Template, bx : Int, by : Int, bz : Int, rot : Int, i : Int) : NativeI32Arr do
+    let sx = Strata.Template.t_sx(t)
+    let sy = Strata.Template.t_sy(t)
+    let sz = Strata.Template.t_sz(t)
+    if i >= sx * sy * sz do grid else
+      let id = NativeArray.get_i32(Strata.Template.t_ids(t), i)
+      let grid = if id == 0 do grid else
+        let tx = i % sx
+        let ty = i / sx % sy
+        let tz = i / (sx * sy)
+        let (rx, rz) = match rot % 4 do
+          0 -> (tx, tz)
+          1 -> (sz - 1 - tz, tx)
+          2 -> (sx - 1 - tx, sz - 1 - tz)
+          _ -> (tz, sx - 1 - tx)
+        end
+        let lx = bx + rx - x
+        let wy = by + ty
+        let lz = bz + rz - z
+        -- below the surface (a voxel of water over it at least), inside this parcel's layer
+        if wy > -2 || wy < -32 || lx < 0 || lz < 0 || lx >= 32 || lz >= 32 do grid
+        else NativeArray.set_i32(grid, lx + 32 * ((wy + 32) + 32 * lz), id) end
+      end
+      coral_put(grid, x, z, t, bx, by, bz, rot, i + 1)
+    end
+  end
+  -- the corals whose spots lie within 2 m of parcel corner (x, z) (voxels) and its far side, into a 32 x 32 x 32 grid of ids
+  pfn coral_spots(f : Ur.Ocean.Field, grid : NativeI32Arr, x : Int, z : Int, gx : Int, gz : Int, placed : Int) : (NativeI32Arr, Int) do
+    let gx1 = int_div_euclid(x, 8) + 5
+    if gz > int_div_euclid(z, 8) + 4 do (grid, placed)
+    else if gx > gx1 do coral_spots(f, grid, x, z, int_div_euclid(x, 8) - 1, gz + 1, placed)
+    else
+      -- the spot's middle voxel, on the 2 m grid
+      let vx = gx * 8 + 4
+      let vz = gz * 8 + 4
+      let h = Strata.Seed.cell(97, 0, gx, 0, gz)
+      let d = Ur.Ocean.depth(f, vx, vz)
+      let n = List.length(f.corals)
+      if n == 0 || Ur.Ocean.kind(f, vx, vz) != 1 || d < 3 || Strata.Seed.unit(h) >= coral_chance(f.reef_type) do coral_spots(f, grid, x, z, gx + 1, gz, placed) else
+        let t = List.nth(f.corals, int_mod_euclid(Strata.Seed.mix(h, 1), n))
+        let half = Strata.Corals.half(t)
+        let rot = int_mod_euclid(Strata.Seed.mix(h, 2), 4)
+        coral_spots(f, coral_put(grid, x, z, t, vx - half, 0 - d, vz - half, rot, 0), x, z, gx + 1, gz, placed + 1)
+      end
+    end end
+  end
+  pfn coral_at(grid : NativeI32Arr, x : Int, y : Int, z : Int) : Int do
+    if x < 0 || y < 0 || z < 0 || x >= 32 || y >= 32 || z >= 32 do 0 else NativeArray.get_i32(grid, x + 32 * (y + 32 * z)) end
+  end
+  pfn coral_faces(m : Ur.SceneMesh.Mesh, grid : NativeI32Arr, i : Int) : Ur.SceneMesh.Mesh do
+    -- a parcel's corals stop at 12000 faces: the mesh holds no more
+    if i >= 32768 || m.quads >= 12000 do m else
+      let id = NativeArray.get_i32(grid, i)
+      let m = if id == 0 do m else
+        let x = i % 32
+        let y = i / 32 % 32
+        let z = i / 1024
+        let m = if coral_at(grid, x, y + 1, z) == 0 do face(m, x, y, z, 1, 1, 0, id) else m end
+        let m = if coral_at(grid, x, y - 1, z) == 0 do face(m, x, y, z, 1, 1, 1, id) else m end
+        let m = if coral_at(grid, x + 1, y, z) == 0 do face(m, x, y, z, 1, 1, 2, id) else m end
+        let m = if coral_at(grid, x - 1, y, z) == 0 do face(m, x, y, z, 1, 1, 3, id) else m end
+        let m = if coral_at(grid, x, y, z + 1) == 0 do face(m, x, y, z, 1, 1, 4, id) else m end
+        if coral_at(grid, x, y, z - 1) == 0 do face(m, x, y, z, 1, 1, 5, id) else m end
+      end
+      coral_faces(m, grid, i + 1)
+    end
+  end
+  -- the seabed mesh with the parcel's corals added: a mesh big enough for them when there are any
+  fn add(m : Ur.SceneMesh.Mesh, f : Ur.Ocean.Field, x : Int, z : Int) : Ur.SceneMesh.Mesh do
+    if List.is_empty(f.corals) do m else
+      let (grid, placed) = coral_spots(f, NativeArray.make_i32(32768, 0), x, z, int_div_euclid(x, 8) - 1, int_div_euclid(z, 8) - 1, 0)
+      if placed == 0 do m else
+        let big = { words: NativeArray.make_i32(24064, 0), quads: 0 }
+        let big = copy_quads(big, m, 0)
+        coral_faces(big, grid, 0)
+      end
+    end
+  end
+  pfn copy_quads(into : Ur.SceneMesh.Mesh, from : Ur.SceneMesh.Mesh, k : Int) : Ur.SceneMesh.Mesh do
+    if k >= from.quads do into else
+      let n = into.quads * 2
+      let words = NativeArray.set_i32(NativeArray.set_i32(into.words, n, NativeArray.get_i32(from.words, k * 2)), n + 1, NativeArray.get_i32(from.words, k * 2 + 1))
+      copy_quads({ words: words, quads: into.quads + 1 }, from, k + 1)
+    end
+  end
+end

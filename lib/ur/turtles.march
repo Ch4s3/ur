@@ -1,0 +1,173 @@
+mod Ur.Turtles do
+  needs IO.Console
+  needs IO.Process
+  needs IO.Foreign
+  needs Window
+  alias Ur.WildlifeMesh as Draw
+  import Ur.SceneMesh.{box, vehicle_body}
+
+  alias Ur.Sim as S
+  alias Ur.Landscape as L
+  alias Ur.Ocean as O
+
+  type TurtleRoute = { x : Float, z : Float, heading : Float, sweep : Float }
+  type TurtlePose = { x : Float, z : Float, heading : Float }
+  type TurtleTrack = { due : Float, route : Option(TurtleRoute) }
+  fn empty(now : Float) : TurtleTrack do { due: now +. 5.5, route: None } end
+
+  fn turtle_duration() : Float do 26.0 end
+
+  pfn turtle_position(route : TurtleRoute, age : Float) : (Float, Float) do
+    let (forward, side) = if age < 9.0 do (age *. 0.8 -. 4.0, 0.0)
+    else if age < 17.0 do
+      let angle = (age -. 9.0) *. 3.141592654 /. 8.0
+      (3.2 +. 1.55 *. Math.sin(angle), route.sweep *. 1.5 *. (1.0 -. Math.cos(angle)))
+    else (3.2 -. (age -. 17.0) *. 0.8, route.sweep *. 3.0) end end
+    let dx = Math.sin(route.heading)
+    let dz = Math.cos(route.heading)
+    (route.x +. dx *. forward +. dz *. side, route.z +. dz *. forward -. dx *. side)
+  end
+
+  fn turtle_pose(route : TurtleRoute, age : Float) : TurtlePose do
+    let (x, z) = turtle_position(route, age)
+    let (ax, az) = turtle_position(route, age -. 0.08)
+    let (bx, bz) = turtle_position(route, age +. 0.08)
+    { x: x, z: z, heading: Math.atan2(bx -. ax, bz -. az) }
+  end
+
+  fn turtle_ground(c : Ur.Sim.City, ocean : Ur.Ocean.Field, x : Float, z : Float) : Int do
+    let vx = float_to_int(Math.floor(x *. 4.0))
+    let vz = float_to_int(Math.floor(z *. 4.0))
+    Math.max_int(L.height(c, vx, vz), 0 - O.depth(ocean, vx, vz))
+  end
+
+  pfn beach_tile_clear(c : Ur.Sim.City, x : Float, z : Float) : Bool do
+    let px = float_to_int(Math.floor(x /. 8.0))
+    let pz = float_to_int(Math.floor(z /. 8.0))
+    if px < 0 || pz < 0 || px >= S.width() || pz >= S.depth() do true else
+      let i = S.index(px, pz)
+      S.get(c.roads, i) == 0 && S.get(c.plants, i) == 0 && S.get(c.buildings, i) == 0 &&
+        S.get(c.construction, i) == 0 && S.get(c.parks, i) == 0 && S.get(c.seawalls, i) == 0 &&
+        S.get(c.ferries, i) == 0 && S.grade_kind(c, i) == 0 && !S.canal_water(c, i)
+    end
+  end
+
+  pfn turtle_path_clear(c : Ur.Sim.City, ocean : Ur.Ocean.Field, route : TurtleRoute, n : Int) : Bool do
+    if n > 52 do true else
+      let (x, z) = turtle_position(route, int_to_float(n) *. 0.5)
+      let ground = turtle_ground(c, ocean, x, z)
+      let terrain_ok = if n <= 7 || n >= 46 do ground == 0
+        else if n >= 12 && n <= 40 do ground >= 1 && ground <= 6
+        else ground <= 6 end end
+      terrain_ok && beach_tile_clear(c, x, z) && turtle_path_clear(c, ocean, route, n + 1)
+    end
+  end
+
+  pfn turtle_direction(c : Ur.Sim.City, ocean : Ur.Ocean.Field, x : Float, z : Float, seed : Int, n : Int) : Option(TurtleRoute) do
+    if n >= 16 do None else
+      let k = int_mod_euclid(seed + n, 16)
+      let heading = int_to_float(k % 8) *. 0.785398163
+      let route = { x: x, z: z, heading: heading, sweep: if k < 8 do 1.0 else -1.0 end }
+      let (wx, wz) = turtle_position(route, 3.0)
+      let (sx, sz) = turtle_position(route, 9.0)
+      if turtle_ground(c, ocean, wx, wz) == 0 && turtle_ground(c, ocean, sx, sz) > 0 &&
+        turtle_path_clear(c, ocean, route, 0) do Some(route)
+      else turtle_direction(c, ocean, x, z, seed, n + 1) end
+    end
+  end
+
+  pfn turtle_site(c : Ur.Sim.City, ocean : Ur.Ocean.Field, cx : Float, cz : Float, visible : Float -> Float -> Float -> Bool, seed : Int, n : Int) : Option(TurtleRoute) do
+    if n >= 1369 do None else
+      let k = int_mod_euclid(seed + n * 61, 1369)
+      let x = Math.floor(cx) +. int_to_float(k % 37 - 18) +. 0.5
+      let z = Math.floor(cz) +. int_to_float(k / 37 - 18) +. 0.5
+      let ground = turtle_ground(c, ocean, x, z)
+      let route = if ground > 0 && ground <= 3 && visible(x, int_to_float(ground) *. 0.25, z) &&
+        beach_tile_clear(c, x, z) do turtle_direction(c, ocean, x, z, seed, 0) else None end
+      match route do
+        Some(_) -> route
+        None -> turtle_site(c, ocean, cx, cz, visible, seed, n + 1)
+      end
+    end
+  end
+
+  fn step(c : Ur.Sim.City, ocean : Ur.Ocean.Field, cx : Float, cz : Float, visible : Float -> Float -> Float -> Bool, now : Float, old : TurtleTrack, changed : Bool, seed : Int) : TurtleTrack do
+    match old.route do
+      Some(route) ->
+        if now -. old.due >= turtle_duration() || (changed && !turtle_path_clear(c, ocean, route, 0)) do
+          { due: now +. 31.0 +. int_to_float(int_mod_euclid(seed, 24)), route: None }
+        else old end
+      None ->
+        if now < old.due do old else
+          match turtle_site(c, ocean, cx, cz, visible, seed, 0) do
+            Some(route) -> { due: now, route: Some(route) }
+            None -> { due: now +. 7.0, route: None }
+          end
+        end
+    end
+  end
+
+  fn slots() : Int do 5 end
+  fn setup(base : Int) : Unit do
+    let shell = box(vehicle_body(), 2, 1, 3, 8, 2, 9, 13)
+    let shell = box(shell, 1, 2, 4, 10, 1, 7, 14)
+    let shell = box(shell, 2, 3, 3, 8, 1, 9, 21)
+    let shell = box(shell, 3, 4, 4, 6, 1, 7, 14)
+    let shell = box(box(shell, 4, 5, 5, 4, 1, 5, 25), 5, 5, 7, 2, 1, 1, 21)
+    let shell = box(box(shell, 4, 1, 11, 4, 2, 3, 21), 4, 1, 1, 3, 1, 2, 14)
+    let shell = box(box(shell, 4, 2, 13, 4, 2, 2, 25), 5, 1, 15, 2, 2, 1, 21)
+    let shell = box(box(shell, 4, 3, 14, 1, 1, 1, 19), 7, 3, 14, 1, 1, 1, 19)
+    Draw.upload(base, shell, 0.10)
+    let left = box(box(vehicle_body(), 2, 0, 1, 4, 1, 3, 14), 0, 0, 0, 3, 1, 2, 21)
+    let right = box(box(vehicle_body(), 0, 0, 1, 4, 1, 3, 14), 3, 0, 0, 3, 1, 2, 21)
+    Draw.upload((base + 1), left, 0.10)
+    Draw.upload((base + 2), right, 0.10)
+    Draw.upload((base + 3), left, 0.065)
+    Draw.upload((base + 4), right, 0.065)
+  end
+  pfn hide_parts(base : Int, part : Int) : Unit do
+    if part < 5 do
+      Draw.show((base + part), false)
+      hide_parts(base, part + 1)
+    else () end
+  end
+  fn hide(base : Int) : Unit do hide_parts(base, 0) end
+
+  pfn turtle_stroke(base : Int, p : TurtlePose, y : Float, stride : Float, swimming : Bool, part : Int) : Unit do
+    let left = part % 2 == 1
+    let side = if left do -1.0 else 1.0 end
+    let front = part < 3
+    let (across, along, size) = if front do (0.36, 0.29, 0.10) else (0.29, -0.36, 0.065) end
+    let (dx, dz) = (Math.sin(p.heading), Math.cos(p.heading))
+    let rhythm = if front == left do stride else 0.0 -. stride end
+    let yaw = p.heading +. side *. (0.19 +. rhythm *. (if swimming do 0.47 else 0.24 end))
+    let roll = if swimming do side *. (0.12 +. rhythm *. 0.40) else 0.0 end
+    Draw.pose((base + part), p.x +. dx *. along +. dz *. across *. side,
+      y +. 0.05 +. (if swimming do 0.06 else 0.03 end) *. rhythm,
+      p.z +. dz *. along -. dx *. across *. side, yaw, 0.0, roll,
+      if left do 6.0 *. size else 0.0 end, 0.0, size *. 2.0)
+    ()
+  end
+  fn draw(base : Int, c : Ur.Sim.City, ocean : Ur.Ocean.Field, route : TurtleRoute, age : Float,
+    waves : Strata.Waves.SeaWaves, field : Option(Strata.Waves.Swell), exposure : NativeF32Arr, now : Float) : Unit do
+    let p = turtle_pose(route, age)
+    -- Blend the four surrounding shore samples, so the turtle climbs low sand steps smoothly.
+    let x = Math.floor(p.x -. 0.5) +. 0.5
+    let z = Math.floor(p.z -. 0.5) +. 0.5
+    let (u, v) = (p.x -. x, p.z -. z)
+    let h = fn (x : Float, z : Float) -> int_to_float(turtle_ground(c, ocean, x, z)) *. 0.25
+    let sand = (h(x, z) *. (1.0 -. u) +. h(x +. 1.0, z) *. u) *. (1.0 -. v) +.
+      (h(x, z +. 1.0) *. (1.0 -. u) +. h(x +. 1.0, z +. 1.0) *. u) *. v
+    let surface = Ur.Sea.surface_height(waves, field, exposure, p.x, p.z, now)
+    let depth = Ur.Ocean.depth(ocean, float_to_int(Math.floor(p.x *. 4.0)), float_to_int(Math.floor(p.z *. 4.0)))
+    let ground = h(p.x, p.z)
+    let swimming = ground == 0.0
+    let stride = Math.sin(age *. 7.2)
+    let float_y = surface -. Math.min_float(0.69, 0.20 +. int_to_float(depth) *. 0.11)
+    let y = if swimming do (if sand > 0.01 do Math.max_float(sand -. 0.17, float_y) else float_y end)
+      else Math.max_float(sand, ground) -. 0.04 end
+    let roll = stride *. (if swimming do 0.10 else 0.037 end)
+    Draw.pose(base, p.x, y +. 0.027 *. Math.abs(stride), p.z, p.heading, 0.0, roll, 0.6, 0.0, 0.8)
+    List.fold_left([1, 2, 3, 4], (), fn (_, part) -> turtle_stroke(base, p, y, stride, swimming, part))
+  end
+end

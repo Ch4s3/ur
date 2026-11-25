@@ -1,0 +1,75 @@
+-- The body and hinged flukes are lofted from elliptical sections in Strata's
+-- model space. Their silhouettes can curve between the surrounding voxels.
+mod Ur.WhaleArt do
+  alias Strata.Model as Model
+
+  -- Centre x, y, z and transverse radii in the section plane.
+  type WhaleSection = WhaleSection(Float, Float, Float, Float, Float)
+
+  pfn vertex(section : WhaleSection, yaw : Float, angle : Float, u : Float, v : Float) : List(Float) do
+    match section do
+      WhaleSection(x, y, z, width, height) ->
+        let side = width *. Math.cos(angle)
+        [x +. side *. Math.cos(yaw), y +. height *. Math.sin(angle), z -. side *. Math.sin(yaw), u, v]
+    end
+  end
+
+  pfn band(mesh : Strata.Model.Geometry, a : WhaleSection, b : WhaleSection, yaw : Float, sides : Int, tex : Int) : Strata.Model.Geometry do
+    List.fold_left(List.range(0, sides), mesh, fn (out, i) ->
+      let start = int_to_float(i) /. int_to_float(sides)
+      let stop = int_to_float(i + 1) /. int_to_float(sides)
+      let lo = start *. 6.283185307
+      let hi = stop *. 6.283185307
+      let corners = List.concat([vertex(a, yaw, lo, start, 0.0), vertex(a, yaw, hi, stop, 0.0),
+        vertex(b, yaw, lo, start, 1.0), vertex(b, yaw, hi, stop, 1.0)])
+      Model.quad(out, NativeArray.from_list_f32(corners), tex))
+  end
+
+  pfn loft(mesh : Strata.Model.Geometry, sections : List(WhaleSection), yaw : Float, sides : Int, tex : Int) : Strata.Model.Geometry do
+    match sections do
+      Cons(a, Cons(b, tail)) -> loft(band(mesh, a, b, yaw, sides, tex), Cons(b, tail), yaw, sides, tex)
+      _ -> mesh
+    end
+  end
+
+  fn body() : Strata.Model.Geometry do
+    let hull = loft(Model.empty(), [
+      WhaleSection(8.5, 4.25, 0.0, 0.9, 0.7), WhaleSection(8.5, 4.15, 3.0, 1.6, 1.05),
+      WhaleSection(8.5, 4.1, 6.5, 2.4, 1.65), WhaleSection(8.5, 4.25, 10.0, 3.75, 2.45),
+      WhaleSection(8.5, 4.25, 13.5, 5.05, 3.25), WhaleSection(8.5, 4.15, 17.5, 5.4, 3.5),
+      WhaleSection(8.5, 4.05, 21.0, 5.2, 3.25), WhaleSection(8.5, 3.8, 24.0, 4.75, 2.8),
+      WhaleSection(8.5, 3.6, 26.5, 3.8, 2.15), WhaleSection(8.5, 3.5, 28.0, 2.8, 1.5),
+      WhaleSection(8.5, 3.5, 28.8, 1.4, 0.8), WhaleSection(8.5, 3.5, 29.1, 0.08, 0.08)
+    ], 0.0, 20, 4)
+    let dorsal = loft(hull, [
+      WhaleSection(8.5, 5.9, 8.0, 0.08, 0.08), WhaleSection(8.5, 6.4, 9.6, 0.5, 1.0),
+      WhaleSection(8.5, 7.0, 11.3, 0.75, 2.05), WhaleSection(8.5, 7.1, 12.7, 0.62, 1.25),
+      WhaleSection(8.5, 6.8, 14.5, 0.08, 0.08)
+    ], 0.0, 12, 19)
+    List.fold_left([-1.0, 1.0], dorsal, fn (mesh, side) ->
+      loft(mesh, [
+        WhaleSection(8.5 +. side *. 3.9, 2.8, 17.0, 2.15, 0.65),
+        WhaleSection(8.5 +. side *. 5.7, 2.35, 16.3, 1.6, 0.52),
+        WhaleSection(8.5 +. side *. 7.05, 1.85, 15.25, 0.95, 0.34),
+        WhaleSection(8.5 +. side *. 8.0, 1.4, 14.3, 0.08, 0.08)
+      ], side *. 1.570796327, 12, 19))
+  end
+
+  fn tail() : Strata.Model.Geometry do
+    let stem = loft(Model.empty(), [
+      WhaleSection(8.5, 2.0, 2.0, 1.45, 0.5), WhaleSection(8.5, 2.0, 5.1, 1.45, 0.77),
+      WhaleSection(8.5, 2.0, 8.5, 1.15, 0.93), WhaleSection(8.5, 2.0, 11.1, 0.8, 0.75)
+    ], 0.0, 16, 4)
+    -- Each lobe fans out from the stem, with swept tips and a notch between
+    -- the lobes at the trailing edge.
+    List.fold_left([-1.0, 1.0], stem, fn (mesh, side) ->
+      loft(mesh, [
+        WhaleSection(8.5 +. side *. 0.4, 2.0, 3.3, 1.40, 0.63),
+        WhaleSection(8.5 +. side *. 2.0, 2.0, 2.8, 2.05, 0.65),
+        WhaleSection(8.5 +. side *. 4.0, 2.05, 2.55, 1.82, 0.49),
+        WhaleSection(8.5 +. side *. 6.0, 2.24, 2.35, 1.27, 0.33),
+        WhaleSection(8.5 +. side *. 7.65, 2.5, 1.7, 0.62, 0.20),
+        WhaleSection(8.5 +. side *. 8.35, 2.7, 1.12, 0.08, 0.07)
+      ], side *. 1.570796327, 16, 19))
+  end
+end
