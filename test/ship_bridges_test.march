@@ -54,7 +54,67 @@ mod ShipBridgesTest do
       _ -> Test.assert_true(false, "Both drawbridge leaves have deck geometry")
     end
   end
+  pfn arch_corner(mesh : Ur.BridgeMesh.Arch, lot : Int, face : Int, index : Int) : (Float, Float, Float) do
+    let vertices = Strata.Model.floats(mesh.geometry)
+    let offset = face * 21 + index * 5
+    (NativeArray.get_f32(vertices, offset) +. int_to_float(lot % S.width() * 32),
+      NativeArray.get_f32(vertices, offset + 1) +. int_to_float(mesh.floor),
+      NativeArray.get_f32(vertices, offset + 2) +. int_to_float(lot / S.width() * 32))
+  end
+  pfn arch_joint(a : Ur.BridgeMesh.Arch, lot_a : Int, strip_a : Int, b : Ur.BridgeMesh.Arch, lot_b : Int, strip_b : Int) : Bool do
+    List.all(List.range(0, 10), fn edge ->
+      let left = strip_a * 10 + edge
+      let right = strip_b * 10 + edge
+      nearby(arch_corner(a, lot_a, left, 1), arch_corner(b, lot_b, right, 0)) &&
+        nearby(arch_corner(a, lot_a, left, 3), arch_corner(b, lot_b, right, 2)))
+  end
+  pfn canal_arch() : Unit do
+    let west = S.index(11, 12)
+    let channel = S.index(12, 12)
+    let east = S.index(13, 12)
+    let north = S.index(12, 11)
+    let south = S.index(12, 13)
+    let source = fixture(11, 13)
+    let empty = NativeArray.make_int(S.count(), 0)
+    let roads = List.fold_left([west - 1, west, east, east + 1], empty,
+      fn (roads, lot) -> NativeArray.set_int(roads, lot, 1))
+    let canals = List.fold_left([north, channel, south], empty,
+      fn (canals, lot) -> NativeArray.set_int(canals, lot, 1))
+    let land = { source with roads: roads, canals: canals, heights: NativeArray.make_int(S.count(), 11) }
+    let c = S.build_grade(land, east, west, 50)
+    let height = fn t -> S.grade_surface(c, west, east, t)
+    Test.assert_true(S.canal_arch(c, west, east) && height(0.125) == 11.0 && height(0.875) == 11.0 &&
+      Math.abs(height(0.5) -. 23.0) < 0.001 &&
+      height(0.1875) -. height(0.125) < height(0.25) -. height(0.1875) &&
+      height(0.5) > height(0.375) && Math.abs(height(0.25) -. height(0.75)) < 0.001,
+      "The canal arch has street-level entries, eased slopes and a single rounded crown")
+    let ground = Ur.Landscape.portal_street(c, west, 11)
+    Test.assert_true(S.street_end_arm(land, west) >= 0 && S.street_end_arm(c, west) == -1 &&
+      List.any(ground, fn p -> p.material == 4 && p.x == 0) &&
+      List.all(ground, fn p -> p.x + p.w <= 16),
+      "The west approach joins the bridge at the street centre without a ground-level stub")
+    Test.assert_true(S.crossing_navigation(c, north, south, 12) == -1 &&
+      S.crossing_navigation(c, north, south, 20) == -2,
+      "Canal navigation uses the clearance under the rounded deck")
+    let higher = { c with heights: NativeArray.set_int(c.heights, channel, 18) }
+    Test.assert_true(List.all([c, higher], fn bridge ->
+      S.bridge_air_clearance_at(bridge, channel, 12, 16) >= 12 &&
+      S.bridge_air_clearance_at(bridge, channel, 19, 16) >= 12),
+      "The short arch clears a centred barge across its beam at both canal levels")
+    match (Ur.BridgeMesh.arch(c, west), Ur.BridgeMesh.arch(c, channel), Ur.BridgeMesh.arch(c, east)) do
+      (Some(entry), Some(deck), Some(exit)) ->
+        let half = 16 / S.arch_section_run()
+        let (_, crown, _) = arch_corner(deck, channel, (half - 1) * 10 + 5, 1)
+        Test.assert_true(arch_joint(entry, west, half - 1, deck, channel, 0) &&
+          arch_joint(deck, channel, half - 1, deck, channel, half) &&
+          arch_joint(deck, channel, half * 2 - 1, exit, east, 0) &&
+          Math.abs(crown -. height(0.5) -. 1.0) < 0.001,
+          "The arch shares every curb, deck and stripe edge across the crown and both parcel seams")
+      _ -> Test.assert_true(false, "The canal arch has a mesh on all three parcels")
+    end
+  end
   fn main(_cap : Cap(IO)) : Unit do
+    canal_arch()
     let first = S.index(2, 12)
     let last = S.index(41, 12)
     let center = S.index(21, 12)

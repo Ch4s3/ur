@@ -211,20 +211,27 @@ mod Ur.Landscape do
     let north_link = S.street_link(c, i, 2)
     let south_link = S.street_link(c, i, 3)
     let peer = S.grade_peer(c, i)
-    let bore = if S.mountain_tunnel(c, i, peer) do S.direction(i, peer) else -1 end
-    let east = west_link || east_link || (bore >= 0 && bore < 2)
-    let north = north_link || south_link || bore >= 2
+    let bridge = S.grade_kind(c, i) == 1 && S.valid(peer)
+    let crossing = if bridge || S.mountain_tunnel(c, i, peer) do S.direction(i, peer) else -1 end
+    let east = west_link || east_link || (crossing >= 0 && crossing < 2)
+    let north = north_link || south_link || crossing >= 2
     let junction = east && north && h > 0
     let arms = List.length(List.filter([west_link, east_link, north_link, south_link], fn linked -> linked))
     let shaped = shaped_surface(c, i)
-    let bulb = shaped && arms <= 1
+    let end_arm = S.street_end_arm(c, i)
+    let source = S.grade_source(c, i)
+    let target = S.grade_peer(c, source)
+    let under_bridge = end_arm >= 0 && S.grade_link(c, source, target) && S.grade_kind(c, source) == 1 &&
+      (end_arm < 2) == (source / S.width() == target / S.width())
+    let bulb = shaped && arms <= 1 && !under_bridge
     let deck = if h == 0 do 2 else h end
     -- A curve meets the centre of the next parcel edge. Straight segments
     -- use the same width, including the raised walking edge.
     let colour = if kind == 3 do 16 else 4 end
     let width = S.road_half_width(kind)
-    let a = if bulb || (shaped && junction) do
-      shaped_street(kind, { west: west_link, east: east_link, north: north_link, south: south_link }, bulb, deck)
+    let a = if bulb || ((shaped || bridge) && junction) do
+      shaped_street(kind, { west: west_link || crossing == 0, east: east_link || crossing == 1,
+        north: north_link || crossing == 2, south: south_link || crossing == 3 }, bulb, deck)
       else if junction || h == 0 do Cons(A.piece(0, deck, 0, 32, 1, 32, colour), Nil)
       else straight_edge(east, 16 - width, deck, 32, width * 2, colour, Nil) end
     end
@@ -746,11 +753,23 @@ mod Ur.Landscape do
       if horizontal >= 0 do parts else
         trim_closed_arms(c, lot, S.direction(lot, peer), 0, 16 - S.road_half_width(S.get(c.roads, lot)) - 2, parts)
       end
+    else if S.grade_kind(c, lot) == 1 && S.valid(peer) do
+      let inward = S.direction(lot, peer)
+      let parts = trim_closed_arms(c, lot, inward, 0, 16 - S.road_half_width(S.get(c.roads, lot)) - 2, parts)
+      let across = if inward < 2 do 2 else 0 end
+      let junction = S.street_link(c, lot, across) || S.street_link(c, lot, across + 1)
+      let reach = if junction do 14 - S.road_half_width(S.get(c.roads, lot)) else 16 end
+      if S.street_link(c, lot, inward) || reach == 0 do parts else
+        match A.orient([A.piece(0, 0, 0, 32, 1, reach, 0)], S.opposite(inward)) do
+          Nil -> parts
+          Cons(cut, _) -> cut_road_pieces(parts, cut)
+        end
+      end
     else if S.grade_kind(c, lot) == 3 && S.valid(peer) && !portal_crossed_by_street(c, lot, peer) do
       let side = S.opposite(S.direction(lot, peer))
       let guide = A.orient([A.piece(4, 0, 0, 24, 1, 16, 0)], side)
       match guide do Nil -> parts | Cons(cut, _) -> cut_road_pieces(parts, cut) end
-    else parts end end end
+    else parts end end end end
   end
   -- Three clear street-facing vehicle openings; the back wall is recessed so
   -- the bays remain legible instead of reading as a narrow side attachment.
@@ -970,6 +989,28 @@ mod Ur.Landscape do
     let right_pin = bridge_axis_piece(east, pin, hinge, 27, 2, 2, 1, 10)
     List.append([footing, cap, left, right, left_pin, right_pin], base)
   end
+  pfn arch_abutment(c : Ur.Sim.City, i : Int, first : Int, last : Int, east : Bool,
+    at : Int, parts : List(Ur.Architecture.Piece)) : List(Ur.Architecture.Piece) do
+    let span = S.span_distance(first, last) * 32
+    let start = S.span_distance(first, i) * 32 - 16 + at
+    if at >= 32 do parts
+    else if start < 0 || start + 4 > span do arch_abutment(c, i, first, last, east, at + 4, parts)
+    else
+      let is_canal = S.canal_water(c, i)
+      let dry = if !is_canal do S.get(c.heights, i) > 0 else
+        !List.any([6, 16, 25], fn across ->
+          if east do S.canal_wet(c, i, at + 2, across) else S.canal_wet(c, i, across, at + 2) end)
+      end
+      let ground = S.get(c.heights, i)
+      let left = S.grade_surface(c, first, last, int_to_float(start) /. int_to_float(span))
+      let right = S.grade_surface(c, first, last, int_to_float(start + 4) /. int_to_float(span))
+      let top = float_to_int(Math.floor(Math.min_float(left, right)))
+      let parts = if dry && top > ground do
+        Cons(bridge_axis_piece(east, at, ground, 7, 4, top - ground, 18, 17), parts)
+      else parts end
+      arch_abutment(c, i, first, last, east, at + 4, parts)
+    end end
+  end
   pfn grade_parts(c : Ur.Sim.City, i : Int, lighting : Int, base : List(Ur.Architecture.Piece)) : List(Ur.Architecture.Piece) do
     let a = S.grade_source(c, i)
     let b = S.grade_peer(c, a)
@@ -984,6 +1025,8 @@ mod Ur.Landscape do
         let pillar_height = float_to_int(S.grade_surface(c, a, b, int_to_float(offset) /. int_to_float(span))) - h
         let side = S.drawbridge_leaf_side(c, i)
         if side != 0 do drawbridge_hinge(c, i, Math.min_int(a, b), Math.max_int(a, b), side, east, base)
+        else if S.canal_arch(c, a, b) && (i == a || i == b || S.get(c.roads, i) == 0) do
+          arch_abutment(c, i, Math.min_int(a, b), Math.max_int(a, b), east, 0, base)
         else if !S.bridge_pier(c, i) || pillar_height <= 2 do base
         else if style == 0 do Cons(A.piece(13, h, 13, 6, pillar_height, 6, 17), base)
         else
@@ -1000,7 +1043,7 @@ mod Ur.Landscape do
               else A.piece(5, h + tower - 3, 14, 22, 3, 4, 24) end
             Cons(front, Cons(back, Cons(beam, pier)))
           end
-        end end end
+        end end end end
       else if kind == 3 && (i == a || i == b) do
         List.append(tunnel_portal(c, i, if i == a do b else a end, lighting >= 8), base)
       else if i == a || i == b do

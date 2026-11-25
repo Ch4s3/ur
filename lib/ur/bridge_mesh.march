@@ -1,0 +1,77 @@
+mod Ur.BridgeMesh do
+  alias Ur.Sim as S
+  alias Strata.Model as Model
+
+  type Arch = { geometry : Strata.Model.Geometry, floor : Int }
+  type Rim = { across : Float, height : Float, material : Int }
+
+  pfn rim(half : Float, rail : Float, curb : Float, top : Float) : List(Rim) do
+    let left = 0.0 -. half
+    let bottom = top -. 2.0
+    let rail_top = top +. rail
+    [
+      { across: left, height: bottom, material: 17 },
+      { across: half, height: bottom, material: 17 },
+      { across: half, height: rail_top, material: 17 },
+      { across: half -. curb, height: rail_top, material: 17 },
+      { across: half -. curb, height: top, material: 4 },
+      { across: 0.5, height: top, material: 16 },
+      { across: 0.0 -. 0.5, height: top, material: 4 },
+      { across: left +. curb, height: top, material: 17 },
+      { across: left +. curb, height: rail_top, material: 17 },
+      { across: left, height: rail_top, material: 17 },
+      { across: left, height: bottom, material: 17 }
+    ]
+  end
+
+  pfn vertex(east : Bool, along : Float, edge : Rim, u : Float, v : Float) : List(Float) do
+    if east do [along, edge.height, 16.0 +. edge.across, u, v]
+    else [16.0 -. edge.across, edge.height, along, u, v] end
+  end
+
+  pfn strip(g : Strata.Model.Geometry, east : Bool, from : Float, to : Float, a : List(Rim), b : List(Rim)) : Strata.Model.Geometry do
+    match (a, b) do
+      (Cons(a0, Cons(a1, ar)), Cons(b0, Cons(b1, br))) ->
+        let va = Math.abs(a1.across -. a0.across) +. Math.abs(a1.height -. a0.height)
+        let vb = Math.abs(b1.across -. b0.across) +. Math.abs(b1.height -. b0.height)
+        let corners = List.append(
+          List.append(vertex(east, from, a0, from, 0.0), vertex(east, to, b0, to, 0.0)),
+          List.append(vertex(east, from, a1, from, va), vertex(east, to, b1, to, vb)))
+        let g = Model.quad(g, NativeArray.from_list_f32(corners), a0.material)
+        strip(g, east, from, to, Cons(a1, ar), Cons(b1, br))
+      _ -> g
+    end
+  end
+
+  fn arch(c : Ur.Sim.City, lot : Int) : Option(Arch) do
+    let source = S.grade_source(c, lot)
+    let target = S.grade_peer(c, source)
+    if !S.canal_arch(c, source, target) do None else
+      let first = Math.min_int(source, target)
+      let last = Math.max_int(source, target)
+      let east = first / S.width() == last / S.width()
+      let length = S.span_distance(first, last) * 32
+      let origin = S.span_distance(first, lot) * 32 - 16
+      let low = Math.max_int(origin, 0)
+      let high = Math.min_int(origin + 32, length)
+      let span = int_to_float(length)
+      let surface = fn at -> S.grade_surface(c, first, last, int_to_float(at) /. span)
+      let floor = float_to_int(Math.floor(Math.min_float(surface(low), surface(high)))) - 1
+      let start = int_to_float(S.road_half_width(S.get(c.roads, first)) + 2)
+      let finish = int_to_float(S.road_half_width(S.get(c.roads, last)) + 2)
+      let runway = S.arch_landing_run(length)
+      let profile = fn at ->
+        let from_end = Math.min_int(at, length - at)
+        let blend = int_to_float(S.clamp(from_end - runway, 0, 8)) /. 8.0
+        let half = start +. (finish -. start) *. int_to_float(at) /. span
+        rim(half, 1.0 +. blend, 2.0 -. blend, surface(at) +. int_to_float(1 - floor))
+      let step = S.arch_section_run()
+      let (geometry, _) = List.fold_left(List.range(0, (high - low) / step), (Model.empty(), profile(low)), fn (state, section) ->
+        let (mesh, a) = state
+        let at = low + section * step
+        let b = profile(at + step)
+        (strip(mesh, east, int_to_float(at - origin), int_to_float(at + step - origin), a, b), b))
+      Some({ geometry: geometry, floor: floor })
+    end
+  end
+end

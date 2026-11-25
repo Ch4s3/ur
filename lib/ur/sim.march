@@ -1894,6 +1894,21 @@ mod Ur.Sim do
       24.0 *. progress *. progress *. (3.0 -. 2.0 *. progress)
     end
   end
+  fn canal_arch(c : City, a : Int, b : Int) : Bool do
+    let span = span_distance(a, b)
+    span >= 2 && span <= 6 && grade_link(c, a, b) && grade_kind(c, a) == 1 && bridge_style(c, a) == 0 &&
+      canal_water(c, a + grade_step(a, b) * (span / 2)) &&
+      canal_water(c, b + grade_step(b, a) * (span / 2))
+  end
+  fn arch_section_run() : Int do 4 end
+  fn arch_landing_run(span : Int) : Int do if span == 64 do 8 else 0 end end
+  pfn canal_arch_lift(span : Int, amplitude : Float, at : Float) : Float do
+    let landing = arch_landing_run(span)
+    let progress = (at -. int_to_float(landing)) /. int_to_float(span - 2 * landing)
+    let t = Math.max_float(0.0, Math.min_float(1.0, progress))
+    let arc = Math.sin(3.14159265359 *. t)
+    amplitude *. arc *. arc
+  end
   pfn tunnel_ramp(c : City, portal : Int, other : Int, half : Float) : Float do
     let step = grade_step(portal, other)
     let safe = if get(c.heights, portal + step) == 0 do 0.5
@@ -1940,6 +1955,21 @@ mod Ur.Sim do
       let run = if t <= 0.5 do tunnel_ramp(c, a, b, span *. 0.5) else tunnel_ramp(c, b, a, span *. 0.5) end
       let entrance = if t <= 0.5 do start else finish end
       0.0 -. tunnel_drop(depth, entrance, distance, run)
+    else if kind == 1 && canal_arch(c, a, b) do
+      let length = parcels * 32
+      let run = int_to_float(arch_section_run())
+      let sections = int_to_float(length) /. run
+      let position = t *. sections
+      let lo = Math.max_float(0.0, Math.min_float(sections -. 1.0, Math.floor(position)))
+      let amplitude = if parcels == 2 do
+        let water = canal_level(c, a + grade_step(a, b))
+        -- Keep twelve voxels of air below the deck across the centred barge's eight-voxel beam.
+        -- Four voxels from the crown, the curve still has over 93% of its rise.
+        Math.max_float(12.0, int_to_float(water + 14 - Math.min_int(ah, bh)) /. 0.93)
+      else 24.0 end
+      let low = canal_arch_lift(length, amplitude, lo *. run)
+      let high = canal_arch_lift(length, amplitude, (lo +. 1.0) *. run)
+      low +. (high -. low) *. (position -. lo)
     else if kind == 1 && parcels >= 3 do
       let run = if parcels >= 5 do 2.5 else 1.5 end
       let position = t *. span
@@ -1956,8 +1986,7 @@ mod Ur.Sim do
       let ramp = if progress > 1.0 do 1.0 else progress end
       let height = if kind == 1 do 24.0 else if kind == 2 do 0.0 -. 8.0 else 0.0 end end
       height *. ramp
-    end
-    end
+    end end end
     start +. (finish -. start) *. t +. lift
     end end
   end
@@ -1976,8 +2005,13 @@ mod Ur.Sim do
       else if side != 0 && distance >= 10 do 1024 else
         let span = int_to_float(span_distance(a, b))
         let center = int_to_float(span_distance(a, lot))
-        let low = grade_surface(c, a, b, Math.max_float(0.0, (center -. 0.5) /. span))
-        let high = grade_surface(c, a, b, Math.min_float(1.0, (center +. 0.5) /. span))
+        let along = clamp(if a < b do station else 31 - station end, 0, 31)
+        let edge = along / arch_section_run() * arch_section_run()
+        let arch = canal_arch(c, a, b)
+        let lo = if arch do int_to_float(edge - 16) /. 32.0 else -0.5 end
+        let hi = if arch do lo +. int_to_float(arch_section_run()) /. 32.0 else 0.5 end
+        let low = grade_surface(c, a, b, Math.max_float(0.0, (center +. lo) /. span))
+        let high = grade_surface(c, a, b, Math.min_float(1.0, (center +. hi) /. span))
         let water = if canal_water(c, lot) do canal_level(c, lot) else 0 end
         float_to_int(Math.floor(Math.min_float(low, high))) - 2 - water
       end end

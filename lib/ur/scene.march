@@ -316,7 +316,8 @@ mod Ur.Scene do
   -- Strata's shadow handles have a smaller range than its mesh slots.
   pfn raised_shadow(i : Int) : Int do i * 4 + 3 end
   fn wildlife_base() : Int do raised_slot(S.count()) end
-  fn chunk_slots() : Int do wildlife_base() + Ur.WildlifeRender.slots() end
+  pfn arch_slot(i : Int) : Int do wildlife_base() + Ur.WildlifeRender.slots() + i end
+  fn chunk_slots() : Int do arch_slot(S.count()) end
   -- a parcel's fifth and sixth layers of terrain (32 to 48 m), for the tallest mountains
   pfn high_slot(i : Int, layer : Int) : Int do Ur.Ocean.slot_count() + cloud_bodies() + i * 2 + layer - 4 end
   pfn cloud_slot(i : Int) : Int do Ur.Ocean.slot_count() + i end
@@ -1169,7 +1170,7 @@ mod Ur.Scene do
         let length = Math.sqrt(run *. run +. rise *. rise)
         let cells = S.clamp(float_to_int(length +. 0.5), 1, 32)
         let scale = length /. int_to_float(cells)
-        let width = S.clamp(float_to_int(18.0 /. scale +. 0.5), 9, 18)
+        let width = S.clamp(float_to_int(18.0 /. scale +. 0.5), 9, 32)
         let offset = int_to_float(lo - middle + 16)
         let along = offset +. 2.0 *. scale *. Math.sin(pitch)
         let across = 16.0 -. int_to_float(width) *. scale *. 0.5
@@ -1182,17 +1183,22 @@ mod Ur.Scene do
       end
     end
   end
-  pfn pose_raised_deck(i : Int, deck : RaisedDeck) : Unit do
-    let px = deck.x *. 0.25
-    let py = deck.y *. 0.25
-    let pz = deck.z *. 0.25
+  pfn deck_rotation(deck : RaisedDeck) : (Float, Float, Float, Float) do
     let yaw = if deck.east do 0.0 else 0.0 -. 0.7853981634 end
     let sy = Math.sin(yaw)
     let cy = Math.cos(yaw)
     let sp = Math.sin(deck.pitch *. 0.5)
     let cp = Math.cos(deck.pitch *. 0.5)
-    Vk.slot_pose(raised_slot(i), px, py, pz, sy *. sp, sy *. cp, cy *. sp, cy *. cp)
-    Vk.body_place(raised_shadow(i), px, py, pz, sy *. sp, sy *. cp, cy *. sp, cy *. cp)
+    (sy *. sp, sy *. cp, cy *. sp, cy *. cp)
+  end
+  pfn pose_deck(slot : Int, deck : RaisedDeck) : Unit do
+    let (qx, qy, qz, qw) = deck_rotation(deck)
+    Vk.slot_pose(slot, deck.x *. 0.25, deck.y *. 0.25, deck.z *. 0.25, qx, qy, qz, qw)
+  end
+  pfn pose_raised_deck(i : Int, deck : RaisedDeck) : Unit do
+    let (qx, qy, qz, qw) = deck_rotation(deck)
+    pose_deck(raised_slot(i), deck)
+    Vk.body_place(raised_shadow(i), deck.x *. 0.25, deck.y *. 0.25, deck.z *. 0.25, qx, qy, qz, qw)
   end
   pfn suspension_cables(m : Ur.SceneMesh.Mesh, deck : RaisedDeck, at : Int) : Ur.SceneMesh.Mesh do
     if at >= deck.cells do m else
@@ -1210,15 +1216,9 @@ mod Ur.Scene do
       suspension_cables(m, deck, at + 8)
     end
   end
-  pfn overpass(c : Ur.Sim.City, i : Int) : Unit do
-    match bridge_deck(c, i, S.bridge_opening(c, i)) do
-      None -> ()
-      Some(deck) ->
+  pfn deck_mesh(deck : RaisedDeck, suspension : Bool) : Ur.SceneMesh.Mesh do
       let cells = deck.cells
       let width = deck.width
-      let slot = raised_slot(i)
-      let handle = raised_shadow(i)
-      let suspension = S.bridge_style(c, S.grade_source(c, i)) == 2
       let mesh = { words: NativeArray.make_i32(if suspension do 512 else 128 end, 0), quads: 0 }
       let centre = width / 2
       let mesh = box(mesh, 0, 0, 0, cells, 1, width, 4)
@@ -1227,7 +1227,26 @@ mod Ur.Scene do
       let mesh = box(mesh, 0, 1, centre + 1, cells, 1, width - centre - 1, 4)
       let mesh = box(mesh, 0, 2, 0, cells, 2, 1, 17)
       let mesh = box(mesh, 0, 2, width - 1, cells, 2, 1, 17)
-      let mesh = if suspension do suspension_cables(mesh, deck, 0) else mesh end
+      if suspension do suspension_cables(mesh, deck, 0) else mesh end
+  end
+  pfn arch_deck(i : Int, x : Int, z : Int, deck : Ur.BridgeMesh.Arch) : Unit do
+    -- Model IDs 0 and 1 are the whale. The renderer copies this scratch model on commit.
+    let model = 2
+    let mesh = deck.geometry
+    let instance = NativeArray.set_i32(NativeArray.make_i32(2, 0), 0, Q.pack_instance0(0, 0, 0, model))
+    if Vk.model_set(model, Strata.Model.floats(mesh), Strata.Model.count(mesh)) &&
+      Vk.chunk_begin(arch_slot(i), x, deck.floor, z, 0) && Vk.chunk_part(3, instance, 1) && Vk.chunk_commit() do ()
+    else Ur.AppError.stop("Arch deck upload failed") end
+  end
+  pfn overpass(c : Ur.Sim.City, i : Int) : Unit do
+    match bridge_deck(c, i, S.bridge_opening(c, i)) do
+      None -> ()
+      Some(deck) ->
+      let cells = deck.cells
+      let width = deck.width
+      let slot = raised_slot(i)
+      let handle = raised_shadow(i)
+      let mesh = deck_mesh(deck, S.bridge_style(c, S.grade_source(c, i)) == 2)
       let shadow = deck_shadow(NativeArray.make_u8(cells * width * 4, 0), cells, width, 0)
       if Vk.body_begin(slot) && Vk.chunk_part(0, mesh.words, mesh.quads) && Vk.chunk_commit() &&
         Vk.body_shape(handle, shadow, cells, 4, width) do
@@ -1379,9 +1398,17 @@ mod Ur.Scene do
         else Ur.AppError.stop("Tunnel cutaway rock upload failed") end
       end
     else layers(c, i, x, z, hs, high_ground(hs, 0, 0), sign_parts(c, i, control, tick, 0, L.structures(c, i, lighting)), probe, 0) end
-    if raised do overpass(c, i) else
-      Vk.body_drop(raised_shadow(i))
-      Vk.chunk_free(raised_slot(i))
+    match Ur.BridgeMesh.arch(c, i) do
+      Some(deck) ->
+        arch_deck(i, x, z, deck)
+        Vk.body_drop(raised_shadow(i))
+        Vk.chunk_free(raised_slot(i))
+      None ->
+        Vk.chunk_free(arch_slot(i))
+        if raised do overpass(c, i) else
+          Vk.body_drop(raised_shadow(i))
+          Vk.chunk_free(raised_slot(i))
+        end
     end
   end
   pfn changed(a : Ur.Sim.City, b : Ur.Sim.City, i : Int) : Bool do
@@ -1445,6 +1472,17 @@ mod Ur.Scene do
       tx >= 0 && tx < S.width() && tz >= 0 && tz < S.depth() &&
         S.get(old.road_shapes, S.index(tx, tz)) != S.get(c.road_shapes, S.index(tx, tz))))
   end
+  pfn arch_changed(old : Ur.Sim.City, c : Ur.Sim.City, i : Int) : Bool do
+    let before = S.grade_source(old, i)
+    let after = S.grade_source(c, i)
+    let old_peer = S.grade_peer(old, before)
+    let new_peer = S.grade_peer(c, after)
+    let was_arch = S.canal_arch(old, before, old_peer)
+    let is_arch = S.canal_arch(c, after, new_peer)
+    was_arch != is_arch || (is_arch && (before != after || old_peer != new_peer ||
+      S.get(old.heights, before) != S.get(c.heights, after) || S.get(old.heights, old_peer) != S.get(c.heights, new_peer) ||
+      S.get(old.roads, before) != S.get(c.roads, after) || S.get(old.roads, old_peer) != S.get(c.roads, new_peer)))
+  end
   pfn sync_parcels(old : Ur.Sim.City, c : Ur.Sim.City, i : Int, force : Bool, structural : Bool, water_changed : Bool, before : Lighting, after : Lighting, signals : Signals, section : Section,
     flags : NativeIntArr, floods : NativeIntArr) : Unit do
     if i >= S.count() do () else
@@ -1459,7 +1497,7 @@ mod Ur.Scene do
          (section.after > 0 && section_ground(c, i, section.after)))
       -- flood_neighborhood_changed's 3x3 from the flood flags; the structural test only where a
       -- flagged lot lies within 2 (road_profile reads lots that far), and as before there.
-      if force || cut_changed || lighting_changed || signal_changed || (water_changed && S.get(c.heights, i) > 0 && flagged_near(floods, i, 1)) || (structural && flagged_near(flags, i, 2) && (changed(old, c, i) || nearby_shape_changed(old, c, i) || changed(old, c, S.neighbour(i, 0)) ||
+      if force || cut_changed || lighting_changed || signal_changed || (water_changed && S.get(c.heights, i) > 0 && flagged_near(floods, i, 1)) || (structural && arch_changed(old, c, i)) || (structural && flagged_near(flags, i, 2) && (changed(old, c, i) || nearby_shape_changed(old, c, i) || changed(old, c, S.neighbour(i, 0)) ||
         changed(old, c, S.neighbour(i, 1)) || changed(old, c, S.neighbour(i, 2)) ||
         changed(old, c, S.neighbour(i, 3)) || L.road_profile(old, i) != L.road_profile(c, i) || corner_changed(old, c, i, 0, 2) ||
         corner_changed(old, c, i, 0, 3) || corner_changed(old, c, i, 1, 2) || corner_changed(old, c, i, 1, 3))) do parcel(c, i, now, control, signals.after_tick, section.after) else () end
