@@ -369,6 +369,90 @@ mod Ur.Build do
     end end end end end end
   end
 
+  pfn cable_tool(tool : Int) : Bool do tool == 26 || tool == 27 || tool == 97 end
+  pfn pipe_tool(tool : Int) : Bool do tool == 18 || tool == 19 || tool == 98 end
+  pfn utility_tiles(c : Ur.Sim.City, tool : Int) : NativeIntArr do
+    if cable_tool(tool) do c.grid else c.pipes end
+  end
+
+  pfn utility_join_priority(c : Ur.Sim.City, tool : Int, lot : Int) : Int do
+    if !S.valid(lot) || !(cable_tool(tool) || pipe_tool(tool)) do 0 else
+      let tier = S.get(utility_tiles(c, tool), lot)
+      if tier > 0 do tier + 1 else
+        let kind = S.get(c.plants, lot)
+        let intake = kind == 3 || kind == 4 || kind == 9 || kind == 10
+        let facility = if tool == 26 do S.utility_endpoint(c, 2, lot) || intake
+          else tool == 18 && (S.utility_endpoint(c, 1, lot) || S.utility_endpoint(c, 31, lot)) end
+        if facility do 1 else 0 end
+      end
+    end
+  end
+
+  fn utility_join(c : Ur.Sim.City, tool : Int, lot : Int) : Bool do utility_join_priority(c, tool, lot) > 0 end
+
+  doc "Snap a route endpoint by at most one cardinal parcel, preferring installed mains and feeders."
+  fn utility_snap(c : Ur.Sim.City, tool : Int, target : Int, bypass : Bool) : Int do
+    if bypass || !S.valid(target) || utility_join(c, tool, target) do target else
+      let (lot, _) = List.fold_left([0, 1, 2, 3], (target, 0), fn (best, arm) ->
+        let candidate = S.neighbour(target, arm)
+        let priority = utility_join_priority(c, tool, candidate)
+        let (_, current_priority) = best
+        if priority > current_priority do (candidate, priority) else best end)
+      lot
+    end
+  end
+
+  pfn street_joins(c : Ur.Sim.City, lot : Int) : List(Int) do
+    if S.get(c.roads, lot) > 0 do [lot] else
+      List.filter(List.map([0, 1, 2, 3], fn arm -> S.neighbour(lot, arm)), fn peer -> S.get(c.roads, peer) > 0)
+    end
+  end
+
+  pfn utility_street_leg(c : Ur.Sim.City, start : Int, target : Int) : List(Int) do
+    let starts = street_joins(c, start)
+    let ends = street_joins(c, target)
+    if List.is_empty(starts) || List.is_empty(ends) do Nil else
+      let goals = mark(starts, NativeArray.make_int(S.count(), 0))
+      let queue = NativeArray.make_int(S.count(), 0)
+      let parents = NativeArray.set_int(NativeArray.make_int(S.count(), -1), target, target)
+      let (queue, count, parents) = List.fold_left(ends, (queue, 0, parents), fn (state, lot) ->
+        let (queue, count, parents) = state
+        let seeded = (NativeArray.set_int(queue, count, lot), count + 1, NativeArray.set_int(parents, lot, target))
+        seeded)
+      let route = extension_search(c, goals, target, queue, 0, count, parents)
+      if List.is_empty(route) || S.get(c.roads, start) > 0 do route else Cons(start, route) end
+    end
+  end
+
+  pfn utility_legs(c : Ur.Sim.City, start : Int, points : List(Point), follow : Bool) : List(Int) do
+    match points do
+      Nil -> Nil
+      Cons(point, rest) ->
+        let street = if follow && start != point.lot do utility_street_leg(c, start, point.lot) else Nil end
+        let leg = if List.is_empty(street) do bend(start, point.lot, point.flip) else street end
+        List.append(List.drop(leg, 1), utility_legs(c, point.lot, rest, follow))
+    end
+  end
+
+  doc "Quote committed utility legs and an optional final leg using the construction rules."
+  fn utility_preview(c : Ur.Sim.City, tool : Int, start : Int, target : Int, waypoints : List(Point), flip : Bool, follow : Bool) : Preview do
+    if c.harbour < 0 || !(cable_tool(tool) || pipe_tool(tool)) do preview(c, tool, start, target)
+    else
+      let start = if S.valid(start) do start else target end
+      if !S.valid(start) do empty_preview(c, Nil) else
+        let points = List.filter(waypoints, fn point -> S.valid(point.lot))
+        let points = if S.valid(target) do List.append(points, [{ lot: target, flip: flip }]) else points end
+        let tiles = Cons(start, utility_legs(c, start, points, follow && (tool == 18 || tool == 26)))
+        let plan = road_preview(c, tool, tiles, false)
+        let before = utility_tiles(c, tool)
+        let after = utility_tiles(plan.city, tool)
+        let upkeep = List.fold_left(plan.tiles, 0, fn (total, lot) ->
+          total + S.utility_upkeep(S.get(after, lot)) - S.utility_upkeep(S.get(before, lot)))
+        { plan with upkeep: upkeep }
+      end
+    end
+  end
+
   fn sidewalk_preview(c : Ur.Sim.City, lot : Int, spot : Int, tool : Int) : Preview do
     let (x, _) = S.sidewalk_point(c, lot, spot)
     if x < 0 do { empty_preview(c, Nil) with valid: false, reason: "Aim at a sidewalk position." } else
@@ -393,6 +477,14 @@ mod Ur.Build do
     let figures = int_to_string(p.length) ++ " m · " ++ grade ++ " · $" ++ int_to_string(p.cost) ++
       " · $" ++ int_to_string(p.upkeep) ++ "/mo change"
     if p.valid do figures else p.reason ++ place end
+  end
+  fn utility_quote(p : Preview, waypoints : Bool) : String do
+    if !p.valid do p.reason
+    else if !p.changed do ""
+    else
+      let commit = if waypoints do " · Enter to build" else " · Drag and release to build" end
+      int_to_string(p.length) ++ " m · $" ++ int_to_string(p.cost) ++ " · $" ++ int_to_string(p.upkeep) ++ "/mo change" ++ commit
+    end end
   end
   fn caption(p : Preview, tool : Int) : String do
     if street(tool) && p.length > 0 do quote(p, tool) ++ (if p.valid && p.changed do " · Release to build" else "" end)
