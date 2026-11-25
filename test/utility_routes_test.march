@@ -1,0 +1,87 @@
+mod UtilityRoutesTest do
+  needs IO
+  needs IO.Console
+  alias Ur.Sim as S
+  alias Ur.Build as Build
+
+  pfn fixture() : Ur.Sim.City do
+    let zero = NativeArray.make_int(S.count(), 0)
+    let base = S.new()
+    { base with harbour: S.index(2, 9), heights: NativeArray.make_int(S.count(), 10),
+      roads: zero, plants: zero, grid: zero, pipes: zero, cash: 20000 }
+  end
+
+  pfn snaps(c : Ur.Sim.City) : Unit do
+    let target = S.index(8, 10)
+    let main = S.index(9, 10)
+    let generator = S.index(8, 11)
+    let outfall = S.index(16, 14)
+    let plants = NativeArray.set_int(NativeArray.set_int(c.plants, generator, 12), outfall, 11)
+    let city = { c with pipes: NativeArray.set_int(c.pipes, main, 2), plants: plants }
+    Test.assert_true(Build.utility_join(city, 18, main), "A pointer placed exactly on a main exposes a join")
+    Test.assert_eq_int(Build.utility_snap(city, 18, target, false), main, "Pipe snaps to the nearby main")
+    Test.assert_eq_int(Build.utility_snap(city, 26, target, false), generator, "Cable snaps to a matching facility")
+    Test.assert_eq_int(Build.utility_snap(city, 18, S.index(16, 13), false), outfall, "Shared mains snap to sewage endpoints")
+    Test.assert_eq_int(Build.utility_snap(city, 18, target, true), target, "The bypass keeps the raw endpoint")
+    Test.assert_eq_int(Build.utility_snap(city, 27, target, false), target, "Removal only snaps to an installed conduit of its own type")
+  end
+
+  pfn bends_and_waypoints(c : Ur.Sim.City) : Unit do
+    let start = S.index(3, 10)
+    let x_bend = S.index(5, 10)
+    let z_bend = S.index(3, 12)
+    let first = S.index(5, 12)
+    let last = S.index(7, 12)
+    let empty = Build.utility_preview(c, 18, -1, -1, Nil, false, false)
+    Test.assert_true(List.is_empty(empty.tiles) && !empty.changed, "An unstarted route without a hovered parcel stays empty")
+    let hover = Build.utility_preview(c, 18, -1, start, Nil, false, false)
+    Test.assert_eq_int(List.length(hover.tiles), 1, "An unstarted route previews a single hovered parcel")
+    let direct = Build.utility_preview(c, 18, start, first, Nil, false, false)
+    let flipped = Build.utility_preview(c, 18, start, first, Nil, true, false)
+    Test.assert_true(direct.valid && S.get(direct.city.pipes, x_bend) == 1 && S.get(direct.city.pipes, z_bend) == 0,
+      "Manual drafting starts with the horizontal bend")
+    Test.assert_true(flipped.valid && S.get(flipped.city.pipes, z_bend) == 1 && S.get(flipped.city.pipes, x_bend) == 0,
+      "Flipping places the other bend")
+    let chain = Build.utility_preview(c, 18, start, last, [Build.point(first, true)], false, false)
+    let unit = S.cost(c, start, 18)
+    Test.assert_true(chain.valid && chain.cost == 7 * unit && chain.upkeep == 7 * S.utility_upkeep(1),
+      "The chained quote prices each parcel once and includes monthly upkeep")
+    Test.assert_true(S.get(chain.city.pipes, z_bend) == 1 && S.get(chain.city.pipes, last) == 1,
+      "The committed bend persists when the next leg is previewed")
+    let pinned = Build.utility_preview(c, 18, start, -1, [Build.point(first, true)], false, false)
+    Test.assert_true(pinned.cost == flipped.cost && S.get(pinned.city.pipes, last) == 0,
+      "Confirmation without a hover uses the committed legs")
+    let poor = { c with cash: unit * 2 }
+    let blocked = Build.utility_preview(poor, 18, start, last, [Build.point(first, true)], false, false)
+    Test.assert_true(!blocked.valid && !blocked.changed && blocked.city.cash == poor.cash && S.get(blocked.city.pipes, start) == 0,
+      "An unaffordable leg leaves the entire draft unbuilt")
+  end
+
+  pfn streets(c : Ur.Sim.City) : Unit do
+    let a = S.index(3, 10)
+    let b = S.index(5, 10)
+    let off_road = S.index(4, 10)
+    let corner = S.index(4, 9)
+    let roads = List.fold_left([a, S.index(3, 9), corner, S.index(5, 9), b], c.roads,
+      fn (road, lot) -> NativeArray.set_int(road, lot, 1))
+    let city = { c with roads: roads }
+    let followed = Build.utility_preview(city, 26, a, b, Nil, false, true)
+    Test.assert_true(followed.valid && S.get(followed.city.grid, corner) == 1 && S.get(followed.city.grid, off_road) == 0,
+      "Street following chooses the connected street detour")
+    let frontage = Build.utility_preview(city, 26, S.index(3, 11), S.index(5, 11), Nil, false, true)
+    Test.assert_true(frontage.valid && S.get(frontage.city.grid, corner) == 1 && S.get(frontage.city.grid, S.index(3, 11)) == 1,
+      "A frontage connection reaches the street before following it")
+    let broken = { city with roads: NativeArray.set_int(roads, corner, 0) }
+    let fallback = Build.utility_preview(broken, 26, a, b, Nil, false, true)
+    Test.assert_true(fallback.valid && S.get(fallback.city.grid, off_road) == 1,
+      "A gap in the street network falls back to a manual bend")
+  end
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let city = fixture()
+    snaps(city)
+    bends_and_waypoints(city)
+    streets(city)
+    Authority.must(println("Utility route checks passed"))
+  end
+end

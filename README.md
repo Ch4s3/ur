@@ -50,7 +50,10 @@ and a positive monthly budget.
 | Semicolon / apostrophe | Lower / raise energy price |
 | F5 | Screenshot (`STRATA_SHOT`, default `strata_shot.ppm`) |
 | Z | Undo the last construction gesture |
-| Escape | Open or close the game menu |
+| R / F / G | Flip the utility bend, follow streets, or toggle waypoints |
+| Shift | Bypass utility snapping while held |
+| Enter / Backspace | Build a utility waypoint draft or remove its last point |
+| Escape | Cancel an active draft or open/close the game menu |
 
 Hover a parcel for a development explanation. Each simulation month takes one
 second at 1x speed. Roads permit at most 3 m of elevation change between parcels.
@@ -610,9 +613,33 @@ then have a path to serve the new building.
 
 **Layers → Networks** shows Electricity, Water supply, and Sewage collection
 separately. Point at a segment to see its load and limit or at a building to
-see how much service it receives. **Utilities → Upgrades → Upgrade water and
-sewer main** increases both pipe limits. A connected pump, desalination
-plant, or recycler also needs local power to run.
+see how much service it receives. Click a badge or segment to inspect its
+connected network, follow the flow arrows, and see recent delivery. **Jump to
+bottleneck** appears when adding capacity to a specific segment would let
+more service reach the selected parcel. Source and outlet badges show
+whether their facilities are operating.
+
+Pipe and cable endpoints snap to nearby mains, feeders and compatible facilities.
+The map marks the exact join. Hold **Shift** to use the parcel under the cursor.
+Use **R** to flip the bend or **F** to follow connected streets where available.
+For a longer draft, enable **Waypoints** (**G**), click along the route, remove the
+last point with **Backspace**, and press **Enter** to build. A simple drag still
+builds on release.
+
+Pause the pointer briefly to see the forecast before building. Shared pipe edits
+show both water and sewage impacts. A cut that would reduce service at a critical
+site lists the affected facilities and waits for confirmation. From a selected
+network, the inspector can draft a feeder or main upgrade or a line extension
+when it would improve service. Check the route, cost, and forecast, then press
+**Enter** to approve it.
+
+While zoning, the utility preview estimates buildout demand and reachable
+capacity. When siting a utility facility, it shows projected connections and
+output for the finished site. Click a utility alert to jump to the affected
+network. The alert gives the parcel count, the start time, and the restoration
+time once service returns. Zoom out to see grouped status markers or zoom in for
+individual buildings and flow arrows. The inspector stays pinned when switching
+between Water supply and Sewage collection.
 
 For the deterministic comparison, run
 `UR_UTILITY_REPLAY=4 .march/build/release/ur` after a release build. Set

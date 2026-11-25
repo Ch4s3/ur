@@ -45,6 +45,16 @@ mod Ur.UtilitiesNetwork do
       _ -> if lot + n.width >= n.size do -1 else lot + n.width end
     end
   end
+  pfn opposite_arm(arm : Int) : Int do if arm % 2 == 0 do arm + 1 else arm - 1 end end
+  doc "Net flow from this segment toward its neighbour on the given arm."
+  fn arm_flow(n : Network, lot : Int, arm : Int) : Int do
+    if arm < 0 || arm >= 4 || capacity(n, lot) == 0 do 0 else
+      let other = peer(n, lot, arm)
+      if capacity(n, other) == 0 do 0 else
+        NativeArray.get_int(n.flow, lot * 5 + arm) - NativeArray.get_int(n.flow, other * 5 + opposite_arm(arm))
+      end
+    end
+  end
   pfn direction(n : Network, from : Int, to : Int) : Int do
     if from / n.width == to / n.width do (if to < from do 0 else 1 end)
     else if to < from do 2 else 3 end end
@@ -96,6 +106,11 @@ mod Ur.UtilitiesNetwork do
       end
     end
   end
+  pfn search_for(n : Network, target : Int) : Search do
+    let start = { next: NativeArray.set_int(NativeArray.make_int(n.size * 2, -1), target, target),
+      queue: NativeArray.set_int(NativeArray.make_int(n.size * 2, 0), 0, target), tail: 1, origin: -1 }
+    search(n, start, 0)
+  end
   pfn path_room(n : Network, next : NativeIntArr, from : Int, target : Int, amount : Int) : Int do
     if from == target do amount else
       let to = NativeArray.get_int(next, from)
@@ -115,9 +130,7 @@ mod Ur.UtilitiesNetwork do
   end
   pfn draw_to(n : Network, target : Int, units : Int, delivered : Int) : (Network, Int) do
     if delivered == units do (n, delivered) else
-      let start = { next: NativeArray.set_int(NativeArray.make_int(n.size * 2, -1), target, target),
-        queue: NativeArray.set_int(NativeArray.make_int(n.size * 2, 0), 0, target), tail: 1, origin: -1 }
-      let route = search(n, start, 0)
+      let route = search_for(n, target)
       if route.origin < 0 do (n, delivered) else
         let lot = route.origin / 2
         let supply = remaining(n, lot)
@@ -131,6 +144,55 @@ mod Ur.UtilitiesNetwork do
   fn draw(n : Network, lot : Int, units : Int) : (Network, Int) do
     let site = tap(n, lot, 0)
     if site < 0 || units <= 0 do (n, 0) else draw_to(n, site * 2 + 1, units, 0) end
+  end
+  pfn outgoing(n : Network, s : Search, node : Int, arm : Int) : Search do
+    if arm == 4 do s else
+      let other = peer(n, node / 2, arm)
+      let s = if capacity(n, other) == 0 do s
+        else if node % 2 == 1 do push(s, other * 2, node)
+        else if NativeArray.get_int(n.flow, other * 5 + opposite_arm(arm)) > 0 do push(s, other * 2 + 1, node)
+        else s end end end
+      outgoing(n, s, node, arm + 1)
+    end
+  end
+  pfn reach_outward(n : Network, s : Search, head : Int) : NativeIntArr do
+    if head == s.tail do s.next else
+      let node = NativeArray.get_int(s.queue, head)
+      let lot = node / 2
+      let inlet = node % 2 == 0
+      let room = if inlet do capacity(n, lot) - used(n, lot) else used(n, lot) end
+      let s = if room > 0 do push(s, if inlet do node + 1 else node - 1 end, node) else s end
+      reach_outward(n, outgoing(n, s, node, 0), head + 1)
+    end
+  end
+  pfn seed_inlets(n : Network, s : Search, lot : Int) : Search do
+    if lot == n.size do s else
+      let inlet = lot * 2
+      let s = if remaining(n, lot) > 0 do push(s, inlet, inlet) else s end
+      seed_inlets(n, s, lot + 1)
+    end
+  end
+  pfn binding_edge(n : Network, supply : NativeIntArr, route : Search, head : Int) : Int do
+    if head == route.tail do -1 else
+      let node = NativeArray.get_int(route.queue, head)
+      if node % 2 == 1 && capacity(n, node / 2) == used(n, node / 2) &&
+        NativeArray.get_int(supply, node - 1) >= 0 do node / 2
+      else binding_edge(n, supply, route, head + 1) end
+    end
+  end
+  -- A saturated inlet-to-outlet edge can be the sole constraint only if its
+  -- inlet can reach unused supply backwards and its outlet can reach the tap forwards.
+  doc "Find the nearest full segment whose added capacity alone would permit another unit at this tap."
+  fn binding_segment(n : Network, tap : Int) : Int do
+    if capacity(n, tap) == 0 do -1 else
+      let route = search_for(n, tap * 2 + 1)
+      if route.origin >= 0 do -1 else
+        let start = { next: NativeArray.make_int(n.size * 2, -1),
+          queue: NativeArray.make_int(n.size * 2, 0), tail: 0, origin: -1 }
+        let supplied = reach_outward(n, seed_inlets(n, start, 0), 0)
+        binding_edge(n, supplied, route, 0)
+      end
+    end
   end
   -- Reachability ignores capacity usage. It distinguishes a local restriction
   -- from a parcel that has no path to an installed source at all.

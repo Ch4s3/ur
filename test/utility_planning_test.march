@@ -1,0 +1,83 @@
+mod UtilityPlanningTest do
+  needs IO
+  needs IO.Console
+  alias Ur.Sim as S
+  alias Ur.UtilitiesNetwork as Net
+  alias Ur.UtilityPlanning as Planning
+
+  pfn target_alert(alerts : List(Ur.UtilityPlanning.Alert), lot : Int) : Ur.UtilityPlanning.Alert do
+    match List.find(alerts, fn item -> item.lot == lot) do
+      Some(item) -> item
+      None -> panic("Expected a notice at the selected lot")
+    end
+  end
+
+  pfn alert_checks(report : Ur.Sim.UtilityReport) : Unit do
+    let a = S.index(10, 10)
+    let b = S.index(11, 10)
+    let island = S.index(25, 10)
+    let zero = NativeArray.make_int(S.count(), 0)
+    let lines = List.fold_left([a, b, island], zero, fn (out, lot) -> NativeArray.set_int(out, lot, 10))
+    let demand = NativeArray.set_int(NativeArray.set_int(zero, a, 4), b, 4)
+    let electric = { report.electric with flow: Net.new(S.width(), S.count(), lines), demand: demand, delivered: zero }
+    let report = { report with electric: electric, facility_demand: NativeArray.set_int(zero, island, 8), facility_delivered: zero }
+    let opened = Planning.alerts(Nil, report, 20)
+    Test.assert_eq_int(List.length(opened), 2, "Two distinct networks produce two alerts")
+    Test.assert_eq_int((target_alert(opened, a)).count, 2, "Two shortfalls on one network share an alert")
+    Test.assert_eq_int((target_alert(opened, island)).count, 1, "A metered facility can be the only affected load")
+    let receiving = { report with electric: { electric with delivered: NativeArray.set_int(zero, a, 4) } }
+    let narrowed = Planning.alerts(opened, receiving, 22)
+    let updated = target_alert(narrowed, b)
+    Test.assert_eq_int(updated.id, (target_alert(opened, a)).id, "The district identity survives a change of target parcel")
+    Test.assert_eq_int(updated.started, 20, "A continuing outage keeps its first observation")
+    Test.assert_eq_int(updated.count, 1, "The district count falls as lots recover")
+    let repaired = { report with electric: { electric with delivered: demand }, facility_delivered: report.facility_demand }
+    let cleared = Planning.alerts(narrowed, repaired, 24)
+    Test.assert_eq_int((target_alert(cleared, b)).resolved, 24, "Recovery is recorded at its observation time")
+    let recurring = Planning.alerts(cleared, report, 30)
+    Test.assert_true((target_alert(recurring, a)).id != updated.id && (target_alert(recurring, a)).resolved < 0,
+      "A recurring outage gets a fresh active notice")
+    let unwired = { report with electric: { electric with flow: Net.new(S.width(), S.count(), zero) }, facility_demand: zero }
+    let adjacent = Planning.alerts(Nil, unwired, 31)
+    Test.assert_eq_int(List.length(adjacent), 1, "Adjacent unconnected lots form one local notice")
+    Test.assert_eq_int((target_alert(adjacent, a)).count, 2, "The unconnected notice counts each affected lot")
+  end
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let city = S.new()
+    let zero = NativeArray.make_int(S.count(), 0)
+    let a = S.index(10, 10)
+    let b = S.index(11, 10)
+    let density = NativeArray.set_int(NativeArray.make_int(S.count(), 1), b, 2)
+    let city = { city with heights: NativeArray.make_int(S.count(), 10), density: density,
+      buildings: zero, zones: zero, roads: zero, plants: zero, grid: zero, pipes: zero }
+    let st = S.stats(city)
+    alert_checks(st.utilities)
+    let draft = Ur.Build.preview(city, 2, a, b)
+    Test.assert_true(draft.valid && draft.changed, "The fixture paints two residential plots")
+    let lines = Planning.zoning(city, st, draft)
+    Test.assert_true(List.any(lines, fn line -> String.contains(line, "2 plots")), "The preview counts only changed plots")
+    Test.assert_true(List.any(lines, fn line -> String.contains(line, "Power 0/12")), "Different height limits change estimated electric demand")
+    Test.assert_true(List.any(lines, fn line -> String.contains(line, "Water 0/48")), "Water coverage uses current deliverable headroom")
+    let segments = NativeArray.set_int(NativeArray.set_int(zero, a, 64), b, 64)
+    let network = Net.add_source(Net.new(S.width(), S.count(), segments), a, 20)
+    let reservation = { electric: { st.project_capacity.electric with flow: network },
+      water: { st.project_capacity.water with flow: network }, sewer: { st.project_capacity.sewer with flow: network } }
+    let supplied = Planning.zoning(city, { st with project_capacity: reservation }, draft)
+    Test.assert_true(List.any(supplied, fn line -> String.contains(line, "Power 12/12")), "Available power meets the proposed district load")
+    Test.assert_true(List.any(supplied, fn line -> String.contains(line, "Water 20/48")), "Both plots share the same spare water supply")
+    let facility = { draft with city: city }
+    let lines = Planning.siting(facility, 10, a)
+    Test.assert_true(List.any(lines, fn line -> String.contains(line, "Pump power 0/12")), "Desalination shows the rated draw even if unconnected")
+    Test.assert_true(List.any(lines, fn line -> String.contains(line, "Needs a connected pipe")), "Siting explains why the projected site cannot operate")
+    Test.assert_true(List.any(lines, fn line -> String.contains(line, "Output 0")), "An offline placement still shows its output")
+    let conduits = Ur.Build.footprint(18, city.harbour, a)
+    let installed = List.fold_left(conduits, zero, fn (out, lot) -> NativeArray.set_int(out, lot, 1))
+    let connected = { city with founding_map: true, grid: installed, pipes: installed,
+      heights: NativeArray.set_int(city.heights, b, 0), roads: NativeArray.set_int(installed, a, 0) }
+    let lines = Planning.siting({ facility with city: connected }, 10, a)
+    Test.assert_true(List.any(lines, fn line -> String.contains(line, "Pump power 12/12")), "A connected site shows actual power allocation")
+    Test.assert_true(List.any(lines, fn line -> String.contains(line, "Supplies 192")), "A running site shows its offered water output")
+    Authority.must(println("Utility planning checks passed"))
+  end
+end

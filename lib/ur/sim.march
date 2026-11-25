@@ -1074,10 +1074,12 @@ mod Ur.Sim do
       let rx = x + float_to_int(Math.floor(int_to_float(i) *. Math.cos(a) +. 0.5))
       let rz = z + float_to_int(Math.floor(int_to_float(i) *. Math.sin(a) +. 0.5))
       if rx < 0 || rz < 0 || rx >= width() || rz >= depth() do true
-      else if get(c.heights, index(rx, rz)) > 0 do false else ray_open(c, x, z, a, i + 1) end end
+      else if get(c.heights, index(rx, rz)) > 0 || reef_breaks(c, index(rx, rz)) do false else ray_open(c, x, z, a, i + 1) end end
     end
   end
-  doc "Whether [lot] lies in sheltered water: of 16 rays from it, each 8 parcels long, at most 5 meet no land (past the map's edge is open sea)."
+  -- a reef whose top is within 2 m of the surface breaks the swell, as land does: water inside a reef is sheltered (a mangrove cay)
+  pfn reef_breaks(c : City, i : Int) : Bool do get(c.sea_reefs, i) == 1 && get(c.sea_shoals, i) <= 8 end
+  doc "Whether [lot] lies in sheltered water: of 16 rays from it, each 8 parcels long, at most 5 meet neither land nor a reef within 2 m of the surface (past the map's edge is open sea)."
   fn sheltered(c : City, lot : Int) : Bool do
     let x = lot % width()
     let z = lot / width()
@@ -1089,11 +1091,36 @@ mod Ur.Sim do
       if valid(n) && get(c.heights, n) > 0 do true else land_beside(c, lot, d + 1) end
     end
   end
-  doc "Whether water parcel [lot] holds a mangrove stand (living or dead): a mangrove map, sheltered water beside land, and clear water: no seawall, ferry route, transit, crossing or worked seabed, not the harbour. Drawing and the surge both go by this."
+  doc "Whether water parcel [lot] holds a mangrove stand (living or dead): a mangrove map, sheltered water beside land (sheltered by land or a shallow reef), no further than 8 parcels up a river, and clear water: no seawall, ferry route, transit, crossing or worked seabed, not the harbour. Drawing and the surge both go by this."
   fn mangrove_water(c : City, lot : Int) : Bool do
     if !valid(lot) || get(c.heights, lot) > 0 || !mangrove_map(c) || lot == c.harbour do false
     else if get(c.seawalls, lot) > 0 || get(c.ferries, lot) > 0 || get(c.transit, lot) > 0 || get(c.grade_cover, lot) > 0 || get(c.seabed, lot) > 0 do false
-    else land_beside(c, lot, 0) && sheltered(c, lot) end end
+    else
+      -- a river's banks shelter it to the mouth; past 8 parcels upstream it runs fresh
+      let reach = river_reach(c, lot)
+      if reach > 8 do false else land_beside(c, lot, 0) && (reach >= 0 || sheltered(c, lot)) end
+    end end
+  end
+  doc "How many parcels upstream of its mouth water parcel [lot] lies in a seeded island's river (0 at the mouth), or -1 if it is not river water."
+  fn river_reach(c : City, lot : Int) : Int do
+    if !valid(lot) || get(c.heights, lot) > 0 || c.world_seed < 0 || !c.founding_map do -1 else
+      let shape = island_shape(c.world_seed)
+      if !shape.river do -1 else
+        let x = lot % width()
+        let z = lot / width()
+        match mouth_go(c, shape, 19) do
+          Cons(m, _) ->
+            let mz = m / width()
+            if x >= 38 || z < 18 || z > mz || int_abs(x - river_column(shape, z)) > 1 do -1 else mz - z end
+          Nil -> -1
+        end
+      end
+    end
+  end
+  doc "How thickly a mangrove stand on [lot] grows, out of 11 spots' chances: 7 on the coast and at a river's mouth, thinning to 2 eight parcels upstream, where the river runs fresh and no mangroves grow."
+  fn mangrove_density(c : City, lot : Int) : Int do
+    let reach = river_reach(c, lot)
+    if reach < 0 do 7 else 7 - reach * 5 / 8 end
   end
   doc "The stand on [lot]: 0 none, 1 living, 2 thinned (harm 50+), 3 dead (harm 100)."
   fn mangrove_state(c : City, lot : Int) : Int do
@@ -3925,14 +3952,25 @@ mod Ur.Sim do
       island_utility_count(c, roads, pipes, kind, i + 1, total + (if active do 1 else 0 end))
     end
   end
-  type UtilityDelivery = { flow : Ur.UtilitiesNetwork.Network, connections : NativeIntArr, demand : NativeIntArr, delivered : NativeIntArr, total : Int }
+  -- Source quantities are indexed by facility parcel, which can differ from the network tap.
+  type UtilityDelivery = { flow : Ur.UtilitiesNetwork.Network, connections : NativeIntArr, demand : NativeIntArr, delivered : NativeIntArr, sites : NativeIntArr, total : Int }
   type UtilityReport = { electric : UtilityDelivery, water : UtilityDelivery, sewer : UtilityDelivery,
     wells : Int, rain : Int, desal : Int, recycled : Int, imported : Int, treated : Int, discharged : Int, outlets : NativeIntArr,
-    farms : Int, irrigated : NativeIntArr, facility_power : Int, fresh_start : NativeIntArr, fresh_left : NativeIntArr, battery_out : Int, battery_capacity : Int, battery_stored : Int, operating : NativeIntArr }
+    farms : Int, irrigated : NativeIntArr, facility_power : Int, facility_demand : NativeIntArr, facility_delivered : NativeIntArr,
+    grid_reach : NativeIntArr, pipe_reach : NativeIntArr,
+    fresh_start : NativeIntArr, fresh_left : NativeIntArr, battery_out : Int, battery_capacity : Int, battery_stored : Int, operating : NativeIntArr }
   type UtilityLoads = { electric : NativeIntArr, water : NativeIntArr, sewer : NativeIntArr }
-  type WaterSupply = { flow : Ur.UtilitiesNetwork.Network, wells : Int, rain : Int, desal : Int, recycled : Int }
-  type SewerSupply = { flow : Ur.UtilitiesNetwork.Network, connections : NativeIntArr, delivered : NativeIntArr,
+  type UtilitySources = { flow : Ur.UtilitiesNetwork.Network, sites : NativeIntArr }
+  type FacilityDraw = { flow : Ur.UtilitiesNetwork.Network, operating : NativeIntArr, demand : NativeIntArr, delivered : NativeIntArr, total : Int }
+  type WaterSupply = { source : UtilitySources, reclaimed : NativeIntArr, wells : Int, rain : Int, desal : Int, recycled : Int }
+  type SewerSupply = { flow : Ur.UtilitiesNetwork.Network, connections : NativeIntArr, delivered : NativeIntArr, sites : NativeIntArr,
     recycled_at : NativeIntArr, outlets : NativeIntArr, treated : Int, discharged : Int }
+  pfn source_at(out : UtilitySources, lot : Int, tap : Int, units : Int) : UtilitySources do
+    if units <= 0 || Net.capacity(out.flow, tap) == 0 do out else
+      let sites = out.sites
+      { flow: Net.add_source(out.flow, tap, units), sites: NativeArray.set_int(sites, lot, get(sites, lot) + units) }
+    end
+  end
   fn utility_upkeep(tier : Int) : Int do if tier == 2 do 6 else tier * 2 end end
   fn utility_upgrade(tool : Int) : Bool do tool == 97 || tool == 98 end
   fn utility_capacity(kind : Int, tier : Int) : Int do
@@ -4045,11 +4083,11 @@ mod Ur.Sim do
     end
   end
   pfn electrical_sources(c : City, roads : NativeIntArr, grid : NativeIntArr, lot : Int, gas : Int, nuclear : Int, biogas : Int,
-    out : Ur.UtilitiesNetwork.Network) : Ur.UtilitiesNetwork.Network do
+    out : UtilitySources) : UtilitySources do
     if lot == count() do out else
       let kind = get(c.plants, lot)
       let units = source_units(c, roads, grid, lot, kind, gas, nuclear, biogas)
-      let out = if units > 0 do Net.add_source(out, Net.tap(out, lot, 0), units) else out end
+      let out = if units > 0 do source_at(out, lot, Net.tap(out.flow, lot, 0), units) else out end
       electrical_sources(c, roads, grid, lot + 1, gas - (if kind == 1 do units else 0 end),
         nuclear - (if kind == 14 do units else 0 end), biogas - (if kind == 15 do units else 0 end), out)
     end
@@ -4079,10 +4117,10 @@ mod Ur.Sim do
   doc "Most power the city's grid batteries can charge or discharge at once."
   fn battery_power(c : City, roads : NativeIntArr) : Int do battery_count(c, roads) * battery_rate() end
   pfn battery_sources(c : City, roads : NativeIntArr, grid : NativeIntArr, lot : Int, deficit : Int, stored : Int,
-    out : Ur.UtilitiesNetwork.Network, total : Int) : (Ur.UtilitiesNetwork.Network, Int) do
+    out : UtilitySources, total : Int) : (UtilitySources, Int) do
     if lot >= count() || deficit <= 0 || stored <= 0 do (out, total) else
       let units = if battery_online(c, roads, grid, lot) do clamp(deficit, 0, clamp(stored, 0, battery_rate())) else 0 end
-      let out = if units > 0 do Net.add_source(out, Net.tap(out, lot, 0), units) else out end
+      let out = if units > 0 do source_at(out, lot, Net.tap(out.flow, lot, 0), units) else out end
       battery_sources(c, roads, grid, lot + 1, deficit - units, stored - units, out, total + units)
     end
   end
@@ -4091,33 +4129,28 @@ mod Ur.Sim do
     utility_count(c, roads, pipes, 3, 0, 0) * 4 + utility_count(c, roads, pipes, 4, 0, 0) * 12 +
       utility_count(c, roads, pipes, 10, 0, 0) * 8 + utility_count(c, roads, pipes, 9, 0, 0) * 6
   end
-  pfn facility_draw(c : City, roads : NativeIntArr, pipes : NativeIntArr, lot : Int, flow : Ur.UtilitiesNetwork.Network, operating : NativeIntArr, total : Int) : (Ur.UtilitiesNetwork.Network, NativeIntArr, Int) do
-    if lot == count() do (flow, operating, total) else
+  pfn facility_draw(c : City, roads : NativeIntArr, pipes : NativeIntArr, lot : Int, draw : FacilityDraw) : FacilityDraw do
+    if lot == count() do draw else
       let kind = get(c.plants, lot)
-      let demand = match kind do
-        3 -> 4
-        4 -> 12
-        9 -> 6
-        10 -> 8
-        _ -> 0
+      let want = facility_draw_of(kind)
+      let draw = if want == 0 || !utility_site(c, roads, pipes, kind, lot) || (kind == 3 && remote_food_island(c, lot) == 1) do draw else
+        let (flow, given) = Net.draw(draw.flow, lot, want)
+        let demand = NativeArray.set_int(draw.demand, lot, want)
+        if given == want do { flow: flow, demand: demand, delivered: NativeArray.set_int(draw.delivered, lot, given),
+          operating: NativeArray.set_int(draw.operating, lot, 1), total: draw.total + given }
+        else { draw with demand: demand } end
       end
-      if demand == 0 || !utility_site(c, roads, pipes, kind, lot) || (kind == 3 && remote_food_island(c, lot) == 1) do
-        facility_draw(c, roads, pipes, lot + 1, flow, operating, total)
-      else
-        let (test, given) = Net.draw(flow, lot, demand)
-        if given == demand do facility_draw(c, roads, pipes, lot + 1, test, NativeArray.set_int(operating, lot, 1), total + given)
-        else facility_draw(c, roads, pipes, lot + 1, flow, operating, total) end
-      end
+      facility_draw(c, roads, pipes, lot + 1, draw)
     end
   end
   pfn sewer_plants(c : City, roads : NativeIntArr, pipes : NativeIntArr, active : NativeIntArr, mode : Int, lot : Int,
-    flow : Ur.UtilitiesNetwork.Network, installed : Bool) : (Ur.UtilitiesNetwork.Network, Bool) do
-    if lot == count() do (flow, installed) else
+    out : UtilitySources, installed : Bool) : (UtilitySources, Bool) do
+    if lot == count() do (out, installed) else
       let kind = get(c.plants, lot)
       let limit = if mode == 10 && kind == 10 && get(active, lot) > 0 do 160 * facility_staffed(c, lot) / 100
         else if mode == 11 && kind == 11 && utility_site(c, roads, pipes, kind, lot) do 192 else 0 end end
-      let flow = if limit > 0 do Net.add_source(flow, Net.tap(flow, lot, 0), limit) else flow end
-      sewer_plants(c, roads, pipes, active, mode, lot + 1, flow, installed || kind == 10 || kind == 11)
+      let out = if limit > 0 do source_at(out, lot, Net.tap(out.flow, lot, 0), limit) else out end
+      sewer_plants(c, roads, pipes, active, mode, lot + 1, out, installed || kind == 10 || kind == 11)
     end
   end
   pfn merge_supply(a : NativeIntArr, b : NativeIntArr, lot : Int, out : NativeIntArr) : NativeIntArr do
@@ -4141,19 +4174,21 @@ mod Ur.Sim do
     end
   end
   pfn sewage_flow(c : City, roads : NativeIntArr, pipes : NativeIntArr, demand : NativeIntArr, active : NativeIntArr, zero : NativeIntArr) : SewerSupply do
-    let (plants, installed) = sewer_plants(c, roads, pipes, active, 10, 0, network(c.pipes, 2), false)
+    let (treatment, installed) = sewer_plants(c, roads, pipes, active, 10, 0, { flow: network(c.pipes, 2), sites: zero }, false)
+    let plants = treatment.flow
     let (treated, served, recovered) = allocate_utility(plants, demand, zero, 0)
     let spent = subtract_supply(plants.source, treated.source, 0, zero)
     let baseline = { treated with source: zero }
-    let (outlets, _) = sewer_plants(c, roads, pipes, active, 11, 0, baseline, installed)
+    let (sources, _) = sewer_plants(c, roads, pipes, active, 11, 0, { flow: baseline, sites: treatment.sites }, installed)
     -- The harbour handles starter sewage until municipal treatment is installed.
-    let outlets = if !installed do Net.add_source(outlets, c.harbour, if c.founding_map do 48 else 12000 end) else outlets end
+    let sources = if !installed do source_at(sources, c.harbour, c.harbour, if c.founding_map do 48 else 12000 end) else sources end
+    let outlets = sources.flow
     let connections = Net.connected({ outlets with source: merge_supply(plants.source, outlets.source, 0, plants.source) })
     -- Treat all reachable sewage before sending the balance to the coast.
     let (drained, served, _) = distribute(outlets, demand, served, false, recovered)
     let (discharge, volume) = sewer_outlets(c, roads, pipes, drained, outlets.source, 0, zero, zero, 0)
     let drained = { drained with source: merge_supply(drained.source, treated.source, 0, drained.source) }
-    { flow: drained, connections: connections, delivered: served, recycled_at: spent, outlets: discharge, treated: recovered, discharged: volume }
+    { flow: drained, connections: connections, delivered: served, sites: sources.sites, recycled_at: spent, outlets: discharge, treated: recovered, discharged: volume }
   end
   pfn subtract_supply(a : NativeIntArr, b : NativeIntArr, lot : Int, out : NativeIntArr) : NativeIntArr do
     if lot == count() do out else
@@ -4162,7 +4197,20 @@ mod Ur.Sim do
     end
   end
   fn collector_supply(c : City, lot : Int) : Int do clamp(get(c.rain_tanks, lot), 0, 96) end
-  pfn water_sources(c : City, roads : NativeIntArr, pipes : NativeIntArr, active : NativeIntArr, treated : NativeIntArr, lot : Int,
+  -- Split treatment shared by several sites at one tap in parcel order. Account for
+  -- rounding at the tap so the displayed offers add up to its actual recycled supply.
+  pfn record_recycled(out : WaterSupply, treated : NativeIntArr, lot : Int, handling : Int) : WaterSupply do
+    let tap = Net.tap(out.source.flow, lot, 0)
+    let before = get(out.reclaimed, tap)
+    let assigned = clamp(get(treated, tap) - before, 0, handling)
+    if !valid(tap) || assigned == 0 do out else
+      let recovered = (before + assigned) * 3 / 4 - before * 3 / 4
+      let sites = out.source.sites
+      let source = { out.source with sites: NativeArray.set_int(sites, lot, get(sites, lot) + recovered) }
+      { out with source: source, reclaimed: NativeArray.set_int(out.reclaimed, tap, before + assigned) }
+    end
+  end
+  pfn water_sources(c : City, roads : NativeIntArr, pipes : NativeIntArr, active : NativeIntArr, sewage : SewerSupply, lot : Int,
     out : WaterSupply) : WaterSupply do
     if lot == count() do out else
       let kind = get(c.plants, lot)
@@ -4170,19 +4218,22 @@ mod Ur.Sim do
       let wells = if kind == 3 && available && get(active, lot) > 0 do maintained(c, 3, 192) else 0 end
       let rain = if kind == 8 && available do collector_supply(c, lot) else 0 end
       let desal = if kind == 4 && available && get(active, lot) > 0 do 192 * facility_staffed(c, lot) / 100 else 0 end
-      let recycled = get(treated, lot) * 3 / 4
+      let recycled = get(sewage.recycled_at, lot) * 3 / 4
       let supply = wells + rain + desal
-      let flow = if supply > 0 do Net.add_source(out.flow, Net.tap(out.flow, lot, 0), supply) else out.flow end
-      let flow = if recycled > 0 do Net.add_source(flow, lot, recycled) else flow end
-      water_sources(c, roads, pipes, active, treated, lot + 1, { flow: flow,
-        wells: out.wells + wells, rain: out.rain + rain, desal: out.desal + desal, recycled: out.recycled + recycled })
+      let source = if supply > 0 do source_at(out.source, lot, Net.tap(out.source.flow, lot, 0), supply) else out.source end
+      let source = if recycled > 0 do { source with flow: Net.add_source(source.flow, lot, recycled) } else source end
+      let out = { out with source: source, wells: out.wells + wells, rain: out.rain + rain,
+        desal: out.desal + desal, recycled: out.recycled + recycled }
+      let handling = if kind == 10 do get(sewage.sites, lot) else 0 end
+      let out = if handling > 0 do record_recycled(out, sewage.recycled_at, lot, handling) else out end
+      water_sources(c, roads, pipes, active, sewage, lot + 1, out)
     end
   end
-  pfn water_imports(c : City, roads : NativeIntArr, pipes : NativeIntArr, active : NativeIntArr, lot : Int, cash : Int, flow : Ur.UtilitiesNetwork.Network) : Ur.UtilitiesNetwork.Network do
-    if lot == count() || cash == 0 do flow else
+  pfn water_imports(c : City, roads : NativeIntArr, pipes : NativeIntArr, active : NativeIntArr, lot : Int, cash : Int, out : UtilitySources) : UtilitySources do
+    if lot == count() || cash == 0 do out else
       let units = if get(c.plants, lot) == 9 && utility_site(c, roads, pipes, 9, lot) && get(active, lot) > 0 do clamp(cash, 0, 160) else 0 end
-      let flow = if units > 0 do Net.add_source(flow, Net.tap(flow, lot, 0), units) else flow end
-      water_imports(c, roads, pipes, active, lot + 1, cash - units, flow)
+      let out = if units > 0 do source_at(out, lot, Net.tap(out.flow, lot, 0), units) else out end
+      water_imports(c, roads, pipes, active, lot + 1, cash - units, out)
     end
   end
   pfn irrigate(c : City, roads : NativeIntArr, pipes : NativeIntArr, lot : Int, flow : Ur.UtilitiesNetwork.Network, supplied : NativeIntArr, farms : Int) : (Ur.UtilitiesNetwork.Network, NativeIntArr, Int) do
@@ -4204,31 +4255,95 @@ mod Ur.Sim do
     let grid = grid_access(c)
     let pipes = pipe_access(c)
     let bootstrap = harbour_power(c, grid)
-    let electric = Net.add_source(network(c.grid, 0), c.harbour, bootstrap)
+    let electric = source_at({ flow: network(c.grid, 0), sites: zero }, c.harbour, c.harbour, bootstrap)
     let generated = electrical_sources(c, roads, grid, 0, gen.gas - bootstrap, gen.nuclear, gen.biogas, electric)
     let demanded = array_total(loads.electric, 0, 0) + facility_load(c, roads, pipes)
-    let (source, battery_out) = battery_sources(c, roads, grid, 0, demanded - array_total(generated.source, 0, 0), c.battery, generated, 0)
-    let grid_paths = Net.connected(source)
-    let (electric, active, plant_power) = facility_draw(c, roads, pipes, 0, source, zero, 0)
-    let (electric, powered, power_total) = allocate_utility(electric, loads.electric, zero, 0)
+    let (source, battery_out) = battery_sources(c, roads, grid, 0, demanded - array_total(generated.flow.source, 0, 0), c.battery, generated, 0)
+    let grid_paths = Net.connected(source.flow)
+    let facility = facility_draw(c, roads, pipes, 0, { flow: source.flow, operating: zero, demand: zero, delivered: zero, total: 0 })
+    let active = facility.operating
+    let (electric, powered, power_total) = allocate_utility(facility.flow, loads.electric, zero, 0)
     let sanitation = sewage_flow(c, roads, pipes, loads.sewer, active, zero)
     let starter_water = if c.founding_map && valid(c.harbour) && get(pipes, c.harbour) >= 0 do 64 else 0 end
-    let water = water_sources(c, roads, pipes, active, sanitation.recycled_at, 0,
-      { flow: Net.add_source(network(c.pipes, 1), c.harbour, starter_water), wells: 0, rain: starter_water, desal: 0, recycled: 0 })
-    let (local, wet, served) = allocate_utility(water.flow, loads.water, zero, 0)
-    let imports = water_imports(c, roads, pipes, active, 0, clamp(c.cash - gen.cost, 0, 12000), { local with source: zero })
-    let water_paths = Net.connected({ imports with source: merge_supply(water.flow.source, imports.source, 0, water.flow.source) })
-    let (supplied, wet, delivered) = distribute(imports, loads.water, wet, false, served)
+    let water = water_sources(c, roads, pipes, active, sanitation, 0,
+      { source: source_at({ flow: network(c.pipes, 1), sites: zero }, c.harbour, c.harbour, starter_water),
+        reclaimed: zero, wells: 0, rain: starter_water, desal: 0, recycled: 0 })
+    let fresh_start = water.source.flow.source
+    let (local, wet, served) = allocate_utility(water.source.flow, loads.water, zero, 0)
+    let imports = water_imports(c, roads, pipes, active, 0, clamp(c.cash - gen.cost, 0, 12000), { flow: { local with source: zero }, sites: water.source.sites })
+    let water_paths = Net.connected({ imports.flow with source: merge_supply(fresh_start, imports.flow.source, 0, fresh_start) })
+    let (supplied, wet, delivered) = distribute(imports.flow, loads.water, wet, false, served)
     let (local, farm_sites, farms) = irrigate(c, roads, pipes, 0, { supplied with source: local.source }, zero, 0)
     let (imported, irrigated, farms_after) = irrigate(c, roads, pipes, 0, { local with source: supplied.source }, farm_sites, farms)
     let flow = { imported with source: merge_supply(local.source, imported.source, 0, local.source) }
-    { electric: { flow: electric, connections: grid_paths, demand: loads.electric, delivered: powered, total: power_total },
-      water: { flow: flow, connections: water_paths, demand: loads.water, delivered: wet, total: delivered },
-      sewer: { flow: sanitation.flow, connections: sanitation.connections, demand: loads.sewer, delivered: sanitation.delivered,
+    { electric: { flow: electric, connections: grid_paths, demand: loads.electric, delivered: powered, sites: source.sites, total: power_total },
+      water: { flow: flow, connections: water_paths, demand: loads.water, delivered: wet, sites: imports.sites, total: delivered },
+      sewer: { flow: sanitation.flow, connections: sanitation.connections, demand: loads.sewer, delivered: sanitation.delivered, sites: sanitation.sites,
         total: array_total(sanitation.delivered, 0, 0) },
       wells: water.wells, rain: water.rain, desal: water.desal, recycled: water.recycled,
       imported: delivered - served + (farms_after - farms) * 24, treated: sanitation.treated, discharged: sanitation.discharged,
-      outlets: sanitation.outlets, farms: farms_after, irrigated: irrigated, facility_power: plant_power, fresh_start: water.flow.source, fresh_left: local.source, battery_out: battery_out, battery_capacity: battery_capacity(c, roads), battery_stored: c.battery, operating: active }
+      outlets: sanitation.outlets, farms: farms_after, irrigated: irrigated, facility_power: facility.total, facility_demand: facility.demand,
+      facility_delivered: facility.delivered, grid_reach: grid, pipe_reach: pipes, fresh_start: fresh_start,
+      fresh_left: local.source, battery_out: battery_out, battery_capacity: battery_units(c, roads, grid, 0, 0) * battery_energy(),
+      battery_stored: c.battery, operating: active }
+  end
+  doc "The current utility allocation using the same inputs as the city's stats."
+  fn utility_snapshot(c : City) : UtilityReport do
+    let roads = access(c)
+    utility_report(c, roads, generation(c, roads), population(c))
+  end
+  fn utility_endpoint(c : City, layer : Int, lot : Int) : Bool do
+    if !valid(lot) do false else
+      let kind = get(c.plants, lot)
+      let harbour = lot == c.harbour
+      match layer do
+        1 -> (harbour && c.founding_map) || kind == 3 || kind == 4 || kind == 8 || kind == 9 || kind == 10
+        2 -> (harbour && c.founding_map) || power_plant(kind)
+        31 -> kind == 10 || kind == 11 || (harbour && !has_facility(c, 10, 0) && !has_facility(c, 11, 0))
+        _ -> false
+      end
+    end
+  end
+  pfn utility_endpoint_reason(c : City, report : UtilityReport, roads : NativeIntArr, layer : Int, lot : Int, kind : Int) : String do
+    if facility_paused(c, lot) do "Paused"
+    else if building_offline(c, lot) || (layer == 2 && surface_flood(c, lot) >= 2) do "Offline"
+    else if facility_staffed(c, lot) <= 0 do "Needs staff"
+    else if lot != c.harbour && !facility_road_ready(c, roads, kind, lot) do "Needs a road connection"
+    else if kind == 3 && remote_food_island(c, lot) == 1 && distance(farm_water(c), lot) >= 0 do "Supplies island farms"
+    else if layer == 2 && distance(report.grid_reach, lot) < 0 do "Needs a connected power line"
+    else if layer != 2 && distance(report.pipe_reach, lot) < 0 do "Needs a connected pipe"
+    else if layer != 2 && facility_draw_of(kind) > 0 && get(report.facility_delivered, lot) == 0 do "Pumps need power"
+    else match kind do
+      1 | 14 -> "Fuel unavailable"
+      8 -> "Tank empty"
+      9 -> "Import budget exhausted"
+      10 -> "Waiting for sewage"
+      13 -> if sun_up(c) do "No output" else "Sun is down" end
+      15 -> "No feedstock available"
+      33 -> "Wind too light"
+      45 -> if report.battery_stored > 0 do "Standing by" else "Battery empty" end
+      _ -> "No output"
+    end end end end end end end end end
+  end
+  doc "Current offered output or a blocker for the utility facility on this parcel."
+  fn utility_site_status(c : City, report : UtilityReport, roads : NativeIntArr, layer : Int, lot : Int) : String do
+    if !utility_endpoint(c, layer, lot) do "" else
+      let kind = get(c.plants, lot)
+      let service = match layer do
+        2 -> report.electric
+        31 -> report.sewer
+        _ -> report.water
+      end
+      let output = get(service.sites, lot)
+      let name = if kind == 0 do "Harbour" else facility_name(kind) end
+      let state = if output <= 0 do utility_endpoint_reason(c, report, roads, layer, lot, kind)
+        else if layer == 31 do
+          if kind == 11 do int_to_string(get(report.outlets, lot)) ++ "/" ++ int_to_string(output) ++ " discharged"
+          else "Handles up to " ++ int_to_string(output) end
+        else (if kind == 45 do "Discharging " else "Supplies " end) ++ int_to_string(output)
+        end end
+      name ++ " · " ++ state
+    end
   end
   pfn services_with(c : City, a : NativeIntArr, people : Int, power : Power, utilities : UtilityReport) : Services do
     let commodity_market = c.production_freight.last_day >= 0
@@ -7271,6 +7386,14 @@ mod Ur.Sim do
     else if zone == 4 do 6
     else if zone == 3 do (if get(c.buildings, lot) > 0 do 14 else 2 end)
     else 0 end end end end
+  end
+  fn project_utility_demand(c : City, layer : Int, lot : Int) : Int do
+    if layer == 2 do (if get(c.zones, lot) == 4 do industrial_power(c, lot) else 4 end)
+    else if layer == 31 do project_water(c, lot) * 3 / 4
+    else project_water(c, lot) end end
+  end
+  fn project_reservations(c : City, report : UtilityReport) : UtilityReservation do
+    reserve_utilities(c, access(c), report)
   end
   pfn save_flow(delivery : UtilityDelivery, flow : Ur.UtilitiesNetwork.Network) : UtilityDelivery do { delivery with flow: flow } end
   pfn hold_utilities(c : City, roads : NativeIntArr, lot : Int, capacity : UtilityReservation) : UtilityReservation do
