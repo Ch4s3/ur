@@ -17,7 +17,7 @@ mod IslandTreesTest do
     Test.assert_true(pines >= 70 && pines <= 130, "a pine stand on about a third of seeds: " ++ int_to_string(pines))
     Test.assert_true(both <= 180, "the two are drawn apart: they agree on " ++ int_to_string(both) ++ " of 300")
     let founding = seeded(c, -1)
-    Test.assert_true(Ur.Flora.mangrove_map(founding), "the founding map has mangroves")
+    Test.assert_true(!Ur.Flora.mangrove_map(founding), "the founding map has no mangroves (its storms are tuned without them)")
     Test.assert_true(!Ur.Flora.pine_map(founding), "and no pine stand")
     Test.assert_true(Math.abs(Ur.Flora.prevailing(founding) -. 0.42) < 0.001, "and the daily wind's base as its trade wind")
     let one = seeded(c, 77)
@@ -145,7 +145,7 @@ mod IslandTreesTest do
     let a = block(a, 35, 55, 29, 31, 12)
     let bare = { c with heights: a, roads: zero, buildings: NativeArray.make_int(S.count(), 0), zones: NativeArray.make_int(S.count(), 0),
       parks: NativeArray.make_int(S.count(), 0), plants: NativeArray.make_int(S.count(), 0), seawalls: NativeArray.make_int(S.count(), 0), harbour: -1 }
-    let on = { bare with world_seed: -1 }
+    let on = seeded(bare, first_mangrove_seed(bare, true, 1))
     let off = seeded(bare, first_mangrove_seed(bare, false, 1))
     let shore = S.index(44, 10)
     Test.assert_true(rooted(Ur.Landscape.structures(on, shore, 0)), "a sheltered shore on a mangrove map grows mangroves")
@@ -168,7 +168,7 @@ mod IslandTreesTest do
       seabed: NativeArray.make_int(S.count(), 0), pollution: NativeArray.make_int(S.count(), 0), land_pollution: NativeArray.make_int(S.count(), 0),
       mangrove_harm: NativeArray.make_int(S.count(), 0), harbour: -1, sea_counted: 2,
       sea_heights: NativeArray.set_int(NativeArray.make_int(S.count(), 0), stand, 350) }
-    let on = { bare with world_seed: -1 }
+    let on = seeded(bare, first_mangrove_seed(bare, true, 1))
     let off = seeded(bare, first_mangrove_seed(bare, false, 1))
     Test.assert_true(S.mangrove_water(on, stand), "a sheltered water parcel beside land holds a stand on a mangrove map")
     Test.assert_true(!S.mangrove_water(off, stand), "not on other maps")

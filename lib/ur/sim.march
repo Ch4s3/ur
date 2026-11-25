@@ -937,8 +937,8 @@ mod Ur.Sim do
   end
   fn severe_rain(c : City) : Bool do current_weather(c) == 4 end
 
-  doc "Whether the map's sheltered shores carry mangroves: about one map in three, and the founding map."
-  fn mangrove_map(c : City) : Bool do c.world_seed < 0 || Strata.Seed.mix(c.world_seed, 1301) % 3 == 0 end
+  doc "Whether the map's sheltered shores carry mangroves: about one generated map in three. Not the founding map, whose storms and flood scenarios are tuned without them."
+  fn mangrove_map(c : City) : Bool do c.world_seed >= 0 && Strata.Seed.mix(c.world_seed, 1301) % 3 == 0 end
   pfn ray_open(c : City, x : Int, z : Int, a : Float, i : Int) : Bool do
     if i > 8 do true else
       let rx = x + float_to_int(Math.floor(int_to_float(i) *. Math.cos(a) +. 0.5))
