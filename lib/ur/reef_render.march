@@ -7,6 +7,15 @@ mod Ur.ReefRender do
   -- floor and is cut below the surface; the voxels inside this parcel's layer (y -32..-1) are drawn, a face wherever
   -- the neighbour is empty.
   pfn coral_chance(reef_type : Int) : Float do if reef_type == 2 do 0.6 else if reef_type == 1 do 0.35 else 0.2 end end end
+  fn colony(f : Ur.Ocean.Field, gx : Int, gz : Int) : Option((Int, Int)) do
+    let vx = gx * 8 + 4
+    let vz = gz * 8 + 4
+    let h = Strata.Seed.cell(97, 0, gx, 0, gz)
+    let d = Ur.Ocean.depth(f, vx, vz)
+    if List.is_empty(f.corals) || Ur.Ocean.kind(f, vx, vz) != 1 || d < 3 || Strata.Seed.unit(h) >= coral_chance(f.reef_type) do None
+    else Some((h, d)) end
+  end
+
   pfn coral_put(grid : NativeI32Arr, x : Int, z : Int, t : Strata.Template.Template, bx : Int, by : Int, bz : Int, rot : Int, i : Int) : NativeI32Arr do
     let sx = Strata.Template.t_sx(t)
     let sy = Strata.Template.t_sy(t)
@@ -39,17 +48,13 @@ mod Ur.ReefRender do
     if gz > int_div_euclid(z, 8) + 4 do (grid, placed)
     else if gx > gx1 do coral_spots(f, grid, x, z, int_div_euclid(x, 8) - 1, gz + 1, placed)
     else
-      -- the spot's middle voxel, on the 2 m grid
-      let vx = gx * 8 + 4
-      let vz = gz * 8 + 4
-      let h = Strata.Seed.cell(97, 0, gx, 0, gz)
-      let d = Ur.Ocean.depth(f, vx, vz)
-      let n = List.length(f.corals)
-      if n == 0 || Ur.Ocean.kind(f, vx, vz) != 1 || d < 3 || Strata.Seed.unit(h) >= coral_chance(f.reef_type) do coral_spots(f, grid, x, z, gx + 1, gz, placed) else
-        let t = List.nth(f.corals, int_mod_euclid(Strata.Seed.mix(h, 1), n))
-        let half = Strata.Corals.half(t)
-        let rot = int_mod_euclid(Strata.Seed.mix(h, 2), 4)
-        coral_spots(f, coral_put(grid, x, z, t, vx - half, 0 - d, vz - half, rot, 0), x, z, gx + 1, gz, placed + 1)
+      match colony(f, gx, gz) do
+        None -> coral_spots(f, grid, x, z, gx + 1, gz, placed)
+        Some((h, d)) ->
+          let t = List.nth(f.corals, int_mod_euclid(Strata.Seed.mix(h, 1), List.length(f.corals)))
+          let half = Strata.Corals.half(t)
+          let rot = int_mod_euclid(Strata.Seed.mix(h, 2), 4)
+          coral_spots(f, coral_put(grid, x, z, t, gx * 8 + 4 - half, 0 - d, gz * 8 + 4 - half, rot, 0), x, z, gx + 1, gz, placed + 1)
       end
     end end
   end

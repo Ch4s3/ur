@@ -6,17 +6,20 @@ mod Ur.WildlifeRender do
 
   pfn whale_base(base : Int) : Int do base + Ur.Birds.slots() end
   pfn turtle_base(base : Int) : Int do whale_base(base) + Ur.Whales.slots() end
-  fn slots() : Int do turtle_base(0) + Ur.Turtles.slots() end
+  pfn fish_base(base : Int) : Int do turtle_base(base) + Ur.Turtles.slots() end
+  fn slots() : Int do fish_base(0) + Ur.ReefFish.slots() end
   fn setup(base : Int) : Unit do
     Ur.Birds.setup(base)
     Ur.Whales.setup(whale_base(base))
     Ur.Turtles.setup(turtle_base(base))
+    Ur.ReefFish.setup(fish_base(base))
   end
 
   fn hide(base : Int) : Unit do
     Ur.Birds.hide(base, -1)
     Ur.Whales.hide(whale_base(base))
     Ur.Turtles.hide(turtle_base(base))
+    Ur.ReefFish.hide(fish_base(base))
   end
   fn draw(base : Int, c : Ur.Sim.City, ocean : Ur.Ocean.Field, sightings : Ur.Wildlife.Sightings,
     waves : Strata.Waves.SeaWaves, field : Option(Strata.Waves.Swell), exposure : NativeF32Arr, before : Float, now : Float) : Unit do
@@ -33,6 +36,10 @@ mod Ur.WildlifeRender do
     match sightings.whale.site do
       Some(site) -> Ur.Whales.draw(whale_base(base), site, now -. sightings.whale.due, before -. sightings.whale.due, waves, field, exposure, now)
       None -> Ur.Whales.hide(whale_base(base))
+    end
+    match sightings.fish.route do
+      Some(route) -> Ur.ReefFish.draw(fish_base(base), route, now -. sightings.fish.due)
+      None -> Ur.ReefFish.hide(fish_base(base))
     end
   end
 end

@@ -8,11 +8,11 @@ mod Ur.Wildlife do
   type WildlifePose = { x : Float, y : Float, z : Float, pitch : Float, flight : Float }
   type WildlifeView = { x : Float, z : Float, zoom : Float, aspect : Float, yaw : Float }
   type SightingTrack = { due : Float, site : Option(WildlifeSite) }
-  type Sightings = { bird : SightingTrack, bird_kind : Int, whale : SightingTrack, turtle : Ur.Turtles.TurtleTrack }
+  type Sightings = { bird : SightingTrack, bird_kind : Int, whale : SightingTrack, turtle : Ur.Turtles.TurtleTrack, fish : Ur.ReefFish.FishTrack }
 
   fn empty(now : Float) : Sightings do
     { bird: { due: now +. 1.5, site: None }, bird_kind: 0,
-      whale: { due: now +. 7.0, site: None }, turtle: Ur.Turtles.empty(now) }
+      whale: { due: now +. 7.0, site: None }, turtle: Ur.Turtles.empty(now), fish: Ur.ReefFish.empty(now) }
   end
 
   fn close(view : WildlifeView) : Bool do view.zoom <= 48.0 end
@@ -122,13 +122,18 @@ mod Ur.Wildlife do
     whale_strip(c, ocean, x, z, Math.sin(heading), Math.cos(heading), -16)
   end
 
-  pfn in_view(view : WildlifeView, x : Float, y : Float, z : Float, margin : Float) : Bool do
+  fn screen_offset(view : WildlifeView, x : Float, y : Float, z : Float) : (Float, Float) do
     let dx = x -. view.x
     let dz = z -. view.z
     let sy = Math.sin(view.yaw)
     let cy = Math.cos(view.yaw)
     let right = dx *. cy -. dz *. sy
     let up = (y -. 3.0) *. 0.795 -. (dx *. sy +. dz *. cy) *. 0.607
+    (right, up)
+  end
+
+  pfn in_view(view : WildlifeView, x : Float, y : Float, z : Float, margin : Float) : Bool do
+    let (right, up) = screen_offset(view, x, y, z)
     Math.abs(right) <= view.zoom *. margin && Math.abs(up) <= view.zoom /. view.aspect *. margin
   end
 
@@ -239,7 +244,8 @@ mod Ur.Wildlife do
       end
       let visible = fn (x : Float, y : Float, z : Float) -> in_view(view, x, y, z, 0.70)
       let turtle = Ur.Turtles.step(c, ocean, view.x, view.z, visible, now, old.turtle, changed, seed)
-      { bird: bird, bird_kind: bird_kind, whale: whale, turtle: turtle }
+      let fish = Ur.ReefFish.step(ocean, view, now, old.fish, changed, seed)
+      { bird: bird, bird_kind: bird_kind, whale: whale, turtle: turtle, fish: fish }
     end
   end
 end

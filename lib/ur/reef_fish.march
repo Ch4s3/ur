@@ -1,0 +1,187 @@
+-- Short, occasional passes over visible coral. Routes are chosen on the render clock.
+mod Ur.ReefFish do
+  needs IO.Console
+  needs IO.Process
+  needs IO.Foreign
+  needs Window
+  alias Ur.Ocean as O
+  alias Ur.Wildlife as W
+  alias Ur.WildlifeMesh as Draw
+  import Ur.SceneMesh.{box, vehicle_body}
+
+  type FishRoute = { gx : Int, gz : Int, x : Float, z : Float, dx : Float, dz : Float, travel : Float, sweep : Float }
+  type FishPose = { x : Float, y : Float, z : Float, heading : Float }
+  type FishTrack = { due : Float, route : Option(FishRoute) }
+
+  fn empty(now : Float) : FishTrack do { due: now +. 4.5, route: None } end
+  fn duration(route : FishRoute) : Float do 7.0 +. route.travel *. 0.85 end
+  pfn school() : List(Int) do [0, 1, 2] end
+  pfn depth() : Float do -0.04 end
+
+  -- A U-shaped pass turns beside the colony. Swim the offsets along the
+  -- same curve so the fish separate a little without moving in lockstep.
+  fn pose(route : FishRoute, age : Float, index : Int) : FishPose do
+    let t = Math.max_float(0.0, Math.min_float(1.0, age /. duration(route)))
+    let angle = 3.14159265 *. t
+    let member = int_to_float(index - 1)
+    let phase = age *. 1.8 +. member *. 2.0
+    let along = route.travel *. (1.0 -. Math.sin(angle)) +. member *. 0.52
+    let across = route.sweep *. (2.0 *. t -. 1.0) +. member *. 0.47 +. Math.sin(phase) *. 0.12
+    let forward = 0.0 -. route.travel *. 3.14159265 *. Math.cos(angle)
+    let side = 2.0 *. route.sweep
+    { x: route.x +. route.dx *. along +. route.dz *. across,
+      y: depth() +. Math.sin(phase) *. 0.018,
+      z: route.z +. route.dz *. along -. route.dx *. across,
+      heading: Math.atan2(route.dx *. forward +. route.dz *. side, route.dz *. forward -. route.dx *. side) }
+  end
+
+  pfn clear_water(ocean : Ur.Ocean.Field, p : FishPose) : Bool do
+    let vx = float_to_int(Math.floor(p.x +. 0.5)) * 4
+    let vz = float_to_int(Math.floor(p.z +. 0.5)) * 4
+    O.corner_depth(ocean, vx, vz) >= 3
+  end
+
+  pfn clear_samples(ocean : Ur.Ocean.Field, route : FishRoute, age : Float, interval : Float, count : Int) : Bool do
+    if count < 0 do true else
+      List.all(school(), fn i -> clear_water(ocean, pose(route, age, i))) &&
+        clear_samples(ocean, route, age +. interval, interval, count - 1)
+    end
+  end
+
+  pfn clear_route(ocean : Ur.Ocean.Field, route : FishRoute) : Bool do
+    let count = 16 + float_to_int(route.travel *. 7.0)
+    clear_samples(ocean, route, 0.0, duration(route) /. int_to_float(count), count)
+  end
+
+  pfn approach(ocean : Ur.Ocean.Field, view : Ur.Wildlife.WildlifeView, gx : Int, gz : Int, seed : Int, attempt : Int) : Option(FishRoute) do
+    if attempt >= 4 do None else
+      let direction = int_mod_euclid(seed + attempt, 4)
+      let horizontal = direction % 2 == 0
+      let sign = if direction < 2 do 1.0 else -1.0 end
+      let heading = if horizontal do view.yaw +. 1.57079633 else view.yaw end
+      let dx = sign *. Math.sin(heading)
+      let dz = sign *. Math.cos(heading)
+      let x = int_to_float(gx * 2 + 1) +. 1.4 *. dx
+      let z = int_to_float(gz * 2 + 1) +. 1.4 *. dz
+      let (right, up) = W.screen_offset(view, x, depth(), z)
+      let half_height = view.zoom /. view.aspect
+      let (edge, offset, scale) = if horizontal do (view.zoom, right, 1.0) else (half_height, 0.0 -. up, 0.607) end
+      -- Both ends extend beyond the viewport by more than the whole school.
+      let travel = (edge +. 2.2 -. sign *. offset) /. scale
+      let sweep = if int_mod_euclid(seed, 2) == 0 do 2.7 else -2.7 end
+      let route = { gx: gx, gz: gz, x: x, z: z, dx: dx, dz: dz, travel: travel, sweep: sweep }
+      if Math.abs(right) <= view.zoom *. 0.78 && Math.abs(up) <= half_height *. 0.75 && clear_route(ocean, route) do Some(route)
+      else approach(ocean, view, gx, gz, seed, attempt + 1) end
+    end
+  end
+
+  pfn find_route(ocean : Ur.Ocean.Field, view : Ur.Wildlife.WildlifeView, seed : Int, cx : Int, cz : Int, n : Int) : Option(FishRoute) do
+    if n >= 225 do None else
+      let k = int_mod_euclid(seed + n * 17, 225)
+      let gx = cx + k % 15 - 7
+      let gz = cz + k / 15 - 7
+      let route = if Option.is_some(Ur.ReefRender.colony(ocean, gx, gz)) do
+        approach(ocean, view, gx, gz, Strata.Seed.mix(seed, k), 0)
+      else None end
+      match route do
+        Some(_) -> route
+        None -> find_route(ocean, view, seed, cx, cz, n + 1)
+      end
+    end
+  end
+
+  fn step(ocean : Ur.Ocean.Field, view : Ur.Wildlife.WildlifeView, now : Float, old : FishTrack, changed : Bool, seed : Int) : FishTrack do
+    if view.zoom > 26.0 || ocean.reef_type == 0 || List.is_empty(ocean.corals) do empty(now) else
+      match old.route do
+        Some(route) ->
+          if now -. old.due >= duration(route) ||
+            (changed && (Option.is_none(Ur.ReefRender.colony(ocean, route.gx, route.gz)) || !clear_route(ocean, route))) do
+            { due: now +. 26.0 +. int_to_float(int_mod_euclid(seed, 18)), route: None }
+          else old end
+        None ->
+          if now < old.due do old else
+            let gx = float_to_int(Math.floor(view.x *. 0.5))
+            let gz = float_to_int(Math.floor(view.z *. 0.5))
+            match find_route(ocean, view, seed, gx, gz, 0) do
+              Some(route) -> { due: now, route: Some(route) }
+              None -> { due: now +. 4.0, route: None }
+            end
+          end
+      end
+    end
+  end
+
+  fn slots() : Int do 6 end
+  pfn voxel(index : Int) : Float do
+    match index do 0 -> 0.041 | 1 -> 0.039 | _ -> 0.043 end
+  end
+
+  pfn minnow() : (Ur.SceneMesh.Mesh, Ur.SceneMesh.Mesh) do
+    let body = box(vehicle_body(), 2, 3, 4, 1, 1, 2, 4)
+    let body = box(body, 1, 2, 6, 3, 3, 6, 9)
+    let body = box(body, 2, 3, 12, 1, 2, 2, 9)
+    let body = box(body, 2, 5, 8, 1, 1, 2, 4)
+    let tail = box(vehicle_body(), 2, 3, 1, 1, 1, 3, 4)
+    let tail = box(box(tail, 2, 4, 0, 1, 2, 2, 9), 2, 1, 0, 1, 2, 2, 9)
+    (body, tail)
+  end
+
+  pfn round_fish() : (Ur.SceneMesh.Mesh, Ur.SceneMesh.Mesh) do
+    let body = box(vehicle_body(), 2, 3, 4, 1, 1, 2, 37)
+    let body = box(body, 1, 2, 6, 3, 3, 6, 23)
+    let body = box(box(body, 0, 3, 7, 1, 1, 4, 37), 4, 3, 7, 1, 1, 4, 37)
+    let body = box(box(body, 1, 5, 7, 3, 1, 4, 37), 1, 1, 7, 3, 1, 4, 23)
+    let body = box(body, 2, 6, 8, 1, 1, 2, 37)
+    let tail = box(vehicle_body(), 2, 3, 2, 1, 1, 2, 37)
+    (body, box(tail, 2, 2, 1, 1, 3, 1, 23))
+  end
+
+  pfn slender_fish() : (Ur.SceneMesh.Mesh, Ur.SceneMesh.Mesh) do
+    let body = box(vehicle_body(), 2, 3, 4, 1, 1, 2, 37)
+    let body = box(body, 1, 3, 6, 3, 2, 7, 37)
+    let body = box(body, 1, 2, 7, 3, 1, 5, 17)
+    let body = box(body, 2, 3, 13, 1, 1, 3, 17)
+    let tail = box(vehicle_body(), 2, 3, 1, 1, 1, 3, 37)
+    (body, box(tail, 1, 3, 0, 3, 1, 1, 37))
+  end
+
+  pfn meshes(base : Int, index : Int) : Unit do
+    let (body, tail) = match index do
+      0 -> minnow()
+      1 -> round_fish()
+      _ -> slender_fish()
+    end
+    let size = voxel(index)
+    Draw.upload(base + index * 2, body, size)
+    Draw.upload(base + index * 2 + 1, tail, size)
+  end
+
+  fn setup(base : Int) : Unit do
+    List.fold_left(school(), (), fn (_, i) -> meshes(base, i))
+  end
+
+  fn hide(base : Int) : Unit do
+    List.fold_left(school(), (), fn (_, i) ->
+      Draw.show(base + i * 2, false)
+      Draw.show(base + i * 2 + 1, false)
+      ())
+  end
+
+  pfn draw_fish(base : Int, route : FishRoute, age : Float, i : Int) : Unit do
+    let p = pose(route, age, i)
+    let beat = Math.sin(age *. (8.0 +. int_to_float(i)) +. int_to_float(i) *. 2.2)
+    let yaw = p.heading +. beat *. 0.045
+    let size = voxel(i)
+    let hub = 4.0 *. size
+    let tail_x = p.x -. hub *. Math.sin(yaw)
+    let tail_z = p.z -. hub *. Math.cos(yaw)
+    -- The school swims between the sea surface and the clipped coral tips.
+    Draw.pose(base + i * 2, p.x, p.y, p.z, yaw, 0.0, 0.0, 2.5 *. size, 3.5 *. size, 8.0 *. size)
+    Draw.pose(base + i * 2 + 1, tail_x, p.y, tail_z, yaw +. beat *. 0.40, 0.0, 0.0, 2.5 *. size, 3.5 *. size, 4.0 *. size)
+    ()
+  end
+
+  fn draw(base : Int, route : FishRoute, age : Float) : Unit do
+    List.fold_left(school(), (), fn (_, i) -> draw_fish(base, route, age, i))
+  end
+end

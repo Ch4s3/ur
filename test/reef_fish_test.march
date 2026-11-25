@@ -1,0 +1,47 @@
+mod ReefFishTest do
+  needs IO
+  needs IO.Console
+  alias Ur.ReefFish as Fish
+  alias Ur.Ocean as O
+  alias Ur.Sim as S
+
+  pfn visible(view : Ur.Wildlife.WildlifeView, pose : Ur.ReefFish.FishPose) : Bool do
+    let dx = pose.x -. view.x
+    let dz = pose.z -. view.z
+    let sy = Math.sin(view.yaw)
+    let cy = Math.cos(view.yaw)
+    let right = dx *. cy -. dz *. sy
+    let up = (pose.y -. 3.0) *. 0.795 -. (dx *. sy +. dz *. cy) *. 0.607
+    Math.abs(right) <= view.zoom && Math.abs(up) <= view.zoom /. view.aspect
+  end
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let ocean = O.field(S.unclaimed())
+    let view : Ur.Wildlife.WildlifeView = { x: 477.0, z: 157.0, zoom: 20.0, aspect: 1.6, yaw: 0.55 }
+    let track = Fish.empty(0.0)
+    let waiting = Fish.step(ocean, view, 0.0, track, false, 19)
+    let wide = Fish.step(ocean, { view with zoom: 60.0 }, 6.0, track, false, 19)
+    let open_water = Fish.step(ocean, { view with x: -100.0, z: -100.0 }, 6.0, track, false, 19)
+    Test.assert_true(Option.is_none(waiting.route), "fish wait before their first pass")
+    Test.assert_true(Option.is_none(wide.route), "fish stay out of wide views")
+    Test.assert_true(Option.is_none(open_water.route), "open water without coral has no reef fish")
+
+    let active = Fish.step(ocean, view, 6.0, track, false, 19)
+    match active.route do
+      None -> Test.assert_true(false, "the shoals reef offers an off-camera fish route")
+      Some(route) ->
+        let duration = Fish.duration(route)
+        List.fold_left([0, 1, 2], (), fn (_, index) ->
+          let start = Fish.pose(route, 0.0, index)
+          let turn = Fish.pose(route, duration *. 0.5, index)
+          let finish = Fish.pose(route, duration, index)
+          Test.assert_true(!visible(view, start) && !visible(view, finish), "every fish starts and ends fully off camera")
+          Test.assert_true(visible(view, turn) && turn.y < 0.0 && start.heading != finish.heading,
+            "fish turn through the reef in view, below the surface")
+          ())
+        let finished = Fish.step(ocean, view, 6.1 +. duration, active, false, 19)
+        Test.assert_true(Option.is_none(finished.route) && finished.due > 6.1 +. duration, "passes are separated by quiet intervals")
+    end
+    Authority.must(println("Reef fish checks passed"))
+  end
+end
