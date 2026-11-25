@@ -1,0 +1,237 @@
+mod Ur.UtilityPlanning do
+  alias Ur.Sim as S
+  alias Ur.UtilitiesNetwork as Net
+  alias Ur.UtilityView as View
+
+  type Alert = { id : Int, layer : Int, lot : Int, count : Int, started : Int, resolved : Int }
+  type Shortfalls = { lots : List(Int), unwired : NativeIntArr }
+  type Labels = { keys : NativeIntArr, queue : NativeIntArr, tail : Int }
+  type Groups = { counts : NativeIntArr, targets : NativeIntArr, keys : List(Int) }
+  type Previous = { ids : NativeIntArr, starts : NativeIntArr }
+
+  pfn utility_delivery(report : Ur.Sim.UtilityReport, layer : Int) : Ur.Sim.UtilityDelivery do
+    match layer do
+      2 -> report.electric
+      31 -> report.sewer
+      _ -> report.water
+    end
+  end
+
+  pfn deficient(report : Ur.Sim.UtilityReport, layer : Int, flow : Ur.UtilitiesNetwork.Network, lot : Int, out : Shortfalls) : Shortfalls do
+    let (need, got) = View.parcel_delivery(report, layer, lot)
+    if need <= got do out else
+      let unwired = if Net.tap(flow, lot, 0) < 0 do NativeArray.set_int(out.unwired, lot, 1) else out.unwired end
+      { lots: Cons(lot, out.lots), unwired: unwired }
+    end
+  end
+
+  pfn eligible(flow : Ur.UtilitiesNetwork.Network, unwired : NativeIntArr, lot : Int, key : Int) : Bool do
+    if key >= S.count() do S.get(unwired, lot) > 0 else Net.capacity(flow, lot) > 0 end
+  end
+
+  pfn discover(labels : Labels, lot : Int, key : Int) : Labels do
+    let keys = labels.keys
+    let queue = labels.queue
+    let tail = labels.tail
+    { keys: NativeArray.set_int(keys, lot, key), queue: NativeArray.set_int(queue, tail, lot), tail: tail + 1 }
+  end
+
+  pfn branches(flow : Ur.UtilitiesNetwork.Network, unwired : NativeIntArr, labels : Labels, lot : Int, key : Int, arm : Int) : Labels do
+    if arm == 4 do labels else
+      let next = Net.peer(flow, lot, arm)
+      let labels = if S.valid(next) && S.get(labels.keys, next) < 0 && eligible(flow, unwired, next, key) do
+        discover(labels, next, key)
+      else labels end
+      branches(flow, unwired, labels, lot, key, arm + 1)
+    end
+  end
+
+  pfn flood_component(flow : Ur.UtilitiesNetwork.Network, unwired : NativeIntArr, labels : Labels, key : Int, head : Int) : Labels do
+    if head == labels.tail do labels else
+      let lot = NativeArray.get_int(labels.queue, head)
+      flood_component(flow, unwired, branches(flow, unwired, labels, lot, key, 0), key, head + 1)
+    end
+  end
+
+  -- Install network IDs on segment lots in a single map walk. An unconnected
+  -- parcel has no utility network, so adjacent unconnected shortfalls group together.
+  pfn label_components(flow : Ur.UtilitiesNetwork.Network, unwired : NativeIntArr, labels : Labels, lot : Int) : NativeIntArr do
+    if lot == S.count() do labels.keys else
+      let key = if Net.capacity(flow, lot) > 0 do lot else lot + S.count() end
+      let labels = if S.get(labels.keys, lot) >= 0 || !eligible(flow, unwired, lot, key) do labels else
+        flood_component(flow, unwired, discover({ labels with tail: 0 }, lot, key), key, 0)
+      end
+      label_components(flow, unwired, labels, lot + 1)
+    end
+  end
+
+  pfn network_key(flow : Ur.UtilitiesNetwork.Network, keys : NativeIntArr, lot : Int) : Int do
+    if !S.valid(lot) do -1 else
+      let tap = Net.tap(flow, lot, 0)
+      S.get(keys, if S.valid(tap) do tap else lot end)
+    end
+  end
+
+  pfn combine(flow : Ur.UtilitiesNetwork.Network, keys : NativeIntArr, out : Groups, lot : Int) : Groups do
+    let key = network_key(flow, keys, lot)
+    if key < 0 do out else
+      let counts = out.counts
+      let targets = out.targets
+      let count = NativeArray.get_int(counts, key)
+      let target = NativeArray.get_int(targets, key)
+      { counts: NativeArray.set_int(counts, key, count + 1),
+        targets: if count == 0 || lot < target do NativeArray.set_int(targets, key, lot) else targets end,
+        keys: if count == 0 do Cons(key, out.keys) else out.keys end }
+    end
+  end
+
+  pfn previous_by_key(flow : Ur.UtilitiesNetwork.Network, keys : NativeIntArr, seen : Previous, alert : Alert) : Previous do
+    let key = network_key(flow, keys, alert.lot)
+    if key < 0 do seen else
+      let old = NativeArray.get_int(seen.ids, key)
+      if old >= 0 && old < alert.id do seen else
+        { ids: NativeArray.set_int(seen.ids, key, alert.id), starts: NativeArray.set_int(seen.starts, key, alert.started) }
+      end
+    end
+  end
+
+  pfn alert_layer(previous : List(Alert), report : Ur.Sim.UtilityReport, layer : Int, stamp : Int, next_id : Int) :
+      (List(Alert), List(Alert), Int) do
+    let before = List.filter(previous, fn alert -> alert.layer == layer && alert.resolved < 0)
+    let flow = (utility_delivery(report, layer)).flow
+    let zero = NativeArray.make_int(S.count(), 0)
+    let short = List.fold_left(List.range(0, S.count()), { lots: Nil, unwired: zero },
+      fn (out, lot) -> deficient(report, layer, flow, lot, out))
+    if List.is_empty(short.lots) do (Nil, List.map(before, fn old -> { old with resolved: stamp }), next_id) else
+      let keys = label_components(flow, short.unwired,
+        { keys: NativeArray.make_int(S.count(), -1), queue: zero, tail: 0 }, 0)
+      let size = 2 * S.count()
+      let groups = List.fold_left(short.lots, { counts: NativeArray.make_int(size, 0), targets: NativeArray.make_int(size, -1), keys: Nil },
+        fn (out, lot) -> combine(flow, keys, out, lot))
+      let prior = List.fold_left(before, { ids: NativeArray.make_int(size, -1), starts: NativeArray.make_int(size, 0) },
+        fn (seen, alert) -> previous_by_key(flow, keys, seen, alert))
+      let (active, next_id) = List.fold_left(groups.keys, (Nil, next_id), fn (result, key) ->
+        let (active, next_id) = result
+        let old_id = NativeArray.get_int(prior.ids, key)
+        let id = if old_id < 0 do next_id else old_id end
+        let started = if old_id < 0 do stamp else NativeArray.get_int(prior.starts, key) end
+        let item = { id: id, layer: layer, lot: NativeArray.get_int(groups.targets, key),
+          count: NativeArray.get_int(groups.counts, key), started: started, resolved: -1 }
+        (Cons(item, active), if old_id < 0 do next_id + 1 else next_id end))
+      let resolved = List.filter(before, fn old ->
+        let key = network_key(flow, keys, old.lot)
+        key < 0 || NativeArray.get_int(groups.counts, key) == 0)
+      (List.reverse(active), List.map(resolved, fn old -> { old with resolved: stamp }), next_id)
+    end
+  end
+
+  doc "One notice per affected network, with past resolutions kept behind active notices."
+  fn alerts(previous : List(Alert), report : Ur.Sim.UtilityReport, stamp : Int) : List(Alert) do
+    let next_id = List.fold_left(previous, 0, fn (next, alert) -> if alert.id >= next do alert.id + 1 else next end)
+    let previous = List.map(List.filter(previous, fn alert -> alert.started <= stamp),
+      fn alert -> if alert.resolved > stamp do { alert with resolved: -1 } else alert end)
+    let (power, power_done, next_id) = alert_layer(previous, report, 2, stamp, next_id)
+    let (water, water_done, next_id) = alert_layer(previous, report, 1, stamp, next_id)
+    let (sewer, sewer_done, _) = alert_layer(previous, report, 31, stamp, next_id)
+    let resolved = List.take(List.append(power_done, List.append(water_done, List.append(sewer_done,
+      List.filter(previous, fn alert -> alert.resolved >= 0)))), 12)
+    List.append(power, List.append(water, List.append(sewer, resolved)))
+  end
+
+  fn zoning_tool(tool : Int) : Bool do tool == 2 || tool == 3 || tool == 5 || tool == 28 || tool == 117 end
+  fn siting_tool(tool : Int) : Bool do
+    let kind = S.facility_kind(tool)
+    S.power_plant(kind) || kind == 3 || kind == 4 || kind == 8 || kind == 9 || kind == 10 || kind == 11
+  end
+
+  type Allowance = { flow : Ur.UtilitiesNetwork.Network, left : Int, supplied : Int, wanted : Int }
+  type ZoneEstimate = { power : Allowance, water : Allowance, sewer : Allowance, plots : Int }
+
+  pfn spare(flow : Ur.UtilitiesNetwork.Network) : Allowance do
+    let left = List.fold_left(List.range(0, flow.size), 0, fn (sum, lot) -> sum + Net.remaining(flow, lot))
+    { flow: flow, left: left, supplied: 0, wanted: 0 }
+  end
+
+  pfn claim_service(pool : Allowance, lot : Int, need : Int) : Allowance do
+    let want = S.clamp(need, 0, pool.left)
+    let (flow, given) = Net.draw(pool.flow, lot, want)
+    { flow: flow, left: pool.left - given, supplied: pool.supplied + given, wanted: pool.wanted + need }
+  end
+
+  pfn plot_water(zone : Int, floors : Int) : Int do
+    match zone do
+      1 -> 16 * floors
+      2 -> 2 * floors
+      3 -> if floors > 0 do 2 + 14 * (floors - 1) else 0 end
+      4 -> 6 * floors
+      _ -> 0
+    end
+  end
+
+  pfn plot_power(c : Ur.Sim.City, lot : Int, zone : Int, floors : Int) : Int do
+    floors * (if zone == 4 do S.industrial_power(c, lot) else 4 end)
+  end
+
+  pfn zone_plot(old : Ur.Sim.City, draft : Ur.Sim.City, out : ZoneEstimate, lot : Int) : ZoneEstimate do
+    let zone = S.get(draft.zones, lot)
+    let earlier = S.get(old.zones, lot)
+    let old_limit = S.get(old.density, lot)
+    let limit = S.get(draft.density, lot)
+    if zone == 0 || (zone == earlier && limit == old_limit) do out else
+      let floors = S.clamp(limit, 1, 3)
+      let built = S.get(old.buildings, lot)
+      let already_planned = if zone == earlier do S.clamp(old_limit, 1, floors) else built end
+      let needed_power = S.clamp(plot_power(draft, lot, zone, floors) - plot_power(old, lot, earlier, already_planned), 0, 1000)
+      let needed_water = S.clamp(plot_water(zone, floors) - plot_water(earlier, already_planned), 0, 1000)
+      let needed_sewer = (out.water.wanted + needed_water) * 3 / 4 - out.water.wanted * 3 / 4
+      { power: claim_service(out.power, lot, needed_power), water: claim_service(out.water, lot, needed_water),
+        sewer: claim_service(out.sewer, lot, needed_sewer), plots: out.plots + 1 }
+    end
+  end
+
+  pfn available(name : String, pool : Allowance) : String do
+    name ++ " " ++ int_to_string(pool.supplied) ++ "/" ++ int_to_string(pool.wanted)
+  end
+
+  doc "Estimated load at the proposed zoning height limits and service the current network can deliver."
+  fn zoning(c : Ur.Sim.City, st : Ur.Sim.Stats, draft : Ur.Build.Preview) : List(String) do
+    if !draft.valid || !draft.changed do Nil else
+      let capacity = st.project_capacity
+      let start = { power: spare(capacity.electric.flow), water: spare(capacity.water.flow),
+        sewer: spare(capacity.sewer.flow), plots: 0 }
+      let estimate = List.fold_left(draft.tiles, start, fn (out, lot) -> zone_plot(c, draft.city, out, lot))
+      if estimate.plots == 0 do Nil else
+        [int_to_string(estimate.plots) ++ " plots · Estimated at height limits", "Deliverable / additional demand",
+          available("Power", estimate.power) ++ " · " ++ available("Water", estimate.water) ++ " · " ++ available("Sewage", estimate.sewer)]
+      end
+    end
+  end
+
+  doc "Utility connections, pump demand and site output if the planned facility were completed now."
+  fn siting(draft : Ur.Build.Preview, tool : Int, lot : Int) : List(String) do
+    if !draft.valid || !draft.changed || !S.valid(lot) || !siting_tool(tool) do Nil else
+      let kind = S.facility_kind(tool)
+      let c = draft.city
+      let c = { c with plants: NativeArray.set_int(c.plants, lot, kind),
+        paused_facilities: NativeArray.set_int(c.paused_facilities, lot, 0),
+        facility_staff: NativeArray.set_int(c.facility_staff, lot, 0) }
+      let report = S.utility_snapshot(c)
+      let power = S.power_plant(kind)
+      let layer = if power do 2 else if kind == 11 do 31 else 1 end end
+      let wired = S.distance(report.grid_reach, lot) >= 0
+      let piped = S.distance(report.pipe_reach, lot) >= 0
+      let connection = if power do
+        if wired do "Power line connected" else "Needs a connected power line" end
+      else if piped do "Main connected" else "Needs a connected pipe" end end
+      let status = S.utility_site_status(c, report, S.access(c), layer, lot)
+      let output = S.get((utility_delivery(report, layer)).sites, lot)
+      let status = if output == 0 do "Output 0 · " ++ status else status end
+      let pump = S.facility_draw_of(kind)
+      let power_line = if pump > 0 do
+        ["Pump power " ++ int_to_string(S.get(report.facility_delivered, lot)) ++ "/" ++ int_to_string(pump) ++
+          (if wired do " · Line connected" else " · Needs a power line" end)]
+      else Nil end
+      List.append(["Completion estimate · Current network", connection], List.append(power_line, [status]))
+    end
+  end
+end
