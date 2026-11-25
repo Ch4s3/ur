@@ -1,0 +1,135 @@
+mod Ur.RoadShape do
+  type StreetPoint = { x : Int, z : Int }
+  type StreetCurve = { a : StreetPoint, control : StreetPoint, b : StreetPoint }
+  type ParcelShape = { lot : Int, shape : StreetCurve }
+  type Slice = { lot : Int, from : (Float, Float), to : (Float, Float) }
+
+  fn encode(shape : StreetCurve) : Int do
+    1 + shape.a.x + 64 * (shape.a.z + 64 * (shape.control.x + 64 *
+      (shape.control.z + 64 * (shape.b.x + 64 * shape.b.z))))
+  end
+  fn save_limit() : Int do 34905131041 end
+  pfn coordinate(n : Int) : Int do Math.min_int(32, n % 64) end
+  fn decode(code : Int) : StreetCurve do
+    let v = code - 1
+    { a: { x: coordinate(v), z: coordinate(v / 64) },
+      control: { x: coordinate(v / 4096), z: coordinate(v / 262144) },
+      b: { x: coordinate(v / 16777216), z: coordinate(v / 1073741824) } }
+  end
+  fn sample(s : StreetCurve, t : Float) : (Float, Float) do
+    let u = 1.0 -. t
+    let a = u *. u
+    let b = t *. t
+    let h = 2.0 *. t *. u
+    (a *. int_to_float(s.a.x) +. h *. int_to_float(s.control.x) +. b *. int_to_float(s.b.x),
+     a *. int_to_float(s.a.z) +. h *. int_to_float(s.control.z) +. b *. int_to_float(s.b.z))
+  end
+  fn tangent(s : StreetCurve, t : Float) : (Float, Float) do
+    let u = 1.0 -. t
+    (u *. int_to_float(s.control.x - s.a.x) +. t *. int_to_float(s.b.x - s.control.x),
+     u *. int_to_float(s.control.z - s.a.z) +. t *. int_to_float(s.b.z - s.control.z))
+  end
+  fn on_arm(p : StreetPoint, d : Int) : Bool do
+    match d do
+      0 -> p.x == 0
+      1 -> p.x == 32
+      2 -> p.z == 0
+      _ -> p.z == 32
+    end
+  end
+  fn centre(lot : Int, width : Int) : StreetPoint do
+    { x: lot % width * 32 + 16, z: lot / width * 32 + 16 }
+  end
+
+  pfn at(x : Float, z : Float, dx : Float, dz : Float, t : Float) : (Float, Float) do
+    (x +. dx *. t, z +. dz *. t)
+  end
+  -- The slice begins at the previous boundary on the exact same centreline.
+  -- A corner tie travels through one zero-length cardinal link.
+  pfn walk(width : Int, x : Float, z : Float, dx : Float, dz : Float, col : Int, row : Int,
+    last_col : Int, last_row : Int, t : Float, out : List(Slice)) : List(Slice) do
+    let from = at(x, z, dx, dz, t)
+    let lot = row * width + col
+    if col == last_col && row == last_row do Cons({ lot: lot, from: from, to: (x +. dx, z +. dz) }, out)
+    else
+      let sx = if dx > 0.0 do 1 else -1 end
+      let sz = if dz > 0.0 do 1 else -1 end
+      let tx = if col == last_col do 2.0 else (int_to_float((col + (if sx > 0 do 1 else 0 end)) * 32) -. x) /. dx end
+      let tz = if row == last_row do 2.0 else (int_to_float((row + (if sz > 0 do 1 else 0 end)) * 32) -. z) /. dz end
+      let east = tx <= tz
+      let next = if east do tx else tz end
+      walk(width, x, z, dx, dz, if east do col + sx else col end, if east do row else row + sz end,
+        last_col, last_row, next, Cons({ lot: lot, from: from, to: at(x, z, dx, dz, next) }, out))
+    end
+  end
+  pfn slices(width : Int, points : List((Float, Float)), out : List(Slice)) : List(Slice) do
+    match points do
+      Cons((x, z), Cons((bx, bz), rest)) ->
+        let out = walk(width, x, z, bx -. x, bz -. z, float_to_int(x) / 32, float_to_int(z) / 32,
+          float_to_int(bx) / 32, float_to_int(bz) / 32, 0.0, out)
+        slices(width, Cons((bx, bz), rest), out)
+      _ -> List.reverse(out)
+    end
+  end
+  pfn local_point(width : Int, lot : Int, x : Float, z : Float) : StreetPoint do
+    { x: Math.min_int(32, Math.max_int(0, float_to_int(Math.floor(x +. 0.5)) - lot % width * 32)),
+      z: Math.min_int(32, Math.max_int(0, float_to_int(Math.floor(z +. 0.5)) - lot / width * 32)) }
+  end
+  pfn fit(width : Int, lot : Int, start : (Float, Float), finish : (Float, Float), mids : List((Float, Float))) : ParcelShape do
+    let (ax, az) = start
+    let (bx, bz) = finish
+    let (cx, cz) = match List.drop(mids, List.length(mids) / 2) do
+      Nil -> ((ax +. bx) *. 0.5, (az +. bz) *. 0.5)
+      Cons((mx, mz), _) ->
+        let da = Math.sqrt((mx -. ax) *. (mx -. ax) +. (mz -. az) *. (mz -. az))
+        let db = Math.sqrt((mx -. bx) *. (mx -. bx) +. (mz -. bz) *. (mz -. bz))
+        if da < 0.25 || db < 0.25 do ((ax +. bx) *. 0.5, (az +. bz) *. 0.5) else
+          let t = da /. (da +. db)
+          let u = 1.0 -. t
+          let w = 2.0 *. u *. t
+          ((mx -. u *. u *. ax -. t *. t *. bx) /. w, (mz -. u *. u *. az -. t *. t *. bz) /. w)
+        end
+    end
+    { lot: lot, shape: { a: local_point(width, lot, ax, az), control: local_point(width, lot, cx, cz), b: local_point(width, lot, bx, bz) } }
+  end
+  pfn combine(width : Int, current : Slice, rest : List(Slice), mids : List((Float, Float)), out : List(ParcelShape)) : List(ParcelShape) do
+    match rest do
+      Nil -> List.reverse(Cons(fit(width, current.lot, current.from, current.to, mids), out))
+      Cons(next, remaining) ->
+        if next.lot == current.lot do combine(width, { current with to: next.to }, remaining, Cons(current.to, mids), out)
+        else combine(width, next, remaining, Nil, Cons(fit(width, current.lot, current.from, current.to, mids), out)) end
+    end
+  end
+  pfn real(p : StreetPoint) : (Float, Float) do (int_to_float(p.x), int_to_float(p.z)) end
+  fn trace(width : Int, points : List((Float, Float))) : List(ParcelShape) do
+    match slices(width, points, Nil) do
+      Nil -> Nil
+      Cons(first, rest) -> combine(width, first, rest, Nil, Nil)
+    end
+  end
+  fn diagonal(width : Int, a : StreetPoint, b : StreetPoint) : List(ParcelShape) do trace(width, [real(a), real(b)]) end
+  fn curve(width : Int, a : StreetPoint, control : StreetPoint, b : StreetPoint) : List(ParcelShape) do
+    let shape = { a: a, control: control, b: b }
+    let n = Math.max_int(2, (int_abs(a.x - control.x) + int_abs(a.z - control.z) +
+      int_abs(b.x - control.x) + int_abs(b.z - control.z)) / 4)
+    let samples = List.map(List.range(0, n + 1), fn i -> sample(shape, int_to_float(i) /. int_to_float(n)))
+    trace(width, samples)
+  end
+  pfn softened(points : List((Float, Float)), out : List((Float, Float))) : List((Float, Float)) do
+    match points do
+      Cons((x, z), Cons((bx, bz), rest)) ->
+        let from = (x *. 0.75 +. bx *. 0.25, z *. 0.75 +. bz *. 0.25)
+        let to = (x *. 0.25 +. bx *. 0.75, z *. 0.25 +. bz *. 0.75)
+        softened(Cons((bx, bz), rest), Cons(to, Cons(from, out)))
+      Cons(last, Nil) -> List.reverse(Cons(last, out))
+      Nil -> List.reverse(out)
+    end
+  end
+  fn freeform(width : Int, points : List(StreetPoint)) : List(ParcelShape) do
+    let raw = List.map(points, real)
+    match raw do
+      Nil -> Nil
+      Cons(first, _) -> trace(width, softened(softened(raw, [first]), [first]))
+    end
+  end
+end

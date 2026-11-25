@@ -1,0 +1,86 @@
+mod CanalTest do
+  needs IO
+  needs IO.Console
+  alias Ur.Sim as S
+
+  pfn fixture() : Ur.Sim.City do
+    let c = S.new()
+    let zero = NativeArray.make_int(S.count(), 0)
+    { c with heights: NativeArray.make_int(S.count(), 4), harbour: S.index(2, 10),
+      roads: zero, zones: zero, buildings: zero, plants: zero, cash: 20000 }
+  end
+
+  pfn navigation() : Unit do
+    let c = fixture()
+    let a = S.index(5, 10)
+    let lock = S.index(6, 10)
+    let b = S.index(7, 10)
+    let c = { c with heights: NativeArray.set_int(c.heights, b, 10) }
+    let quoted = Ur.Build.preview(c, 127, a, b)
+    Test.assert_true(quoted.valid && quoted.changed && quoted.cost == 420, "Digging a canal applies to a whole stroke")
+    let canal = quoted.city
+    Test.assert_true(Ur.Food.walkable(canal, lock), "The canal bank is part of the pedestrian network")
+    Test.assert_true(S.canal_wet(canal, lock, 16, 16) && !S.canal_wet(canal, lock, 16, 3), "Sidewalks flank the channel")
+    Test.assert_true(List.is_empty(S.canal_path(canal, a, b)), "Different water levels require a lock")
+    let navigable = S.act(canal, lock, 128)
+    Test.assert_true(List.length(S.canal_path(navigable, a, b)) == 3, "The lock connects the two reaches")
+    let taxi = S.act(S.act(navigable, a, 130), b, 130)
+    let links = Ur.Food.destinations(taxi, fn lot -> lot == b)
+    Test.assert_true(S.canal_taxi_peer(taxi, a) == b && S.get(links, a) == b, "The water taxi is a passenger route")
+    let cut = S.act(S.act(taxi, lock, 132), lock, 132)
+    Test.assert_true(S.canal_taxi_peer(cut, a) < 0 && S.ferry_status(cut, a) == 2, "Removing a canal reach suspends its service")
+    let roads = NativeArray.set_int(NativeArray.set_int(navigable.roads, a - S.width(), 1), b - S.width(), 1)
+    let freight = S.act(S.act({ navigable with roads: roads }, a, 131), b, 131)
+    Test.assert_true(S.get(freight.canal_docks, a) == 2 && S.ferry_peer(freight, a) == b &&
+      S.canal_taxi_peer(freight, a) < 0, "Street-connected freight quays provide cargo service")
+  end
+
+  pfn flood_gate() : Unit do
+    let c = fixture()
+    let sea = S.index(4, 10)
+    let mouth = S.index(5, 10)
+    let inland = S.index(12, 10)
+    let bank = S.index(12, 11)
+    let heights = NativeArray.set_int(c.heights, sea, 0)
+    let c = { c with heights: heights, sea_heights: S.sea_on_water(heights, 350) }
+    let canal = (Ur.Build.preview(c, 127, mouth, inland)).city
+    let open = S.act(canal, mouth, 129)
+    let flooded = S.surge_day(open)
+    Test.assert_true(S.get(open.canals, mouth) == 3 && S.surface_flood(flooded, bank) > 0,
+      "An open entrance lets a surge reach inland banks")
+    let closed = S.act(open, mouth, 129)
+    let defended = S.surge_day(closed)
+    Test.assert_true(S.get(closed.canals, mouth) == 4 && S.surface_flood(defended, bank) == 0 &&
+      List.is_empty(S.canal_path(closed, mouth, inland)), "A closed barrier stops water and boats")
+    let reopened = S.act(closed, mouth, 129)
+    Test.assert_true(List.length(S.canal_path(reopened, mouth, inland)) == 8 &&
+      S.surface_flood(S.surge_day(reopened), bank) > 0, "Reopening restores the entrance")
+  end
+
+  pfn movable_crossing() : Unit do
+    let c = fixture()
+    let west = S.index(3, 10)
+    let east = S.index(13, 10)
+    let north = S.index(8, 7)
+    let south = S.index(8, 13)
+    let roads = NativeArray.set_int(NativeArray.set_int(c.roads, west, 1), east, 1)
+    let c = { c with roads: roads, cash: 100000 }
+    let reaches = S.act((Ur.Build.preview(c, 127, north, south)).city, S.index(7, 10), 127)
+    let bridge = S.build_grade_with_rise(reaches, west, east, 126, 2)
+    Test.assert_true(S.movable_leaf(bridge, S.index(8, 10)), "The lift spans a canal")
+    let taxi = S.act(S.act(bridge, north, 130), south, 130)
+    let boats = Ur.Lift.routes(taxi, Nil)
+    let approaching = Ur.Lift.step(taxi, boats, Map.empty(), 8.0)
+    let waiting = Ur.Lift.step(approaching, boats, Map.insert(Map.empty(), west, true, Map.int_cmp), 8.0)
+    Test.assert_true(S.canal_taxi_peer(taxi, north) == south &&
+      !S.bridge_road_open(waiting, west, east) && !S.bridge_ship_open(waiting, S.index(8, 10)),
+      "An approaching canal taxi requests the lift and waits for the road deck")
+  end
+
+  fn main(_cap : Cap(IO)) : Unit do
+    navigation()
+    flood_gate()
+    movable_crossing()
+    Authority.must(println("Canal checks passed"))
+  end
+end

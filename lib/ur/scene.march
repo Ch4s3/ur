@@ -120,7 +120,7 @@ mod Ur.Scene do
   end
   -- Render slots, laid out from the lot count N = S.count() (at the original 60 x 44 map these
   -- are the numbers the game always used):
-  --   0 .. 4N           per-lot layers (lot * 4 + layer: terrain, building, overpass, cutaways)
+  --   0 .. 4N           low per-lot terrain and structure layers, also used for cutaways
   --   sea_slot          the sea's chunks (sea_cols x sea_rows, at most 31)
   --   (4N + 32 .. 39 spare: once the 7 clouds)
   --   rotor_slot        N: a lot's ferry vessel or wind-turbine rotor
@@ -331,7 +331,10 @@ mod Ur.Scene do
   fn cloud_bodies() : Int do 32 end
   -- Above the ocean's slots: clouds, high terrain, then rooftop electricity markers.
   pfn power_marker_base() : Int do Ur.Ocean.slot_count() + cloud_bodies() + S.count() * 2 end
-  fn chunk_slots() : Int do power_marker_base() + S.count() end
+  pfn raised_slot(i : Int) : Int do power_marker_base() + S.count() + i end
+  -- Strata's shadow handles have a smaller range than its mesh slots.
+  pfn raised_shadow(i : Int) : Int do i * 4 + 3 end
+  fn chunk_slots() : Int do raised_slot(S.count()) end
   -- a parcel's fifth and sixth layers of terrain (32 to 48 m), for the tallest mountains
   pfn high_slot(i : Int, layer : Int) : Int do Ur.Ocean.slot_count() + cloud_bodies() + i * 2 + layer - 4 end
   pfn cloud_slot(i : Int) : Int do Ur.Ocean.slot_count() + i end
@@ -850,12 +853,14 @@ mod Ur.Scene do
       end
     end
   end
-  pfn flood_water(hs : NativeIntArr, probe : FloodProbe, y : Int, i : Int, mesh : Mesh) : Mesh do
+  pfn flood_water(hs : NativeIntArr, probe : FloodProbe, channel_floor : Int, y : Int, i : Int, mesh : Mesh) : Mesh do
     if i >= 64 do mesh else
       let x = i % 8 * 4
       let z = i / 8 * 4
       let h = NativeArray.get_int(hs, 11 + i % 8 + i / 8 * 10)
-      let (level, depth) = flood_at(probe, x + 2, z + 2, h)
+      -- Ordinary sea is drawn elsewhere. A submerged canal bed still needs its surge surface.
+      let ground = if h <= 0 && channel_floor > 0 do channel_floor else h end
+      let (level, depth) = flood_at(probe, x + 2, z + 2, ground)
       let mesh = if depth == 0 || level < y || level >= y + 32 do mesh else
         let concentration = S.clamp(depth * 4 + 15, 0, 63)
         let packed = concentration * (1 + 64 + 4096 + 262144)
@@ -864,7 +869,21 @@ mod Ur.Scene do
         let words = NativeArray.set_i32(mesh.words, n, w0)
         { words: NativeArray.set_i32(words, n + 1, Q.pack1(packed % 65536, packed / 65536, 252)), quads: mesh.quads + 1 }
       end
-      flood_water(hs, probe, y, i + 1, mesh)
+      flood_water(hs, probe, channel_floor, y, i + 1, mesh)
+    end
+  end
+  pfn canal_water(c : Ur.Sim.City, lot : Int, probe : FloodProbe, level : Int, at : Int, mesh : Mesh) : Mesh do
+    if at >= 64 do mesh else
+      let x = at % 8 * 4
+      let z = at / 8 * 4
+      let (flood, _) = flood_at(probe, x + 2, z + 2, Math.max_int(1, S.canal_level(c, lot) - 6))
+      let mesh = if S.canal_wet(c, lot, x + 2, z + 2) && flood <= S.canal_level(c, lot) do
+        let packed = 54 * (1 + 64 + 4096 + 262144)
+        let n = mesh.quads * 2
+        let words = NativeArray.set_i32(mesh.words, n, Q.with_drop(Q.pack0(x, level, z, 4, 4, 0), 6))
+        { words: NativeArray.set_i32(words, n + 1, Q.pack1(packed % 65536, packed / 65536, 252)), quads: mesh.quads + 1 }
+      else mesh end
+      canal_water(c, lot, probe, level, at + 1, mesh)
     end
   end
   pfn upload(slot : Int, x : Int, y : Int, z : Int, m : Mesh, water : Mesh, light : NativeU8Arr) : Unit do
@@ -872,19 +891,23 @@ mod Ur.Scene do
       (water.quads == 0 || Vk.chunk_part(2, water.words, water.quads)) && Vk.chunk_light(light, NativeArray.length_u8(light)) && Vk.chunk_commit() do ()
     else Ur.AppError.stop("Strata refused a world mesh upload") end
   end
-  pfn layers(i : Int, x : Int, z : Int, hs : NativeIntArr, peak : Int, parts : List(Ur.Architecture.Piece), probe : FloodProbe, layer : Int) : Unit do
+  pfn layers(c : Ur.Sim.City, i : Int, x : Int, z : Int, hs : NativeIntArr, peak : Int, parts : List(Ur.Architecture.Piece), probe : FloodProbe, layer : Int) : Unit do
     if layer >= 6 do () else
       let y = layer * 32
       let slot = if layer < 4 do i * 4 + layer else high_slot(i, layer) end
       let flood = probe.high >= y && probe.low < y + 32
-      if peak > y || occupied(parts, y) || flood do
+      let level = S.canal_level(c, i)
+      let channel = S.canal_water(c, i) && level >= y && level < y + 32
+      if peak > y || occupied(parts, y) || flood || channel do
         let m = surface(empty(), hs, x, z, y, 0)
         let a = terrain_light(NativeArray.make_u8(32768, 0), hs, y, 0)
         let (mesh, light) = pieces(m, a, parts, y, false, false, Vk.lamp_shadow(27))
-        let water = if flood do flood_water(hs, probe, y, 0, { words: NativeArray.make_i32(128, 0), quads: 0 }) else { mesh with quads: 0 } end
+        let water = if flood || channel do { words: NativeArray.make_i32(if flood && channel do 256 else 128 end, 0), quads: 0 } else { mesh with quads: 0 } end
+        let water = if channel do canal_water(c, i, probe, level - y, 0, water) else water end
+        let water = if flood do flood_water(hs, probe, if S.canal_water(c, i) do 1 else 0 end, y, 0, water) else water end
         upload(slot, x, y, z, mesh, water, light)
       else Vk.chunk_free(slot) end
-      layers(i, x, z, hs, peak, parts, probe, layer + 1)
+      layers(c, i, x, z, hs, peak, parts, probe, layer + 1)
     end
   end
   -- The seabed: below sea level (voxel 0) under every water cell of the map
@@ -1206,52 +1229,128 @@ mod Ur.Scene do
       deck_shadow(if solid do NativeArray.set_u8(a, i, 5) else a end, length, width, i + 1)
     end
   end
-  pfn overpass(c : Ur.Sim.City, i : Int, x : Int, z : Int) : Unit do
+  type RaisedDeck = { cells : Int, width : Int, scale : Float, x : Float, y : Float, z : Float,
+    east : Bool, pitch : Float, span : Int, middle : Int }
+  fn deck_point(d : RaisedDeck, along : Float, above : Float) : (Float, Float, Float) do
+    let run = along *. Math.cos(d.pitch) -. above *. Math.sin(d.pitch)
+    let rise = along *. Math.sin(d.pitch) +. above *. Math.cos(d.pitch)
+    (d.x +. (if d.east do run else 0.0 end), d.y +. rise, d.z +. (if d.east do 0.0 else run end))
+  end
+  pfn hinge_deck(deck : RaisedDeck, side : Int, opening : Float) : RaisedDeck do
+    if side == 0 || opening <= 0.0 do deck else
+      let hinge = if side > 0 do 0.0 else int_to_float(deck.cells) *. deck.scale end
+      let deck_top = 2.0 *. deck.scale
+      let (x, y, z) = deck_point(deck, hinge, deck_top)
+      let pitch = deck.pitch +. (int_to_float(side) *. S.drawbridge_angle() -. deck.pitch) *. opening
+      let (dx, dy, dz) = deck_point({ deck with x: 0.0, y: 0.0, z: 0.0, pitch: pitch }, hinge, deck_top)
+      { deck with x: x -. dx, y: y -. dy, z: z -. dz, pitch: pitch }
+    end
+  end
+  fn bridge_deck(c : Ur.Sim.City, i : Int, opening : Float) : Option(RaisedDeck) do
     let a = S.grade_source(c, i)
     let b = S.grade_peer(c, a)
-    let first = if a < b do a else b end
-    let last = if a < b do b else a end
-    let east = first / S.width() == last / S.width()
-    let span = S.span_distance(first, last) * 32
-    let middle = S.span_distance(first, i) * 32
-    let lo = S.clamp(middle - 16, 0, span)
-    let hi = S.clamp(middle + 16, 0, span)
-    if hi <= lo do () else
-      let run = int_to_float(hi - lo)
-      let begin = S.grade_surface(c, first, last, int_to_float(lo) /. int_to_float(span))
-      let rise = S.grade_surface(c, first, last, int_to_float(hi) /. int_to_float(span)) -. begin
-      let pitch = Math.atan2(rise, run)
-      let length = Math.sqrt(run *. run +. rise *. rise)
-      let cells = S.clamp(float_to_int(length +. 0.5), 1, 32)
-      let scale = length /. int_to_float(cells)
-      let width = S.clamp(float_to_int(18.0 /. scale +. 0.5), 9, 18)
-      let offset = int_to_float(lo - middle + 16)
-      let along = offset +. 2.0 *. scale *. Math.sin(pitch)
-      let across = 16.0 -. int_to_float(width) *. scale *. 0.5
-      let px = int_to_float(x) +. (if east do along else 32.0 -. across end)
-      let pz = int_to_float(z) +. (if east do across else along end)
-      let py = begin +. 1.0 -. 2.0 *. scale *. Math.cos(pitch)
-      let yaw = if east do 0.0 else 0.0 -. 0.7853981634 end
-      let sy = Math.sin(yaw)
-      let cy = Math.cos(yaw)
-      let sp = Math.sin(pitch *. 0.5)
-      let cp = Math.cos(pitch *. 0.5)
-      let slot = i * 4 + 3
-      let mesh = { words: NativeArray.make_i32(128, 0), quads: 0 }
-      let mesh = box(mesh, 0, 0, 0, cells, 2, width, 4)
+    if !S.grade_link(c, a, b) || S.grade_kind(c, a) != 1 do None else
+      let first = Math.min_int(a, b)
+      let last = Math.max_int(a, b)
+      let east = first / S.width() == last / S.width()
+      let span = S.span_distance(first, last) * 32
+      let middle = S.span_distance(first, i) * 32
+      let lo = S.clamp(middle - 16, 0, span)
+      let hi = S.clamp(middle + 16, 0, span)
+      if hi <= lo do None else
+        let run = int_to_float(hi - lo)
+        let begin = S.grade_surface(c, first, last, int_to_float(lo) /. int_to_float(span))
+        let rise = S.grade_surface(c, first, last, int_to_float(hi) /. int_to_float(span)) -. begin
+        let pitch = Math.atan2(rise, run)
+        let length = Math.sqrt(run *. run +. rise *. rise)
+        let cells = S.clamp(float_to_int(length +. 0.5), 1, 32)
+        let scale = length /. int_to_float(cells)
+        let width = S.clamp(float_to_int(18.0 /. scale +. 0.5), 9, 18)
+        let offset = int_to_float(lo - middle + 16)
+        let along = offset +. 2.0 *. scale *. Math.sin(pitch)
+        let across = 16.0 -. int_to_float(width) *. scale *. 0.5
+        let x = int_to_float(i % S.width() * 32) +. (if east do along else 32.0 -. across end)
+        let z = int_to_float(i / S.width() * 32) +. (if east do across else along end)
+        let y = begin +. 1.0 -. 2.0 *. scale *. Math.cos(pitch)
+        let deck = { cells: cells, width: width, scale: scale, x: x, y: y, z: z,
+          east: east, pitch: pitch, span: span, middle: middle }
+        Some(hinge_deck(deck, S.drawbridge_leaf_side(c, i), opening))
+      end
+    end
+  end
+  pfn pose_raised_deck(i : Int, deck : RaisedDeck) : Unit do
+    let px = deck.x *. 0.25
+    let py = deck.y *. 0.25
+    let pz = deck.z *. 0.25
+    let yaw = if deck.east do 0.0 else 0.0 -. 0.7853981634 end
+    let sy = Math.sin(yaw)
+    let cy = Math.cos(yaw)
+    let sp = Math.sin(deck.pitch *. 0.5)
+    let cp = Math.cos(deck.pitch *. 0.5)
+    Vk.slot_pose(raised_slot(i), px, py, pz, sy *. sp, sy *. cp, cy *. sp, cy *. cp)
+    Vk.body_place(raised_shadow(i), px, py, pz, sy *. sp, sy *. cp, cy *. sp, cy *. cp)
+  end
+  pfn suspension_cables(m : Mesh, deck : RaisedDeck, at : Int) : Mesh do
+    if at >= deck.cells do m else
+      let w = S.clamp(deck.cells - at, 1, 8)
+      let station = deck.middle - 16 + at + w / 2
+      let quarter = deck.span / 4
+      let high = if station < quarter do 4 + S.clamp(station, 0, quarter) * 22 / quarter
+        else if station > deck.span - quarter do 4 + S.clamp(deck.span - station, 0, quarter) * 22 / quarter
+        else
+          let offset = int_abs(station - deck.span / 2)
+          8 + 18 * offset * offset / (quarter * quarter)
+        end end
+      let m = box(box(m, at, high, 0, w, 2, 1, 19), at, high, deck.width - 1, w, 2, 1, 19)
+      let m = if high > 4 do box(box(m, at, 4, 0, 1, high - 4, 1, 23), at, 4, deck.width - 1, 1, high - 4, 1, 23) else m end
+      suspension_cables(m, deck, at + 8)
+    end
+  end
+  pfn overpass(c : Ur.Sim.City, i : Int) : Unit do
+    match bridge_deck(c, i, S.bridge_opening(c, i)) do
+      None -> ()
+      Some(deck) ->
+      let cells = deck.cells
+      let width = deck.width
+      let slot = raised_slot(i)
+      let handle = raised_shadow(i)
+      let suspension = S.bridge_style(c, S.grade_source(c, i)) == 2
+      let mesh = { words: NativeArray.make_i32(if suspension do 512 else 128 end, 0), quads: 0 }
+      let centre = width / 2
+      let mesh = box(mesh, 0, 0, 0, cells, 1, width, 4)
+      let mesh = box(mesh, 0, 1, 0, cells, 1, centre, 4)
+      let mesh = box(mesh, 0, 1, centre, cells, 1, 1, 16)
+      let mesh = box(mesh, 0, 1, centre + 1, cells, 1, width - centre - 1, 4)
       let mesh = box(mesh, 0, 2, 0, cells, 2, 1, 17)
       let mesh = box(mesh, 0, 2, width - 1, cells, 2, 1, 17)
-      let marker = Q.with_drop(Q.pack0(0, 2, width / 2, cells, 1, 0), 7)
-      let n = mesh.quads * 2
-      let mesh = { words: NativeArray.set_i32(NativeArray.set_i32(mesh.words, n, marker), n + 1, Q.pack1(16, 255, 17)), quads: mesh.quads + 1 }
+      let mesh = if suspension do suspension_cables(mesh, deck, 0) else mesh end
       let shadow = deck_shadow(NativeArray.make_u8(cells * width * 4, 0), cells, width, 0)
       if Vk.body_begin(slot) && Vk.chunk_part(0, mesh.words, mesh.quads) && Vk.chunk_commit() &&
-        Vk.body_shape(slot, shadow, cells, 4, width) do
-        Vk.slot_voxel(slot, scale *. 0.25)
-        Vk.body_voxel(slot, scale *. 0.25)
-        Vk.slot_pose(slot, px *. 0.25, py *. 0.25, pz *. 0.25, sy *. sp, sy *. cp, cy *. sp, cy *. cp)
-        Vk.body_place(slot, px *. 0.25, py *. 0.25, pz *. 0.25, sy *. sp, sy *. cp, cy *. sp, cy *. cp)
+        Vk.body_shape(handle, shadow, cells, 4, width) do
+        Vk.slot_voxel(slot, deck.scale *. 0.25)
+        Vk.body_voxel(handle, deck.scale *. 0.25)
+        pose_raised_deck(i, deck)
       else Ur.AppError.stop("Overpass deck upload failed") end
+    end
+  end
+  fn movable_bridges(previous : Ur.Sim.City, c : Ur.Sim.City) : Unit do
+    if Map.is_empty(previous.lift_decks) && Map.is_empty(c.lift_decks) do () else
+      let portals = List.append(Map.keys(c.lift_decks),
+        List.filter(Map.keys(previous.lift_decks), fn portal -> Option.is_none(Map.get(c.lift_decks, portal, Map.int_cmp))))
+      List.each(portals, fn portal ->
+        if S.lift_amount(previous, portal) == S.lift_amount(c, portal) do () else
+          let peer = S.grade_peer(c, portal)
+          if S.lift_portal(c, portal, peer) < 0 do () else
+            let distance = S.span_distance(portal, peer)
+            let step = S.grade_step(portal, peer)
+            let first = portal + step * ((distance - 1) / 2)
+            List.each([first, first + step], fn lot ->
+              match bridge_deck(c, lot, S.bridge_opening(c, lot)) do
+                None -> ()
+                Some(deck) -> pose_raised_deck(lot, deck)
+              end)
+          end
+        end)
     end
   end
   type Signals = { before : NativeIntArr, after : NativeIntArr, before_tick : Int, after_tick : Int }
@@ -1318,9 +1417,13 @@ mod Ur.Scene do
         let m = if mountain do cross_strip(cross_strip(m, east, at, 0, y, 6, 23), east, at, 26, y, 6, 23)
           else cross_strip(m, east, at, 0, y, 32, 23) end
         let pavement = if mountain do y else y + 1 end
-        let m = if mountain do cross_strip(m, east, at, 6, pavement, 20, 4)
-          else cross_strip(m, east, at, 5, pavement, 22, 4) end
-        let m = if strip % 3 != 0 do cross_strip(m, east, at, 15, pavement + 1, 1, 8) else m end
+        let edge = if mountain do 6 else 5 end
+        let m = if strip % 3 == 0 do cross_strip(m, east, at, edge, pavement, 32 - edge * 2, 4)
+          else
+            let m = cross_strip(m, east, at, edge, pavement, 15 - edge, 4)
+            let m = cross_strip(m, east, at, 15, pavement, 1, 8)
+            cross_strip(m, east, at, 16, pavement, 16 - edge, 4)
+          end
         let m = cross_strip(cross_strip(m, east, at, 5, pavement + 1, 1, 10), east, at, 26, pavement + 1, 1, 10)
         let m = cross_wall(cross_wall(m, east, at, 5, pavement + 1, 7, true, if rib do 24 else 19 end),
           east, at, 26, pavement + 1, 7, false, if rib do 24 else 19 end)
@@ -1371,11 +1474,16 @@ mod Ur.Scene do
         if Vk.chunk_begin(i * 4, x, -34, z, 0) && Vk.chunk_part(0, rock.words, rock.quads) && Vk.chunk_commit() do ()
         else Ur.AppError.stop("Tunnel cutaway rock upload failed") end
       end
-    else layers(i, x, z, hs, high_ground(hs, 0, 0), sign_parts(c, i, control, tick, 0, L.structures(c, i, lighting)), probe, 0) end
-    if raised do overpass(c, i, x, z) else Vk.body_drop(i * 4 + 3) end
+    else layers(c, i, x, z, hs, high_ground(hs, 0, 0), sign_parts(c, i, control, tick, 0, L.structures(c, i, lighting)), probe, 0) end
+    if raised do overpass(c, i) else
+      Vk.body_drop(raised_shadow(i))
+      Vk.chunk_free(raised_slot(i))
+    end
   end
   pfn changed(a : Ur.Sim.City, b : Ur.Sim.City, i : Int) : Bool do
-    S.valid(i) && (S.public_work_stage(a, i) != S.public_work_stage(b, i) || S.get(a.seawalls, i) != S.get(b.seawalls, i) || S.flood_repair_days(a, i) != S.flood_repair_days(b, i) || S.get(a.sidewalk_items, i) != S.get(b.sidewalk_items, i) || S.get(a.waste_bins, i) != S.get(b.waste_bins, i) || (a.harbour != b.harbour && (i == a.harbour || i == b.harbour)) || S.get(a.heights, i) != S.get(b.heights, i) || S.campus_root(a, i) != S.campus_root(b, i) || S.get(a.roads, i) != S.get(b.roads, i) || S.get(a.grade_cover, i) != S.get(b.grade_cover, i) || S.get(a.fire_recovery, i) != S.get(b.fire_recovery, i) || S.get(a.park_tiers, i) != S.get(b.park_tiers, i) || S.get(a.streetscape, i) != S.get(b.streetscape, i) || S.get(a.parks, i) != S.get(b.parks, i) || S.get(a.tolls, i) != S.get(b.tolls, i) || S.get(a.public_parking, i) != S.get(b.public_parking, i) ||
+    S.valid(i) && (S.get(a.road_shapes, i) != S.get(b.road_shapes, i) ||
+      S.get(a.canals, i) != S.get(b.canals, i) || S.get(a.canal_docks, i) != S.get(b.canal_docks, i) ||
+      S.public_work_stage(a, i) != S.public_work_stage(b, i) || S.get(a.seawalls, i) != S.get(b.seawalls, i) || S.flood_repair_days(a, i) != S.flood_repair_days(b, i) || S.get(a.sidewalk_items, i) != S.get(b.sidewalk_items, i) || S.get(a.waste_bins, i) != S.get(b.waste_bins, i) || (a.harbour != b.harbour && (i == a.harbour || i == b.harbour)) || S.get(a.heights, i) != S.get(b.heights, i) || S.campus_root(a, i) != S.campus_root(b, i) || S.get(a.roads, i) != S.get(b.roads, i) || S.get(a.grade_cover, i) != S.get(b.grade_cover, i) || S.get(a.fire_recovery, i) != S.get(b.fire_recovery, i) || S.get(a.park_tiers, i) != S.get(b.park_tiers, i) || S.get(a.streetscape, i) != S.get(b.streetscape, i) || S.get(a.parks, i) != S.get(b.parks, i) || S.get(a.tolls, i) != S.get(b.tolls, i) || S.get(a.public_parking, i) != S.get(b.public_parking, i) ||
       S.get(a.transit, i) != S.get(b.transit, i) || S.get(a.stops, i) != S.get(b.stops, i) || S.get(a.ferries, i) != S.get(b.ferries, i) ||
       S.car_free_now(a, i) != S.car_free_now(b, i) || S.storefront(a, i) != S.storefront(b, i) || S.ground_at(a, i) != S.ground_at(b, i) || S.business_closed(a, i) != S.business_closed(b, i) || S.get(a.zones, i) != S.get(b.zones, i) || S.get(a.buildings, i) != S.get(b.buildings, i) || S.get(a.construction, i) != S.get(b.construction, i) || S.get(a.plants, i) != S.get(b.plants, i))
   end
@@ -1422,6 +1530,15 @@ mod Ur.Scene do
   pfn flagged_row(flags : NativeIntArr, x : Int, x1 : Int, z : Int) : Bool do
     x <= x1 && (NativeArray.get_int(flags, S.index(x, z)) != 0 || flagged_row(flags, x + 1, x1, z))
   end
+  pfn nearby_shape_changed(old : Ur.Sim.City, c : Ur.Sim.City, i : Int) : Bool do
+    let x = i % S.width()
+    let z = i / S.width()
+    List.any([-1, 0, 1], fn dz -> List.any([-1, 0, 1], fn dx ->
+      let tx = x + dx
+      let tz = z + dz
+      tx >= 0 && tx < S.width() && tz >= 0 && tz < S.depth() &&
+        S.get(old.road_shapes, S.index(tx, tz)) != S.get(c.road_shapes, S.index(tx, tz))))
+  end
   pfn sync_parcels(old : Ur.Sim.City, c : Ur.Sim.City, i : Int, force : Bool, structural : Bool, water_changed : Bool, before : Lighting, after : Lighting, signals : Signals, section : Section,
     flags : NativeIntArr, floods : NativeIntArr) : Unit do
     if i >= S.count() do () else
@@ -1436,7 +1553,7 @@ mod Ur.Scene do
          (section.after > 0 && section_ground(c, i, section.after)))
       -- flood_neighborhood_changed's 3x3 from the flood flags; the structural test only where a
       -- flagged lot lies within 2 (road_profile reads lots that far), and as before there.
-      if force || cut_changed || lighting_changed || signal_changed || (water_changed && S.get(c.heights, i) > 0 && flagged_near(floods, i, 1)) || (structural && flagged_near(flags, i, 2) && (changed(old, c, i) || changed(old, c, S.neighbour(i, 0)) ||
+      if force || cut_changed || lighting_changed || signal_changed || (water_changed && S.get(c.heights, i) > 0 && flagged_near(floods, i, 1)) || (structural && flagged_near(flags, i, 2) && (changed(old, c, i) || nearby_shape_changed(old, c, i) || changed(old, c, S.neighbour(i, 0)) ||
         changed(old, c, S.neighbour(i, 1)) || changed(old, c, S.neighbour(i, 2)) ||
         changed(old, c, S.neighbour(i, 3)) || L.road_profile(old, i) != L.road_profile(c, i) || corner_changed(old, c, i, 0, 2) ||
         corner_changed(old, c, i, 0, 3) || corner_changed(old, c, i, 1, 2) || corner_changed(old, c, i, 1, 3))) do parcel(c, i, now, control, signals.after_tick, section.after) else () end
@@ -1495,12 +1612,28 @@ mod Ur.Scene do
     let m = box(m, margin, 1, margin + 1, 1, 1, width - 2, material)
     box(m, far, 1, margin + 1, 1, 1, width - 2, material)
   end
-  pfn road_marker(c : Ur.Sim.City, i : Int, slot : Int, mesh : Mesh) : Int do
+  pfn road_marker_at(i : Int, y : Int, slot : Int, mesh : Mesh) : Int do
     if !S.valid(i) || slot >= 72 do slot else
       let x = i % S.width() * 32
       let z = i / S.width() * 32
-      let y = layer_floor(c, x, z) + 3
       if Vk.chunk_begin(preview_slot(slot), x, y, z, 0) && Vk.chunk_part(0, mesh.words, mesh.quads) && Vk.chunk_commit() do slot + 1 else slot end
+    end
+  end
+  pfn road_marker(c : Ur.Sim.City, i : Int, slot : Int, mesh : Mesh) : Int do
+    if !S.valid(i) do slot else
+      road_marker_at(i, layer_floor(c, i % S.width() * 32, i / S.width() * 32) + 3, slot, mesh)
+    end
+  end
+  pfn road_pin(c : Ur.Sim.City, p : Ur.Build.Point, slot : Int) : Int do
+    match p.site do
+      None -> road_marker(c, p.lot, slot, road_outline(10, 8))
+      Some(at) ->
+        let x = S.clamp(at.x % 32, 2, 29)
+        let z = S.clamp(at.z % 32, 2, 29)
+        let m = { words: NativeArray.make_i32(6, 0), quads: 0 }
+        let m = face(m, x - 2, 2, z, 5, 1, 0, 10)
+        let m = face(m, x, 2, z - 2, 1, 2, 0, 10)
+        road_marker(c, p.lot, slot, face(m, x, 2, z + 1, 1, 2, 0, 10))
     end
   end
   pfn road_markers(c : Ur.Sim.City, tiles : List(Int), next : Int, stride : Int, offset : Int, mesh : Mesh) : Int do
@@ -1546,8 +1679,29 @@ mod Ur.Scene do
         end
     end
   end
+  pfn bridge_markers(c : Ur.Sim.City, a : Int, b : Int, tiles : List(Int), slot : Int) : Int do
+    let first = if a < b do a else b end
+    let last = if a < b do b else a end
+    let span = int_to_float(S.span_distance(first, last) * 32)
+    let east = first / S.width() == last / S.width()
+    List.fold_left(tiles, slot, fn (used, i) ->
+      let middle = S.span_distance(first, i) * 32
+      let lo = float_to_int(S.grade_surface(c, first, last, int_to_float(middle - 16) /. span))
+      let hi = float_to_int(S.grade_surface(c, first, last, int_to_float(middle + 16) /. span))
+      let floor = (if lo < hi do lo else hi end) + 2
+      let mesh = List.fold_left(List.range(0, 8), { words: NativeArray.make_i32(16, 0), quads: 0 }, fn (mesh, strip) ->
+        let t = int_to_float(middle - 14 + strip * 4) /. span
+        let y = S.clamp(float_to_int(S.grade_surface(c, first, last, t)) + 2 - floor, 0, 31)
+        if east do face(mesh, strip * 4, y, 7, 4, 18, 0, 20)
+        else face(mesh, 7, y, strip * 4, 18, 4, 0, 20) end)
+      road_marker_at(i, floor, used, mesh))
+  end
   fn road_preview(c : Ur.Sim.City, p : Ur.Build.Preview, d : Ur.Build.Draft, tool : Int, old_count : Int) : Int do
-    let pins = List.map(d.points, fn point -> point.lot)
+    let pins = if !S.grade_tool(tool) && d.mode == Ur.Build.freeform_mode() do
+      let first = Ur.Build.start_point(d)
+      let last = Ur.Build.end_point(d)
+      if first == last do [first] else [first, last] end
+    else List.map(d.points, fn point -> point.lot) end
     let issues = List.filter([p.blocked, p.edge], fn i -> S.valid(i))
     let focused = List.append(pins, issues)
     let approach = S.grade_tool(tool)
@@ -1563,7 +1717,9 @@ mod Ur.Scene do
     else road_outline(material, 2) end
     let points = List.filter(focused, fn i -> i != p.blocked && i != p.edge)
     let used = road_markers(c, issues, 0, 1, 0, road_outline(30, 5))
-    let used = road_markers(c, points, used, 1, 0, road_outline(10, 8))
+    let used = if !approach && Ur.Build.shaped_mode(d.mode) && d.mode != Ur.Build.freeform_mode() do
+      List.fold_left(d.points, used, fn (slot, pin) -> if pin.lot == p.blocked || pin.lot == p.edge do slot else road_pin(c, pin, slot) end)
+    else road_markers(c, points, used, 1, 0, road_outline(10, 8)) end
     let used = if S.valid(d.snapped) && (d.target >= 0 || d.drag >= 0) do
       road_marker(c, d.snapped, used, road_outline(18, 11))
     else used end
@@ -1576,10 +1732,12 @@ mod Ur.Scene do
     let used = if alternate_count == 0 do used else road_markers(c, alternate, used, (alternate_count + 11) / 12, 0, road_outline(18, 10)) end
     let limit = S.clamp(72 - used - (if frontage > 0 do 12 else 0 end), 1, 72)
     let stride = S.clamp((count + limit - 1) / limit, 1, S.count())
-    let used = if approach do road_markers(c, tiles, used, stride, 0, mesh) else
+    let used = if S.bridge_tool(tool) && p.valid && p.changed && straight do
+      bridge_markers(p.city, first, last, List.filter(tiles, fn i -> i != first && i != last), used)
+    else if approach do road_markers(c, tiles, used, stride, 0, mesh) else
       let mask = List.fold_left(p.tiles, NativeArray.make_int(S.count(), 0), fn (mask, i) -> NativeArray.set_int(mask, i, 1))
       road_strokes(c, p, tiles, mask, used, stride, 0, material)
-    end
+    end end
     let available = S.clamp(72 - used, 1, 72)
     let used = road_markers(c, p.frontage, used, (frontage + available - 1) / available + (if frontage == 0 do 1 else 0 end), 0,
       box({ words: NativeArray.make_i32(12, 0), quads: 0 }, 12, 0, 12, 8, 1, 8, 11))
@@ -1688,13 +1846,80 @@ mod Ur.Scene do
       else street_pose_turn(c, a, b, t, lane, (-1, -1)) end
     else street_pose_turn(c, a, b, t, lane, curve) end
   end
+  pfn unit_direction(x : Float, z : Float, fx : Float, fz : Float) : (Float, Float) do
+    let size = Math.sqrt(x *. x +. z *. z)
+    if size < 0.001 do (fx, fz) else (x /. size, z /. size) end
+  end
+  pfn shaped_exit(s : Ur.RoadShape.StreetCurve, arm : Int) : Int do
+    if Ur.RoadShape.on_arm(s.a, arm) do 0
+    else if Ur.RoadShape.on_arm(s.b, arm) do 1 else -1 end end
+  end
+  pfn degenerate_shape(code : Int) : Bool do
+    if code == 0 do false else
+      let s = Ur.RoadShape.decode(code)
+      s.a.x == s.b.x && s.a.z == s.b.z && s.a.x == s.control.x && s.a.z == s.control.z
+    end
+  end
+  pfn outward_heading(code : Int, arm : Int) : (Float, Float) do
+    let x = if arm == 0 do -1.0 else if arm == 1 do 1.0 else 0.0 end end
+    let z = if arm == 2 do -1.0 else if arm == 3 do 1.0 else 0.0 end end
+    if code == 0 do (x, z) else
+      let s = Ur.RoadShape.decode(code)
+      let end_at = shaped_exit(s, arm)
+      if end_at < 0 do (x, z) else
+        let (dx, dz) = Ur.RoadShape.tangent(s, int_to_float(end_at))
+        let side = if end_at == 0 do -1.0 else 1.0 end
+        unit_direction(dx *. side, dz *. side, x, z)
+      end
+    end
+  end
+  pfn shaped_half(c : Ur.Sim.City, lot : Int, peer : Int, at : Float, facing : Float, lane : Float) : (Float, Float, Float, Float) do
+    let arm = S.direction(lot, peer)
+    let (ex, ez) = L.street_edge(c, lot, arm)
+    let code = S.get(c.road_shapes, lot)
+    let (ox, oz) = outward_heading(code, arm)
+    let other = S.get(c.road_shapes, peer)
+    let (px, pz) = outward_heading(other, S.opposite(arm))
+    let (jx, jz) = if degenerate_shape(code) do (0.0 -. px, 0.0 -. pz)
+      else if degenerate_shape(other) do (ox, oz)
+      else unit_direction(ox -. px, oz -. pz, ox, oz) end end
+    let (x, z, dx, dz) = if code == 0 do
+      let vx = int_to_float(ex - 16)
+      let vz = int_to_float(ez - 16)
+      (16.0 +. vx *. at, 16.0 +. vz *. at, vx, vz)
+    else
+      let s = Ur.RoadShape.decode(code)
+      let end_at = shaped_exit(s, arm)
+      if end_at < 0 do
+        let (mx, mz) = Ur.RoadShape.sample(s, 0.5)
+        let vx = int_to_float(ex) -. mx
+        let vz = int_to_float(ez) -. mz
+        (mx +. vx *. at, mz +. vz *. at, vx, vz)
+      else
+        let sign = if end_at == 0 do -1.0 else 1.0 end
+        let t = 0.5 +. at *. sign *. 0.5
+        let (x, z) = Ur.RoadShape.sample(s, t)
+        let (dx, dz) = Ur.RoadShape.tangent(s, t)
+        (x, z, dx *. sign, dz *. sign)
+      end
+    end
+    let (ux, uz) = unit_direction(dx, dz, jx, jz)
+    let blend = at *. at *. at
+    let (vx, vz) = unit_direction(ux +. (jx -. ux) *. blend, uz +. (jz -. uz) *. blend, jx, jz)
+    let dx = vx *. facing
+    let dz = vz *. facing
+    (int_to_float(lot % S.width() * 32) +. x -. dz *. lane,
+     int_to_float(lot / S.width() * 32) +. z +. dx *. lane, dx, dz)
+  end
   pfn street_pose_turn(c : Ur.Sim.City, a : Int, b : Int, t : Float, lane : Float, curve : (Int, Int)) : (Float, Float, Float, Float) do
     let first = t < 0.5
     let plot = if first do a else b end
     let other = if first do b else a end
     let (horizontal, vertical) = curve
     let outward = S.direction(plot, other)
-    if !S.grade_link(c, a, b) && horizontal >= 0 && (outward == horizontal || outward == vertical) do
+    if S.span_distance(a, b) == 1 && (S.get(c.road_shapes, a) > 0 || S.get(c.road_shapes, b) > 0) do
+      shaped_half(c, plot, other, if first do t *. 2.0 else (1.0 -. t) *. 2.0 end, if first do 1.0 else -1.0 end, lane)
+    else if !S.grade_link(c, a, b) && horizontal >= 0 && (outward == horizontal || outward == vertical) do
       let sample = if first do t *. 2.0 else (1.0 -. t) *. 2.0 end
       let sign = if outward == horizontal do 1.0 else -1.0 end
       let theta = 0.7853981634 *. (1.0 +. sign *. sample)
@@ -1713,7 +1938,7 @@ mod Ur.Scene do
       let z = int_to_float(a / S.width() * 32 + 16) +. dz *. t *. 32.0
       let n = if S.grade_link(c, a, b) do int_to_float(S.span_distance(a, b)) else 1.0 end
       (x -. dz /. n *. lane, z +. dx /. n *. lane, dx /. n, dz /. n)
-    end
+    end end
   end
   pfn vessel_progress(c : Ur.Sim.City, i : Int, phase : Float, fallback : Float) : Float do
     if !S.freight_port(c, i) do fallback else match c.freight do
@@ -1728,14 +1953,23 @@ mod Ur.Scene do
         if i == route.island do progress else 1.0 -. progress end
     end end
   end
+  pfn lift_vessel(c : Ur.Sim.City, source : Int) : (Float, Bool) do
+    match Map.get(c.lift_vessels, source, Map.int_cmp) do
+      Some(phase) -> S.vessel_position(phase)
+      None -> (0.0, true)
+    end
+  end
   -- Where ferry [i]'s boat is: its mesh's low corner in voxels and whether it runs along x, or None when [i] is not the lower end of a crossing.
   pfn ferry_spot(c : Ur.Sim.City, i : Int, time : Float, clock : Float) : Option((Int, Int, Bool)) do
     let peer = S.get(c.ferries, i) - 1
-    if !S.valid(peer) || peer <= i do None else
+    if !S.valid(peer) || peer <= i || S.get(c.canal_docks, i) > 0 do None else
+      let passage = S.crossing_navigation(c, i, peer, S.ferry_air_draft(c, i))
+      if passage == -2 do None else
       let phase = time *. 0.25 +. int_to_float(i % 11) *. 0.17
       let fraction = phase -. Math.floor(phase)
       let sweep = if fraction < 0.5 do fraction *. 2.0 else (1.0 -. fraction) *. 2.0 end
-      let t = vessel_progress(c, i, clock, sweep)
+      let (position, _) = lift_vessel(c, i)
+      let t = if passage >= 0 do position else vessel_progress(c, i, clock, sweep) end
       let x0 = i % S.width()
       let z0 = i / S.width()
       let x1 = peer % S.width()
@@ -1743,10 +1977,70 @@ mod Ur.Scene do
       let x = x0 * 32 + 9 + float_to_int(int_to_float((x1 - x0) * 32) *. t)
       let z = z0 * 32 + 9 + float_to_int(int_to_float((z1 - z0) * 32) *. t)
       Some((x, z, int_abs(x1 - x0) >= int_abs(z1 - z0)))
-    end
+    end end
   end
   -- A ferry is a body, posed every frame on the swell (float_ferries); a refresh uploads its mesh and sets it level.
+  pfn canal_boat_mesh(taxi : Bool) : Mesh do
+    if taxi do vessel_mesh(true, true) else
+      let m = box(vehicle_body(), 1, 0, 1, 17, 1, 6, 19)
+      let m = box(m, 0, 1, 0, 19, 2, 8, 13)
+      let m = box(m, 0, 3, 0, 19, 1, 8, 8)
+      let m = box(m, 2, 4, 1, 5, 3, 6, 9)
+      let m = box(m, 8, 4, 1, 5, 3, 6, 7)
+      box(m, 14, 4, 1, 4, 3, 6, 10)
+    end
+  end
+  pfn canal_boat_segment(path : List(Int), progress : Float, dock : Int) : (Int, Int, Float) do
+    match path do
+      Cons(a, Cons(b, rest)) ->
+        if progress >= 1.0 && !List.is_empty(rest) do
+          canal_boat_segment(Cons(b, rest), progress -. 1.0, dock)
+        else (a, b, progress) end
+      Cons(a, Nil) -> (a, a, 0.0)
+      Nil -> (dock, dock, 0.0)
+    end
+  end
+  pfn canal_vessel(c : Ur.Sim.City, i : Int, time : Float, refresh : Bool) : Unit do
+    let slot = rotor_slot(i)
+    let peer = S.get(c.ferries, i) - 1
+    if !S.valid(peer) || peer <= i do
+      if refresh do Vk.chunk_free(slot) else () end
+    else
+      let taxi = S.get(c.canal_docks, i) == 1
+      if refresh do
+        let mesh = canal_boat_mesh(taxi)
+        if Vk.body_begin(slot) && Vk.chunk_part(0, mesh.words, mesh.quads) && Vk.chunk_commit() do ()
+        else Ur.AppError.stop("Canal boat upload failed") end
+      else () end
+      let path = S.canal_service_path(c, i, peer)
+      let spans = int_to_float(List.length(path) - 1)
+      let phase = time /. (if spans > 0.0 do spans *. 3.0 else 3.0 end)
+      let phase = phase -. Math.floor(phase)
+      let lift = List.any(path, fn lot -> S.movable_leaf(c, lot))
+      let (position, direction) = lift_vessel(c, i)
+      let outward = if lift do direction else phase < 0.5 end
+      let progress = spans *. (if lift do position
+        else (if outward do phase else 1.0 -. phase end) *. 2.0 end)
+      let (a, b, u) = canal_boat_segment(path, progress, i)
+      let dx = int_to_float(b % S.width() - a % S.width())
+      let dz = int_to_float(b / S.width() - a / S.width())
+      let x = int_to_float(a % S.width() * 32 + 16) +. dx *. u *. 32.0
+      let z = int_to_float(a / S.width() * 32 + 16) +. dz *. u *. 32.0
+      let level = int_to_float(S.canal_level(c, a)) +. int_to_float(S.canal_level(c, b) - S.canal_level(c, a)) *. u
+      let direction = if outward do 1.0 else -1.0 end
+      let (dx, dz) = if a == b do (if S.canal_arm(c, a, 0) || S.canal_arm(c, a, 1) do (1.0, 0.0) else (0.0, 1.0) end)
+        else (dx *. direction, dz *. direction) end
+      let half_length = if taxi do 7.5 else 9.5 end
+      let half_width = if taxi do 3.0 else 4.0 end
+      let yaw = Math.atan2(0.0 -. dz, dx) *. 0.5
+      Vk.slot_pose(slot, (x -. dx *. half_length +. dz *. half_width) *. 0.25, (level +. 1.0) *. 0.25,
+        (z -. dz *. half_length -. dx *. half_width) *. 0.25, 0.0, Math.sin(yaw), 0.0, Math.cos(yaw))
+    end
+  end
   pfn ferry_slot(c : Ur.Sim.City, i : Int, time : Float, clock : Float, refresh : Bool) : Unit do
+    if S.get(c.canal_docks, i) > 0 do
+      if refresh do canal_vessel(c, i, time, true) else () end
+    else
     let slot = rotor_slot(i)
     match ferry_spot(c, i, time, clock) do
       None -> if refresh do Vk.chunk_free(slot) else () end
@@ -1756,6 +2050,7 @@ mod Ur.Scene do
           if Vk.body_begin(slot) && Vk.chunk_part(0, mesh.words, mesh.quads) && Vk.chunk_commit() do () else Ur.AppError.stop("Ferry upload failed") end
         else () end
         Vk.slot_pose(slot, int_to_float(x) *. 0.25, 0.25, int_to_float(z) *. 0.25, 0.0, 0.0, 0.0, 1.0)
+    end
     end
   end
   -- (x, y, z) turned by the unit quaternion (qx, qy, qz, qw)
@@ -1777,7 +2072,8 @@ mod Ur.Scene do
   doc "Pose each ferry on the sea (Strata.Waves' query of the waves the ocean shader draws): it rises and falls with the water under its middle and pitches and rolls with the sea's slope along and across its hull, from the heights at its bow, stern and sides, so it rides a long swell and shrugs off ripples shorter than itself. On a calm day it barely moves; in a storm it heaves and tips, never past 20 degrees. [waves] is this frame's sea state (Strata.Waves.sea_state), [field] the swell refracted round the coast that Strata draws, [exposure] the sea map handed to it (Ur.Sea.exposure), [water_time] the water's clock; [time] and [clock] place the boats as `vehicles` does."
   fn float_ferries(c : Ur.Sim.City, waves : Strata.Waves.SeaWaves, field : Option(Strata.Waves.Swell), exposure : NativeF32Arr, water_time : Float, time : Float, clock : Float, i : Int) : Unit do
     if i >= S.count() do () else
-      if S.get(c.ferries, i) > 0 && !S.wind_turbine(S.get(c.plants, i)) do
+      if S.get(c.canal_docks, i) > 0 do canal_vessel(c, i, time, false)
+      else if S.get(c.ferries, i) > 0 && !S.wind_turbine(S.get(c.plants, i)) do
         match ferry_spot(c, i, time, clock) do
           None -> ()
           Some((x, z, east)) ->
@@ -1816,7 +2112,7 @@ mod Ur.Scene do
             let (ox, oy, oz) = turn(qx, 0.0, qz, qw, lx, 0.0, lz)
             Vk.slot_pose(rotor_slot(i), cx -. ox, 0.25 +. heave -. oy, cz -. oz, qx, 0.0, qz, qw)
         end
-      else () end
+      else () end end
       float_ferries(c, waves, field, exposure, water_time, time, clock, i + 1)
     end
   end
@@ -1925,7 +2221,7 @@ mod Ur.Scene do
           (far_end > reach || far_end > int_to_float(S.tunnel_lip(c, far, portal))) end)
     else kind == 2 && (S.get(c.roads, i) > 0 || S.get(c.buildings, i) > 0 || S.get(c.plants, i) > 0 || S.get(c.construction, i) > 0) end
   end
-  pfn patrol_vehicle(c : Ur.Sim.City, call : Ur.Sim.Incident, progress : Float, slot : Int, section : Bool) : Unit do
+  pfn draw_patrol_vehicle(c : Ur.Sim.City, call : Ur.Sim.Incident, progress : Float, slot : Int, section : Bool) : Unit do
     let legs = List.length(call.road) - 1
     let step = progress *. int_to_float(legs)
     let leg = float_to_int(step)
@@ -1981,6 +2277,13 @@ mod Ur.Scene do
         end end
       end
     end
+  end
+  pfn patrol_vehicle(c : Ur.Sim.City, call : Ur.Sim.Incident, progress : Float, slot : Int, section : Bool,
+    roads : Ur.Lift.ServiceRoads) : Ur.Lift.ServiceRoads do
+    let legs = int_to_float(Math.max_int(1, List.length(call.road) - 1))
+    let (at, roads) = Ur.Lift.service_drive(c, roads, slot, call.road, progress *. legs)
+    draw_patrol_vehicle(c, call, at /. legs, slot, section)
+    roads
   end
   -- Incidents follow the fleet's 180 slots (see the render-slot layout at sea_slot).
   pfn incident_slot(index : Int) : Int do 6 * S.count() + 280 + index * 2 end
@@ -2151,45 +2454,52 @@ mod Ur.Scene do
       Cons(i, rest) -> last_street(rest, i)
     end
   end
-  pfn medical_vehicle(c : Ur.Sim.City, call : Ur.Sim.Incident, transfer : Ur.Sim.MedicalTransfer, progress : Float, marker : Int, section : Bool) : Unit do
+  pfn medical_vehicle(c : Ur.Sim.City, call : Ur.Sim.Incident, transfer : Ur.Sim.MedicalTransfer, progress : Float, marker : Int, section : Bool, roads : Ur.Lift.ServiceRoads) : Ur.Lift.ServiceRoads do
     let inbound = 0.55 +. int_to_float(call.travel) /. 32.0
     let after_arrival = (progress -. 1.0) *. inbound
     if progress < 1.0 do
       incident_marker(c, call, marker)
-      if progress >= 0.0 && !List.is_empty(call.road) do patrol_vehicle(c, call, progress, marker + 1, section)
-      else Vk.chunk_free(marker + 1) end
+      if progress >= 0.0 && !List.is_empty(call.road) do patrol_vehicle(c, call, progress, marker + 1, section, roads)
+      else
+        Vk.chunk_free(marker + 1)
+        roads
+      end
     else
       match transfer.route do
         Nil ->
           incident_marker(c, call, marker)
           Vk.chunk_free(marker + 1)
+          roads
         Cons(curb, _) ->
           if after_arrival < 0.26 do
             load_patient(c, call, curb, after_arrival /. 0.26, marker)
-            patrol_vehicle(c, { call with road: Cons(curb, Nil) }, 0.0, marker + 1, section)
+            patrol_vehicle(c, { call with road: Cons(curb, Nil) }, 0.0, marker + 1, section, roads)
           else
             Vk.chunk_free(marker)
             let progress = (after_arrival -. 0.26) /. (0.5 +. int_to_float(transfer.transport) /. 32.0)
-            if progress < 1.0 do patrol_vehicle(c, { call with road: transfer.route }, progress, marker + 1, section)
+            if progress < 1.0 do patrol_vehicle(c, { call with road: transfer.route }, progress, marker + 1, section, roads)
             else
               let unloading = (progress -. 1.0) *. (0.5 +. int_to_float(transfer.transport) /. 32.0) /. 0.24
               let receiving = last_street(transfer.route, -1)
               if unloading < 1.0 && S.valid(receiving) do
                 load_patient(c, { call with lot: transfer.facility }, receiving, 1.0 -. unloading, marker)
-                patrol_vehicle(c, { call with road: Cons(receiving, Nil) }, 0.0, marker + 1, section)
-              else Vk.chunk_free(marker + 1) end
+                patrol_vehicle(c, { call with road: Cons(receiving, Nil) }, 0.0, marker + 1, section, roads)
+              else
+                Vk.chunk_free(marker + 1)
+                roads
+              end
             end
           end
       end
     end
   end
-  pfn draw_calls(c : Ur.Sim.City, calls : List(Ur.Sim.Incident), month : Int, age : Float, wind : Ur.Sim.Wind, motion : Float, used : Int, section : Bool) : Int do
-    if used == 16 do used else
+  pfn draw_calls(c : Ur.Sim.City, calls : List(Ur.Sim.Incident), month : Int, age : Float, wind : Ur.Sim.Wind, motion : Float, used : Int, section : Bool, roads : Ur.Lift.ServiceRoads) : (Int, Ur.Lift.ServiceRoads) do
+    if used == 16 do (used, roads) else
       match calls do
-        Nil -> used
+        Nil -> (used, roads)
         Cons(call, rest) ->
           let since_report = age -. int_to_float(call.reported) /. 120.0
-          if since_report < 0.0 || since_report >= (if call.kind == 4 do 5.4 else 2.2 end) do draw_calls(c, rest, month, age, wind, motion, used, section) else
+          if since_report < 0.0 || since_report >= (if call.kind == 4 do 5.4 else 2.2 end) do draw_calls(c, rest, month, age, wind, motion, used, section, roads) else
             let marker = incident_slot(used)
             let wait = int_to_float(call.response - call.travel) /. 75.0
             let progress = (since_report -. wait) /. (0.55 +. int_to_float(call.travel) /. 32.0)
@@ -2199,26 +2509,33 @@ mod Ur.Scene do
               since_report < duration *. int_to_float(rain) /. 100.0
             end
             if burning do () else clear_window_smoke(marker) end
-            match call.medical do
-              Some(transfer) -> medical_vehicle(c, call, transfer, progress, marker, section)
+            let roads = match call.medical do
+              Some(transfer) -> medical_vehicle(c, call, transfer, progress, marker, section, roads)
               None ->
                 if burning do fire_fx(c, call.lot, wind, motion, marker) else incident_marker(c, call, marker) end
                 if call.response >= 0 && !List.is_empty(call.road) && progress >= 0.0 && progress < 1.0 do
-                  patrol_vehicle(c, call, progress, marker + 1, section)
-                else Vk.chunk_free(marker + 1) end
+                  patrol_vehicle(c, call, progress, marker + 1, section, roads)
+                else
+                  Vk.chunk_free(marker + 1)
+                  roads
+                end
             end
             let spread = if burning && since_report > 0.3 do List.take(call.spread, 1 + float_to_int((since_report -. 0.3) *. 5.0)) else Nil end
-            draw_calls(c, rest, month, age, wind, motion, draw_spread(c, spread, wind, motion, used + 1), section)
+            draw_calls(c, rest, month, age, wind, motion, draw_spread(c, spread, wind, motion, used + 1), section, roads)
           end
       end
     end
   end
-  pfn recent_calls(c : Ur.Sim.City, history : List(Ur.Sim.CrimeMonth), elapsed : Float, wind : Ur.Sim.Wind, motion : Float, used : Int, section : Bool) : Int do
+  pfn recent_calls(c : Ur.Sim.City, history : List(Ur.Sim.CrimeMonth), elapsed : Float, wind : Ur.Sim.Wind, motion : Float,
+    used : Int, section : Bool, roads : Ur.Lift.ServiceRoads) : (Int, Ur.Lift.ServiceRoads) do
     match history do
-      Nil -> used
+      Nil -> (used, roads)
       Cons(month, rest) ->
         let age = int_to_float((c.month - month.month) * S.days_per_month()) *. S.day_seconds() +. elapsed
-        if age >= int_to_float(S.days_per_month()) *. S.day_seconds() +. 6.4 || used == 16 do used else recent_calls(c, rest, elapsed, wind, motion, draw_calls(c, month.calls, month.month, age, wind, motion, used, section), section) end
+        if age >= int_to_float(S.days_per_month()) *. S.day_seconds() +. 6.4 || used == 16 do (used, roads) else
+          let (used, roads) = draw_calls(c, month.calls, month.month, age, wind, motion, used, section, roads)
+          recent_calls(c, rest, elapsed, wind, motion, used, section, roads)
+        end
     end
   end
   pfn clear_incidents(used : Int) : Unit do
@@ -2229,8 +2546,11 @@ mod Ur.Scene do
       clear_incidents(used + 1)
     end
   end
-  fn incidents(c : Ur.Sim.City, elapsed : Float, wind : Ur.Sim.Wind, motion : Float, section : Bool) : Unit do
-    clear_incidents(recent_calls(c, c.crime_history, elapsed, wind, motion, 0, section))
+  fn incidents(c : Ur.Sim.City, elapsed : Float, wind : Ur.Sim.Wind, motion : Float, section : Bool,
+    roads : Ur.Lift.ServiceRoads) : Ur.Lift.ServiceRoads do
+    let (used, roads) = recent_calls(c, c.crime_history, elapsed, wind, motion, 0, section, roads)
+    clear_incidents(used)
+    roads
   end
   pfn delivery_pose(c : Ur.Sim.City, trip : Ur.Food.Trip, i : Int, j : Int, index : Int, t : Float, forward : Bool, slot : Int, section : Bool) : Unit do
     let curb = !street_tile(c, i) || !street_tile(c, j)
@@ -2291,7 +2611,8 @@ mod Ur.Scene do
   -- Round each intersection using the incoming and outgoing legs of this route.
   pfn bus_xy(c : Ur.Sim.City, trip : Ur.Food.Trip, i : Int, j : Int, index : Int, t : Float) : (Float, Float) do
     let portal = if t < 0.5 do i else j end
-    if street_tile(c, i) && street_tile(c, j) && S.mountain_tunnel(c, portal, S.grade_peer(c, portal)) do
+    if street_tile(c, i) && street_tile(c, j) && (S.mountain_tunnel(c, portal, S.grade_peer(c, portal)) ||
+      S.get(c.road_shapes, i) > 0 || S.get(c.road_shapes, j) > 0) do
       let (x, z, _, _) = street_pose(c, i, j, t, 0.0)
       (x, z)
     else
@@ -2393,7 +2714,7 @@ mod Ur.Scene do
     let z = iz * 32 + (if farm do 2 + float_to_int(t *. 19.0) else if east do 13 else if boat do 8 else 10 end end end) + float_to_int(int_to_float(dz) *. progress)
     let h = S.get(c.heights, i)
     let y = if boat do 1 else h + 2 + float_to_int(int_to_float(S.get(c.heights, j) - h) *. t) end
-    if trip.mode == 4 do Vk.chunk_free(slot)
+    if trip.mode == 4 || (ferry && S.get(c.canal_docks, i) > 0) do Vk.chunk_free(slot)
     else if trip.mode == 3 do
       let direction = if forward do 1.0 else -1.0 end
       posed_vehicle(slot, vehicle_mesh(3),
@@ -2512,6 +2833,20 @@ mod Ur.Scene do
     let y = if grade do S.grade_surface(c, a, b, t) +. 2.0 else ay +. (end_y -. ay) *. t end
     { x: x, y: y, z: z, dx: bx -. ax, dz: bz -. az, visible: !grade || !covered_lane(c, a, x, z, section) }
   end
+  fn sanitation_traffic(c : Ur.Sim.City, moment : Option(SanitationMoment), driver : Int,
+    roads : Ur.Lift.ServiceRoads) : (Option(SanitationMoment), Ur.Lift.ServiceRoads) do
+    match moment do
+      Some(m) ->
+        if driver < 0 do (moment, roads) else
+          let (at, roads) = Ur.Lift.service_drive(c, roads, sanitation_slot(), m.run.route, m.step)
+          (Some({ m with step: at }), roads)
+        end
+      None -> (None, roads)
+    end
+  end
+  fn sanitation_position(moment : Option(SanitationMoment), roads : Ur.Lift.ServiceRoads) : Option(SanitationMoment) do
+    Option.map(moment, fn m -> { m with step: Ur.Lift.service_position(roads, sanitation_slot(), m.step) })
+  end
   fn sanitation_truck(c : Ur.Sim.City, moment : Option(SanitationMoment), driver : Int, night : Bool, section : Bool) : Unit do
     let slot = sanitation_slot()
     match moment do
@@ -2537,7 +2872,10 @@ mod Ur.Scene do
   end
   pfn road_snap_at(c : Ur.Sim.City, view : Projection, lot : Int, mx : Float, my : Float, best : Int, distance : Float) : (Int, Float) do
     if !S.valid(lot) || S.get(c.heights, lot) == 0 do (best, distance) else
-      let (x, y) = world_point(view, int_to_float(lot % S.width() * 32 + 16), int_to_float(S.get(c.heights, lot)), int_to_float(lot / S.width() * 32 + 16))
+      let code = S.get(c.road_shapes, lot)
+      let (lx, lz) = if code == 0 do (16.0, 16.0) else Ur.RoadShape.sample(Ur.RoadShape.decode(code), 0.5) end
+      let (x, y) = world_point(view, int_to_float(lot % S.width() * 32) +. lx,
+        int_to_float(S.get(c.heights, lot)), int_to_float(lot / S.width() * 32) +. lz)
       let square = (mx -. x) *. (mx -. x) +. (my -. y) *. (my -. y)
       if square < distance || (square == distance && (best < 0 || lot < best)) do (lot, square) else (best, distance) end
     end
@@ -2621,13 +2959,21 @@ mod Ur.Scene do
     end
   end
   pfn food_vehicle(c : Ur.Sim.City, trip : Ur.Food.Trip, time : Float, slot : Int, section : Bool) : Unit do
+    let legs = if trip.mode == 8 do Ur.Lift.fishing_legs(c, List.drop(trip.stops, 1), 0) else trip.legs end
+    let trip = { trip with legs: legs }
     if trip.legs == 0 do Vk.chunk_free(slot) else
       let span = int_to_float(trip.legs)
       let speed = if trip.mode == 8 do 0.42 else 0.38 end
       let phase = (time *. speed +. int_to_float(trip.source % 13) *. 0.21) /. (span *. 2.0)
       let fraction = phase -. Math.floor(phase)
-      let forward = fraction < 0.5
-      let step = (if forward do fraction else 1.0 -. fraction end) *. span *. 2.0
+      let (step, forward) = match Map.get(c.lift_vessels, S.count() + trip.source, Map.int_cmp) do
+        Some(phase) ->
+          let (position, outward) = S.vessel_position(phase)
+          (position *. span, outward)
+        None ->
+          let forward = fraction < 0.5
+          ((if forward do fraction else 1.0 -. fraction end) *. span *. 2.0, forward)
+      end
       trip_pose(c, trip, step, forward, 0.0, slot, section)
     end
   end
@@ -2678,10 +3024,20 @@ mod Ur.Scene do
     let dz = peer / S.width() - z
     let height = S.get(c.heights, i)
     let deck = if height == 0 do 2 else height end
-    if S.get(c.parks, i) > 0 || S.get(c.parks, peer) > 0 do (x * 32 + 16, z * 32 + 16, deck + 2)
+    if S.canal_water(c, i) do (x * 32 + side, z * 32 + side, deck + 2)
+    else if S.get(c.road_shapes, i) > 0 do
+      let shape = Ur.RoadShape.decode(S.get(c.road_shapes, i))
+      let (lx, lz) = Ur.RoadShape.sample(shape, 0.5)
+      let (tx, tz) = Ur.RoadShape.tangent(shape, 0.5)
+      let (tx, tz) = unit_direction(tx, tz, 1.0, 0.0)
+      let towards_peer = int_to_float(dz) *. tx -. int_to_float(dx) *. tz
+      let width = int_to_float(S.road_half_width(S.get(c.roads, i)) + 1)
+      let width = if towards_peer < 0.0 do 0.0 -. width else width end
+      (x * 32 + float_to_int(lx -. tz *. width), z * 32 + float_to_int(lz +. tx *. width), deck + 2)
+    else if S.get(c.parks, i) > 0 || S.get(c.parks, peer) > 0 do (x * 32 + 16, z * 32 + 16, deck + 2)
     else if S.get(c.roads, i) > 0 do (x * 32 + side, z * 32 + side, deck + 2)
     else if S.get(c.transit, i) == 1 do (x * 32 + 16, z * 32 + 16, deck + 2)
-    else (x * 32 + 16 + dx * 13, z * 32 + 16 + dz * 13, deck + 2) end end end
+    else (x * 32 + 16 + dx * 13, z * 32 + 16 + dz * 13, deck + 2) end end end end end
   end
   -- The height walking_point gives lot [i].
   pfn walking_height(c : Ur.Sim.City, i : Int) : Int do
@@ -2889,10 +3245,22 @@ mod Ur.Scene do
     let z = int_to_float(lot / S.width() * 32)
     let y = int_to_float(S.get(c.heights, lot) + 1)
     if p.kind == 0 do
-      let shift = if p.bay == 0 do -6.0 else 6.0 end
       let curb = int_to_float(S.road_half_width(S.get(c.roads, lot)) - 2)
-      { x: x +. 16.0 +. dx *. curb +. dz *. shift, y: y,
-        z: z +. 16.0 +. dz *. curb -. dx *. shift, dx: dz, dz: 0.0 -. dx }
+      let code = S.get(c.road_shapes, lot)
+      if code > 0 do
+        let shape = Ur.RoadShape.decode(code)
+        let t = if p.bay == 0 do 0.28 else 0.72 end
+        let (lx, lz) = Ur.RoadShape.sample(shape, t)
+        let (tx, tz) = Ur.RoadShape.tangent(shape, t)
+        let (tx, tz) = unit_direction(tx, tz, dz, 0.0 -. dx)
+        let side = if dz *. tx -. dx *. tz < 0.0 do -1.0 else 1.0 end
+        { x: x +. lx -. tz *. side *. curb, y: y,
+          z: z +. lz +. tx *. side *. curb, dx: tx *. side, dz: tz *. side }
+      else
+        let shift = if p.bay == 0 do -6.0 else 6.0 end
+        { x: x +. 16.0 +. dx *. curb +. dz *. shift, y: y,
+          z: z +. 16.0 +. dz *. curb -. dx *. shift, dx: dz, dz: 0.0 -. dx }
+      end
     else
       let (local_x, local_z) = match p.kind do
         3 -> (5.5 +. int_to_float(p.bay % 4 * 7), if p.bay < 4 do 7.0 else 23.0 end)
@@ -3036,7 +3404,7 @@ mod Ur.Scene do
     end
   end
   pfn walking_segment(c : Ur.Sim.City, person : Ur.Citizens.Citizen, a : Int, b : Int) : Bool do
-    if person.transit_phase == 3 || Ur.Citizens.driving(c, person, a, b) do false else
+    if person.transit_phase == 3 || (person.progress > 0.0 && S.canal_taxi_leg(c, a, b)) || Ur.Citizens.driving(c, person, a, b) do false else
       match (person.car_phase, Ur.Citizens.parking_at(person.parking), Ur.Citizens.parking_at(person.arrival)) do
         (1, Some(p), _) -> b != p.road || person.progress < 0.5
         (2, _, Some(p)) -> a != p.road || person.progress >= 0.5
@@ -3174,7 +3542,7 @@ mod Ur.Scene do
   pfn citizen_vehicle(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, person : Ur.Citizens.Citizen, progress : Float, slot : Int, in_car : Bool) : Unit do
     match person.route do
       Cons(a, Cons(b, _)) ->
-        if in_car || person.transit_phase == 3 do Vk.chunk_free(slot)
+        if in_car || person.transit_phase == 3 || (progress > 0.0 && S.canal_taxi_leg(c, a, b)) do Vk.chunk_free(slot)
         else citizen_walker(c, map, person, progress, a, b, slot) end
       _ ->
         if visible_at_stop(c, person) do
@@ -3710,8 +4078,8 @@ mod Ur.Scene do
       (w *. 0.5 +. (right +. half_tile) *. scale, h *. 0.5 -. (up +. half_tile *. 0.607) *. scale)
     end
   end
-  pfn march_ray(c : Ur.Sim.City, x : Float, y : Float, z : Float, dx : Float, dz : Float, section : Int) : Int do
-    if y < (if section > 0 do -9.0 else -0.5 end) do -1 else
+  pfn march_ray(c : Ur.Sim.City, x : Float, y : Float, z : Float, dx : Float, dz : Float, section : Int) : (Int, Ur.RoadShape.StreetPoint) do
+    if y < (if section > 0 do -9.0 else -0.5 end) do (-1, { x: 0, z: 0 }) else
       let vx = float_to_int(Math.floor(x *. 4.0))
       let vz = float_to_int(Math.floor(z *. 4.0))
       let px = int_div_euclid(vx, 32)
@@ -3740,15 +4108,16 @@ mod Ur.Scene do
       let road = inside && !cut && S.get(c.roads, i) > 0
       let top = h + (if station do (if parking_garage do 16 else if kind <= 2 || S.wind_turbine(kind) do 38 else if kind == 5 do 4 else if kind == 14 || kind >= 18 do 19 else 13 end end end end) else if stage > 0 do 1 + level * 11 + Ur.Architecture.worksite_rise(stage) else if level > 0 do 18 + level * 11 else 0 end end end)
       let structure = !cut && (station || level > 0 || stage > 0) && lx >= 3 && lx < 29 && lz >= 3 && lz < 30 && y *. 4.0 <= int_to_float(top)
-      if inside && (y *. 4.0 <= int_to_float(h) || structure || (road && y *. 4.0 <= int_to_float(h + 3))) do i
+      if inside && (y *. 4.0 <= int_to_float(h) || structure || (road && y *. 4.0 <= int_to_float(h + 3))) do (i, { x: vx, z: vz })
       else march_ray(c, x -. dx, y -. 0.125, z -. dz, dx, dz, section) end
     end
   end
   fn pick_at(c : Ur.Sim.City, wx : Float, base : Float) : Int do
-    march_ray(c, wx, 40.0, base +. 40.0, 0.0, 0.125, 0)
+    let (lot, _) = march_ray(c, wx, 40.0, base +. 40.0, 0.0, 0.125, 0)
+    lot
   end
-  fn pick(c : Ur.Sim.City, mx : Float, my : Float, w : Float, h : Float, cx : Float, cz : Float, zoom : Float, yaw : Float, section : Int) : Int do
-    if w <= 0.0 || h <= 0.0 || mx < 0.0 || my < 0.0 || mx >= w || my >= h do -1 else
+  fn pick_site(c : Ur.Sim.City, mx : Float, my : Float, w : Float, h : Float, cx : Float, cz : Float, zoom : Float, yaw : Float, section : Int) : (Int, Ur.RoadShape.StreetPoint) do
+    if w <= 0.0 || h <= 0.0 || mx < 0.0 || my < 0.0 || mx >= w || my >= h do (-1, { x: 0, z: 0 }) else
       let sx = (mx /. w *. 2.0 -. 1.0) *. zoom
       let sy = (1.0 -. my /. h *. 2.0) *. zoom *. h /. w
       let sin_yaw = Math.sin(yaw)
@@ -3760,4 +4129,9 @@ mod Ur.Scene do
         sin_yaw *. 194.0 /. 148.0 *. 0.125, cos_yaw *. 194.0 /. 148.0 *. 0.125, section)
     end
   end
+  fn pick(c : Ur.Sim.City, mx : Float, my : Float, w : Float, h : Float, cx : Float, cz : Float, zoom : Float, yaw : Float, section : Int) : Int do
+    let (lot, _) = pick_site(c, mx, my, w, h, cx, cz, zoom, yaw, section)
+    lot
+  end
+
 end

@@ -10,10 +10,11 @@ mod Ur.Toolbar do
   pfn menu(group : Int, page : Int) : Menu do
     match group do
       1 ->
-        let items = if page == 3 do [99, 100, 101] else if page == 2 do Cons(71, Cons(72, Cons(73, Cons(74, Cons(75, Nil)))))
-          else if page == 1 do Cons(50, Cons(51, Cons(52, Cons(54, Nil))))
-          else Cons(1, Cons(48, Cons(49, Cons(33, Cons(40, Nil))))) end end end
-        { span: 5, pages: ["Streets", "Crossings", "Car-free days", "Flood protection"], items: items }
+        let items = if page == 4 do [127, 128, 129, 130, 131, 132]
+          else if page == 3 do [99, 100, 101] else if page == 2 do Cons(71, Cons(72, Cons(73, Cons(74, Cons(75, Nil)))))
+          else if page == 1 do [124, 125, 126, 50, 51, 52, 54]
+          else Cons(1, Cons(48, Cons(49, Cons(33, Cons(40, Nil))))) end end end end
+        { span: if page == 4 do 6 else 5 end, pages: ["Streets", "Crossings", "Car-free days", "Flood protection", "Canals"], items: items }
       2 ->
         let items = match page do
           2 -> Cons(64, Cons(65, Cons(66, Cons(63, Nil))))
@@ -85,7 +86,7 @@ mod Ur.Toolbar do
       1 -> "road"
       48 -> "avenue"
       49 -> "promenade"
-      50 -> "overpass"
+      50 | 124 | 125 | 126 -> "overpass"
       51 -> "underpass"
       52 -> "road_tunnel"
       53 -> "park"
@@ -106,6 +107,12 @@ mod Ur.Toolbar do
       121 -> "outfall"
       122 -> "ferry"
       123 -> "harbour"
+      127 -> "outfall"
+      128 -> "grade"
+      129 -> "well"
+      130 -> "ferry"
+      131 -> "harbour"
+      132 -> "clear"
       2 | 29 -> "homes"
       3 | 31 -> "jobs"
       28 | 30 -> "mixed"
@@ -331,7 +338,7 @@ mod Ur.Toolbar do
         let cost = if map do 0 else S.cost(c, 0, tool) end
         let upkeep = if map do 0 else S.civic_tool_upkeep(tool) end
         let affordable = c.cash >= cost
-        let unit = if tool == 53 || S.grade_tool(tool) do "/tile" else "" end
+        let unit = if tool == 53 || tool == 127 || S.grade_tool(tool) do "/tile" else "" end
         let caption = "$" ++ int_to_string(cost) ++ unit ++ (if upkeep > 0 do "  +  $" ++ int_to_string(upkeep) ++ "/mo" else "" end)
         let a = if prerequisite != "" do text(a, x +. 8.0, y +. 85.0, 10.0, "Locked", false)
           else if tool == 55 && !map do text(a, x +. 8.0, y +. 85.0, 10.5, "Click a park", true) else if cost > 0 do text(a, x +. 8.0, y +. 85.0, 10.5, caption, affordable) else a end end end

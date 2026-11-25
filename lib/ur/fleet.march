@@ -122,6 +122,19 @@ mod Ur.Fleet do
     if u < 0.0 do 0.0 else if u > span do span else u end end
   end
 
+  fn lift_occupancy(c : Ur.Sim.City, active : List(Run), busy : Map(Int, Bool)) : Map(Int, Bool) do
+    List.fold_left(active, busy, fn (busy, run) ->
+      if run.trip.mode != 2 && run.trip.mode != 6 do busy else
+        let at = position(run.trip, run.progress)
+        let leg = float_to_int(at)
+        if at -. int_to_float(leg) <= 0.00001 || leg >= run.trip.legs do busy else
+          let (a, b) = F.leg(run.trip.stops, leg)
+          let portal = S.lift_portal(c, a, b)
+          if portal < 0 do busy else Map.insert(busy, portal, true, Map.int_cmp) end
+        end
+      end)
+  end
+
   fn bus_rotation(run : Run) : Float do
     let phase = run.progress
     let span = int_to_float(run.trip.legs)
@@ -175,17 +188,43 @@ mod Ur.Fleet do
     else
     let at = position(trip, run.progress)
     let outbound = forward(trip, run.progress)
-    let leg = S.clamp(if outbound do float_to_int(at) else float_to_int(Math.ceil(at)) - 1 end, 0, trip.legs - 1)
+    let leg = S.clamp(if outbound do float_to_int(at +. 0.00001) else float_to_int(Math.ceil(at -. 0.00001)) - 1 end, 0, trip.legs - 1)
     let (a, b) = F.leg(trip.stops, leg)
     let peer = if outbound do b else a end
     let road = if outbound do a else b end
-    let on_road = trip.mode == 2 || trip.mode == 6
-    let blocked = (on_road && S.storm_road_closed(c, peer)) || (trip.mode == 6 && S.car_free_now(c, peer) && !S.car_free_now(c, road))
-    let pace = if on_road do S.rain_road_pace(c, peer) else 1.0 end
-    let delay = S.delay_for(c, road, S.road_load(traffic, road))
+    let ferry = trip.mode == 6 && S.get(c.ferries, road) == peer + 1
+    let on_road = (trip.mode == 2 || trip.mode == 6) && !ferry
+    let grade = on_road && S.grade_link(c, road, peer)
+    let crossing = grade && S.movable_bridge(c, road)
+    let entry = if outbound do at -. int_to_float(leg) else int_to_float(leg + 1) -. at end
+    let waiting = entry <= 0.00001
+    let voyage = if ferry do S.lift_passenger(c, road, peer, entry) else None end
+    let passage = if waiting && ferry && S.get(c.canal_docks, road) == 0 && Option.is_none(voyage) do
+      S.crossing_navigation(c, road, peer, S.ferry_air_draft(c, road))
+    else -1 end
+    let closed = (waiting && crossing && !S.bridge_road_open(c, road, peer)) || passage != -1
+    let blocked = closed || (on_road && !crossing && S.storm_road_closed(c, peer)) ||
+      (on_road && !crossing && trip.mode == 6 && S.car_free_now(c, peer) && !S.car_free_now(c, road))
+    let pace = if on_road && !crossing do S.rain_road_pace(c, peer) else 1.0 end
+    let delay = if crossing || ferry do 0 else S.delay_for(c, road, S.road_load(traffic, road)) end
+    let length = if grade do int_to_float(S.span_distance(road, peer)) else 1.0 end
     let speed = if trip.mode == 2 do 0.65 else 0.85 end
-    let step = if blocked do 0.0 else dt *. speed *. pace *. S.traffic_pace(c.street_day, S.street_hour(time)) /. (1.0 +. int_to_float(delay) *. 0.08) end
-    let progress = run.progress +. step
+    let step = if blocked do 0.0 else
+      dt *. speed *. pace *. S.traffic_pace(c.street_day, S.street_hour(time)) /. (length *. (1.0 +. int_to_float(delay) *. 0.08))
+    end
+    let proposed = match voyage do
+      Some(progress) -> run.progress +. Math.max_float(0.0, progress -. entry)
+      None -> run.progress +. step
+    end
+    let edge = 0.35 +. int_to_float(if outbound do leg + 1 else trip.legs * 2 - leg end) +. (if outbound do 0.0 else 0.70 end)
+    let next_leg = if outbound do leg + 1 else leg - 1 end
+    let progress = if proposed > edge && run.progress < edge && next_leg >= 0 && next_leg < trip.legs do
+      let (a, b) = F.leg(trip.stops, next_leg)
+      let from = if outbound do a else b end
+      let to = if outbound do b else a end
+      if ((trip.mode == 2 || trip.mode == 6) && S.grade_link(c, from, to) && S.movable_bridge(c, from)) ||
+        (trip.mode == 6 && S.get(c.ferries, from) == to + 1) do edge else proposed end
+    else proposed end
     let direction = S.direction(road, peer)
     let control = if S.span_distance(road, peer) == 1 && S.junction_arm(c, peer, S.opposite(direction)) do S.get(junctions, peer) else 0 end
     let stop = 0.35 +. (if outbound do int_to_float(leg) else int_to_float(trip.legs * 2 - leg - 1) +. 0.70 end) +. S.stop_line()

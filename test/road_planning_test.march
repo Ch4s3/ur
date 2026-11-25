@@ -1,4 +1,5 @@
 mod RoadPlanningTest do
+  needs IO
   needs IO.Console
   needs IO.Clock
   needs IO.Process
@@ -35,9 +36,9 @@ mod RoadPlanningTest do
     let p = RoadBuild.preview(water, 1, a, b)
     Test.assert_true(!p.valid && !p.changed && p.blocked == b && p.city.cash == c.cash && S.get(p.city.roads, a) == 0, "Blocked final parcel rolls back the whole street")
     let end_lot = S.index(5, 12)
-    let d = { RoadBuild.new_draft() with mode: 1, points: [{ lot: a, flip: false }, { lot: end_lot, flip: false }] }
+    let d = { RoadBuild.new_draft() with mode: 1, points: [RoadBuild.point(a, false), RoadBuild.point(end_lot, false)] }
     Test.assert_true(!(RoadBuild.planned(water, 1, d, true)).valid, "Horizontal first runs into water")
-    let alternate = { d with points: [{ lot: a, flip: false }, { lot: end_lot, flip: true }] }
+    let alternate = { d with points: [RoadBuild.point(a, false), RoadBuild.point(end_lot, true)] }
     Test.assert_true((RoadBuild.planned(water, 1, alternate, true)).valid, "Vertical first bypasses the same water")
     let added = RoadBuild.draft_input(d, 1, S.index(6, 12), S.index(6, 12), true, true, false, false)
     let dragged = RoadBuild.draft_input(added, 1, S.index(7, 12), S.index(7, 12), false, true, false, false)
@@ -73,7 +74,7 @@ mod RoadPlanningTest do
     let c = (RoadBuild.preview(c, 1, a, b)).city
     let c = { c with transit: NativeArray.set_int(c.transit, m, 2), stops: NativeArray.set_int(c.stops, m, 1),
       storm_drains: NativeArray.set_int(c.storm_drains, m, 1) }
-    let d = { RoadBuild.new_draft() with mode: 4, points: [{ lot: m, flip: false }] }
+    let d = { RoadBuild.new_draft() with mode: 4, points: [RoadBuild.point(m, false)] }
     let p = RoadBuild.planned(c, 48, d, true)
     Test.assert_true(p.valid && p.cost == 195 && p.upkeep == 9, "Replace selects and prices the whole corridor")
     Test.assert_true(S.get(p.city.transit, m) == 2 && S.get(p.city.stops, m) == 1 && S.get(p.city.storm_drains, m) == 1, "Widening preserves compatible infrastructure")
@@ -85,6 +86,21 @@ mod RoadPlanningTest do
   end
   pfn solid_at(parts : List(Ur.Architecture.Piece), x : Int, y : Int, z : Int) : Bool do
     List.any(parts, fn p -> x >= p.x && x < p.x + p.w && y >= p.y && y < p.y + p.h && z >= p.z && z < p.z + p.d)
+  end
+  pfn flush_markings() : Unit do
+    let c = fixture()
+    let lot = S.index(8, 10)
+    let west = S.index(7, 10)
+    let east = S.index(9, 10)
+    List.each([(1, 8, 2), (2, 10, 4), (3, 17, 4)], fn spec ->
+      let (kind, ink, x) = spec
+      let roads = List.fold_left([west, lot, east], c.roads, fn (roads, i) -> NativeArray.set_int(roads, i, kind))
+      let parts = Ur.Landscape.portal_street({ c with roads: roads }, lot, 10)
+      let line = List.filter(parts, fn p -> p.material == ink)
+      let surface = List.filter(parts, fn p -> p.material == 4 || p.material == 16)
+      Test.assert_true(solid_at(line, x, 10, 15) && !solid_at(parts, x, 11, 15) &&
+        !solid_at(surface, x, 10, 15) && solid_at(surface, x, 10, 13),
+        "The centre marking replaces a strip of pavement at the same height"))
   end
   pfn turnaround() : Unit do
     let c = fixture()
@@ -122,7 +138,7 @@ mod RoadPlanningTest do
     let a = S.index(3, 10)
     let wanted = S.index(7, 12)
     let b = S.index(7, 10)
-    let d = { RoadBuild.new_draft() with mode: 5, points: [{ lot: a, flip: false }], target: wanted }
+    let d = { RoadBuild.new_draft() with mode: 5, points: [RoadBuild.point(a, false)], target: wanted }
     Test.assert_eq_int(RoadBuild.confirm_points(1, d.mode), 2, "Straight street requires a pinned start and end")
     let p = RoadBuild.planned(c, 1, d, false)
     Test.assert_true(p.valid && p.length == 40 && p.cost == 300 && S.get(p.city.roads, b) == 1 &&
@@ -132,6 +148,89 @@ mod RoadPlanningTest do
     let (x, y) = Ur.Scene.world_point(view, 176.0, 10.0, 336.0)
     Test.assert_eq_int(Ur.Scene.road_snap(p.city, view, interior, -1, x, y, false), interior,
       "Snapping finds an interior road parcel for a T-junction")
+  end
+  pfn drawn_streets() : Unit do
+    let c = fixture()
+    let a = S.index(4, 10)
+    let b = S.index(10, 16)
+    let middle = S.index(7, 13)
+    let bend = S.index(10, 10)
+    let start = RoadBuild.point(a, false)
+    let finish = RoadBuild.point(b, false)
+    let d = { RoadBuild.new_draft() with mode: RoadBuild.diagonal_mode(), points: [start, finish] }
+    let diagonal = RoadBuild.planned(c, 1, d, true)
+    Test.assert_true(diagonal.valid && S.get(diagonal.city.roads, middle) == 1 &&
+      S.get(diagonal.city.roads, bend) == 0 && List.length(diagonal.tiles) == 13,
+      "A diagonal crosses the middle without taking an L-shaped detour")
+    let d = { d with mode: RoadBuild.curve_mode(), points: [start, RoadBuild.point(bend, false), finish] }
+    let curve = RoadBuild.planned(c, 1, d, true)
+    Test.assert_true(curve.valid && S.get(curve.city.roads, S.index(9, 12)) == 1 &&
+      S.get(curve.city.roads, bend) == 0, "The curve follows the handle without paving its parcel")
+    let d = { RoadBuild.new_draft() with mode: RoadBuild.freeform_mode() }
+    let d = RoadBuild.draft_input(d, 1, a, a, true, true, false, false)
+    let d = RoadBuild.draft_input(d, 1, middle, middle, false, true, false, false)
+    let d = RoadBuild.draft_input(d, 1, b, b, false, false, false, false)
+    let sketch = RoadBuild.planned(c, 1, d, true)
+    Test.assert_true(sketch.valid && S.get(sketch.city.roads, middle) == 1 &&
+      RoadBuild.end_point(d) == b && d.drag < 0, "A freeform stroke fills gaps between pointer samples and retains the released end")
+  end
+  pfn off_grid_streets() : Unit do
+    let c = fixture()
+    let a = S.index(3, 10)
+    let b = S.index(8, 14)
+    let start = { RoadBuild.point(a, false) with site: Some({ x: 105, z: 339 }) }
+    let finish = { RoadBuild.point(b, false) with site: Some({ x: 281, z: 460 }) }
+    let d = { RoadBuild.new_draft() with mode: RoadBuild.diagonal_mode(), points: [start, finish] }
+    let p = RoadBuild.planned(c, 1, d, true)
+    let s = Ur.RoadShape.decode(S.get(p.city.road_shapes, a))
+    let last = Ur.RoadShape.decode(S.get(p.city.road_shapes, b))
+    Test.assert_true(p.valid && s.a.x == 9 && s.a.z == 19 && last.b.x == 25 && last.b.z == 12,
+      "The constructed road keeps both off-grid endpoints")
+    let plot = S.index(8, 15)
+    let zoned = S.act(p.city, plot, 2)
+    Test.assert_true(S.get(S.access(p.city), b) >= 0 && S.fleet_frontage(p.city, plot, 0) == b &&
+      S.get(zoned.zones, plot) > 0,
+      "An off-grid street is reachable from the harbour and supplies frontage")
+    match p.tiles do
+      Cons(first, Cons(second, _)) ->
+        let (x0, z0, dx0, dz0) = Ur.Scene.street_pose(p.city, first, second, 0.49999, 5.0)
+        let (x1, z1, dx1, dz1) = Ur.Scene.street_pose(p.city, first, second, 0.5, 5.0)
+        Test.assert_true(Math.abs(x0 -. x1) < 0.01 && Math.abs(z0 -. z1) < 0.01 &&
+          Math.abs(dx0 -. dx1) < 0.01 && Math.abs(dz0 -. dz1) < 0.01 &&
+          Math.abs(dx1) > 0.2 && Math.abs(dz1) > 0.2, "Lanes meet continuously at an off-grid seam")
+      _ -> Test.assert_true(false, "The road crosses multiple parcels")
+    end
+    let game = { city: p.city, cx: 60.0, cz: 80.0, zoom: 30.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(game)) do
+      Err(message) -> Test.assert_true(false, message)
+      Ok(loaded) -> Test.assert_eq_int(S.get(loaded.city.road_shapes, a), S.get(p.city.road_shapes, a),
+        "An off-grid centreline survives save and load")
+    end
+  end
+  pfn long_bridge() : Unit do
+    let c = fixture()
+    let a = S.index(5, 10)
+    let b = S.index(22, 10)
+    let mid = S.index(13, 10)
+    let roads = NativeArray.set_int(NativeArray.set_int(c.roads, a, 1), b, 1)
+    let c = { c with roads: roads, heights: NativeArray.set_int(c.heights, mid, 0), cash: 20000 }
+    let overpass = RoadBuild.crossing(c, 50, a, b)
+    let low = RoadBuild.crossing_with_rise(c, 124, a, b, 4)
+    let high = RoadBuild.crossing_with_rise(c, 124, a, b, 8)
+    Test.assert_true(!overpass.valid && low.valid && high.valid && high.length == 136,
+      "The bridge spans farther than the Overpass tool")
+    Test.assert_true(S.grade_link(high.city, a, b) && S.grade_surface(high.city, a, b, 0.5) == 42.0 &&
+      S.grade_surface(low.city, a, b, 0.5) == 26.0 && S.grade_surface(high.city, a, b, 0.0) == 10.0,
+      "Changing bridge rise adjusts the level deck while meeting both approach streets")
+    let hills = { c with heights: NativeArray.set_int(c.heights, S.index(13, 9), 112) }
+    let blocked = RoadBuild.crossing_with_rise(hills, 124, a, b, 4)
+    Test.assert_true(!blocked.valid && !S.grade_link(blocked.city, a, b),
+      "A hillside reaching under the edge of the deck blocks the bridge")
+    let game = { city: high.city, cx: 60.0, cz: 80.0, zoom: 30.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(game)) do
+      Err(message) -> Test.assert_true(false, message)
+      Ok(loaded) -> Test.assert_eq_int(S.bridge_rise(loaded.city, a), 8, "The selected bridge height survives saving")
+    end
   end
   pfn tunnels() : Unit do
     let c = fixture()
@@ -214,8 +313,12 @@ mod RoadPlanningTest do
     surface()
     layouts()
     replace()
+    flush_markings()
     turnaround()
     straight_street()
+    drawn_streets()
+    off_grid_streets()
+    long_bridge()
     tunnels()
     Authority.must(println("Road planning checks passed"))
   end
