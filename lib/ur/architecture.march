@@ -10,37 +10,85 @@ mod Ur.Architecture do
     end
   end
   type Facade = { wall : Int, trim : Int, glass : Int, form : Int }
-  pfn windows(n : Int, y : Int, x : Int, front : Int, span : Int, skin : Facade, lit : Bool, out : List(Piece)) : List(Piece) do
-    if n >= 3 do out else
-      let bay = span / 3
-      let glaze = if skin.form == 1 do bay - 1 else bay - 3 end
-      let start = x + n * bay + (bay - glaze) / 2
-      let a = Cons(piece(start - 1, y, front, glaze + 2, 6, 1, skin.trim), out)
-      let panes = if lit && (n + x + y) % 3 != 0 do 26 else skin.glass end
-      let a = Cons(piece(start, y + 1, front + 1, glaze, 4, 1, panes), a)
-      let a = Cons(piece(start, y + 1, 5, glaze, 4, 1, panes), a)
-      windows(n + 1, y, x, front, span, skin, lit, a)
+  type WindowOpening = { start : Int, width : Int, glass : Int }
+
+  pfn opening(start : Int, width : Int, glass : Int) : WindowOpening do
+    { start: start, width: width, glass: glass }
+  end
+
+  pfn wall_strip(wall : Piece, along_x : Bool, start : Int, y : Int, width : Int, height : Int) : Piece do
+    if along_x do { wall with x: start, y: y, w: width, h: height }
+    else { wall with z: start, y: y, d: width, h: height } end
+  end
+
+  pfn window_row(wall : Piece, side : Int, cursor : Int, limit : Int, y : Int, height : Int,
+    openings : List(WindowOpening), out : List(Piece)) : List(Piece) do
+    let along_x = side >= 2
+    match openings do
+      Nil ->
+        if cursor < limit do Cons(wall_strip(wall, along_x, cursor, y, limit - cursor, height), out) else out end
+      Cons(window, rest) ->
+        let gap = window.start - cursor
+        let out = if gap > 0 do Cons(wall_strip(wall, along_x, cursor, y, gap, height), out) else out end
+        let pane = wall_strip(wall, along_x, window.start, y, window.width, height)
+        let pane = if along_x do
+          { pane with z: wall.z + (if side == 2 do wall.d - 1 else 0 end), d: 1, material: window.glass }
+        else
+          { pane with x: wall.x + (if side == 0 do wall.w - 1 else 0 end), w: 1, material: window.glass }
+        end
+        window_row(wall, side, window.start + window.width, limit, y, height, rest, Cons(pane, out))
     end
   end
-  pfn side_windows(n : Int, y : Int, x : Int, span : Int, glass : Int, out : List(Piece)) : List(Piece) do
-    if n >= 3 do out else
-      let z = 8 + n * 5
-      let a = Cons(piece(x - 1, y, z, 1, 4, 3, glass), Cons(piece(x + span, y, z, 1, 4, 3, glass), out))
-      side_windows(n + 1, y, x, span, glass, a)
+
+  doc "Cut an ordered row of openings into a solid wall strip, glazing each at its inside face. Sides are west, east, north and south."
+  fn window_wall(wall : Piece, side : Int, y : Int, height : Int, openings : List(WindowOpening)) : List(Piece) do
+    let along_x = side >= 2
+    let start = if along_x do wall.x else wall.z end
+    let span = if along_x do wall.w else wall.d end
+    let head = y + height
+    let lower = wall_strip(wall, along_x, start, wall.y, span, y - wall.y)
+    let upper = wall_strip(wall, along_x, start, head, span, wall.y + wall.h - head)
+    window_row(wall, side, start, start + span, y, height, openings, [lower, upper])
+  end
+
+  pfn bays(start : Int, span : Int, depth : Int, glass : Int, lit : Bool, phase : Int) : List(WindowOpening) do
+    let bay = span / 3
+    let width = Math.max_int(2, bay - depth)
+    let first = start + (bay - width) / 2
+    List.map([0, 1, 2], fn n ->
+      opening(first + n * bay, width, if lit && (n + phase) % 3 != 0 do 26 else glass end))
+  end
+
+  pfn facade(y : Int, x : Int, span : Int, front : Int, skin : Facade, lit : Bool,
+    shop : Bool, out : List(Piece)) : List(Piece) do
+    let rear = 6
+    let side_span = front - rear - 3
+    let core = piece(x + 2, y, rear + 2, span - 4, 11, side_span, skin.wall)
+    let wide = if skin.form == 1 do 2 else 3 end
+    let front_wall = piece(x, y, front - 1, span, 11, 2, skin.wall)
+    let front_parts = if shop do [front_wall] else
+      window_wall(front_wall, 3, y + 4, 4, bays(x, span, wide, skin.glass, lit, x + y))
     end
+    let back = window_wall(piece(x, y, rear, span, 11, 2, skin.wall), 2, y + 4, 4,
+      bays(x, span, wide, skin.glass, lit, x + y + 1))
+    let west = window_wall(piece(x, y, rear + 2, 2, 11, side_span, skin.wall), 0, y + 4, 4,
+      bays(rear + 2, side_span, 2, skin.glass, lit, x + y + 2))
+    let east = window_wall(piece(x + span - 2, y, rear + 2, 2, 11, side_span, skin.wall), 1, y + 4, 4,
+      bays(rear + 2, side_span, 2, skin.glass, lit, x + y + 3))
+    List.append(front_parts, List.append(back, List.append(west, List.append(east, Cons(core, out)))))
   end
   pfn floors(n : Int, level : Int, skin : Facade, lit : Bool, shop : Bool, out : List(Piece)) : List(Piece) do
     if level >= n do out else
       let y = 2 + 11 * level
-      let inset = if skin.form == 2 do level * 2 else if skin.form == 3 do 2 else 0 end end
+      -- Above the two setbacks, upper floors continue at the same width.
+      let setback = if skin.form == 2 do Math.min_int(level, 2) else 0 end
+      let inset = if skin.form == 3 do 2 else setback * 2 end
       let x = 5 + inset
       let span = 22 - inset * 2
-      let front = if skin.form == 2 do 25 - level else 25 end
-      let a = Cons(piece(x, y, 6, span, 11, front - 5, skin.wall), out)
-      let a = Cons(piece(x - 1, y + 10, 5, span + 2, 1, front - 3, skin.trim), a)
+      let front = 25 - setback
       let floor_lit = lit && (!shop || level > 0) && (n == 1 || (level + skin.form) % 4 != 3)
-      let a = windows(0, y + 3, x, front + 1, span, skin, floor_lit, a)
-      let a = side_windows(0, y + 4, x, span, if floor_lit do 26 else skin.glass end, a)
+      let a = facade(y, x, span, front, skin, floor_lit, shop && level == 0, out)
+      let a = Cons(piece(x - 1, y + 10, 5, span + 2, 1, front - 3, skin.trim), a)
       let a = if level == 0 || skin.form == 1 do a else
         let bx = if skin.form == 3 do 15 else if skin.form == 2 do 9 else 11 end end
         let a = Cons(piece(bx, y + 1, front, 10, 1, 30 - front, 17), a)
@@ -98,8 +146,9 @@ mod Ur.Architecture do
     let tint = if grocery do 21 else 6 end
     let a = Cons(piece(4, 0, 27, 24, 1, 5, 16), out)
     let glass = if lit do 27 else 9 end
-    let a = Cons(piece(5, 3, 27, 7, 5, 1, glass), Cons(piece(20, 3, 27, 7, 5, 1, glass), a))
-    let a = Cons(piece(7, 4, 28, 1, 3, 1, 8), Cons(piece(24, 4, 28, 1, 3, 1, 8), a))
+    let left = window_wall(piece(5, 2, 26, 8, 7, 2, 17), 3, 3, 5, [opening(6, 6, glass)])
+    let right = window_wall(piece(19, 2, 26, 8, 7, 2, 17), 3, 3, 5, [opening(20, 6, glass)])
+    let a = List.append(left, List.append(right, a))
     let a = Cons(piece(11, 10, 27, 10, 2, 1, tint), Cons(piece(13, 10, 28, 6, 1, 1, 8), a))
     let a = canopy(0, tint, a)
     if closed do
@@ -115,7 +164,7 @@ mod Ur.Architecture do
     let wall = if home do (if shade == 0 do 18 else if shade == 1 do 5 else if shade == 2 do 8 else 7 end end end)
       else if shade == 0 do 23 else if shade == 1 do 8 else if shade == 2 do 7 else 19 end end end end
     let trim = if shade == 3 do 8 else if form == 1 do 19 else 17 end end
-    let glass = if home && form != 1 do 15 else 9 end
+    let glass = 9
     let a = Cons(piece(3, 0, 3, 26, 2, 27, 17), Nil)
     let a = floors(levels, 0, { wall: wall, trim: trim, glass: glass, form: form }, lit, shop, a)
     let a = Cons(piece(13, 2, 26, 6, 8, 2, 13), Cons(piece(14, 3, 28, 4, 6, 1, 7), a))

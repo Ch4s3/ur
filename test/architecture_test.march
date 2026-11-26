@@ -1,0 +1,36 @@
+mod ArchitectureTest do
+  needs IO
+  needs IO.Console
+  alias Ur.Architecture as A
+
+  pfn has(parts : List(Ur.Architecture.Piece), x : Int, y : Int, z : Int, material : Int) : Bool do
+    List.any(parts, fn p -> (material < 0 || p.material == material) && x >= p.x && x < p.x + p.w &&
+      y >= p.y && y < p.y + p.h && z >= p.z && z < p.z + p.d)
+  end
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let parts = A.building(2, true, 0, true, false, false)
+    Test.assert_true(!has(parts, 8, 7, 25, -1) && has(parts, 8, 7, 24, 9) &&
+      has(parts, 5, 7, 25, 18) && has(parts, 8, 5, 25, 18),
+      "A front window has a clear opening, a recessed pane and intact wall on both sides of the opening")
+    Test.assert_true(!has(parts, 8, 7, 6, -1) && has(parts, 8, 7, 7, 9) &&
+      !has(parts, 5, 7, 10, -1) && has(parts, 6, 7, 10, 9) &&
+      !has(parts, 26, 7, 10, -1) && has(parts, 25, 7, 10, 9),
+      "Rear and side windows recess inward with their wall orientation")
+    let turned = A.orient(parts, 1)
+    Test.assert_true(!has(turned, 25, 7, 23, -1) && has(turned, 24, 7, 23, 9),
+      "Rotating a building rotates the cutout and its pane together")
+    let office = A.building(3, false, 2, true, false, true)
+    Test.assert_true(!has(office, 14, 30, 23, -1) && has(office, 14, 30, 22, 26),
+      "The inset top floor keeps its windows recessed and lit")
+    let tower = A.building(12, false, 2, true, false, true)
+    Test.assert_true(List.all(tower, fn p -> p.w > 0 && p.h > 0 && p.d > 0 &&
+      p.x >= 0 && p.x + p.w <= 32 && p.z >= 0 && p.z + p.d <= 32) &&
+      !has(tower, 14, 129, 23, -1) && has(tower, 14, 129, 22, 26),
+      "A tall stepped building keeps usable wall dimensions and recessed upper windows")
+    let shop = A.storefront(true, false, true, A.building(2, true, 0, true, true, true))
+    Test.assert_true(!has(shop, 8, 5, 27, -1) && has(shop, 8, 5, 26, 27) && has(shop, 5, 5, 27, 17),
+      "The shop pane sits behind the frame and still emits light")
+    Authority.must(println("Architecture checks passed"))
+  end
+end
