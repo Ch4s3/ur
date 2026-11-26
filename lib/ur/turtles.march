@@ -41,7 +41,7 @@ mod Ur.Turtles do
     Math.max_int(L.height(c, vx, vz), 0 - O.depth(ocean, vx, vz))
   end
 
-  pfn beach_tile_clear(c : Ur.Sim.City, x : Float, z : Float) : Bool do
+  fn beach_tile_clear(c : Ur.Sim.City, x : Float, z : Float) : Bool do
     let px = float_to_int(Math.floor(x /. 8.0))
     let pz = float_to_int(Math.floor(z /. 8.0))
     if px < 0 || pz < 0 || px >= S.width() || pz >= S.depth() do true else

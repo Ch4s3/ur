@@ -1,0 +1,195 @@
+-- Short sideways dashes above the waterline, on the wildlife clock.
+mod Ur.Crabs do
+  needs IO.Console
+  needs IO.Process
+  needs IO.Foreign
+  needs Window
+  alias Ur.Sim as S
+  alias Ur.Ocean as O
+  alias Ur.Turtles as Shore
+  alias Ur.Wildlife as W
+  alias Ur.WildlifeMesh as Draw
+  alias Strata.Model as Model
+  import Ur.SwimMesh.{section, loft}
+
+  type CrabRoute = { x : Float, z : Float, heading : Float, reach : Float, direction : Float }
+  type CrabPose = { x : Float, y : Float, z : Float, heading : Float, gait : Float }
+  type CrabTrack = { due : Float, route : Option(CrabRoute) }
+
+  fn empty(now : Float) : CrabTrack do { due: now +. 3.8, route: None } end
+  fn duration() : Float do 6.2 end
+
+  pfn ground(c : Ur.Sim.City, ocean : Ur.Ocean.Field, x : Float, z : Float) : Int do
+    Shore.turtle_ground(c, ocean, x, z)
+  end
+
+  pfn shore_point(route : CrabRoute, progress : Float) : (Float, Float) do
+    let along = route.reach *. route.direction *. (2.0 *. progress -. 1.0)
+    (route.x +. Math.cos(route.heading) *. along, route.z -. Math.sin(route.heading) *. along)
+  end
+
+  fn pose(c : Ur.Sim.City, ocean : Ur.Ocean.Field, route : CrabRoute, age : Float) : CrabPose do
+    let first = W.ease((age -. 0.48) /. 1.97)
+    let second = W.ease((age -. 3.02) /. 2.10)
+    let (x, z) = shore_point(route, 0.56 *. first +. 0.44 *. second)
+    let motion = 4.0 *. (first *. (1.0 -. first) +. second *. (1.0 -. second))
+    let gait = Math.sin(age *. 24.0) *. motion
+    let exposed = W.ease(age /. 0.46) *. W.ease((duration() -. age) /. 0.55)
+    let y = int_to_float(ground(c, ocean, x, z)) *. 0.25 +. 0.018 +. 0.022 *. Math.abs(gait) -. 0.48 *. (1.0 -. exposed)
+    { x: x, y: y, z: z, heading: route.heading, gait: gait }
+  end
+
+  pfn wet(c : Ur.Sim.City, ocean : Ur.Ocean.Field, x : Float, z : Float) : Bool do
+    let vx = float_to_int(Math.floor(x *. 4.0))
+    let vz = float_to_int(Math.floor(z *. 4.0))
+    ground(c, ocean, x, z) == 0 && O.depth(ocean, vx, vz) > 0 && Shore.beach_tile_clear(c, x, z)
+  end
+
+  pfn above_surf(c : Ur.Sim.City, ocean : Ur.Ocean.Field, x : Float, z : Float, heading : Float) : Bool do
+    let dx = Math.sin(heading)
+    let dz = Math.cos(heading)
+    List.any([1.25, 2.25, 3.25, 4.0], fn distance -> wet(c, ocean, x +. dx *. distance, z +. dz *. distance))
+  end
+
+  pfn sand_clear(c : Ur.Sim.City, x : Float, z : Float, height : Int) : Bool do
+    if height < 1 || height > 5 || !Shore.beach_tile_clear(c, x, z) do false else
+      let vx = float_to_int(Math.floor(x *. 4.0))
+      let vz = float_to_int(Math.floor(z *. 4.0))
+      let px = int_div_euclid(vx, 32)
+      let pz = int_div_euclid(vz, 32)
+      if px < 0 || pz < 0 || px >= S.width() || pz >= S.depth() do true else
+        let lx = int_mod_euclid(vx, 32)
+        let lz = int_mod_euclid(vz, 32)
+        !List.any(Ur.Landscape.structures(c, S.index(px, pz), 0), fn p ->
+          p.y < height + 2 && p.y + p.h > height && lx + 2 >= p.x && lx - 2 < p.x + p.w &&
+          lz + 2 >= p.z && lz - 2 < p.z + p.d)
+      end
+    end
+  end
+
+  pfn clear_samples(c : Ur.Sim.City, ocean : Ur.Ocean.Field, route : CrabRoute, previous : Int, i : Int) : Bool do
+    if i > 12 do true else
+      let (x, z) = shore_point(route, int_to_float(i) /. 12.0)
+      let h = ground(c, ocean, x, z)
+      int_abs(h - previous) <= 1 && sand_clear(c, x, z, h) &&
+        (i % 6 != 0 || above_surf(c, ocean, x, z, route.heading)) &&
+        clear_samples(c, ocean, route, h, i + 1)
+    end
+  end
+
+  pfn clear_route(c : Ur.Sim.City, ocean : Ur.Ocean.Field, route : CrabRoute) : Bool do
+    let (x, z) = shore_point(route, 0.0)
+    clear_samples(c, ocean, route, ground(c, ocean, x, z), 0)
+  end
+
+  pfn shore_direction(c : Ur.Sim.City, ocean : Ur.Ocean.Field, x : Float, z : Float, seed : Int, attempt : Int) : Option(CrabRoute) do
+    if attempt >= 16 do None else
+      let angle = int_to_float(int_mod_euclid(seed + attempt, 8)) *. 0.785398163
+      let route = { x: x, z: z, heading: angle, reach: if attempt < 8 do 2.2 else 1.45 end,
+        direction: if int_mod_euclid(seed, 2) == 0 do 1.0 else -1.0 end }
+      if above_surf(c, ocean, x, z, angle) && clear_route(c, ocean, route) do Some(route)
+      else shore_direction(c, ocean, x, z, seed, attempt + 1) end
+    end
+  end
+
+  pfn find_crab(c : Ur.Sim.City, ocean : Ur.Ocean.Field, view : Ur.Wildlife.WildlifeView, seed : Int, n : Int) : Option(CrabRoute) do
+    if n >= 1089 do None else
+      let k = int_mod_euclid(seed + n * 61, 1089)
+      let x = Math.floor(view.x) +. int_to_float(k % 33 - 16) +. 0.5
+      let z = Math.floor(view.z) +. int_to_float(k / 33 - 16) +. 0.5
+      let h = ground(c, ocean, x, z)
+      let (right, up) = W.screen_offset(view, x, int_to_float(h) *. 0.25, z)
+      let route = if h > 0 && h <= 5 && Math.abs(right) <= view.zoom *. 0.78 &&
+        Math.abs(up) <= view.zoom /. view.aspect *. 0.76 && Shore.beach_tile_clear(c, x, z) do
+        shore_direction(c, ocean, x, z, Strata.Seed.mix(seed, k), 0)
+      else None end
+      match route do
+        Some(_) -> route
+        None -> find_crab(c, ocean, view, seed, n + 1)
+      end
+    end
+  end
+
+  fn step(c : Ur.Sim.City, ocean : Ur.Ocean.Field, view : Ur.Wildlife.WildlifeView,
+    now : Float, old : CrabTrack, changed : Bool, seed : Int) : CrabTrack do
+    if view.zoom > 26.0 do empty(now) else
+      match old.route do
+        Some(route) ->
+          if now -. old.due >= duration() || (changed && !clear_route(c, ocean, route)) do
+            { due: now +. 17.0 +. int_to_float(int_mod_euclid(seed, 15)), route: None }
+          else old end
+        None ->
+          if now < old.due do old else
+            match find_crab(c, ocean, view, seed, 0) do
+              Some(route) -> { due: now, route: Some(route) }
+              None -> { due: now +. 5.0, route: None }
+            end
+          end
+      end
+    end
+  end
+
+  fn slots() : Int do 5 end
+  pfn voxel() : Float do 0.060 end
+
+  pfn part(mesh : Strata.Model.Geometry, left : Bool, mirror : Float, x0 : Float, y0 : Float, z0 : Float,
+    x1 : Float, y1 : Float, z1 : Float, colour : Int) : Strata.Model.Geometry do
+    if left do Model.box(mesh, mirror -. x1, y0, z0, mirror -. x0, y1, z1, colour)
+    else Model.box(mesh, x0, y0, z0, x1, y1, z1, colour) end
+  end
+
+  pfn shell() : Strata.Model.Geometry do
+    let body = loft(Model.empty(), [
+      section(7.5, 2.80, 3.15, 1.19, 0.45), section(7.5, 2.92, 4.80, 3.58, 1.31),
+      section(7.5, 2.95, 6.60, 4.28, 1.77), section(7.5, 2.96, 8.35, 4.22, 1.56),
+      section(7.5, 2.88, 9.95, 2.57, 0.94), section(7.5, 2.85, 10.54, 1.08, 0.28)
+    ], :forward, 6, 18)
+    List.fold_left([true, false], body, fn (mesh, left) ->
+      let mesh = part(mesh, left, 15.0, 9.17, 3.51, 8.46, 9.58, 5.84, 9.15, 35)
+      let mesh = part(mesh, left, 15.0, 8.99, 5.51, 8.39, 9.73, 6.26, 9.27, 19)
+      let mesh = part(mesh, left, 15.0, 10.06, 2.35, 8.10, 12.43, 3.24, 10.47, 6)
+      let mesh = part(mesh, left, 15.0, 10.78, 2.72, 9.93, 13.34, 4.21, 12.21, 35)
+      let mesh = part(mesh, left, 15.0, 10.84, 2.86, 11.62, 11.55, 3.72, 13.69, 18)
+      part(mesh, left, 15.0, 12.52, 2.82, 11.96, 13.18, 3.48, 13.32, 18))
+  end
+
+  -- The two legs in each mesh alternate with the neighboring pair.
+  pfn legs(left : Bool) : Strata.Model.Geometry do
+    List.fold_left([1.05, 3.30], Model.empty(), fn (mesh, z) ->
+      let mesh = part(mesh, left, 5.4, 0.0, 0.72, z, 2.85, 1.50, z +. 0.67, 6)
+      let mesh = part(mesh, left, 5.4, 2.25, 0.28, z -. 0.39, 4.13, 1.02, z +. 0.32, 35)
+      part(mesh, left, 5.4, 3.71, 0.02, z -. 0.87, 5.28, 0.51, z -. 0.23, 18))
+  end
+
+  fn setup(base : Int) : Unit do
+    Draw.upload_model(base, shell(), voxel())
+    let left = legs(true)
+    let right = legs(false)
+    List.each([0, 1, 2, 3], fn i -> Draw.upload_model(base + 1 + i, if i % 2 == 0 do left else right end, voxel()))
+  end
+
+  fn hide(base : Int) : Unit do
+    List.each([0, 1, 2, 3, 4], fn i -> Draw.show(base + i, false))
+  end
+
+  pfn draw_legs(slot : Int, p : CrabPose, i : Int) : Unit do
+    let left = i % 2 == 0
+    let front = i < 2
+    let sign = if left do -1.0 else 1.0 end
+    let beat = if left == front do p.gait else 0.0 -. p.gait end
+    let along = if front do 0.071 else -0.195 end
+    let across = sign *. (0.185 +. beat *. 0.034)
+    let dx = Math.sin(p.heading)
+    let dz = Math.cos(p.heading)
+    Draw.pose(slot, p.x +. dx *. along +. dz *. across, p.y +. Math.max_float(0.0, beat) *. 0.052,
+      p.z +. dz *. along -. dx *. across, p.heading +. sign *. beat *. 0.24, 0.0, sign *. beat *. 0.17,
+      if left do 5.4 *. voxel() else 0.0 end, 0.0, 2.0 *. voxel())
+    ()
+  end
+
+  fn draw(base : Int, c : Ur.Sim.City, ocean : Ur.Ocean.Field, route : CrabRoute, age : Float) : Unit do
+    let p = pose(c, ocean, route, age)
+    Draw.pose(base, p.x, p.y, p.z, p.heading, 0.0, p.gait *. 0.085, 7.5 *. voxel(), 0.0, 6.7 *. voxel())
+    List.each([0, 1, 2, 3], fn i -> draw_legs(base + 1 + i, p, i))
+  end
+end

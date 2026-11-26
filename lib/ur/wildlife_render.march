@@ -10,7 +10,8 @@ mod Ur.WildlifeRender do
   pfn shark_base(base : Int) : Int do fish_base(base) + Ur.ReefFish.slots() end
   pfn manta_base(base : Int) : Int do shark_base(base) + Ur.Sharks.slots() end
   pfn iguana_base(base : Int) : Int do manta_base(base) + Ur.MantaRays.slots() end
-  fn slots() : Int do iguana_base(0) + Ur.Iguanas.slots() end
+  pfn crab_base(base : Int) : Int do iguana_base(base) + Ur.Iguanas.slots() end
+  fn slots() : Int do crab_base(0) + Ur.Crabs.slots() end
   fn setup(base : Int) : Unit do
     Ur.Birds.setup(base)
     Ur.Whales.setup(whale_base(base))
@@ -19,6 +20,7 @@ mod Ur.WildlifeRender do
     Ur.Sharks.setup(shark_base(base))
     Ur.MantaRays.setup(manta_base(base))
     Ur.Iguanas.setup(iguana_base(base))
+    Ur.Crabs.setup(crab_base(base))
   end
 
   fn hide(base : Int) : Unit do
@@ -29,6 +31,7 @@ mod Ur.WildlifeRender do
     Ur.Sharks.hide(shark_base(base))
     Ur.MantaRays.hide(manta_base(base))
     Ur.Iguanas.hide(iguana_base(base))
+    Ur.Crabs.hide(crab_base(base))
   end
   fn draw(base : Int, c : Ur.Sim.City, ocean : Ur.Ocean.Field, sightings : Ur.Wildlife.Sightings,
     waves : Strata.Waves.SeaWaves, field : Option(Strata.Waves.Swell), exposure : NativeF32Arr, before : Float, now : Float) : Unit do
@@ -70,6 +73,10 @@ mod Ur.WildlifeRender do
     match sightings.iguana.route do
       Some(route) -> Ur.Iguanas.draw(iguana_base(base), c, route, now -. sightings.iguana.due)
       None -> Ur.Iguanas.hide(iguana_base(base))
+    end
+    match sightings.crab.route do
+      Some(route) -> Ur.Crabs.draw(crab_base(base), c, ocean, route, now -. sightings.crab.due)
+      None -> Ur.Crabs.hide(crab_base(base))
     end
   end
 end

@@ -1,0 +1,42 @@
+mod BeachCrabTest do
+  needs IO
+  needs IO.Console
+  alias Ur.Crabs as Crab
+  alias Ur.Sim as S
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let city = S.new()
+    let ocean = Ur.Ocean.field(city)
+    let view : Ur.Wildlife.WildlifeView = { x: 28.0, z: 116.0, zoom: 24.0, aspect: 1.6, yaw: 0.55 }
+    let initial = Crab.empty(0.0)
+    let early = Crab.step(city, ocean, view, 0.0, initial, false, 19)
+    let wide = Crab.step(city, ocean, { view with zoom: 60.0 }, 8.0, initial, false, 19)
+    let sea = Crab.step(city, ocean, { view with x: -68.0, z: -68.0 }, 8.0, initial, false, 19)
+    Test.assert_true(Option.is_none(early.route) && Option.is_none(wide.route) && Option.is_none(sea.route),
+      "crabs wait for a close view of a beach")
+    let active = Crab.step(city, ocean, view, 8.0, initial, false, 19)
+    match active.route do
+      None -> Test.assert_true(false, "the natural shore has a path for a beach crab")
+      Some(route) ->
+        let start = Crab.pose(city, ocean, route, 0.0)
+        let a = Crab.pose(city, ocean, route, 1.0)
+        let b = Crab.pose(city, ocean, route, 1.8)
+        let face_step = (b.x -. a.x) *. Math.sin(a.heading) +. (b.z -. a.z) *. Math.cos(a.heading)
+        Test.assert_true(Math.abs(face_step) < 0.001 && (a.x != b.x || a.z != b.z)
+          && a.heading == b.heading, "a crab moves sideways while still facing the surf")
+        let paused = Crab.pose(city, ocean, route, 2.65)
+        let still = Crab.pose(city, ocean, route, 2.85)
+        Test.assert_true(paused.x == still.x && paused.z == still.z && paused.gait == 0.0,
+          "the crab pauses between scuttles")
+        let end_pose = Crab.pose(city, ocean, route, Crab.duration())
+        let start_ground = Ur.Turtles.turtle_ground(city, ocean, start.x, start.z)
+        let end_ground = Ur.Turtles.turtle_ground(city, ocean, end_pose.x, end_pose.z)
+        Test.assert_true(start_ground > 0 && end_ground > 0 && start.y < int_to_float(start_ground) *. 0.25 &&
+          end_pose.y < int_to_float(end_ground) *. 0.25, "the crab emerges from and retreats into dry sand")
+        let quiet = Crab.step(city, ocean, view, 8.1 +. Crab.duration(), active, false, 19)
+        Test.assert_true(Option.is_none(quiet.route) && quiet.due > 18.0 +. Crab.duration(),
+          "successive sightings have a quiet interval")
+    end
+    Authority.must(println("Beach crab checks passed"))
+  end
+end
