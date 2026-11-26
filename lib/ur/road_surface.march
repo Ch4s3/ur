@@ -7,7 +7,7 @@ mod Ur.RoadSurface do
   alias Ur.Architecture as A
 
   type Segment = { x : Float, z : Float, dx : Float, dz : Float, length_squared : Float,
-    kind : Int, width : Float, mark : Bool, left : Float, right : Float, top : Float, bottom : Float }
+    kind : Int, width : Float, sidewalk : Float, mark : Bool, left : Float, right : Float, top : Float, bottom : Float }
 
   pfn minimum(a : Float, b : Float) : Float do if a < b do a else b end end
   pfn maximum(a : Float, b : Float) : Float do if a > b do a else b end end
@@ -38,9 +38,10 @@ mod Ur.RoadSurface do
     let (bx, bz) = b
     let dx = bx -. x
     let dz = bz -. z
-    let margin = width +. 2.0
+    let sidewalk = if mark || width < 14.0 do int_to_float(S.sidewalk_width(kind)) else 2.0 end
+    let margin = width +. sidewalk
     { x: x, z: z, dx: dx, dz: dz, length_squared: dx *. dx +. dz *. dz,
-      kind: kind, width: width, mark: mark, left: minimum(x, bx) -. margin, right: maximum(x, bx) +. margin,
+      kind: kind, width: width, sidewalk: sidewalk, mark: mark, left: minimum(x, bx) -. margin, right: maximum(x, bx) +. margin,
       top: minimum(z, bz) -. margin, bottom: maximum(z, bz) +. margin }
   end
 
@@ -150,13 +151,14 @@ mod Ur.RoadSurface do
           let dx = ax -. at *. s.dx
           let dz = az -. at *. s.dz
           let square = dx *. dx +. dz *. dz
-          let curb = s.width +. 2.0
-          if square >= curb *. curb do ink(rest, x, z, wx, wz, best, material) else
+          let edge = s.width +. s.sidewalk
+          if square >= edge *. edge do ink(rest, x, z, wx, wz, best, material) else
             let road = square < s.width *. s.width
             -- When shoulders overlap, asphalt and its markings win over curbs.
             let rank = square /. (s.width *. s.width) +. (if road do 0.0 else 1.0 end)
             if rank >= best do ink(rest, x, z, wx, wz, best, material) else
-              let material = if road do stripe(s, square, at, wx, wz) else 24 end
+              let curb = s.width +. 1.0
+              let material = if road do stripe(s, square, at, wx, wz) else if square < curb *. curb do 23 else 24 end end
               ink(rest, x, z, wx, wz, rank, material)
             end end
         end
@@ -170,7 +172,7 @@ mod Ur.RoadSurface do
     let height = if x == 32 do deck else NativeArray.get_int(floor, z / 4 * 8 + x / 4) end
     let changed = next != material || height != deck
     let out = if changed && material >= 0 do
-      Cons(A.piece(start, deck, z, x - start, if material == 24 do 2 else 1 end, 1, material), out)
+      Cons(A.piece(start, deck, z, x - start, if material == 23 || material == 24 do 2 else 1 end, 1, material), out)
     else out end
     if x == 32 do out else row(segments, floor, wx, wz, x + 1, z, if changed do x else start end, next, height, out) end
   end

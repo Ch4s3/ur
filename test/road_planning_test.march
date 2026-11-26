@@ -100,7 +100,31 @@ mod RoadPlanningTest do
       let surface = List.filter(parts, fn p -> p.material == 4 || p.material == 16)
       Test.assert_true(solid_at(line, x, 10, 15) && !solid_at(parts, x, 11, 15) &&
         !solid_at(surface, x, 10, 15) && solid_at(surface, x, 10, 13),
-        "The centre marking replaces a strip of pavement at the same height"))
+        "The centre marking replaces a strip of pavement at the same height")
+      let width = S.road_half_width(kind)
+      let walk = S.sidewalk_width(kind)
+      let sidewalk = List.filter(parts, fn p -> p.material == 24)
+      let curb = List.filter(parts, fn p -> p.material == 23)
+      Test.assert_true(solid_at(sidewalk, 15, 11, 16 - width - walk) && solid_at(curb, 15, 11, 15 - width) &&
+        solid_at(curb, 15, 11, 16 + width) && solid_at(sidewalk, 15, 11, 15 + width + walk),
+        "Both sidewalks have raised paving and a defined curb within the parcel")
+      List.each([0, 1, 2, 3], fn spot ->
+        let (sx, sz) = S.sidewalk_point({ c with roads: roads }, lot, spot)
+        Test.assert_true(sx > 0 && sx < 31 && sz > 0 && sz < 31 &&
+          (solid_at(sidewalk, sx, 11, sz) || solid_at(curb, sx, 11, sz)), "A fixture stays on its sidewalk")))
+  end
+  pfn isolated_sidewalks() : Unit do
+    let c = fixture()
+    let lot = S.index(8, 10)
+    List.each([1, 2, 3], fn kind ->
+      let isolated = { c with roads: NativeArray.set_int(c.roads, lot, kind) }
+      let parts = Ur.Landscape.portal_street(isolated, lot, 10)
+      let sidewalk = List.filter(parts, fn p -> p.material == 23 || p.material == 24)
+      List.each([0, 1, 2, 3], fn spot ->
+        let (x, z) = S.sidewalk_point(isolated, lot, spot)
+        let y = Ur.Landscape.sidewalk_height(isolated, lot, x, z)
+        Test.assert_true(solid_at(sidewalk, x, y - 1, z) && !solid_at(parts, x, y, z),
+          "An isolated street seats its fixtures on the rounded sidewalk")))
   end
   pfn turnaround() : Unit do
     let c = fixture()
@@ -111,7 +135,7 @@ mod RoadPlanningTest do
       solid_at(end_parts, 28, 10, 16) && !solid_at(end_parts, 31, 10, 16) &&
       !solid_at(end_parts, 29, 10, 3), "A local dead end widens into a round bulb inside its parcel")
     let from = S.index(7, 10)
-    let curb = List.filter(end_parts, fn p -> p.material == 24)
+    let curb = List.filter(end_parts, fn p -> p.material == 23 || p.material == 24)
     List.each([0, 1, 2, 3], fn spot ->
       let (x, z) = S.sidewalk_point(c, end_lot, spot)
       Test.assert_true(solid_at(curb, x, 11, z), "Sidewalk fixtures stay on the curb around the bulb"))
@@ -132,6 +156,11 @@ mod RoadPlanningTest do
     Test.assert_true(solid_at(parts, 0, 10, 16) && solid_at(parts, 31, 10, 16) &&
       solid_at(parts, 16, 10, 31) && !solid_at(parts, 16, 10, 0) &&
       !solid_at(parts, 0, 10, 0), "A T-junction leaves its closed frontage and corners unpaved")
+    let zebra = List.filter(parts, fn p -> p.material == 8)
+    let asphalt = List.filter(parts, fn p -> p.material == 4)
+    Test.assert_true(solid_at(zebra, 3, 10, 7) && !solid_at(parts, 3, 11, 7) &&
+      !solid_at(asphalt, 3, 10, 7) && solid_at(asphalt, 3, 10, 9),
+      "Crosswalk stripes replace the asphalt flush with the street")
   end
   pfn straight_street() : Unit do
     let c = fixture()
@@ -315,6 +344,7 @@ mod RoadPlanningTest do
     replace()
     flush_markings()
     turnaround()
+    isolated_sidewalks()
     straight_street()
     drawn_streets()
     off_grid_streets()

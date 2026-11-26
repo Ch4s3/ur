@@ -31,6 +31,13 @@ mod Ur.Landscape do
     (h * (32 - step) + peer * step + 16) / 32
   end
 
+  fn sidewalk_height(c : Ur.Sim.City, lot : Int, x : Int, z : Int) : Int do
+    let h = S.get(c.heights, lot)
+    let (axis, before, after) = road_profile(c, lot)
+    let along = if axis == 0 do x else z end
+    (if axis < 0 || RoadSurface.uses_curve(c, lot) do h else graded_height(h, before, after, along / 4 * 4 + 2) end) + 2
+  end
+
   pfn portal_crossed_by_street(c : Ur.Sim.City, lot : Int, peer : Int) : Bool do
     let inward = S.direction(lot, peer)
     let across = if inward < 2 do 2 else 0 end
@@ -121,10 +128,10 @@ mod Ur.Landscape do
   pfn crosswalk(n : Int, deck : Int, side : Int, width : Int, out : List(Ur.Architecture.Piece)) : List(Ur.Architecture.Piece) do
     if n >= width / 2 do out else
       let offset = 17 - width + n * 4
-      let edge = if side % 2 == 0 do 3 else 28 end
-      let stripe = if side < 2 do A.piece(edge, deck + 1, offset, 2, 1, 2, 8)
-        else A.piece(offset, deck + 1, edge, 2, 1, 2, 8) end
-      crosswalk(n + 1, deck, side, width, Cons(stripe, out))
+      let edge = if side % 2 == 0 do 2 else 27 end
+      let stripe = if side < 2 do A.piece(edge, deck, offset, 3, 1, 2, 8)
+        else A.piece(offset, deck, edge, 2, 1, 3, 8) end
+      crosswalk(n + 1, deck, side, width, Cons(stripe, cut_road_pieces(out, stripe)))
     end
   end
   -- Quarter-circle centre line at radius 16. Each scanline merges equal
@@ -136,8 +143,10 @@ mod Ur.Landscape do
     let width = S.road_half_width(kind) * 2
     let inner = 32 - width
     let outer = 32 + width
-    if squared < (inner - 4) * (inner - 4) || squared >= (outer + 4) * (outer + 4) do -1
-    else if squared < inner * inner || squared >= outer * outer do 24
+    let walk = S.sidewalk_width(kind) * 2
+    if squared < (inner - walk) * (inner - walk) || squared >= (outer + walk) * (outer + walk) do -1
+    else if squared < inner * inner || squared >= outer * outer do
+      if squared >= (inner - 2) * (inner - 2) && squared < (outer + 2) * (outer + 2) do 23 else 24 end
     else if kind == 3 do (if squared >= 30 * 30 && squared < 34 * 34 do 17 else 16 end)
     else if kind == 2 && squared >= 30 * 30 && squared < 34 * 34 do 10
     else if kind == 2 && ((squared >= 17 * 17 && squared < 19 * 19) ||
@@ -151,7 +160,7 @@ mod Ur.Landscape do
     let out = if !changed || material < 0 || start == x do out else
       let px = if horizontal == 0 do start else 32 - x end
       let pz = if vertical == 2 do z else 31 - z end
-      Cons(A.piece(px, deck, pz, x - start, if material == 24 do 2 else 1 end, 1, material), out)
+      Cons(A.piece(px, deck, pz, x - start, if material == 23 || material == 24 do 2 else 1 end, 1, material), out)
     end
     if x >= 32 do out else curve_row(kind, deck, horizontal, vertical, x + 1, z, if changed do x else start end, next, out) end
   end
@@ -174,7 +183,9 @@ mod Ur.Landscape do
   end
   pfn street_surface(kind : Int, arms : StreetArms, width : Int, radius : Int, bulb : Bool, x : Int, z : Int) : Int do
     if !street_area(arms, width, radius, x, z) do
-      if street_area(arms, width + 4, radius + (if bulb do 3 else 4 end), x, z) do 24 else -1 end
+      let walk = S.sidewalk_width(kind) * 2
+      if street_area(arms, width + 2, radius + 2, x, z) do 23
+      else if street_area(arms, width + walk, radius + (if bulb do 3 else walk end), x, z) do 24 else -1 end end
     else
       -- Stop the dividing line at the throat so the whole bulb is usable.
       let lead = (x < -22 && arms.west) || (x > 22 && arms.east)
@@ -191,7 +202,7 @@ mod Ur.Landscape do
     let next = if x < 32 do street_surface(kind, arms, width, radius, bulb, x * 2 - 31, z * 2 - 31) else -1 end
     let changed = next != material
     let out = if changed && material >= 0 do
-      Cons(A.piece(start, deck, z, x - start, if material == 24 do 2 else 1 end, 1, material), out)
+      Cons(A.piece(start, deck, z, x - start, if material == 23 || material == 24 do 2 else 1 end, 1, material), out)
     else out end
     if x == 32 do out else
       street_surface_row(kind, arms, width, radius, bulb, deck, x + 1, z, if changed do x else start end, next, out)
@@ -259,8 +270,11 @@ mod Ur.Landscape do
       else straight_edge(east, 16 - width, deck, 32, width * 2, colour, Nil) end
     end
     let a = if bulb || junction || h == 0 do a else
-      let a = straight_edge(east, 14 - width, deck + 1, 32, 2, 24, a)
-      straight_edge(east, 16 + width, deck + 1, 32, 2, 24, a)
+      let walk = S.sidewalk_width(kind)
+      let a = straight_edge(east, 16 - width - walk, deck + 1, 32, walk - 1, 24, a)
+      let a = straight_edge(east, 15 - width, deck + 1, 32, 1, 23, a)
+      let a = straight_edge(east, 16 + width, deck + 1, 32, 1, 23, a)
+      straight_edge(east, 17 + width, deck + 1, 32, walk - 1, 24, a)
     end
     let marks = if bulb || junction do Nil
       else if kind == 1 do
@@ -273,15 +287,17 @@ mod Ur.Landscape do
       else straight_edge(east, 15, deck, 32, 2, 17, Nil) end end end
     -- Replace the asphalt under the paint so the top faces share a height without overlapping.
     let a = List.fold_left(marks, a, fn (parts, mark) -> Cons(mark, cut_road_pieces(parts, mark)))
-    let a = if S.get(c.tolls, i) == 0 do a else
-      let (x, z) = if east do (20, 1) else (1, 20) end
-      Cons(A.piece(x, deck + 1, z, 1, 8, 1, 13), Cons(A.piece(x, deck + 8, z, 3, 2, 3, 10), a))
-    end
-    if junction && kind != 3 do
+    let a = if junction && kind != 3 do
       let a = if west_link do crosswalk(0, deck, 0, width, a) else a end
       let a = if east_link do crosswalk(0, deck, 1, width, a) else a end
       let a = if north_link do crosswalk(0, deck, 2, width, a) else a end
       if south_link do crosswalk(0, deck, 3, width, a) else a end
+    else a end
+    let a = if S.get(c.tolls, i) == 0 do a else
+      let (x, z) = if east do (20, 1) else (1, 20) end
+      Cons(A.piece(x, deck + 1, z, 1, 8, 1, 13), Cons(A.piece(x, deck + 8, z, 3, 2, 3, 10), a))
+    end
+    if junction && kind != 3 do a
     else if h == 0 do
       let a = if east do Cons(A.piece(0, deck + 2, 1, 32, 2, 1, 8), Cons(A.piece(0, deck + 2, 30, 32, 2, 1, 8), a)) else a end
       let a = if north || !east do Cons(A.piece(1, deck + 2, 0, 1, 2, 32, 8), Cons(A.piece(30, deck + 2, 0, 1, 2, 32, 8), a)) else a end
@@ -811,14 +827,14 @@ mod Ur.Landscape do
     if S.mountain_tunnel(c, lot, peer) do
       let (horizontal, _) = S.road_turn(c, lot)
       if horizontal >= 0 do parts else
-        trim_closed_arms(c, lot, S.direction(lot, peer), 0, 16 - S.road_half_width(S.get(c.roads, lot)) - 2, parts)
+        trim_closed_arms(c, lot, S.direction(lot, peer), 0, 16 - S.road_half_width(S.get(c.roads, lot)) - S.sidewalk_width(S.get(c.roads, lot)), parts)
       end
     else if S.grade_kind(c, lot) == 1 && S.valid(peer) do
       let inward = S.direction(lot, peer)
-      let parts = trim_closed_arms(c, lot, inward, 0, 16 - S.road_half_width(S.get(c.roads, lot)) - 2, parts)
+      let parts = trim_closed_arms(c, lot, inward, 0, 16 - S.road_half_width(S.get(c.roads, lot)) - S.sidewalk_width(S.get(c.roads, lot)), parts)
       let across = if inward < 2 do 2 else 0 end
       let junction = S.street_link(c, lot, across) || S.street_link(c, lot, across + 1)
-      let reach = if junction do 14 - S.road_half_width(S.get(c.roads, lot)) else 16 end
+      let reach = if junction do 16 - S.road_half_width(S.get(c.roads, lot)) - S.sidewalk_width(S.get(c.roads, lot)) else 16 end
       if S.street_link(c, lot, inward) || reach == 0 do parts else
         match A.orient([A.piece(0, 0, 0, 32, 1, reach, 0)], S.opposite(inward)) do
           Nil -> parts
@@ -1243,8 +1259,8 @@ mod Ur.Landscape do
     if spot == 4 do base else
       let kind = S.sidewalk_item(c, lot, spot)
       let (x, z) = S.sidewalk_point(c, lot, spot)
-      let y = S.get(c.heights, lot) + 1
-      let parts = if kind == 0 || x < 0 do Nil
+      let y = if kind == 0 || x < 0 do 0 else sidewalk_height(c, lot, x, z) end
+      let parts = if y == 0 do Nil
         else if kind == 6 do [
           A.piece(x - 1, y, z - 1, 3, 1, 3, 19), A.piece(x - 1, y + 1, z - 1, 3, 3, 3, 7),
           A.piece(x - 1, y + 4, z - 1, 3, 1, 3, 19), A.piece(x, y + 5, z, 1, 1, 1, 17),
