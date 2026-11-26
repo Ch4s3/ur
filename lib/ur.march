@@ -643,7 +643,7 @@ mod Ur do
       let truck_popup_over = p.truck_selected && Ur.Hud.over_tile_popup(w, h, truck_point, mx, my)
       let truck_closed = mouse && !p.mouse && truck_popup_over && Ur.Hud.vehicle_popup_close(w, h, truck_point, mx, my)
       let popup_point = if S.valid(p.popup) do Ur.Scene.tile_anchor(p.city, p.popup, w, h, cx, cz, zoom, yaw) else (-1.0, -1.0) end
-      let popup_capture = p.tool == 0 && !p.sidebar_visible && S.valid(p.popup) && Ur.Hud.over_tile_popup(w, h, popup_point, mx, my)
+      let popup_capture = p.tool == 0 && !p.sidebar_visible && S.valid(p.popup) && Ur.Hud.over_parcel_popup(p.city, p.popup, w, h, popup_point, mx, my)
       let popup_action = if mouse && !p.mouse && popup_capture do
         Ur.Hud.tile_popup_action(p.city, p.popup, w, h, popup_point, mx, my)
       else 0 end
@@ -706,7 +706,9 @@ mod Ur do
       else p.finance_view end end
       let key_tool = select_tool(keys, p.keys, 0, 0)
       let key_group = Toolbar.shortcut_group(key_tool)
-      let clicked_group = if click do Toolbar.group_at(mx, my, w, h) else 0 end
+      let clicked_group = if !click do 0
+        else if Toolbar.close_at(mx, my, w, h, p.group, p.page) do p.group
+        else Toolbar.group_at(mx, my, w, h) end end
       let clicked_page = if click do Toolbar.page_at(mx, my, w, h, p.group, p.page) else -1 end
       let option = if click do Toolbar.option_at(mx, my, w, h, p.group, p.page) else -1 end
       let group = if clicked_group > 0 do (if clicked_group == p.group do 0 else clicked_group end)
@@ -834,7 +836,7 @@ mod Ur do
       let cz = if S.valid(utility_jump) do int_to_float(utility_jump / S.width() * 8 + 4) else cz end
       let view = { view with cx: cx, cz: cz }
       let point = Ur.Scene.tile_anchor(c, p.popup, w, h, cx, cz, zoom, yaw)
-      let over_popup = tool == 0 && Ur.Hud.over_tile_popup(w, h, point, mx, my)
+      let over_popup = tool == 0 && Ur.Hud.over_parcel_popup(c, p.popup, w, h, point, mx, my)
       let over_ui = cut_modal || over_notices || popup_temple || over_popup || truck_popup_over || citizen_panel || planner_hit >= 0 || over_toolbar || Toolbar.over(mx, my, w, h, group, page) ||
         Ur.Hud.over_panel(mx, my, w, h, p.sidebar_visible) || Ur.Hud.over_utility_panel(mx, my, layer, tool) ||
         (utility_open && Ur.Hud.over_utility_inspector(mx, my, layer, tool, utility_pinned)) ||
@@ -899,12 +901,20 @@ mod Ur do
       let operation_changed = popup_action == 2 && popup == p.popup && !undone && S.can_pause_facility(next_property, popup)
       let service_changed = (popup_action == 3 || popup_action == 4) && popup == p.popup && !undone && S.get(next_property.stops, popup) == 2
       let freight_changed = popup_action >= 5 && popup_action <= 9 && popup == p.popup && !undone
-      let undo = if operation_changed || service_changed || freight_changed do Cons(stamp_clock(next_property, p.elapsed), List.take(undo, 15)) else undo end
+      let (staff_lot, staff_delta) = if undone do (-1, 0)
+        else if popup == p.popup && (popup_action == 11 || popup_action == 12) do (popup, if popup_action == 11 do -1 else 1 end)
+        else if parcel_open && p.sidebar_visible && p.sidebar_tab == 1 && click && !over_toolbar do
+          (p.parcel_focus, Ur.Hud.parcel_staffing_at(mx, my, w, h))
+        else (-1, 0) end end end
+      let next_staff = if staff_delta == 0 do next_property else S.adjust_staffing(next_property, staff_lot, staff_delta) end
+      let staffing_changed = S.get(next_staff.staffing_targets, staff_lot) != S.get(next_property.staffing_targets, staff_lot)
+      let undo = if operation_changed || service_changed || freight_changed || staffing_changed do Cons(stamp_clock(next_property, p.elapsed), List.take(undo, 15)) else undo end
       let c = if operation_changed do S.toggle_facility(next_property, popup)
         else if service_changed do
           if popup_action == 4 do S.cycle_bus_fare(next_property) else S.act(next_property, popup, 39) end
-        else if freight_changed do S.freight_action(next_property, popup, popup_action - 5) else next_property end end end
-      let policy_changed = policy_changed || property_changed || operation_changed || service_changed || freight_changed
+        else if freight_changed do S.freight_action(next_property, popup, popup_action - 5)
+        else if staffing_changed do S.update_facility_staff(next_staff) else next_property end end end end
+      let policy_changed = policy_changed || property_changed || operation_changed || service_changed || freight_changed || staffing_changed
       let preview_tool = if safety_open || parcel_open do 0 else tool end
       let sidewalk = S.sidewalk_tool(preview_tool) && c.harbour >= 0
       let spot = if sidewalk do Ur.Scene.sidewalk_pick(c, view, hovered, mx, my) else -1 end
@@ -1132,10 +1142,10 @@ mod Ur do
       let collectors_changed = watched && List.any(List.range(0, S.count()), fn lot ->
         S.get(c.plants, lot) == 8 && S.collector_supply(c, lot) != S.collector_supply(p.city, lot))
       let wait = p.stats_wait
-      -- (a facility paused or resumed rebuilds the roster on its own frame, so it keeps its stats there)
-      -- a watch that moved water wants fresh stats (closed roads, offline utilities) too, worked out the same way
+      -- Facility operations and staffing changes get fresh stats on the click frame.
+      -- A watch that moved water also needs fresh stats for closed roads and utilities.
       let want_stats = (paint || undone || policy_changed || watch_flooded || power_stale || collectors_changed || shade_changed || lava_damage) && !midnight
-      let defer_stats = want_stats && !operation_changed
+      let defer_stats = want_stats && !operation_changed && !staffing_changed
       let (pending_stats, stale_stats) = if want_stats || midnight do (None, retire_stats(wait)) else (wait.task, wait.stale) end
       let stale_stats = List.filter(stale_stats, fn task -> Option.is_none(Task.poll(task)))
       let stamp = utility_stamp(c, elapsed)
