@@ -24,7 +24,7 @@ mod Ur.Ocean do
   -- a Strata.Seabed shelf from the coast, the map's natural reefs and sand
   -- bars, the sand storms moved (City.sand_changes), and the city's dredging
   -- and reefs (City.seabed) on top. [kind] says what each cell is made of
-  -- (0 open floor, 1 reef, 2 sand bar, 3 built reef, 4 canal mouth); [shelf] is the bare shelf's depth.
+  -- (0 open floor, 1 reef, 2 sand bar, 3 built reef, 4 canal mouth, 5 basalt); [shelf] is the bare shelf's depth.
   -- [reef_type] is what the map's reefs are, from its temperature (Ur.Sim setup 2): 0 rocky, 1 mixed, 2 coral.
   -- [corals] are the coral templates its reefs are dotted with (Strata.Corals; none without reef), in Ur.Scene's material ids.
   -- [canals] marks parcels where only the cut channel can have a sea-level surface.
@@ -106,7 +106,8 @@ mod Ur.Ocean do
     if i >= NativeArray.length_int(changes) do ft else
       let v = NativeArray.get_int(changes, i)
       let cell = v / 512
-      if cell < 0 || cell >= cells_wide() * cells_deep() || NativeArray.get_int(ft.floor.depth, cell) == 0 do sand(ft, changes, i + 1) else
+      if cell < 0 || cell >= cells_wide() * cells_deep() || NativeArray.get_int(ft.floor.depth, cell) == 0 ||
+        NativeArray.get_int(ft.kind, cell) == 5 do sand(ft, changes, i + 1) else
         let f = ft.floor
         let d = S.clamp(NativeArray.get_int(f.depth, cell) + v % 128 - 64, -2, 63)
         sand({ floor: { f with depth: NativeArray.set_int(f.depth, cell, if d == 0 do 1 else d end) }, kind: NativeArray.set_int(ft.kind, cell, v / 128 % 4) }, changes, i + 1)
@@ -134,11 +135,38 @@ mod Ur.Ocean do
     let ft0 = natural(c, shelf, land)
     built_reefs(c, { ft0 with floor: edits(c, ft0.floor, 0) }, shelf.depth, 0)
   end
+  -- Ease each parcel's solid basalt into the surrounding shelf. The sand
+  -- pass skips this rock and dry cells are handled by the terrain.
+  pfn subsea(c : Ur.Sim.City, ft : Strata.Seabed.Features) : Strata.Seabed.Features do
+    if !S.valid(c.subsea_vent) do ft else
+    let surfaced = List.filter(List.range(0, S.count()), fn lot ->
+      S.get(c.heights, lot) > 0 && S.subsea_owned(c, lot))
+    let rock = List.append(Map.keys(c.subsea_depths), surfaced)
+    List.fold_left(rock, ft, fn (ft, lot) ->
+      if S.canal_water(c, lot) || S.get(c.seawalls, lot) > 0 || S.get(c.seabed, lot) > 0 ||
+        S.canal_approach_mask(c, lot) > 0 do ft else
+        let x = (lot % S.width() + ring()) * 8
+        let z = (lot / S.width() + ring()) * 8
+        let (floor, kind) = List.fold_left(List.range(0, 64), (ft.floor.depth, ft.kind), fn (state, cell) ->
+          let (floor, kind) = state
+          let u = cell % 8
+          let v = cell / 8
+          let i = (z + v) * cells_wide() + x + u
+          let old = NativeArray.get_int(floor, i)
+          let wx = lot % S.width() * 32 + u * 4 + 2
+          let wz = lot / S.width() * 32 + v * 4 + 2
+          let raised = Math.max_int(1, 0 - S.subsea_elevation(c, wx, wz, lot))
+          if old <= 0 || raised >= old do state else
+            (NativeArray.set_int(floor, i, raised), NativeArray.set_int(kind, i, 5))
+          end)
+        { floor: { ft.floor with depth: floor }, kind: kind }
+      end) end
+  end
   doc "The sea floor of city [c] with its reefs, bars and the city's dredging and reefs but no storms: what sand changes (City.sand_changes) are measured against."
   fn unsanded(c : Ur.Sim.City) : Strata.Seabed.Features do
     let n = cells_wide() * cells_deep()
     let land = seed(c, NativeArray.make_int(n, 0), 0)
-    edited(c, Strata.Seabed.shelf(land, cells_wide(), cells_deep(), 4, 2, 3, 20, 63), land)
+    subsea(c, edited(c, Strata.Seabed.shelf(land, cells_wide(), cells_deep(), 4, 2, 3, 20, 63), land))
   end
   -- Keep the engineered channel open through natural banks, sandbars and storm deposits.
   pfn canal_beds(c : Ur.Sim.City, lot : Int, floor : NativeIntArr, kind : NativeIntArr) : (NativeIntArr, NativeIntArr) do
@@ -182,7 +210,7 @@ mod Ur.Ocean do
     let land = seed(c, NativeArray.make_int(n, 0), 0)
     let shelf = Strata.Seabed.shelf(land, cells_wide(), cells_deep(), 4, 2, 3, 20, 63)
     -- the city's edits, then the sand storms moved over them: a dredged channel silts, and dredging it again digs deeper
-    let ft = sand(edited(c, shelf, land), c.sand_changes, 0)
+    let ft = sand(subsea(c, edited(c, shelf, land)), c.sand_changes, 0)
     let rt = reef_type(c)
     let (floor, kind) = canal_beds(c, 0, ft.floor.depth, ft.kind)
     { floor: floor, kind: kind, shelf: shelf.depth, reef_type: rt,
@@ -323,8 +351,14 @@ mod Ur.Ocean do
   pfn seabed_from(a : Ur.Sim.City, b : Ur.Sim.City, i : Int) : Bool do
     if i >= S.count() do false else if S.get(a.seabed, i) != S.get(b.seabed, i) do true else seabed_from(a, b, i + 1) end end
   end
-  doc "Whether any parcel was dredged or given a reef, or a storm moved sand, between [a] and [b]: the floor, and so the water and its swell, change."
-  fn seabed_touched(a : Ur.Sim.City, b : Ur.Sim.City) : Bool do a.sand_day != b.sand_day || seabed_from(a, b, 0) end
+  doc "Whether dredging, reefs, volcanic rock or storm sediment changed the seabed."
+  fn seabed_touched(a : Ur.Sim.City, b : Ur.Sim.City) : Bool do
+    a.sand_day != b.sand_day || seabed_from(a, b, 0) ||
+      a.subsea_vent != b.subsea_vent || S.subsea_peak(a) != S.subsea_peak(b) ||
+      Map.size(a.subsea_depths) != Map.size(b.subsea_depths) ||
+      Map.fold(a.subsea_depths, false, fn (changed, lot, depth) ->
+        changed || Map.get_or(b.subsea_depths, lot, 0, Map.int_cmp) != depth)
+  end
   doc "Whether the sea floor of city [b] may differ from [a]'s: another map, features version, coast, edits or storms (a load or new game swaps the whole city)."
   fn floor_differs(a : Ur.Sim.City, b : Ur.Sim.City) : Bool do
     a.sea_features != b.sea_features || a.world_seed != b.world_seed || a.founding_map != b.founding_map ||

@@ -38,6 +38,7 @@ mod Ur.Sim do
     census : NativeIntArr, population_history : List(NativeIntArr), immigration : Int,
     council : NativeIntArr, religion : Religion,
     climate_seed : Int, world_seed : Int, volcanic : Bool, basalt : Map(Int, Int), volcano_ms : Int, volcanic_shade : Map(Int, Int), setup : NativeIntArr, founders : Int,
+    subsea_vent : Int, subsea_depths : Map(Int, Int),
     rain_uniform : Bool, watch : Int, rain_now : NativeIntArr, storms : List(Ur.Rain.Cell), air : Ur.Air.Air,
     storm_drains : NativeIntArr, seawalls : NativeIntArr,
     -- seabed edits a parcel (Ur.Ocean): 0 none, 1..63 dredged to that many voxels deep, 64 + d a reef whose top is d voxels down
@@ -384,8 +385,9 @@ mod Ur.Sim do
   fn get(a : NativeIntArr, i : Int) : Int do if valid(i) do NativeArray.get_int(a, i) else 0 end end
   pfn terrain_sample(c : City, x : Int, z : Int) : Int do
     if x < 0 || z < 0 || x >= width() || z >= depth() do -7 else
-      let h = get(c.heights, index(x, z))
-      if h == 0 do -7 else h end
+      let lot = index(x, z)
+      let h = get(c.heights, lot)
+      if h == 0 || subsea_owned(c, lot) do -7 else h end
     end
   end
   fn volcanic_highland(c : City, x : Int, z : Int) : Bool do
@@ -405,7 +407,65 @@ mod Ur.Sim do
     if Map.is_empty(c.basalt) || x < 0 || z < 0 || x >= width() * 32 || z >= depth() * 32 do 0
     else Map.get_or(c.basalt, basalt_cell(x, z), 0, Map.int_cmp) end
   end
+  fn subsea_reach() : Int do 6 end
+  fn subsea_mature_height() : Int do 56 end
+  fn subsea_owned(c : City, lot : Int) : Bool do
+    valid(c.subsea_vent) && valid(lot) &&
+      int_abs(lot % width() - c.subsea_vent % width()) <= subsea_reach() &&
+      int_abs(lot / width() - c.subsea_vent / width()) <= subsea_reach() &&
+      (Map.get_or(c.subsea_depths, lot, 0, Map.int_cmp) > 0 ||
+        (get(c.heights, lot) > 0 && basalt_depth(c, lot % width() * 32 + 16, lot / width() * 32 + 16) > 0))
+  end
+  fn subsea_peak(c : City) : Int do
+    let height = get(c.heights, c.subsea_vent)
+    if height > 0 do height else 0 - Map.get_or(c.subsea_depths, c.subsea_vent, 16, Map.int_cmp) end
+  end
+  -- A signed cone surface in quarter-metres. Alternating broad lobes and
+  -- shorter rough ridges break up the waterline as the summit rises.
+  fn subsea_profile(c : City, x : Int, z : Int, peak : Int) : Int do
+    let dx = int_to_float(x - c.subsea_vent % width() * 32 - 16)
+    let dz = int_to_float(z - c.subsea_vent / width() * 32 - 16)
+    let distance = Math.sqrt(dx *. dx +. dz *. dz)
+    let phase = int_to_float(int_mod_euclid(c.world_seed, 97)) *. 0.064
+    let angle = Math.atan2(dz, dx)
+    let outline = 1.0 +. 0.16 *. Math.sin(angle *. 3.0 +. phase) +. 0.10 *. Math.sin(angle *. 5.0 -. phase *. 1.7)
+    let along = distance /. outline
+    let texture = (Math.sin(dx *. 0.41 +. dz *. 0.18) +. Math.sin(dz *. 0.57 -. dx *. 0.24)) *.
+      Math.min_float(1.0, distance /. 12.0)
+    peak - float_to_int(Math.floor(along *. 0.55 +. along *. along *. 0.00085 +. texture +. 0.5))
+  end
+  fn subsea_elevation(c : City, x : Int, z : Int, lot : Int) : Int do
+    let peak = subsea_peak(c)
+    let height = subsea_profile(c, x, z, peak)
+    let cx = lot % width() * 32 + 16
+    let cz = lot / width() * 32 + 16
+    let existing = if get(c.heights, lot) > 0 do get(c.heights, lot)
+      else 0 - Map.get_or(c.subsea_depths, lot, 63, Map.int_cmp) end
+    let center = subsea_profile(c, cx, cz, peak)
+    -- Older vents grew by parcel. Blend a taller saved centre into the
+    -- new contour without dropping that parcel back into the sea.
+    if existing <= center do height + existing - center else
+      let dx = x - cx
+      let dz = z - cz
+      let distance = Math.sqrt(int_to_float(dx * dx + dz * dz))
+      Math.max_int(height, existing - float_to_int(distance *. 0.72 +. 0.5))
+    end
+  end
+  pfn subsea_ready(c : City, lot : Int) : Bool do
+    if !subsea_owned(c, lot) do true else
+      let x = lot % width() * 32 + 2
+      let z = lot / width() * 32 + 2
+      lot != c.subsea_vent && List.all(List.range(0, 64), fn tile ->
+        subsea_elevation(c, x + tile % 8 * 4, z + tile / 8 * 4, lot) > 0)
+    end
+  end
   fn unbuilt_ground_height(c : City, x : Int, z : Int) : Int do
+    let px = int_div_euclid(x, 32)
+    let pz = int_div_euclid(z, 32)
+    let lot = index(px, pz)
+    if px >= 0 && px < width() && pz >= 0 && pz < depth() && subsea_owned(c, lot) do
+      clamp(subsea_elevation(c, x, z, lot), 0, terrain_ceiling())
+    else
     let gx = int_div_euclid(x - 16, 32)
     let gz = int_div_euclid(z - 16, 32)
     let u = int_mod_euclid(x - 16, 32)
@@ -418,7 +478,7 @@ mod Ur.Sim do
       -- Leave the basin, rim and shallow rift intact at the rendered scale.
       clamp(hill + detail / 3, 0, 176)
     else clamp(hill + detail, 0, 96) end
-    clamp(ground + basalt_depth(c, x, z), 0, terrain_ceiling())
+    clamp(ground + basalt_depth(c, x, z), 0, terrain_ceiling()) end
   end
   fn neighbour(i : Int, d : Int) : Int do
     if d == 0 do (if i % width() > 0 do i - 1 else -1 end)
@@ -626,7 +686,7 @@ mod Ur.Sim do
   end
   pfn unclaimed_with_heights(heights : NativeIntArr) : City do
     let zero = NativeArray.make_int(count(), 0)
-    { lift_decks: Map.empty(), lift_vessels: Map.empty(), public_works: Nil, households: new_households(), economy: new_economy(), utility_service: zero, milestones: NativeArray.make_int(64, 0), facility_staff: NativeArray.make_int(count(), 0), facility_expansion: NativeArray.make_int(count(), 0), shelter_demand: None, census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(count(), 0), religion: new_religion(), climate_seed: 0, rain_uniform: false, watch: 1, rain_now: NativeArray.make_int(count(), 0), storms: Nil, air: Ur.Air.empty(), world_seed: -1, volcanic: false, basalt: Map.empty(), volcano_ms: 0, volcanic_shade: Map.empty(), setup: default_setup(), founders: 0, storm_drains: zero, seawalls: zero, seabed: NativeArray.make_int(count(), 0), sea_heights: NativeArray.make_int(count(), 0), ferry_works: NativeArray.make_int(count(), 0), mangrove_harm: NativeArray.make_int(count(), 0), sea_counted: 2, sea_features: 1, sand_changes: NativeArray.make_int(0, 0), sea_run: 0, sand_peak: 0, sand_sector: 0, sand_day: 0, sand_marks: NativeArray.make_int(count(), 0), fishing_policy: zero, private_docks: zero, sea_shoals: NativeArray.make_int(count(), 63), sea_reefs: NativeArray.make_int(count(), 0), fish: NativeArray.make_int(count(), 0), fish_capacity: NativeArray.make_int(count(), 0), fish_last: NativeArray.make_int(count(), 0), fish_alerts: NativeArray.make_int(count(), 0), pump_orders: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, road_shapes: zero, canals: zero, canal_docks: zero, water_bus: zero, water_bus_selection: -1, soil_moisture: 70, pumping_cost: 0, battery: 0, hour: 9, grades: NativeArray.make_int(count(), 0), grade_cover: NativeArray.make_int(count(), 0), parks: NativeArray.make_int(count(), 0), park_tiers: NativeArray.make_int(count(), 0), streetscape: NativeArray.make_int(count(), 0), sidewalk_items: NativeArray.make_int(count(), 0), campus: NativeArray.make_int(count(), 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(count(), 0), empty_homes: NativeArray.make_int(count(), 0), home_arrivals: NativeArray.make_int(count(), 0), housing_search: zero, newcomer_grace: zero, neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(count(), 0), property_status: NativeArray.make_int(count(), 0), property_arrears: NativeArray.make_int(count(), 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(count(), 0), calendar_day: 0, clock_ms: 675, street_day: 0, car_free_days: NativeArray.make_int(count(), 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(count(), 0), quiet_areas: NativeArray.make_int(count(), 0), storefronts: NativeArray.make_int(count(), 0), footfall: NativeArray.make_int(count(), 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, production_freight: Production.empty(), freight: None, shop_stock: zero, shop_sales: zero, shop_delivered: zero, shop_imports: 0, shipments: Nil, harbour: -1, harbour_basin: -1, founding_map: true, heights: heights, roads: zero, tolls: zero, public_parking: zero,
+    { lift_decks: Map.empty(), lift_vessels: Map.empty(), public_works: Nil, households: new_households(), economy: new_economy(), utility_service: zero, milestones: NativeArray.make_int(64, 0), facility_staff: NativeArray.make_int(count(), 0), facility_expansion: NativeArray.make_int(count(), 0), shelter_demand: None, census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(count(), 0), religion: new_religion(), climate_seed: 0, rain_uniform: false, watch: 1, rain_now: NativeArray.make_int(count(), 0), storms: Nil, air: Ur.Air.empty(), world_seed: -1, volcanic: false, basalt: Map.empty(), volcano_ms: 0, volcanic_shade: Map.empty(), subsea_vent: -1, subsea_depths: Map.empty(), setup: default_setup(), founders: 0, storm_drains: zero, seawalls: zero, seabed: NativeArray.make_int(count(), 0), sea_heights: NativeArray.make_int(count(), 0), ferry_works: NativeArray.make_int(count(), 0), mangrove_harm: NativeArray.make_int(count(), 0), sea_counted: 2, sea_features: 1, sand_changes: NativeArray.make_int(0, 0), sea_run: 0, sand_peak: 0, sand_sector: 0, sand_day: 0, sand_marks: NativeArray.make_int(count(), 0), fishing_policy: zero, private_docks: zero, sea_shoals: NativeArray.make_int(count(), 63), sea_reefs: NativeArray.make_int(count(), 0), fish: NativeArray.make_int(count(), 0), fish_capacity: NativeArray.make_int(count(), 0), fish_last: NativeArray.make_int(count(), 0), fish_alerts: NativeArray.make_int(count(), 0), pump_orders: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, road_shapes: zero, canals: zero, canal_docks: zero, water_bus: zero, water_bus_selection: -1, soil_moisture: 70, pumping_cost: 0, battery: 0, hour: 9, grades: NativeArray.make_int(count(), 0), grade_cover: NativeArray.make_int(count(), 0), parks: NativeArray.make_int(count(), 0), park_tiers: NativeArray.make_int(count(), 0), streetscape: NativeArray.make_int(count(), 0), sidewalk_items: NativeArray.make_int(count(), 0), campus: NativeArray.make_int(count(), 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(count(), 0), empty_homes: NativeArray.make_int(count(), 0), home_arrivals: NativeArray.make_int(count(), 0), housing_search: zero, newcomer_grace: zero, neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(count(), 0), property_status: NativeArray.make_int(count(), 0), property_arrears: NativeArray.make_int(count(), 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(count(), 0), calendar_day: 0, clock_ms: 675, street_day: 0, car_free_days: NativeArray.make_int(count(), 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(count(), 0), quiet_areas: NativeArray.make_int(count(), 0), storefronts: NativeArray.make_int(count(), 0), footfall: NativeArray.make_int(count(), 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, production_freight: Production.empty(), freight: None, shop_stock: zero, shop_sales: zero, shop_delivered: zero, shop_imports: 0, shipments: Nil, harbour: -1, harbour_basin: -1, founding_map: true, heights: heights, roads: zero, tolls: zero, public_parking: zero,
       transit: zero, stops: zero, ferries: zero, ferry_start: -1, service: NativeArray.make_int(count(), 1), bus_headways: NativeArray.make_int(count(), 0), bus_fare: 1,
       zones: zero, density: NativeArray.make_int(count(), 3), nuisance: NativeArray.make_int(count(), 3),
       buildings: zero, housing_losses: zero, business_losses: zero, construction: zero, plants: zero, paused_facilities: zero, pipes: zero, grid: zero, pollution: zero, land_pollution: zero, air_pollution: zero,
@@ -663,7 +723,8 @@ mod Ur.Sim do
     { c with harbour_basin: basin, canals: NativeArray.set_int(c.canals, basin, 1) }
   end
   fn can_land(c : City, i : Int) : Bool do
-    c.harbour < 0 && valid(i) && get(c.heights, i) <= 18 && coastal(c, i) && valid(harbour_basin_site(c, i))
+    c.harbour < 0 && valid(i) && get(c.heights, i) <= 18 && coastal(c, i) &&
+      subsea_ready(c, i) && valid(harbour_basin_site(c, i))
   end
   fn land(c : City, i : Int) : City do
     if can_land(c, i) do
@@ -691,7 +752,7 @@ mod Ur.Sim do
   end
   fn new() : City do
     let zero = NativeArray.make_int(count(), 0)
-    seed({ lift_decks: Map.empty(), lift_vessels: Map.empty(), public_works: Nil, households: new_households(), economy: new_economy(), utility_service: zero, milestones: NativeArray.make_int(64, 0), facility_staff: NativeArray.make_int(count(), 0), facility_expansion: NativeArray.make_int(count(), 0), shelter_demand: None, census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(count(), 0), religion: new_religion(), climate_seed: 0, rain_uniform: false, watch: 0, rain_now: NativeArray.make_int(count(), 0), storms: Nil, air: Ur.Air.empty(), world_seed: -1, volcanic: false, basalt: Map.empty(), volcano_ms: 0, volcanic_shade: Map.empty(), setup: default_setup(), founders: 0, storm_drains: zero, seawalls: zero, seabed: NativeArray.make_int(count(), 0), sea_heights: NativeArray.make_int(count(), 0), ferry_works: NativeArray.make_int(count(), 0), mangrove_harm: NativeArray.make_int(count(), 0), sea_counted: 2, sea_features: 1, sand_changes: NativeArray.make_int(0, 0), sea_run: 0, sand_peak: 0, sand_sector: 0, sand_day: 0, sand_marks: NativeArray.make_int(count(), 0), fishing_policy: zero, private_docks: zero, sea_shoals: NativeArray.make_int(count(), 63), sea_reefs: NativeArray.make_int(count(), 0), fish: NativeArray.make_int(count(), 0), fish_capacity: NativeArray.make_int(count(), 0), fish_last: NativeArray.make_int(count(), 0), fish_alerts: NativeArray.make_int(count(), 0), pump_orders: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, road_shapes: zero, canals: zero, canal_docks: zero, water_bus: zero, water_bus_selection: -1, soil_moisture: 70, pumping_cost: 0, battery: 0, hour: 9, grades: NativeArray.make_int(count(), 0), grade_cover: NativeArray.make_int(count(), 0), parks: NativeArray.make_int(count(), 0), park_tiers: NativeArray.make_int(count(), 0), streetscape: NativeArray.make_int(count(), 0), sidewalk_items: NativeArray.make_int(count(), 0), campus: NativeArray.make_int(count(), 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(count(), 0), empty_homes: NativeArray.make_int(count(), 0), home_arrivals: NativeArray.make_int(count(), 0), housing_search: zero, newcomer_grace: zero, neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(count(), 0), property_status: NativeArray.make_int(count(), 0), property_arrears: NativeArray.make_int(count(), 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(count(), 0), calendar_day: 0, clock_ms: 0, street_day: 0, car_free_days: NativeArray.make_int(count(), 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(count(), 0), quiet_areas: NativeArray.make_int(count(), 0), storefronts: NativeArray.make_int(count(), 0), footfall: NativeArray.make_int(count(), 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, production_freight: Production.empty(), freight: None, shop_stock: NativeArray.make_int(count(), 0), shop_sales: NativeArray.set_int(NativeArray.make_int(count(), 0), index(8, 20), 8), shop_delivered: NativeArray.make_int(count(), 0), shop_imports: 0, shipments: Nil, harbour: index(9, 21), harbour_basin: -1, founding_map: false, heights: terrain_fill(NativeArray.make_int(count(), 0), 0), roads: NativeArray.make_int(count(), 0), tolls: NativeArray.make_int(count(), 0), public_parking: NativeArray.make_int(count(), 0), transit: NativeArray.make_int(count(), 0), stops: NativeArray.make_int(count(), 0), ferries: NativeArray.make_int(count(), 0), ferry_start: -1, service: NativeArray.make_int(count(), 1), bus_headways: NativeArray.make_int(count(), 0), bus_fare: 1,
+    seed({ lift_decks: Map.empty(), lift_vessels: Map.empty(), public_works: Nil, households: new_households(), economy: new_economy(), utility_service: zero, milestones: NativeArray.make_int(64, 0), facility_staff: NativeArray.make_int(count(), 0), facility_expansion: NativeArray.make_int(count(), 0), shelter_demand: None, census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(count(), 0), religion: new_religion(), climate_seed: 0, rain_uniform: false, watch: 0, rain_now: NativeArray.make_int(count(), 0), storms: Nil, air: Ur.Air.empty(), world_seed: -1, volcanic: false, basalt: Map.empty(), volcano_ms: 0, volcanic_shade: Map.empty(), subsea_vent: -1, subsea_depths: Map.empty(), setup: default_setup(), founders: 0, storm_drains: zero, seawalls: zero, seabed: NativeArray.make_int(count(), 0), sea_heights: NativeArray.make_int(count(), 0), ferry_works: NativeArray.make_int(count(), 0), mangrove_harm: NativeArray.make_int(count(), 0), sea_counted: 2, sea_features: 1, sand_changes: NativeArray.make_int(0, 0), sea_run: 0, sand_peak: 0, sand_sector: 0, sand_day: 0, sand_marks: NativeArray.make_int(count(), 0), fishing_policy: zero, private_docks: zero, sea_shoals: NativeArray.make_int(count(), 63), sea_reefs: NativeArray.make_int(count(), 0), fish: NativeArray.make_int(count(), 0), fish_capacity: NativeArray.make_int(count(), 0), fish_last: NativeArray.make_int(count(), 0), fish_alerts: NativeArray.make_int(count(), 0), pump_orders: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, road_shapes: zero, canals: zero, canal_docks: zero, water_bus: zero, water_bus_selection: -1, soil_moisture: 70, pumping_cost: 0, battery: 0, hour: 9, grades: NativeArray.make_int(count(), 0), grade_cover: NativeArray.make_int(count(), 0), parks: NativeArray.make_int(count(), 0), park_tiers: NativeArray.make_int(count(), 0), streetscape: NativeArray.make_int(count(), 0), sidewalk_items: NativeArray.make_int(count(), 0), campus: NativeArray.make_int(count(), 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(count(), 0), empty_homes: NativeArray.make_int(count(), 0), home_arrivals: NativeArray.make_int(count(), 0), housing_search: zero, newcomer_grace: zero, neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(count(), 0), property_status: NativeArray.make_int(count(), 0), property_arrears: NativeArray.make_int(count(), 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(count(), 0), calendar_day: 0, clock_ms: 0, street_day: 0, car_free_days: NativeArray.make_int(count(), 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(count(), 0), quiet_areas: NativeArray.make_int(count(), 0), storefronts: NativeArray.make_int(count(), 0), footfall: NativeArray.make_int(count(), 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, production_freight: Production.empty(), freight: None, shop_stock: NativeArray.make_int(count(), 0), shop_sales: NativeArray.set_int(NativeArray.make_int(count(), 0), index(8, 20), 8), shop_delivered: NativeArray.make_int(count(), 0), shop_imports: 0, shipments: Nil, harbour: index(9, 21), harbour_basin: -1, founding_map: false, heights: terrain_fill(NativeArray.make_int(count(), 0), 0), roads: NativeArray.make_int(count(), 0), tolls: NativeArray.make_int(count(), 0), public_parking: NativeArray.make_int(count(), 0), transit: NativeArray.make_int(count(), 0), stops: NativeArray.make_int(count(), 0), ferries: NativeArray.make_int(count(), 0), ferry_start: -1, service: NativeArray.make_int(count(), 1), bus_headways: NativeArray.make_int(count(), 0), bus_fare: 1,
       zones: NativeArray.make_int(count(), 0), density: NativeArray.make_int(count(), 3), nuisance: NativeArray.make_int(count(), 3), buildings: NativeArray.make_int(count(), 0), housing_losses: NativeArray.make_int(count(), 0), business_losses: NativeArray.make_int(count(), 0), construction: NativeArray.make_int(count(), 0),
       plants: NativeArray.set_int(NativeArray.set_int(NativeArray.make_int(count(), 0), index(8, 21), 1), index(9, 22), 3),
       paused_facilities: NativeArray.make_int(count(), 0), pipes: NativeArray.set_int(NativeArray.make_int(count(), 0), index(9, 21), 1), grid: NativeArray.make_int(count(), 0), pollution: NativeArray.make_int(count(), 0), land_pollution: NativeArray.make_int(count(), 0), air_pollution: NativeArray.make_int(count(), 0), trash: 0, waste_live: false, waste_bins: NativeArray.make_int(count(), 0), waste_stock: NativeArray.make_int(count(), 0), waste_sites: NativeArray.make_int(count(), 0), waste_last: NativeArray.make_int(count(), 0), waste_log: NativeArray.make_int(count(), 0), waste_runs: Nil,
@@ -2235,7 +2296,9 @@ mod Ur.Sim do
       let lot = index(x / 32, z / 32)
       let grade = grade_source(c, lot)
       let overhead = lot != a && lot != b && valid(grade) && (get(c.heights, lot) == 0 || canal_water(c, lot))
-      if canal_gate_closed(c, lot) || (overhead && bridge_air_clearance_at(c, lot, x % 32, z % 32) < draft) do -2 else
+      let basalt = (get(c.heights, lot) > 0 && basalt_depth(c, x, z) > 0) || subsea_owned(c, lot)
+      let volcanic_land = lot != a && lot != b && basalt && unbuilt_ground_height(c, x, z) > 0
+      if volcanic_land || canal_gate_closed(c, lot) || (overhead && bridge_air_clearance_at(c, lot, x % 32, z % 32) < draft) do -2 else
         let lift = if overhead && movable_leaf(c, lot) do grade else lift end
         crossing_navigation_go(c, a, b, at + 1, steps, draft, lift)
       end
@@ -3690,10 +3753,24 @@ mod Ur.Sim do
        (design_x(i % width()) >= 44 - get(c.setup, 4) && design_x(i % width()) <= 49 + get(c.setup, 4) && design_z(i / width()) >= 32 - get(c.setup, 4)))
     else valid(i) && design_x(i % width()) >= 6 && design_x(i % width()) <= 13 && design_z(i / width()) >= 16 && design_z(i / width()) <= 22 end
   end
+  pfn volcanic_geothermal(c : City, i : Int) : Bool do
+    let h = get(c.heights, i)
+    if !c.volcanic || !valid(i) || h < 6 || h > 28 do false else
+      let (cx, cz) = Ur.Caldera.centre(c.world_seed)
+      let dx = i % width() - cx
+      let dz = i / width() - cz
+      let radius = 11 + get(c.setup, 4)
+      dx * dx + dz * dz <= radius * radius
+    end
+  end
+  fn geothermal_capacity(c : City, i : Int) : Int do
+    if volcanic_geothermal(c, i) do 240 else 180 end
+  end
   fn geothermal(c : City, i : Int) : Bool do
-    if c.founding_map do valid(i) && get(c.heights, i) >= 6 && get(c.heights, i) <= 28 &&
+    if volcanic_geothermal(c, i) do true
+    else if c.founding_map do valid(i) && get(c.heights, i) >= 6 && get(c.heights, i) <= 28 &&
       design_x(i % width()) >= 41 - get(c.setup, 4) && design_x(i % width()) <= 49 + get(c.setup, 4) && design_z(i / width()) <= 17 + get(c.setup, 4)
-    else valid(i) && design_x(i % width()) >= 26 && design_x(i % width()) <= 30 && design_z(i / width()) >= 11 && design_z(i / width()) <= 16 end
+    else valid(i) && design_x(i % width()) >= 26 && design_x(i % width()) <= 30 && design_z(i / width()) >= 11 && design_z(i / width()) <= 16 end end
   end
   pfn coast_go(c : City, i : Int, d : Int) : Bool do
     if d >= 4 do false else
@@ -4219,8 +4296,10 @@ mod Ur.Sim do
     if lot == count() || remaining == 0 do total else
       let active = get(c.plants, lot) == kind && generator_online(c, lot) &&
         facility_road_ready(c, roads, kind, lot) && distance(grid, lot) >= 0
-      let units = if kind == 2 do 180 else if kind == 15 do 96 else 360 end end
-      let value = if active do units * facility_staffed(c, lot) / 100 else 0 end
+      let value = if active do
+        let units = if kind == 2 do geothermal_capacity(c, lot) else if kind == 15 do 96 else 360 end end
+        units * facility_staffed(c, lot) / 100
+      else 0 end
       staffed_generation(c, roads, grid, kind, lot + 1, remaining - (if active do 1 else 0 end), total + value)
     end
   end
@@ -4527,7 +4606,7 @@ mod Ur.Sim do
     if !generator || !managed_plant_ready(c, lot) || !utility_site(c, roads, grid, kind, lot) do 0 else
       match kind do
         1 -> clamp(gas, 0, 100)
-        2 -> 180 * facility_staffed(c, lot) / 100
+        2 -> geothermal_capacity(c, lot) * facility_staffed(c, lot) / 100
         12 -> 16 + (wind_at(c, lot)).speed * 2
         13 -> solar_output(c, lot)
         14 -> clamp(nuclear, 0, 360 * facility_staffed(c, lot) / 100)
@@ -6504,6 +6583,10 @@ mod Ur.Sim do
           None -> c
         end
       else if uses_site && Option.is_some(site) do { c with message: "Construction site. Clear it before changing its use." }
+      else if uses_site && tool != 7 && valid(i) && i == c.subsea_vent do
+        { c with message: "The active volcanic vent cannot be developed." }
+      else if uses_site && tool != 7 && get(c.heights, i) > 0 && !subsea_ready(c, i) do
+        { c with message: "Wait for the volcanic shoreline to grow across this parcel." }
       else if frozen do { c with message: "The administrator has frozen city construction. Demolition is still allowed." }
       else if c.harbour >= 0 && valid(i) && ((tool >= 109 && tool <= 113) || tool == 115) do expand_service(c, i, tool)
       else if prerequisite != "" do { c with message: prerequisite ++ "." }
@@ -6522,7 +6605,7 @@ mod Ur.Sim do
       else if surface_parking(c, i) && (road_tool(tool) || facility_kind(tool) > 0 || tool == 2 || tool == 3 || tool == 28 || tool == 117 || tool == 53 || tool == 6 || (tool >= 33 && tool <= 36)) do
         { c with message: "Remove the parking facility to build on the surface." }
       else if get(c.public_parking, i) == 3 && tool == 36 do { c with message: "The underground garage occupies this parcel." }
-      else campus_action(c, i, tool) end end end end end end end end end end end end end end end end end
+      else campus_action(c, i, tool) end end end end end end end end end end end end end end end end end end end
     let next = if get(c.roads, i) == 0 || get(next.roads, i) > 0 || get(c.storm_drains, i) == 0 do next else
       { next with storm_drains: NativeArray.set_int(next.storm_drains, i, 0) } end
     let next = if tool == 7 && get(next.plants, i) == 0 && get(next.buildings, i) == 0 && flood_repair_days(c, i) > 0 do

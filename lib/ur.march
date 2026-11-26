@@ -302,12 +302,16 @@ mod Ur do
   pfn stamp_clock(c : Ur.Sim.City, elapsed : Float) : Ur.Sim.City do
     { c with clock_ms: float_to_int(elapsed *. 1000.0) }
   end
-  pfn restore(p : Play, game : Ur.Save.Game, trips : List(Ur.Citizens.EvacuationTrip)) : Play do
+  pfn restore(p : Play, game : Ur.Save.Game, trips : List(Ur.Citizens.EvacuationTrip),
+    saved_route : Option(List(Ur.Volcano.LavaRun)), new_region : Bool) : Play do
     let c = { game.city with shelter_demand: Ur.Citizens.shelter_demand(trips) }
     let volcano = Ur.Volcano.site(c)
-    let volcano_flow = Ur.Volcano.layout(c, volcano)
-    let volcano_lake = Ur.CalderaLake.form(c)
     let volcano_time = int_to_float(c.volcano_ms) /. 1000.0
+    let volcano_flow = match (c.volcanic && Ur.Volcano.animating(volcano_time), saved_route) do
+      (true, Some(runs)) -> runs
+      _ -> Ur.Volcano.layout(c, volcano)
+    end
+    let volcano_lake = Ur.CalderaLake.form(c)
     let ash = Ur.VolcanoRender.ash(c, volcano_lake, volcano_flow, volcano_time)
     let c = S.with_volcanic_shade(c, ash, clock_phase(c))
     let stats = S.stats(c)
@@ -322,6 +326,10 @@ mod Ur do
       Ur.Volcano.reached(p.volcano_flow, p.volcano_time), Ur.Volcano.reached(volcano_flow, volcano_time))
     -- a loaded or new city may stand on another floor even where the coast matches: rebuild it whole, and measure its shoals
     let (ocean, _) = Ur.Scene.ocean(p.ocean, p.city, c, Ur.Ocean.floor_differs(p.city, c), true)
+    let seeded = if new_region do Ur.Subsea.seed(c, ocean, false) else c end
+    let (ocean, _) = if seeded.subsea_vent != c.subsea_vent do Ur.Scene.ocean(ocean, c, seeded, true, true)
+      else (ocean, false) end
+    let c = seeded
     let c = Ur.Ocean.with_shoals(c, ocean)
     Ur.Scene.map_layer(c, stats, p.layer, layer)
     Ur.Scene.clear_preview(0, p.preview_chunks)
@@ -338,9 +346,10 @@ mod Ur do
     let flood_gates = Ur.Scene.flood_gates(c, Nil, Vk.time(), true)
     -- Move past the lifetime of the old city's spray before drawing the restored city.
     let water_time = p.water_time +. 1.0
-    if Option.is_some(volcano) || Option.is_some(p.volcano) do
+    if Option.is_some(volcano) || Option.is_some(p.volcano) || S.valid(c.subsea_vent) || S.valid(p.city.subsea_vent) do
       Ur.Scene.volcano(c, volcano_lake, volcano_flow, volcano_time, true)
       Ur.VolcanoRender.lights(volcano_lake, volcano_flow, volcano_time)
+      Ur.VolcanoRender.subsea_lights(c, volcano_time)
     else () end
     { p with volcano: volcano, volcano_flow: volcano_flow, volcano_time: volcano_time, volcano_lake: volcano_lake, flood_gates: flood_gates, water_time: water_time, wildlife: Ur.Wildlife.empty(water_time), ocean: ocean, ocean_city: c, ocean_job: None, ocean_dirty: false, sea_job: None, sea_sector: -1, sea_lam: 0.0, sea_stale: false, flood_drill: false, sanitation: Ur.Scene.empty_sanitation(), truck_selected: false, citizen_focus: -1, activity: Nil, fleet: Ur.Fleet.step(c, stats.traffic, Nil, fleet_routes, 0.0, true), fleet_routes: fleet_routes, lift_routes: lift_routes, service_roads: Ur.Lift.empty_service_frame(), city: c, stats: stats, food: food, citizens: citizens, shown: citizens, stepping: None, step_ms: 0, rebuilding: None, stale_rebuilds: retire_rebuild(p.rebuilding, p.stale_rebuilds), stats_wait: { task: None, stale: retire_stats(p.stats_wait), city: c, undo: false }, walk_map: walk_map, day_plan: None, cx: game.cx, cz: game.cz, zoom: game.zoom, yaw: game.yaw,
       paused: game.paused, speed: game.speed, menu_open: false, boot: false, confirm: :nothing,
@@ -364,14 +373,15 @@ mod Ur do
         let volcano_ms = float_to_int(Ur.Volcano.phase(p.volcano_time) *. 1000.0)
         let game = { city: { city with volcano_ms: volcano_ms }, cx: p.cx, cz: p.cz, zoom: p.zoom, yaw: p.yaw, paused: p.paused, speed: p.speed }
         let evacuation = Ur.Citizens.evacuation_trips(Ur.Citizens.snapshot(p.citizens))
-        match Ur.Save.save_session(p.save_path, { game: game, evacuation: evacuation }) do
+        let route = if p.city.volcanic && Ur.Volcano.animating(p.volcano_time) do Some(p.volcano_flow) else None end
+        match Ur.Save.save_session_with_route(p.save_path, { game: game, evacuation: evacuation }, route) do
           Ok(_) -> { p with saved: true, notice: "City saved.", confirm: :nothing }
           Err(error) -> { p with notice: error, confirm: :nothing }
         end
       :load_city ->
         if !p.boot && p.confirm != :load_city do { p with confirm: :load_city, notice: "Click Load again to replace the current city." } else
-          match Ur.Save.load_session(p.save_path) do
-            Ok(session) -> restore(p, session.game, session.evacuation)
+          match Ur.Save.load_session_with_route(p.save_path) do
+            Ok((session, route)) -> restore(p, session.game, session.evacuation, route, false)
             Err(error) -> { p with notice: error, confirm: :nothing }
           end
         end
@@ -455,7 +465,7 @@ mod Ur do
         else if setup_row == 17 do { p with world_seed: int_mod_euclid(Authority.must(System.now_ms()), 2147483646) + 1 }
         else { p with setup: setup } end end
       let p = if setup_row == 19 do
-        restore(p, { city: S.unclaimed_setup(p.world_seed, p.setup), cx: S.overview_x(), cz: S.overview_z(), zoom: S.overview_zoom(), yaw: 0.55, paused: true, speed: 1 }, Nil)
+        restore(p, { city: S.unclaimed_setup(p.world_seed, p.setup), cx: S.overview_x(), cz: S.overview_z(), zoom: S.overview_zoom(), yaw: 0.55, paused: true, speed: 1 }, Nil, None, true)
       else p end
       let action = if was_setup || setup_row >= 0 || was_lighting do :nothing
         else if pressed(keys, p.keys, 15) do (if p.boot do :quit else :resume end)
@@ -467,7 +477,7 @@ mod Ur do
       if !next.boot do Ur.Scene.daylight(next.elapsed, sky) else () end
       Ur.Scene.sea_state(Ur.Sea.state_at(next.city, next.elapsed), next.water_time)
       let ash = Ur.VolcanoRender.ash(next.city, next.volcano_lake, next.volcano_flow, next.volcano_time)
-      Ur.Scene.clouds(sky, next.elapsed, next.cloud_offset, next.peaks, next.city, next.forced_weather < 0 && !S.uniform_rain(next.city), ash)
+      Ur.Scene.clouds(sky, next.elapsed, next.cloud_offset, next.peaks, next.city, next.forced_weather < 0 && !S.uniform_rain(next.city), ash, next.yaw)
       Ur.WildlifeRender.hide(Ur.Scene.wildlife_base())
       Ur.Scene.camera(next.cx, next.cz, next.zoom, if h > 0.0 do w /. h else 1.6 end, next.yaw)
       if Strata.Render.draw_ui(if next.confirm == :setup do Menu.draw_setup(next.setup, next.world_seed, next.seed_focus) else if next.confirm == :lighting do Menu.draw_lighting(next.lighting) else Menu.draw(p.boot, next.saved, next.confirm, next.notice, mx, my, next.city.world_seed, S.sea_storms(next.city)) end end) do () else Ur.AppError.stop("Menu overflow") end
@@ -881,17 +891,20 @@ mod Ur do
       let hour_now = S.street_hour(elapsed)
       let hours_gone = (hour_now - hour_before + 24) % 24
       let c = if hours_gone > 0 do S.battery_hours(c, p.stats, hours_gone) else c end
-      let volcano_time = if paused || Option.is_none(p.volcano) do p.volcano_time else p.volcano_time +. dt end
+      let has_vent = Option.is_some(p.volcano) || S.valid(c.subsea_vent)
+      let volcano_time = if paused || !has_vent do p.volcano_time else p.volcano_time +. dt end
       let erupting = Option.is_some(p.volcano) && Ur.Volcano.animating(volcano_time)
       let activity_changed = Ur.Volcano.animating(p.volcano_time) != Ur.Volcano.animating(volcano_time)
       let lava_tick = erupting && float_to_int(p.volcano_time *. 8.0) != float_to_int(volcano_time *. 8.0)
       let reroute = erupting && (activity_changed || ((paint || undone) && Ur.Volcano.spreading(volcano_time)))
       let flow = if reroute do Ur.Volcano.layout(c, p.volcano) else p.volcano_flow end
-      let (c, lava_damage) = if lava_tick || (erupting && (paint || undone)) do
-        Ur.Volcano.burn(c, flow, volcano_time)
-      else (c, false) end
-      let flow = if lava_damage do Ur.Volcano.regrade(c, flow) else flow end
-      let shade_tick = c.volcanic && (paint || undone || midnight || hours_gone > 0 ||
+      let (c, burned) = if lava_tick || (erupting && (paint || undone)) do
+        Ur.Volcano.burn_hits(c, flow, volcano_time)
+      else (c, Nil) end
+      let lava_damage = !List.is_empty(burned)
+      let undo = Ur.Volcano.preserve_burns(undo, burned)
+      let flow = if lava_damage do Ur.Volcano.regrade(c, flow, burned) else flow end
+      let shade_tick = has_vent && (paint || undone || midnight || hours_gone > 0 ||
         float_to_int(volcano_time) != float_to_int(p.volcano_time))
       let c = if shade_tick do
         let ash = Ur.VolcanoRender.ash(c, p.volcano_lake, p.volcano_flow, volcano_time)
@@ -967,7 +980,9 @@ mod Ur do
       let flow = if !reroute && terrain_changed && Ur.Volcano.spreading(p.volcano_time) do
         Ur.Volcano.layout(c, p.volcano)
       else flow end
-      let (c, settled) = Ur.Volcano.settle(c, flow, p.volcano_time, volcano_time)
+      let (c, land_settled) = Ur.Volcano.settle(c, flow, p.volcano_time, volcano_time)
+      let (c, sea_settled) = Ur.Subsea.settle(c, p.ocean, p.volcano_time, volcano_time)
+      let settled = land_settled || sea_settled
       let volcano_flow = if settled do Ur.Volcano.layout(c, p.volcano) else flow end
       let volcano_lake = if terrain_changed || settled do Ur.CalderaLake.form(c) else p.volcano_lake end
       let scene_changed = terrain_changed || settled || activity_changed || lava_damage
@@ -1002,6 +1017,7 @@ mod Ur do
       let (ocean, ocean_city, ocean_job, rebuilt) = poll_ocean(p.ocean, p.ocean_city, p.ocean_job)
       -- a new sea floor: the ferries feel its shoals at once
       let c = if rebuilt do Ur.Ocean.with_shoals(c, ocean) else c end
+      let lift_routes = if rebuilt do Ur.Lift.routes(c, food) else lift_routes end
       -- a storm that moved sand changes the floor too
       let ocean_dirty = p.ocean_dirty || scene_changed || c.sand_day != ocean_city.sand_day
       let (ocean_job, ocean_dirty) = if ocean_dirty && Option.is_none(ocean_job) do (start_ocean(ocean, ocean_city, c), false) else (ocean_job, ocean_dirty) end
@@ -1137,7 +1153,7 @@ mod Ur do
       Ur.Scene.citizen_vehicles(c, walk_map, Ur.Citizens.visible_actors(citizens), Ur.Citizens.visible_actors(p.shown), night, !scene_changed && p.frame > 0, section.after > 0)
       let truck_selected = truck_selected && sanitation.driver >= 0 && sanitation.pickup == p.sanitation.pickup && !undone
       let citizen_stats = Ur.Citizens.indexed_counts(c, citizens)
-      if layer != p.layer || (stats_landed && Ur.Layers.is_utility(layer)) || (layer > 0 && (flood_day || religion_event)) || (midnight && (layer == 39 || layer == 29 || layer == 30 || layer == 26 || layer == 4 || layer == 3 || layer == 9 || layer == 32 || layer == 33 || layer == 34 || Ur.Layers.is_utility(layer))) || (layer > 0 && (paint || undone || policy_changed || day_changed || (due && (layer == 3 || layer == 4 || layer == 9 || Ur.Layers.is_utility(layer) || layer >= 12)))) do Ur.Scene.map_layer(c, st, p.layer, layer) else () end
+      if layer != p.layer || (stats_landed && Ur.Layers.is_utility(layer)) || (layer > 0 && (flood_day || religion_event || settled)) || (midnight && (layer == 39 || layer == 29 || layer == 30 || layer == 26 || layer == 4 || layer == 3 || layer == 9 || layer == 32 || layer == 33 || layer == 34 || Ur.Layers.is_utility(layer))) || (layer > 0 && (paint || undone || policy_changed || day_changed || (due && (layer == 3 || layer == 4 || layer == 9 || Ur.Layers.is_utility(layer) || layer >= 12)))) do Ur.Scene.map_layer(c, st, p.layer, layer) else () end
       Ur.Scene.camera(cx, cz, zoom, if h > 0.0 do w /. h else 1.6 end, yaw)
       let weather = S.current_weather(c)
       let weather_time = int_to_float(c.month * S.days_per_month() + c.calendar_day) *. S.day_seconds() +. elapsed
@@ -1146,16 +1162,20 @@ mod Ur do
       let sea = Ur.Sea.state_at(c, elapsed)
       -- the water runs on real seconds while the city runs, whatever its speed, and stands still while it is paused
       let water_time = if paused do p.water_time else p.water_time +. dt end
-      if Option.is_some(p.volcano) do
+      if has_vent do
         let refresh = scene_changed || section.before != section.after
         let animated = Ur.Volcano.animating(p.volcano_time) || Ur.Volcano.animating(volcano_time)
         let tick = float_to_int(p.volcano_time *. 8.0) != float_to_int(volcano_time *. 8.0)
         if refresh || (section.after == 0 && animated && tick) do
-          Ur.Scene.volcano(c, if section.after == 0 do volcano_lake else None end,
+          let shown_city = if section.after == 0 do c else { c with subsea_vent: -1 } end
+          Ur.Scene.volcano(shown_city, if section.after == 0 do volcano_lake else None end,
             if section.after == 0 do volcano_flow else Nil end, volcano_time, refresh)
         else () end
       else () end
-      if section.after == 0 do Ur.VolcanoRender.lights(volcano_lake, volcano_flow, volcano_time) else () end
+      if section.after == 0 do
+        Ur.VolcanoRender.lights(volcano_lake, volcano_flow, volcano_time)
+        Ur.VolcanoRender.subsea_lights(c, volcano_time)
+      else () end
       Ur.Scene.sea_state(sea, water_time)
       let (sea_job, sea_done) = poll_sea(p.sea_job)
       let (sea_exposure, sea_field) = match sea_done do
@@ -1180,7 +1200,7 @@ mod Ur do
       let drift = game_dt *. int_to_float(wind.speed) /. 3.6
       let cloud_offset = (cloud_x +. Math.cos(wind.heading) *. drift, cloud_z +. Math.sin(wind.heading) *. drift)
       let ash = if section.after == 0 do Ur.VolcanoRender.ash(c, volcano_lake, volcano_flow, volcano_time) else Nil end
-      Ur.Scene.clouds(sky, elapsed, cloud_offset, p.peaks, c, p.forced_weather < 0 && !S.uniform_rain(c), ash)
+      Ur.Scene.clouds(sky, elapsed, cloud_offset, p.peaks, c, p.forced_weather < 0 && !S.uniform_rain(c), ash, yaw)
       let hud = Ur.Hud.draw(c, st, tool, group, page, layer, hovered, inspect, mx, my, reason, sidebar_visible, sidebar_tab, finance_view, crime_focus, council_focus, religion_site, religion_choice, paused, speed, S.street_hour(elapsed), weather, weather_time, citizen_stats, if guided do "" else Build.caption(preview, preview_tool) end, !List.is_empty(undo), activity)
       let hud = if c.harbour >= 0 && !sidebar_visible && (Build.street(tool) || S.grade_tool(tool)) do Ur.Hud.planner(hud, draft, preview, tool) else hud end
       let hud = Ur.Hud.frame_rate(hud, fps.value)
@@ -1503,7 +1523,9 @@ mod Ur do
       -- UR_WORLD_SEED=n starts on the unclaimed region generated from seed n, for screenshots of a generated map
       let volcano_demo = Authority.must(Env.get_int("UR_VOLCANO_VIEW", 0))
       let volcano_view = volcano_demo > 0
-      let world_seed = Authority.must(Env.get_int("UR_WORLD_SEED", if volcano_view do Ur.Caldera.preview_seed() else 0 end))
+      let subsea_view = volcano_demo == 4 || volcano_demo == 5
+      let world_seed = Authority.must(Env.get_int("UR_WORLD_SEED",
+        if subsea_view do Ur.Subsea.preview_seed() else if volcano_view do Ur.Caldera.preview_seed() else 0 end end))
       let c = if world_seed > 0 do S.unclaimed_setup(world_seed, S.default_setup()) else c end
       let demo_hour = Authority.must(Env.get_int("UR_CLOCK_HOUR", if industrial do 12 else -1 end))
       -- UR_WEATHER (0 clear .. 4 severe rain) holds the drawn weather, for screenshots; the simulation keeps its own.
@@ -1559,6 +1581,14 @@ mod Ur do
       if metro && stats.people != Ur.Scenario.metro_people() do Ur.AppError.stop("Metropolitan benchmark: " ++ int_to_string(stats.people) ++ " residents housed, " ++ int_to_string(Ur.Scenario.metro_people()) ++ " asked for (raise UR_METRO_FLOORS)") else () end
       let ocean_start = Authority.must(System.now_ms())
       let ocean = Ur.Ocean.field(c)
+      let c = Ur.Subsea.seed(c, ocean, subsea_view)
+      let c = if volcano_demo == 5 do
+        List.fold_left(List.range(0, 4 + S.subsea_mature_height() / 4), c, fn (city, pulse) ->
+          let end_time = int_to_float(pulse) *. Ur.Volcano.period() +. Ur.Volcano.settle_time()
+          let (grown, _) = Ur.Subsea.settle(city, ocean, end_time -. 1.0, end_time)
+          grown)
+      else c end
+      let ocean = if S.valid(c.subsea_vent) do Ur.Ocean.field(c) else ocean end
       let c = Ur.Ocean.with_shoals(c, ocean)
       Ur.Scene.ocean_all(ocean)
       let sea = Ur.Sea.state_at(c, clock_phase(c))
@@ -1662,7 +1692,10 @@ mod Ur do
           (x -. Math.sin(yaw) *. 10.0, z -. Math.cos(yaw) *. 10.0, 57.0)
         None -> (cx, cz, zoom)
       end
-      if Option.is_some(volcano) && Ur.Scene.tunnel_view(layer, yaw) == 0 do
+      let (cx, cz, zoom) = if subsea_view && S.valid(c.subsea_vent) do
+        (int_to_float(c.subsea_vent % S.width() * 8 + 4), int_to_float(c.subsea_vent / S.width() * 8 + 4), 52.0)
+      else (cx, cz, zoom) end
+      if (Option.is_some(volcano) || S.valid(c.subsea_vent)) && Ur.Scene.tunnel_view(layer, yaw) == 0 do
         Ur.Scene.volcano(c, volcano_lake, volcano_flow, volcano_time, true)
       else () end
       -- UR_ZOOM (metres across half the view) and UR_CENTER_X / UR_CENTER_Z frame a screenshot.

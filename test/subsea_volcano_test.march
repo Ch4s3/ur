@@ -1,0 +1,108 @@
+mod SubseaVolcanoTest do
+  needs IO
+  needs IO.Console
+  alias Ur.Sim as S
+  alias Ur.Ocean as O
+  alias Ur.Subsea as Subsea
+
+  pfn advance(c : Ur.Sim.City, pulse : Int) : (Ur.Sim.City, Bool) do
+    let end_time = int_to_float(pulse) *. Ur.Volcano.period() +. Ur.Volcano.settle_time()
+    Subsea.settle(c, O.field(c), end_time -. 0.5, end_time)
+  end
+
+  pfn reload(c : Ur.Sim.City) : Ur.Sim.City do
+    match Ur.Save.decode(Ur.Save.encode({ city: c, cx: 0.0, cz: 0.0, zoom: 60.0, yaw: 0.55, paused: true, speed: 1 })) do
+      Ok(game) -> game.city
+      Err(message) -> panic(message)
+    end
+  end
+
+  pfn dry_cells(c : Ur.Sim.City, vent : Int) : Int do
+    let x = vent % S.width() * 32 + 16
+    let z = vent / S.width() * 32 + 16
+    List.fold_left(List.range(-20, 21), 0, fn (total, row) ->
+      List.fold_left(List.range(-20, 21), total, fn (n, column) ->
+        let wx = x + column * 4
+        let wz = z + row * 4
+        let lot = S.index(int_div_euclid(wx, 32), int_div_euclid(wz, 32))
+        n + (if S.subsea_owned(c, lot) && Ur.Landscape.height(c, wx, wz) > 0 do 1 else 0 end)))
+  end
+
+  pfn within_mature_radius(c : Ur.Sim.City, x : Int, z : Int) : Bool do
+    let reach = S.subsea_reach() * 8 + 4
+    let cells = List.range(0 - reach, reach)
+    List.all(cells, fn row -> List.all(cells, fn column ->
+      let dx = column * 4 + 2
+      let dz = row * 4 + 2
+      let lot = S.index(int_div_euclid(x + dx, 32), int_div_euclid(z + dz, 32))
+      dx * dx + dz * dz <= 120 * 120 || !S.subsea_owned(c, lot) || Ur.Landscape.height(c, x + dx, z + dz) <= 0))
+  end
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let seed = S.unclaimed_seeded(Subsea.preview_seed())
+    let seabed = O.field(seed)
+    let c = Subsea.seed(seed, seabed, false)
+    let vent = c.subsea_vent
+    Test.assert_true(S.valid(vent) && !c.volcanic, "an eligible seed can have a submarine vent")
+    let x = vent % S.width() * 32 + 16
+    let z = vent / S.width() * 32 + 16
+    let depth = O.depth(O.field(c), x, z)
+    Test.assert_true(depth >= 8 && depth <= 18 && S.get(c.heights, vent) == 0, "the vent begins beneath genuinely shallow water")
+    Test.assert_true((Subsea.seed(seed, seabed, false)).subsea_vent == vent, "the same seed chooses the same vent")
+    Test.assert_true((Subsea.seed({ seed with volcanic: true }, seabed, false)).subsea_vent < 0,
+      "a map with a land volcano gets no additional submarine vent")
+    let (first, grew) = advance(c, 0)
+    let raised = O.field(first)
+    Test.assert_true(grew && S.get(first.heights, vent) == 0 && O.depth(raised, x, z) < depth,
+      "the first eruption lifts the seabed while the summit remains underwater")
+    Test.assert_true(O.kind(raised, x, z) == 5 && O.seabed_touched(c, first), "the reef is volcanic rock and invalidates the ocean field")
+    let cell = (z / 4 + O.ring() * 8) * O.cells_wide() + x / 4 + O.ring() * 8
+    let storm = { first with sand_changes: NativeArray.make_int(1, cell * 512 + 66) }
+    Test.assert_eq_int(O.depth(O.field(storm), x, z), O.depth(raised, x, z), "storm-driven sand cannot erode the solid mound")
+    let saved = reload(first)
+    Test.assert_true(saved.subsea_vent == vent && O.depth(O.field(saved), x, z) == O.depth(raised, x, z),
+      "save and reload preserve the submerged vent and uplift")
+    let restored = Ur.Volcano.keep_shore(first, c)
+    Test.assert_eq_int(O.depth(O.field(restored), x, z), O.depth(raised, x, z), "undo keeps the submerged basalt")
+    let finish = Ur.Volcano.settle_time()
+    let (same, repeated) = Subsea.settle(first, raised, finish, finish +. 1.0)
+    Test.assert_true(!repeated && O.depth(O.field(same), x, z) == O.depth(raised, x, z), "the same pulse cannot deposit twice")
+    let island = List.fold_left(List.range(1, 4), first, fn (city, pulse) ->
+      let (grown, _) = advance(city, pulse)
+      grown)
+    Test.assert_true(S.get(island.heights, vent) > 0 && O.coast_touched(first, island), "successive pulses make real land with a new shoreline")
+    Test.assert_true(O.depth(O.field(island), x, z) == 0 && S.basalt_depth(island, x, z) > 0,
+      "the emergent vent is dry basalt in the terrain and ocean")
+    Test.assert_true(dry_cells(island, vent) < 64, "the first island only dries the irregular central cone within its parcel")
+    Test.assert_true(!S.can_land(island, vent) && (S.act(island, vent, 6)).message == "The active volcanic vent cannot be developed.",
+      "construction cannot flatten a partly emerged vent or alter its summit")
+    let diagonal = 2 * (1 + S.width())
+    Test.assert_eq_int(S.crossing_navigation(island, vent - diagonal, vent + diagonal, 6), -2,
+      "a diagonal water crossing cannot pass through the new island")
+    let saved_island = reload(island)
+    let undone = Ur.Volcano.keep_shore(island, first)
+    Test.assert_true(S.get(saved_island.heights, vent) == S.get(island.heights, vent) &&
+      S.basalt_depth(saved_island, x, z) == S.basalt_depth(island, x, z) &&
+      S.get(undone.heights, vent) == S.get(island.heights, vent), "save, reload and undo preserve the emerged land")
+    let (taller, still_growing) = advance(island, 4)
+    let kept = Ur.Volcano.keep_shore(taller, island)
+    Test.assert_true(still_growing && S.get(taller.heights, vent) > S.get(island.heights, vent) &&
+      S.get(kept.heights, vent) == S.get(taller.heights, vent), "undo preserves later growth of the emerged cone")
+    Test.assert_true(dry_cells(taller, vent) > dry_cells(island, vent), "another pulse pushes the fine shoreline outward")
+    let later = List.fold_left(List.range(5, 18), taller, fn (city, pulse) ->
+      let end_time = int_to_float(pulse) *. Ur.Volcano.period() +. Ur.Volcano.settle_time()
+      let (grown, _) = Subsea.settle(city, seabed, end_time -. 0.5, end_time)
+      grown)
+    Test.assert_true(S.get(later.heights, vent) > S.get(later.heights, S.neighbour(vent, 0)) &&
+      dry_cells(later, vent) > 64, "a mature cone has a higher summit and grows across parcel boundaries")
+    let (finished, changed) = Subsea.settle(later, seabed,
+      18.0 *. Ur.Volcano.period() +. finish -. 0.5, 18.0 *. Ur.Volcano.period() +. finish)
+    Test.assert_true(!changed && S.subsea_peak(finished) == S.subsea_mature_height() && within_mature_radius(finished, x, z),
+      "from the final eruption onward, the cone's shoreline stays within thirty metres of the vent")
+    let protected = { c with seawalls: NativeArray.set_int(c.seawalls, vent, 1) }
+    let (blocked, changed) = advance(protected, 0)
+    Test.assert_true(!changed && S.subsea_peak(blocked) == S.subsea_peak(c) &&
+      Map.size(blocked.subsea_depths) == Map.size(c.subsea_depths), "the vent cannot build through later seawall works")
+    Authority.must(println("Subsea volcano: all assertions passed"))
+  end
+end

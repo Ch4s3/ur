@@ -30,7 +30,10 @@ mod Ur.Sand do
     if i < 0 do out else
       let d = NativeArray.get_int(after.floor.depth, i) - NativeArray.get_int(base.floor.depth, i)
       let k = NativeArray.get_int(after.kind, i)
-      let out = if d == 0 && k == NativeArray.get_int(base.kind, i) do out else Cons(i * 512 + k * 128 + S.clamp(d, -63, 63) + 64, out) end
+      let original = NativeArray.get_int(base.kind, i)
+      -- Solid basalt is tracked separately from the storm's moving sediment.
+      let out = if k == 5 || original == 5 || (d == 0 && k == original) do out
+        else Cons(i * 512 + k * 128 + S.clamp(d, -63, 63) + 64, out) end
       diff_go(base, after, i - 1, out)
     end
   end

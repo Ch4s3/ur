@@ -3,6 +3,30 @@ mod VolcanoTest do
   needs IO.Console
   alias Ur.Sim as S
 
+  pfn geothermal(seed : Int) : Unit do
+    let generated = S.unclaimed_setup(seed, S.default_setup())
+    let inactive = { generated with volcanic: false }
+    let fields = List.filter(List.range(0, S.count()), fn lot ->
+      S.geothermal(generated, lot) && !S.geothermal(inactive, lot))
+    Test.assert_true(List.length(fields) >= 10, "a generated volcano adds multiple usable geothermal parcels")
+    let (cx, cz) = Ur.Caldera.centre(seed)
+    Test.assert_true(!S.geothermal(generated, S.index(cx, cz)), "the caldera floor is too high for geothermal construction")
+    Test.assert_true(List.all(fields, fn lot ->
+      let h = S.get(generated.heights, lot)
+      h >= 6 && h <= 28 && S.geothermal_capacity(generated, lot) == 240),
+      "new geothermal sites are low dry foothills with stronger production")
+    let lot = S.index(cx, cz + 9)
+    let harbour = S.neighbour(lot, 0)
+    let grid = NativeArray.set_int(NativeArray.set_int(NativeArray.make_int(S.count(), 0), harbour, 1), lot, 1)
+    let city = { generated with harbour: harbour, heights: NativeArray.make_int(S.count(), 12), grid: grid,
+      roads: NativeArray.set_int(generated.roads, harbour, 1), plants: NativeArray.set_int(generated.plants, lot, 2) }
+    let legacy = { city with volcanic: false }
+    let st = S.stats(city)
+    Test.assert_eq_int(st.generation.geothermal, 240, "the volcano bonus enters the region's generation total")
+    Test.assert_eq_int(S.plant_output(city, st, lot), 240, "the volcano bonus enters the grid at the station")
+    Test.assert_eq_int((S.stats(legacy)).generation.geothermal, 180, "legacy station output stays at 180")
+  end
+
   fn main(_cap : Cap(IO)) : Unit do
     let eligible = List.filter(List.range(0, 256), fn seed -> Ur.Caldera.eligible(seed))
     Test.assert_true(List.length(eligible) >= 20 && List.length(eligible) <= 48, "only a minority of seeds are volcanic")
@@ -10,6 +34,7 @@ mod VolcanoTest do
 
     -- A flat base makes the footprint and profiles independently measurable.
     let seed = Ur.Caldera.preview_seed()
+    geothermal(seed)
     let shape = Ur.Caldera.shape(seed)
     let floor = Ur.Caldera.height(shape, shape.x, shape.z, 20)
     let _ = List.each([(4, 0), (0, 4), (-4, 0), (0, -4)], fn direction ->
@@ -57,6 +82,13 @@ mod VolcanoTest do
       "lava burns the building it reaches and leaves uncontacted buildings alone")
     let (_, repeated_fire) = Ur.Volcano.burn(damaged, [run], 5.0)
     Test.assert_true(!repeated_fire, "an existing ruin is not burned again")
+    let (_, burned_lots) = Ur.Volcano.burn_hits(early, [run], 4.0)
+    let history = Ur.Volcano.preserve_burns([built, c], burned_lots)
+    let restored = head(history)
+    Test.assert_true(S.get(restored.buildings, vent) == 0 && S.fire_rebuilding(restored, vent) &&
+      S.get(restored.shop_stock, vent) == 0 && S.get(restored.buildings, neighbor) == 1,
+      "undo retains lava damage while restoring the unrelated construction snapshot")
+    Test.assert_true(!S.fire_offline(head(List.drop(history, 1)), vent), "an empty historical parcel does not acquire a ruin")
     Test.assert_true(List.is_empty(Ur.Volcano.reached([run], 2.0)) &&
       !List.is_empty(Ur.Volcano.reached([run], 4.0)), "vegetation is cleared only after lava arrives")
     let last = List.fold_left(path, first, fn (_, cell) -> cell)
@@ -87,6 +119,30 @@ mod VolcanoTest do
     Test.assert_true(!Ur.Volcano.hot(44.0, Ur.Volcano.flow_steps()) && Ur.Volcano.hot(44.0, 0), "the distal crust cools first")
     Test.assert_true(!Ur.Volcano.hot(60.0, 0) && Ur.Volcano.hot(Ur.Volcano.period(), 0), "the vent cools before the next pulse")
     let runs = Ur.Volcano.layout(c, site)
+    let cooling = { paved with volcano_ms: 52000 }
+    let session = { game: { city: cooling, cx: 0.0, cz: 0.0, zoom: 88.0, yaw: 0.55, paused: true, speed: 1 }, evacuation: Nil }
+    let (uninterrupted, _) = Ur.Volcano.settle(cooling, runs, 52.0, 53.0)
+    let (rebuilt, _) = Ur.Volcano.settle(cooling, Ur.Volcano.layout(cooling, site), 52.0, 53.0)
+    Test.assert_true(Map.keys(rebuilt.basalt) != Map.keys(uninterrupted.basalt), "the blocked route exercises the cooling reload regression")
+    let saved = Ur.Save.encode_session_with_route(session, Some(runs))
+    match Ur.Save.decode_session_with_route(saved) do
+      Ok((loaded, Some(route))) ->
+        let (resumed, _) = Ur.Volcano.settle(loaded.game.city, route, 52.0, 53.0)
+        Test.assert_true(Ur.Save.encode_session_with_route(session, Some(route)) == saved,
+          "loading preserves the exact route behind an obstruction placed during cooling")
+        Test.assert_true(Map.keys(resumed.basalt) == Map.keys(uninterrupted.basalt), "loading during cooling preserves the final deposit")
+      Ok(_) -> Test.assert_true(false, "the saved active route is available after loading")
+      Err(message) -> Test.assert_true(false, message)
+    end
+    match Ur.Save.decode_session_with_route(Ur.Save.encode_session_with_route(session, Some(Nil))) do
+      Ok((_, Some(Nil))) -> ()
+      _ -> Test.assert_true(false, "an empty active route must stay distinct from a legacy save that omits the route")
+    end
+    let repeated_core : Ur.Volcano.LavaRun = { vent: 0, sections: [{ spine: first, along_x: true, patches: [patch, patch] }] }
+    match Ur.Save.decode_session_with_route(Ur.Save.encode_session_with_route(session, Some([repeated_core]))) do
+      Err(_) -> ()
+      Ok(_) -> Test.assert_true(false, "a save cannot duplicate lava patches within a section")
+    end
     Test.assert_eq_int(List.length(runs), 3, "three different flanks carry lava")
     Test.assert_true(List.all(runs, fn run -> List.length(run.sections) >= 12), "each vent has its own flank route")
     let cells = List.fold_left(runs, Nil, fn (cells, run) ->

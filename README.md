@@ -190,8 +190,9 @@ both road and pipe access. Homes need pipe access before they can grow.
   shows both the fish population and the fishing policy.
 - The harbour imports any remaining food it can afford, up to 160 per month
   plus 192 per connected trade depot.
-- Standard power stations supply 100 power. Geothermal stations supply 180 on
-  the eastern volcanic field. The eastern island lacks mapped freshwater.
+- Standard power stations supply 100 power. Geothermal stations supply 180
+  on the eastern field and 240 on the low foothills of a generated volcano.
+  The eastern island lacks mapped freshwater.
 
 Power, water, and sewage have limits on individual segments. New homes must
 reserve utility capacity and have access to food before construction starts.
@@ -211,7 +212,7 @@ Use **Lay power line** to extend the starter grid. Generators need grid access
 and a service road. New development needs both road and grid access.
 
 - Wind and solar output vary by month. Gas and nuclear need a monthly fuel
-  budget. Geothermal uses the eastern volcanic field. Biogas consumes collected
+  budget. Geothermal uses mapped fields. Biogas consumes collected
   trash and supplies one unit of electricity per unit digested.
 - In **Utilities / Waste**, place small trash cans or underground bins along
   streets. Underground bins hold more and load faster, but occupy one curb
@@ -453,9 +454,20 @@ where the flow reached. Lava hitting the sea sends up a cloud of white
 steam that drifts downwind and can leave a permanent basalt shelf. Later
 eruptions follow the raised surface.
 
+Some seeded regions also have a shallow offshore vent. Steam marks its
+eruptions while successive pulses build up the seabed. If the mound
+breaks the surface, it becomes a rocky basalt island with a shoreline
+that grows out from the cone. In an archipelago, the vent site aims about
+90 metres beyond the smallest island along the chain. It reserves a
+channel around the fully grown cone, aiming for 24 metres of open water
+and allowing about 19 metres where the map is tight. A region with no
+suitable site skips the submarine vent.
+
 Run `UR_VOLCANO_VIEW=1 ./run.sh` to see an active eruption,
-`UR_VOLCANO_VIEW=2 ./run.sh` to see the deposits after three eruptions, or
+`UR_VOLCANO_VIEW=2 ./run.sh` to see the deposits after three eruptions, and
 `UR_VOLCANO_VIEW=3 ./run.sh` for a close-up of steam at the coast.
+Use `UR_VOLCANO_VIEW=4 ./run.sh` to see the underwater vent erupt and
+`UR_VOLCANO_VIEW=5 ./run.sh` to see the island it builds.
 
 ## Map layers
 

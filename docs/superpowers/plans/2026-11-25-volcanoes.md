@@ -104,3 +104,11 @@ rock, scoria, ash, and scrub. Allow vegetation on sheltered patches and keep
 black basalt on the actual deposits. Check contact timing, dispersal, and
 the mix of terrain materials with the focused volcano tests and a native
 preview.
+
+## Shallow offshore vents
+
+Seed rare vents on shallow, open shelves using the generated ocean depth.
+Use the eruption clock to build up a submerged basalt mound and show steam
+above it. When a parcel breaches the surface, move it into the terrain
+height and basalt layers. Persist the vent and submerged mound, carry
+both through construction undo, and rebuild the ocean after each pulse.

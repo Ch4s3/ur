@@ -310,9 +310,9 @@ mod Ur.Landscape do
       let wx = i % S.width() * 32 + x
       let wz = i / S.width() * 32 + z
       let h = height(c, wx, wz)
-      let bare = h >= 42 && S.volcanic_highland(c, i % S.width(), i / S.width()) &&
+      let bare = S.subsea_owned(c, i) || (h >= 42 && S.volcanic_highland(c, i % S.width(), i / S.width()) &&
         volcanic_cover(wx, wz, h, slope(h, height(c, wx - 4, wz), height(c, wx + 4, wz),
-          height(c, wx, wz - 4), height(c, wx, wz + 4))) >= volcanic_ash_material()
+          height(c, wx, wz - 4), height(c, wx, wz + 4))) >= volcanic_ash_material())
       -- what grows here follows the island (Ur.Flora): zone, wind side, coast
       let kind = Ur.Flora.pick_at(site, c, h, seed)
       let stand = Ur.Flora.mangrove_spot(c, i, h)

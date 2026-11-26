@@ -1,0 +1,165 @@
+-- Locate the growing tip of an island chain on its real, generated coast.
+mod Ur.SubseaSite do
+  alias Ur.Sim as S
+
+  type Island = { parcels : List(Int), area : Int, sum_x : Int, sum_z : Int }
+  type Bearing = { from_x : Float, from_z : Float, east : Float, south : Float, tip : Float }
+  type CoastCell = { dx : Int, dz : Int, distance : Int }
+
+  pfn collect(c : Ur.Sim.City, pending : List(Int), seen : NativeIntArr, island : Island) : (NativeIntArr, Island) do
+    match pending do
+      Nil -> (seen, island)
+      Cons(lot, rest) ->
+        let (pending, seen) = List.fold_left([0, 1, 2, 3], (rest, seen), fn (state, side) ->
+          let (pending, seen) = state
+          let next = S.neighbour(lot, side)
+          if S.valid(next) && S.get(c.heights, next) > 0 && S.get(seen, next) == 0 do
+            (Cons(next, pending), NativeArray.set_int(seen, next, 1))
+          else state end)
+        collect(c, pending, seen, { parcels: Cons(lot, island.parcels), area: island.area + 1,
+          sum_x: island.sum_x + lot % S.width(), sum_z: island.sum_z + lot / S.width() })
+    end
+  end
+
+  pfn islands(c : Ur.Sim.City) : List(Island) do
+    let (_, islands) = List.fold_left(List.range(0, S.count()), (NativeArray.make_int(S.count(), 0), Nil), fn (state, lot) ->
+      let (seen, islands) = state
+      if S.get(c.heights, lot) <= 0 || S.get(seen, lot) > 0 do state else
+        let (seen, island) = collect(c, [lot], NativeArray.set_int(seen, lot, 1), { parcels: Nil, area: 0, sum_x: 0, sum_z: 0 })
+        (seen, if island.area >= 12 do Cons(island, islands) else islands end)
+      end)
+    islands
+  end
+
+  pfn centre(island : Island) : (Float, Float) do
+    let area = int_to_float(island.area)
+    (int_to_float(island.sum_x) /. area, int_to_float(island.sum_z) /. area)
+  end
+
+  pfn distance_sq(a : Island, b : Island) : Float do
+    let (ax, az) = centre(a)
+    let (bx, bz) = centre(b)
+    let dx = ax -. bx
+    let dz = az -. bz
+    dx *. dx +. dz *. dz
+  end
+
+  pfn bearing(island : Island, x : Float, z : Float) : Bearing do
+    let (from_x, from_z) = centre(island)
+    let length = Math.sqrt(x *. x +. z *. z)
+    let east = if length > 0.0 do x /. length else 1.0 end
+    let south = if length > 0.0 do z /. length else 0.0 end
+    let tip = List.fold_left(island.parcels, 0.0, fn (tip, lot) ->
+      let along = (int_to_float(lot % S.width()) -. from_x) *. east +.
+        (int_to_float(lot / S.width()) -. from_z) *. south
+      Math.max_float(tip, along))
+    { from_x: from_x, from_z: from_z, east: east, south: south, tip: tip }
+  end
+
+  pfn open_parcel(c : Ur.Sim.City, lot : Int) : Bool do
+    S.canal_open_sea(c, lot) && lot != c.harbour && lot != c.harbour_basin &&
+      S.canal_approach_mask(c, lot) == 0 && S.get(c.canal_docks, lot) == 0 && S.get(c.ferries, lot) == 0 &&
+      S.get(c.seabed, lot) == 0 && S.get(c.plants, lot) == 0 && S.get(c.grade_cover, lot) == 0 &&
+      S.get(c.roads, lot) == 0 && S.get(c.transit, lot) == 0 && S.get(c.pipes, lot) == 0 &&
+      S.get(c.grid, lot) == 0 && S.public_work_stage(c, lot) == 0
+  end
+
+  pfn open_water(c : Ur.Sim.City, ocean : Ur.Ocean.Field, x : Int, z : Int) : Bool do
+    open_parcel(c, S.index(x, z)) &&
+      List.all([(6, 6), (6, 26), (26, 6), (26, 26), (16, 16)], fn offset ->
+        let (dx, dz) = offset
+        let wx = x * 32 + dx
+        let wz = z * 32 + dz
+        let bottom = Ur.Ocean.kind(ocean, wx, wz)
+        Ur.Ocean.depth(ocean, wx, wz) > 0 && (bottom == 0 || bottom == 2))
+  end
+
+  pfn mature_channel(c : Ur.Sim.City) : List(CoastCell) do
+    -- Sample the mature shoreline at the same cell centres as the ocean.
+    -- Translation leaves this seed's cone profile unchanged.
+    let cone = { c with subsea_vent: 0 }
+    let width = 120
+    let cells = List.range(0, width * width)
+    let land = List.fold_left(cells, NativeArray.make_int(width * width, 0), fn (land, cell) ->
+      let dx = (cell % width - width / 2) * 4 + 2
+      let dz = (cell / width - width / 2) * 4 + 2
+      if S.subsea_profile(cone, 16 + dx, 16 + dz, S.subsea_mature_height()) > 0 do
+        NativeArray.set_int(land, cell, 1)
+      else land end)
+    let distances = Strata.Seabed.coast_distance(land, width, width)
+    List.filter_map(cells, fn cell ->
+      -- Include about 24 metres beyond the shore, allowing for the diagonal
+      -- distance approximation and the edges of the one-metre cells.
+      let distance = NativeArray.get_int(distances, cell)
+      if distance <= 80 do
+        Some({ dx: (cell % width - width / 2) * 4 + 2, dz: (cell / width - width / 2) * 4 + 2, distance: distance })
+      else None end)
+  end
+
+  pfn choose_ahead(c : Ur.Sim.City, ocean : Ur.Ocean.Field, line : Bearing, water : List(CoastCell), gap : Int) : Int do
+    let buffer = List.filter(List.range(0, 81), fn cell ->
+      let dx = cell % 9 - 4
+      let dz = cell / 9 - 4
+      dx * dx + dz * dz <= 16)
+    let (chosen, _) = List.fold_left(List.range(0, S.count()), (-1, 0.0), fn (best, lot) ->
+      let (chosen, rating) = best
+      let x = lot % S.width()
+      let z = lot / S.width()
+      let edge = Math.min_int(Math.min_int(x, S.width() - 1 - x), Math.min_int(z, S.depth() - 1 - z))
+      let dx = int_to_float(x) -. line.from_x
+      let dz = int_to_float(z) -. line.from_z
+      let ahead = dx *. line.east +. dz *. line.south
+      let cross = Math.abs(dx *. line.south -. dz *. line.east)
+      if edge < 3 || ahead < line.tip +. 3.0 || cross > ahead *. 1.25 do best else
+        let wx = x * 32 + 16
+        let wz = z * 32 + 16
+        let shelf = Ur.Ocean.shelf_depth(ocean, wx, wz)
+        let score = Math.abs(ahead -. line.tip -. 11.0) +. cross *. 1.6 +.
+          int_to_float(int_abs(shelf - 28)) *. 0.06
+        if shelf < 18 || (chosen >= 0 && score >= rating) do best else
+          let spread = [-1, 0, 1]
+          let fits = List.all(buffer, fn cell ->
+            let px = x + cell % 9 - 4
+            let pz = z + cell / 9 - 4
+            px < 0 || pz < 0 || px >= S.width() || pz >= S.depth() || open_parcel(c, S.index(px, pz))) &&
+            List.all(spread, fn dz -> List.all(spread, fn dx -> open_water(c, ocean, x + dx, z + dz))) &&
+            List.all(water, fn cell ->
+              let x = wx + cell.dx
+              let z = wz + cell.dz
+              let in_map = x >= 0 && z >= 0 && x < S.width() * 32 && z < S.depth() * 32
+              (cell.distance > 0 || in_map) && (cell.distance > gap || Ur.Ocean.depth(ocean, x, z) > 0))
+          if fits do (lot, score) else best end
+        end
+      end)
+    chosen
+  end
+
+  pfn offshore(c : Ur.Sim.City, ocean : Ur.Ocean.Field, bearings : List(Bearing)) : Int do
+    let water = mature_channel(c)
+    -- Prefer a 24-metre channel. A narrow map can still use a site with
+    -- roughly 19 metres of open water when the entire cone fits.
+    List.fold_left([80, 64], -1, fn (chosen, gap) ->
+      List.fold_left(bearings, chosen, fn (chosen, line) ->
+        if S.valid(chosen) do chosen else choose_ahead(c, ocean, line, water, gap) end))
+  end
+
+  fn site(c : Ur.Sim.City, ocean : Ur.Ocean.Field) : Int do
+    match islands(c) do
+      Nil -> -1
+      Cons(one, Nil) ->
+        offshore(c, ocean, List.map([(1.0, 0.0), (0.0, 1.0), (0.0, -1.0), (-1.0, 0.0)], fn axis ->
+          let (x, z) = axis
+          bearing(one, x, z)))
+      Cons(first, rest) ->
+        let tip = List.fold_left(rest, first, fn (small, island) -> if island.area < small.area do island else small end)
+        let others = List.filter(Cons(first, rest), fn island -> head(island.parcels) != head(tip.parcels))
+        let larger = List.filter(others, fn island -> island.area > tip.area)
+        let options = if List.is_empty(larger) do others else larger end
+        let upstream = List.fold_left(options, head(options), fn (nearest, island) ->
+          if distance_sq(island, tip) < distance_sq(nearest, tip) do island else nearest end)
+        let (x, z) = centre(tip)
+        let (ux, uz) = centre(upstream)
+        offshore(c, ocean, [bearing(tip, x -. ux, z -. uz)])
+    end
+  end
+end

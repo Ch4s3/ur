@@ -10,7 +10,7 @@ mod Ur.Scene do
   alias Ur.Landscape as L
   import Ur.SceneMesh.{empty, face, box, vehicle_body}
   pfn canal_material() : Int do 44 end
-  pfn material_count() : Int do L.volcanic_rock_material() + 1 end
+  pfn material_count() : Int do Ur.VolcanoRender.ash_material() + Ur.VolcanoRender.ash_materials() end
   pfn colour(i : Int) : (Int, Int, Int) do
     match i do
       0 -> (108, 157, 92)
@@ -85,7 +85,8 @@ mod Ur.Scene do
       let steam = i - Ur.VolcanoRender.steam_material()
       let alpha = if i == canal_material() do 214 else if i >= 32 && i <= 34 do 122 - (i - 32) * 31
         else if steam >= 0 && steam < 3 do 142 - steam * 53 else 255 end end end
-      let a = pixels(NativeArray.make_u8(1024, alpha), i, 0, red, green, blue)
+      let a = if i >= Ur.VolcanoRender.ash_material() do Ur.VolcanoRender.ash_texture(i - Ur.VolcanoRender.ash_material())
+        else pixels(NativeArray.make_u8(1024, alpha), i, 0, red, green, blue) end
       if !Vk.texture_set(i, a) do Ur.AppError.stop("Material texture upload failed") else () end
       let roughness = if i == canal_material() do 28 else if i == 3 do 65 else if i == 9 || i == 19 do 116 else 245 end end end
       let d = Strata.Blocks.with_material(Strata.Blocks.with_faces(Strata.Blocks.def(), i, i, i), roughness, 0)
@@ -652,7 +653,8 @@ mod Ur.Scene do
   -- ([phase], the day's clock), parted round [peaks], and cast the low ones' shadows.
   -- ([local]: the city rains in cells, not a forced or uniform weather) and
   -- hand Strata the rain cells active now, so rain and wet streets follow them.
-  fn clouds(w : Strata.Weather.Weather, phase : Float, offset : (Float, Float), peaks : List(Peak), c : Ur.Sim.City, local : Bool, ash : List(Ur.VolcanoSmoke.AshBlob)) : Unit do
+  fn clouds(w : Strata.Weather.Weather, phase : Float, offset : (Float, Float), peaks : List(Peak), c : Ur.Sim.City, local : Bool, ash : List(Ur.VolcanoSmoke.AshBlob), yaw : Float) : Unit do
+    Ur.VolcanoRender.draw_ash(volcano_base(), ash, yaw, Math.atan2(148.0, 194.0))
     let hour = (phase -. Math.floor(phase /. S.day_seconds()) *. S.day_seconds()) *. 24.0 /. S.day_seconds()
     let active = if local do List.filter(S.day_cells(c), fn cell -> hour >= cell.start && hour <= cell.stop) else Nil end
     let storms = List.filter(active, fn cell -> cell.level >= 4)
@@ -700,6 +702,7 @@ mod Ur.Scene do
     Vk.set_sun(-0.64, 0.83, 0.42, 1.18, 1.08, 0.94)
     Vk.set_fog(270.0, 650.0)
     setup_clouds(0)
+    Ur.VolcanoRender.setup_ash(volcano_base())
   end
   -- What the sky does in each kind of simulated weather (Ur.Sim.weather_name),
   -- with rain slanted by the regional wind (km/h to m/s). Storms gust harder.
@@ -769,15 +772,18 @@ mod Ur.Scene do
       let h = NativeArray.get_int(hs, j)
       let depth = S.basalt_depth(c, wx + x, wz + z)
       let deposit = if depth > 0 && h == S.unbuilt_ground_height(c, wx + x + 2, wz + z + 2) do depth else 0 end
+      let island = S.subsea_owned(c, S.index(wx / 32, wz / 32))
+      let grain = int_mod_euclid((wx + x) / 8 * 13 + (wz + z) / 8 * 17 + h / 3, 11)
+      let basalt = if grain < 2 do L.volcanic_rock_material() else if grain < 6 do 4 else Ur.VolcanoRender.crust_material() end end
       let west = NativeArray.get_int(hs, j - 1)
       let east = NativeArray.get_int(hs, j + 1)
       let north = NativeArray.get_int(hs, j - 10)
       let south = NativeArray.get_int(hs, j + 10)
       let cover = if volcanic do L.volcanic_cover(wx + x + 2, wz + z + 2, h, L.slope(h, west, east, north, south))
         else L.top_material(wx + x, wz + z, h) end
-      let side = if cover >= L.volcanic_ash_material() do cover
-        else if volcanic && h >= 42 do 1 else L.side_material(h) end end
-      let top = if deposit > 0 do Ur.VolcanoRender.crust_material() else cover end
+      let side = if island do basalt else if cover >= L.volcanic_ash_material() do cover
+        else if volcanic && h >= 42 do 1 else L.side_material(h) end end end
+      let top = if island do basalt else if deposit > 0 do Ur.VolcanoRender.crust_material() else cover end end
       let a = if h > y && h <= y + 32 do face(m, x, h - y - 1, z, 4, 4, 0, top) else m end
       let a = terrain_wall(a, x + 3, z, east, h, y, 2, side, deposit)
       let a = terrain_wall(a, x, z, west, h, y, 3, side, deposit)
@@ -951,18 +957,19 @@ mod Ur.Scene do
       seabed_kinds(f, x, z, NativeArray.set_int(a, i, Ur.Ocean.kind(f, x + (i % 10 - 1) * 4 + 2, z + (i / 10 - 1) * 4 + 2)), i + 1)
     end
   end
-  -- a cell's floor: reef rock under the corals, pale sand on a bar, else by depth
+  -- A cell's floor: reef rock, pale sand, fresh basalt, or the substrate at that depth.
   pfn bed_material(f : Ur.Ocean.Field, h : Int, kind : Int, u : Int, v : Int) : Int do
-    if kind == 1 || kind == 3 do 37 else if kind == 2 do 5 else seabed_material(h) end end
+    if kind == 1 || kind == 3 do 37 else if kind == 2 do 5
+    else if kind == 5 do Ur.VolcanoRender.crust_material() else seabed_material(h) end end end
   end
 
   pfn floor_limit() : Int do -20 end
   pfn sea_h(hs : NativeIntArr, u : Int, v : Int) : Int do NativeArray.get_int(hs, 11 + u + v * 10) end
   -- A face run along x from cell u0 to u1 (exclusive) of row v.
-  pfn sea_wall(m : Ur.SceneMesh.Mesh, u0 : Int, u1 : Int, v : Int, bottom : Int, top : Int, y : Int, dir : Int) : Ur.SceneMesh.Mesh do
+  pfn sea_wall(m : Ur.SceneMesh.Mesh, u0 : Int, u1 : Int, v : Int, bottom : Int, top : Int, y : Int, dir : Int, material : Int) : Ur.SceneMesh.Mesh do
     let low = S.clamp(bottom - y, 0, 32)
     let high = S.clamp(top - y, 0, 32)
-    if low >= high do m else face(m, u0 * 4, low, v * 4 + (if dir == 4 do 3 else 0 end), (u1 - u0) * 4, high - low, dir, seabed_material(top)) end
+    if low >= high do m else face(m, u0 * 4, low, v * 4 + (if dir == 4 do 3 else 0 end), (u1 - u0) * 4, high - low, dir, material) end
   end
   -- What a cell offers to a run of tops (its height, or 1 when it draws none)
   -- and to a run of walls facing +z or -z (its height and its neighbour's).
@@ -985,36 +992,42 @@ mod Ur.Scene do
       if u >= 8 do m else top_runs(m, f, hs, ks, y, v, u + 1, u) end
     end
   end
-  pfn z_runs(m : Ur.SceneMesh.Mesh, hs : NativeIntArr, y : Int, v : Int, dv : Int, dir : Int, u : Int, start : Int) : Ur.SceneMesh.Mesh do
+  pfn side_material(hs : NativeIntArr, ks : NativeIntArr, u : Int, v : Int) : Int do
+    if NativeArray.get_int(ks, 11 + u + v * 10) == 5 do Ur.VolcanoRender.crust_material()
+    else seabed_material(sea_h(hs, u, v)) end
+  end
+  pfn z_runs(m : Ur.SceneMesh.Mesh, hs : NativeIntArr, ks : NativeIntArr, y : Int, v : Int, dv : Int, dir : Int, u : Int, start : Int) : Ur.SceneMesh.Mesh do
     let key = if start < 8 do wall_key(hs, start, v, dv) else 1000000 end
-    if u < 8 && wall_key(hs, u, v, dv) == key do z_runs(m, hs, y, v, dv, dir, u + 1, start) else
-      let m = if start < 8 && key != 1000000 do sea_wall(m, start, u, v, sea_h(hs, start, v + dv), sea_h(hs, start, v), y, dir) else m end
-      if u >= 8 do m else z_runs(m, hs, y, v, dv, dir, u + 1, u) end
+    let mat = if start < 8 do side_material(hs, ks, start, v) else 0 end
+    if u < 8 && wall_key(hs, u, v, dv) == key && side_material(hs, ks, u, v) == mat do z_runs(m, hs, ks, y, v, dv, dir, u + 1, start) else
+      let m = if start < 8 && key != 1000000 do sea_wall(m, start, u, v, sea_h(hs, start, v + dv), sea_h(hs, start, v), y, dir, mat) else m end
+      if u >= 8 do m else z_runs(m, hs, ks, y, v, dv, dir, u + 1, u) end
     end
   end
-  pfn x_walls(m : Ur.SceneMesh.Mesh, hs : NativeIntArr, y : Int, i : Int) : Ur.SceneMesh.Mesh do
+  pfn x_walls(m : Ur.SceneMesh.Mesh, hs : NativeIntArr, ks : NativeIntArr, y : Int, i : Int) : Ur.SceneMesh.Mesh do
     if i >= 64 do m else
       let x = i % 8 * 4
       let z = i / 8 * 4
       let j = 11 + i % 8 + i / 8 * 10
       let h = NativeArray.get_int(hs, j)
+      let mat = side_material(hs, ks, i % 8, i / 8)
       let m = if h <= floor_limit() do m else
-        wall(wall(m, x + 3, z, NativeArray.get_int(hs, j + 1), h, y, 2, seabed_material(h)), x, z, NativeArray.get_int(hs, j - 1), h, y, 3, seabed_material(h))
+        wall(wall(m, x + 3, z, NativeArray.get_int(hs, j + 1), h, y, 2, mat), x, z, NativeArray.get_int(hs, j - 1), h, y, 3, mat)
       end
-      x_walls(m, hs, y, i + 1)
+      x_walls(m, hs, ks, y, i + 1)
     end
   end
   pfn seabed_rows(m : Ur.SceneMesh.Mesh, f : Ur.Ocean.Field, hs : NativeIntArr, ks : NativeIntArr, y : Int, v : Int) : Ur.SceneMesh.Mesh do
     if v >= 8 do m else
       let m = top_runs(m, f, hs, ks, y, v, 0, 0)
-      let m = z_runs(m, hs, y, v, 1, 4, 0, 0)
-      seabed_rows(z_runs(m, hs, y, v, -1, 5, 0, 0), f, hs, ks, y, v + 1)
+      let m = z_runs(m, hs, ks, y, v, 1, 4, 0, 0)
+      seabed_rows(z_runs(m, hs, ks, y, v, -1, 5, 0, 0), f, hs, ks, y, v + 1)
     end
   end
   -- The seabed in layer [y]: tops and +-z walls merged along each row, +-x walls a cell at a time.
   -- Nothing deeper than 5 m is drawn: the water there is nine-tenths opaque.
   pfn seabed(m : Ur.SceneMesh.Mesh, f : Ur.Ocean.Field, hs : NativeIntArr, ks : NativeIntArr, y : Int) : Ur.SceneMesh.Mesh do
-    x_walls(seabed_rows(m, f, hs, ks, y, 0), hs, y, 0)
+    x_walls(seabed_rows(m, f, hs, ks, y, 0), hs, ks, y, 0)
   end
   -- Dry sand: a sand bar's crest a voxel or two above the sea, in the chunk over the seabed (y 0..31). Each dry cell is
   -- a column of pale sand from sea level to its height, walled where its neighbour is lower.
@@ -1542,12 +1555,19 @@ mod Ur.Scene do
     end
   end
   pfn basalt_flags(old : Ur.Sim.City, c : Ur.Sim.City, structural : Bool) : Option(NativeIntArr) do
-    if !structural || (Map.is_empty(old.basalt) && Map.is_empty(c.basalt)) do None else
+    let cone_changed = old.subsea_vent != c.subsea_vent || S.subsea_peak(old) != S.subsea_peak(c)
+    if !structural || (!cone_changed && Map.is_empty(old.basalt) && Map.is_empty(c.basalt)) do None else
       let cells = List.append(Map.keys(old.basalt), Map.keys(c.basalt))
-      Some(List.fold_left(cells, NativeArray.make_int(S.count(), 0), fn (flags, key) ->
+      let flags = List.fold_left(cells, NativeArray.make_int(S.count(), 0), fn (flags, key) ->
         let a = Map.get_or(old.basalt, key, 0, Map.int_cmp)
         let b = Map.get_or(c.basalt, key, 0, Map.int_cmp)
-        if a != b do NativeArray.set_int(flags, key / 64, 1) else flags end))
+        if a != b || (cone_changed && (S.subsea_owned(old, key / 64) || S.subsea_owned(c, key / 64))) do
+          NativeArray.set_int(flags, key / 64, 1)
+        else flags end)
+      let submerged = List.append(Map.keys(old.subsea_depths), Map.keys(c.subsea_depths))
+      let flags = if cone_changed do List.fold_left(submerged, flags, fn (flags, lot) ->
+        NativeArray.set_int(flags, lot, 1)) else flags end
+      Some(flags)
     end
   end
   pfn sync_parcels(old : Ur.Sim.City, c : Ur.Sim.City, i : Int, force : Bool, structural : Bool, water_changed : Bool, before : Lighting, after : Lighting, signals : Signals, section : Section,

@@ -1,0 +1,53 @@
+mod SubseaSiteTest do
+  needs IO
+  needs IO.Console
+  alias Ur.Sim as S
+
+  pfn rectangle(a : NativeIntArr, x0 : Int, x1 : Int, z0 : Int, z1 : Int) : NativeIntArr do
+    List.fold_left(List.range(z0, z1), a, fn (heights, z) ->
+      List.fold_left(List.range(x0, x1), heights, fn (heights, x) ->
+        NativeArray.set_int(heights, S.index(x, z), 8)))
+  end
+
+  pfn offshore(c : Ur.Sim.City, ocean : Ur.Ocean.Field, vent : Int, gap : Int) : Bool do
+    let x = vent % S.width() * 32 + 16
+    let z = vent / S.width() * 32 + 16
+    let cone = { c with subsea_vent: vent }
+    let cells = List.range(-54, 54)
+    let dry = List.concat(List.map(List.range(-30, 30), fn row ->
+      let dz = row * 4 + 2
+      List.filter_map(List.range(-30, 30), fn column ->
+        let dx = column * 4 + 2
+        if S.subsea_profile(cone, x + dx, z + dz, S.subsea_mature_height()) > 0 do Some((dx, dz)) else None end)))
+    S.valid(vent) && List.all(cells, fn row -> List.all(cells, fn column ->
+      let dx = column * 4 + 2
+      let dz = row * 4 + 2
+      Ur.Ocean.depth(ocean, x + dx, z + dz) > 0 || List.all(dry, fn offset ->
+        let (cone_x, cone_z) = offset
+        (dx - cone_x) * (dx - cone_x) + (dz - cone_z) * (dz - cone_z) > gap * gap)))
+  end
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let main = rectangle(NativeArray.make_int(S.count(), 0), 6, 19, 14, 28)
+    let chain = rectangle(rectangle(main, 24, 32, 17, 26), 37, 43, 20, 25)
+    let isolated_rock = S.index(54, 22)
+    let c = { S.unclaimed() with heights: NativeArray.set_int(chain, isolated_rock, 6), sea_features: 0 }
+    let field = Ur.Ocean.field(c)
+    let vent = Ur.SubseaSite.site(c, field)
+    Test.assert_true(S.valid(vent) && vent % S.width() > 42 && int_abs(vent / S.width() - 22) < 8,
+      "the vent follows the chain beyond its smallest substantial island and ignores a lone rock")
+    Test.assert_true(offshore(c, field, vent, 96), "the mature cone has a three-parcel water channel where the map has room")
+    let blocked = { c with seawalls: NativeArray.set_int(c.seawalls, vent, 1) }
+    let alternative = Ur.SubseaSite.site(blocked, field)
+    Test.assert_true(S.valid(alternative) && alternative != vent, "the siting search routes around protected works")
+    let lone = { c with heights: main }
+    let separate = Ur.SubseaSite.site(lone, Ur.Ocean.field(lone))
+    Test.assert_true(S.valid(separate) && separate % S.width() >= 22, "a single island still has an offshore vent option")
+    let tight = S.unclaimed_seeded(29)
+    Test.assert_eq_int(Ur.SubseaSite.site(tight, Ur.Ocean.field(tight)), -1, "a cramped chain can skip the vent to preserve the channel")
+    let seeded = S.unclaimed_seeded(Ur.Subsea.preview_seed())
+    let preview = Ur.Ocean.field(seeded)
+    Test.assert_true(offshore(seeded, preview, Ur.SubseaSite.site(seeded, preview), 76), "the preview seed has an offshore site with a wide channel at full growth")
+    Authority.must(println("Subsea siting: all assertions passed"))
+  end
+end

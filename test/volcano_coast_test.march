@@ -3,14 +3,14 @@ mod VolcanoCoastTest do
   needs IO.Console
   alias Ur.Sim as S
 
-  pfn shoreline(c : Ur.Sim.City, x : Int, z : Int, end_x : Int) : Ur.Volcano.Cell do
+  pfn shoreline(c : Ur.Sim.City, x : Int, z : Int, end_x : Int) : Ur.Volcano.LavaCell do
     let y = Ur.Landscape.height(c, x, z)
     if y > 0 && Ur.Landscape.height(c, x + 4, z) == 0 do { x: x, y: y, z: z }
     else if x < end_x do shoreline(c, x + 4, z, end_x)
     else panic("Missing dry edge in the fixture.") end end
   end
 
-  pfn run(cell : Ur.Volcano.Cell, vent : Int) : Ur.Volcano.LavaRun do
+  pfn run(cell : Ur.Volcano.LavaCell, vent : Int) : Ur.Volcano.LavaRun do
     let patch = { cell: cell, source: cell, lane: 0, insulation: 0 }
     { vent: vent, sections: [{ spine: cell, along_x: true, patches: [patch] }] }
   end

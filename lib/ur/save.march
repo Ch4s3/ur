@@ -876,12 +876,24 @@ mod Ur.Save do
       Ok(List.fold_left(entries, Map.empty(), fn (basalt, n) -> Map.insert(basalt, n / stride, n % stride, Map.int_cmp)))
     else Err("Invalid basalt deposits.") end
   end
+  pfn encode_subsea_depths(depths : Map(Int, Int)) : Json.JsonValue do
+    encode_ints(Map.fold(depths, Nil, fn (entries, lot, depth) -> Cons(lot * 64 + depth, entries)))
+  end
+  pfn decode_subsea_depths(j : Json.JsonValue) : Result(Map(Int, Int), String) do
+    let? entries = opt_ints(j, "subsea_depths", S.count())
+    if List.all(entries, fn n -> n > 0 && n < S.count() * 64 && n % 64 > 0) do
+      Ok(List.fold_left(entries, Map.empty(), fn (depths, n) -> Map.insert(depths, n / 64, n % 64, Map.int_cmp)))
+    else Err("Invalid submarine volcano depth.") end
+  end
   pfn encode_city(v : Ur.Sim.City) : Json.JsonValue do
     let freight = match v.freight do
       Some(route) -> [("freight", encode_freight(route))]
       None -> Nil
     end
     let fields = List.append([("public_works", Json.encode_array(List.map(v.public_works, encode_public_work))), ("facility_expansion", enc_array(v.facility_expansion, S.count() - 1, Nil)), ("milestones", enc_array(v.milestones, 63, Nil)), ("facility_staff", enc_array(v.facility_staff, S.count() - 1, Nil)), ("founders", Json.encode_int(v.founders)), ("world_seed", Json.encode_int(v.world_seed)), ("volcanic", Json.encode_bool(v.volcanic)), ("basalt", encode_basalt(v.basalt)), ("volcano_ms", Json.encode_int(v.volcano_ms)), ("world_setup", enc_array(v.setup, NativeArray.length_int(v.setup) - 1, Nil)), ("utility_service", enc_array(v.utility_service, S.count() - 1, Nil))], freight)
+    let fields = if S.valid(v.subsea_vent) do
+      Cons(("subsea_vent", Json.encode_int(v.subsea_vent)), Cons(("subsea_depths", encode_subsea_depths(v.subsea_depths)), fields))
+    else fields end
     Json.encode_object(List.append(Cons(("religion", encode_religion(v.religion)), fields),
       Cons(("bus_fare", Json.encode_int(v.bus_fare)),
       Cons(("waste_live", Json.encode_bool(v.waste_live)),
@@ -1285,6 +1297,10 @@ mod Ur.Save do
     let? volcanic = opt_bool(j, "volcanic", false)
     let? basalt = decode_basalt(j)
     let? volcano_ms = opt_int(j, "volcano_ms", 0)
+    let? subsea_vent = opt_int(j, "subsea_vent", -1)
+    let? subsea_depths = decode_subsea_depths(j)
+    let? _ = if S.valid(subsea_vent) || (subsea_vent == -1 && Map.is_empty(subsea_depths)) do
+      Ok(()) else Err("Invalid submarine volcano vent.") end
     let? setup = match Json.get(j, "world_setup") do
       None -> Ok(S.default_setup())
       Some(value) -> match array(value, 8, 48) do
@@ -1406,7 +1422,7 @@ mod Ur.Save do
     let harbour_basin = if S.valid(harbour) && S.valid(raw_basin) && S.get(canals, raw_basin) > 0 &&
       List.any([0, 1, 2, 3], fn side -> S.neighbour(harbour, side) == raw_basin) do raw_basin else -1 end
     if !((harbour == -1 || S.valid(harbour)) && (ferry_start == -1 || S.valid(ferry_start)) && month >= 0 && construction_spend >= 0 && tax >= 0 && tax <= 25 && energy >= 1 && energy <= 12) do Err("Invalid city values.") else
-    Ok(S.restore_rain({ lift_decks: Map.empty(), lift_vessels: Map.empty(), public_works: public_works, rain_uniform: rain_uniform, watch: S.clamp(watch, 0, 2), rain_now: NativeArray.make_int(S.count(), 0), storms: storms, air: air, milestones: milestones, facility_staff: facility_staff, facility_expansion: facility_expansion, founders: S.clamp(founders, 0, 12), world_seed: world_seed, volcanic: volcanic, basalt: basalt, volcano_ms: S.clamp(volcano_ms, 0, float_to_int(Ur.Volcano.period() *. 1000.0) - 1), volcanic_shade: Map.empty(), setup: setup, climate_seed: S.clamp(climate_seed, 0, 2147483646), storm_drains: storm_drains, seawalls: seawalls, seabed: seabed, sea_heights: sea_heights, ferry_works: ferry_works, mangrove_harm: mangrove_harm, sea_counted: S.clamp(sea_counted, 0, 4), sea_features: S.clamp(sea_features, 0, 1), sand_changes: sand_changes, sea_run: S.clamp(NativeArray.get_int(sand_storm, 0), 0, 1000), sand_peak: NativeArray.get_int(sand_storm, 1), sand_sector: S.clamp(NativeArray.get_int(sand_storm, 2), 0, 15), sand_day: NativeArray.get_int(sand_storm, 3), sand_marks: NativeArray.make_int(S.count(), 0), sea_shoals: sea_shoals, sea_reefs: NativeArray.make_int(S.count(), 0), fishing_policy: fishing_policy, private_docks: private_docks, fish: fish, fish_capacity: fish_capacity, fish_last: NativeArray.make_int(S.count(), 0), fish_alerts: NativeArray.make_int(S.count(), 0), pump_orders: pump_orders, surface_water: surface_water, flood_damage: flood_damage, flood_active: flood_active, rain_tanks: rain_tanks, subway_water: subway_water, soil_moisture: S.clamp(soil, 0, 100), pumping_cost: S.clamp(pumping, 0, 200000), battery: S.clamp(battery, 0, 1000000), hour: 9,
+    Ok(S.restore_rain({ lift_decks: Map.empty(), lift_vessels: Map.empty(), public_works: public_works, rain_uniform: rain_uniform, watch: S.clamp(watch, 0, 2), rain_now: NativeArray.make_int(S.count(), 0), storms: storms, air: air, milestones: milestones, facility_staff: facility_staff, facility_expansion: facility_expansion, founders: S.clamp(founders, 0, 12), world_seed: world_seed, volcanic: volcanic, basalt: basalt, volcano_ms: S.clamp(volcano_ms, 0, float_to_int(Ur.Volcano.period() *. 1000.0) - 1), volcanic_shade: Map.empty(), subsea_vent: subsea_vent, subsea_depths: subsea_depths, setup: setup, climate_seed: S.clamp(climate_seed, 0, 2147483646), storm_drains: storm_drains, seawalls: seawalls, seabed: seabed, sea_heights: sea_heights, ferry_works: ferry_works, mangrove_harm: mangrove_harm, sea_counted: S.clamp(sea_counted, 0, 4), sea_features: S.clamp(sea_features, 0, 1), sand_changes: sand_changes, sea_run: S.clamp(NativeArray.get_int(sand_storm, 0), 0, 1000), sand_peak: NativeArray.get_int(sand_storm, 1), sand_sector: S.clamp(NativeArray.get_int(sand_storm, 2), 0, 15), sand_day: NativeArray.get_int(sand_storm, 3), sand_marks: NativeArray.make_int(S.count(), 0), sea_shoals: sea_shoals, sea_reefs: NativeArray.make_int(S.count(), 0), fishing_policy: fishing_policy, private_docks: private_docks, fish: fish, fish_capacity: fish_capacity, fish_last: NativeArray.make_int(S.count(), 0), fish_alerts: NativeArray.make_int(S.count(), 0), pump_orders: pump_orders, surface_water: surface_water, flood_damage: flood_damage, flood_active: flood_active, rain_tanks: rain_tanks, subway_water: subway_water, soil_moisture: S.clamp(soil, 0, 100), pumping_cost: S.clamp(pumping, 0, 200000), battery: S.clamp(battery, 0, 1000000), hour: 9,
       waste_live: waste_live, waste_bins: waste_bins, waste_stock: waste_stock, waste_sites: waste_sites,
       waste_last: waste_last, waste_log: waste_log, waste_runs: waste_runs, council: council, religion: religion, construction_spend: construction_spend, island_exports: island_exports, island_crops: island_crops, island_catch: island_catch,
       shop_imports: shop_imports, harbour: harbour, harbour_basin: harbour_basin, ferry_start: ferry_start, trash: trash,
@@ -1536,15 +1552,86 @@ mod Ur.Save do
         previous: previous, route: route, progress: progress, wait: wait, travel: travel })
     else Err("Invalid evacuation trip.") end
   end
-  fn encode_session(session : Session) : String do
+  pfn encode_lava_cell(cell : Ur.Volcano.LavaCell) : Json.JsonValue do
+    encode_ints([cell.x, cell.y, cell.z])
+  end
+  pfn decode_lava_cell(j : Json.JsonValue) : Result(Ur.Volcano.LavaCell, String) do
+    let? values = items(j, decode_int_item, 3)
+    match values do
+      [x, y, z] ->
+        if x >= 0 && x < S.width() * 32 && x % 4 == 0 && z >= 0 && z < S.depth() * 32 && z % 4 == 0 &&
+          y >= 0 && y <= S.terrain_ceiling() do Ok({ x: x, y: y, z: z })
+        else Err("Invalid saved lava cell.") end
+      _ -> Err("Invalid saved lava cell.")
+    end
+  end
+  pfn encode_lava_patch(patch : Ur.Volcano.LavaPatch) : Json.JsonValue do
+    Json.encode_array([encode_lava_cell(patch.cell), encode_lava_cell(patch.source),
+      Json.encode_int(patch.lane), Json.encode_int(patch.insulation)])
+  end
+  pfn decode_lava_patch(j : Json.JsonValue) : Result(Ur.Volcano.LavaPatch, String) do
+    match j do
+      Json.Array([raw_cell, raw_source, raw_lane, raw_insulation]) ->
+        let? cell = decode_lava_cell(raw_cell)
+        let? source = decode_lava_cell(raw_source)
+        let? lane = integer(raw_lane)
+        let? insulation = integer(raw_insulation)
+        if lane >= 0 && lane <= Ur.Volcano.max_lanes() && insulation >= 0 && insulation <= Ur.Volcano.max_lanes() &&
+          int_abs(cell.x - source.x) + int_abs(cell.z - source.z) <= 4 do
+          Ok({ cell: cell, source: source, lane: lane, insulation: insulation })
+        else Err("Invalid saved lava patch.") end
+      _ -> Err("Invalid saved lava patch.")
+    end
+  end
+  pfn encode_lava_section(section : Ur.Volcano.LavaSection) : Json.JsonValue do
+    Json.encode_array([encode_lava_cell(section.spine), Json.encode_bool(section.along_x),
+      Json.encode_array(List.map(section.patches, encode_lava_patch))])
+  end
+  pfn decode_lava_section(j : Json.JsonValue) : Result(Ur.Volcano.LavaSection, String) do
+    match j do
+      Json.Array([raw_spine, raw_axis, raw_patches]) ->
+        let? spine = decode_lava_cell(raw_spine)
+        let? along_x = boolean(raw_axis)
+        let? patches = items(raw_patches, decode_lava_patch, 1 + Ur.Volcano.max_lanes() * 2)
+        let aligned = List.all(patches, fn patch ->
+          let dx = int_abs(patch.cell.x - spine.x)
+          let dz = int_abs(patch.cell.z - spine.z)
+          if along_x do dx == 0 && dz == patch.lane * 4 else dz == 0 && dx == patch.lane * 4 end)
+        let distinct = List.all(patches, fn patch -> List.length(List.filter(patches, fn other ->
+          patch.cell.x == other.cell.x && patch.cell.z == other.cell.z)) == 1)
+        let one_core = List.length(List.filter(patches, fn patch -> patch.lane == 0)) == 1
+        if aligned && distinct && one_core do Ok({ spine: spine, along_x: along_x, patches: patches })
+        else Err("Invalid saved lava section.") end
+      _ -> Err("Invalid saved lava section.")
+    end
+  end
+  pfn encode_lava_run(run : Ur.Volcano.LavaRun) : Json.JsonValue do
+    Json.encode_array([Json.encode_int(run.vent), Json.encode_array(List.map(run.sections, encode_lava_section))])
+  end
+  pfn decode_lava_run(j : Json.JsonValue) : Result(Ur.Volcano.LavaRun, String) do
+    match j do
+      Json.Array([raw_vent, raw_sections]) ->
+        let? vent = integer(raw_vent)
+        let? sections = items(raw_sections, decode_lava_section, Ur.Volcano.flow_steps() + 1)
+        if vent >= 0 && vent < Ur.Volcano.vent_count() && !List.is_empty(sections) do Ok({ vent: vent, sections: sections })
+        else Err("Invalid saved lava route.") end
+      _ -> Err("Invalid saved lava route.")
+    end
+  end
+  fn encode_session_with_route(session : Session, route : Option(List(Ur.Volcano.LavaRun))) : String do
     let extra = if List.is_empty(session.evacuation) do Nil
       else [("evacuation", Json.encode_array(List.map(session.evacuation, encode_evacuation)))] end
     let fields = [("version", Json.encode_int(2)), ("map", Json.encode_array([Json.encode_int(S.width()), Json.encode_int(S.depth())])),
       ("game", encode_game(session.game)), ("households", encode_households(session.game.city.households))]
+    let extra = match route do
+      Some(runs) -> Cons(("lava_route", Json.encode_array(List.map(runs, encode_lava_run))), extra)
+      None -> extra
+    end
     Json.to_string(Json.encode_object(List.append(fields, extra)))
   end
+  fn encode_session(session : Session) : String do encode_session_with_route(session, None) end
   fn encode(game : Game) : String do encode_session({ game: game, evacuation: Nil }) end
-  fn decode_session(text : String) : Result(Session, String) do
+  fn decode_session_with_route(text : String) : Result((Session, Option(List(Ur.Volcano.LavaRun))), String) do
     let? json = Json.parse(text)
     let? tag = field(json, "version")
     let? version = integer(tag)
@@ -1567,8 +1654,20 @@ mod Ur.Save do
         None -> Ok(Nil)
         Some(raw) -> items(raw, decode_evacuation, S.population(game.city))
       end
-      Ok({ game: game, evacuation: evacuation })
+      let? route = match Json.get(json, "lava_route") do
+        None -> Ok(None)
+        Some(raw) ->
+          let? runs = items(raw, decode_lava_run, Ur.Volcano.vent_count())
+          if List.all(runs, fn run -> List.length(List.filter(runs, fn other -> run.vent == other.vent)) == 1) do
+            Ok(Some(runs))
+          else Err("Duplicate saved lava vent.") end
+      end
+      Ok(({ game: game, evacuation: evacuation }, route))
     else Err("Unsupported save version.") end
+  end
+  fn decode_session(text : String) : Result(Session, String) do
+    let? (session, _) = decode_session_with_route(text)
+    Ok(session)
   end
   fn decode(text : String) : Result(Game, String) do
     let? session = decode_session(text)
@@ -1580,19 +1679,23 @@ mod Ur.Save do
       Err(_) -> false
     end
   end
-  fn load_session(path : String) : Result(Session, String) do
+  fn load_session_with_route(path : String) : Result((Session, Option(List(Ur.Volcano.LavaRun))), String) do
     match File.read(path) do
-      Ok(Ok(text)) -> decode_session(text)
+      Ok(Ok(text)) -> decode_session_with_route(text)
       _ -> Err("Could not read the saved city.")
     end
+  end
+  fn load_session(path : String) : Result(Session, String) do
+    let? (session, _) = load_session_with_route(path)
+    Ok(session)
   end
   fn load(path : String) : Result(Game, String) do
     let? session = load_session(path)
     Ok(session.game)
   end
-  fn save_session(path : String, session : Session) : Result(Unit, String) do
+  fn save_session_with_route(path : String, session : Session, route : Option(List(Ur.Volcano.LavaRun))) : Result(Unit, String) do
     let staging = path ++ "." ++ int_to_string(Authority.must(Process.pid())) ++ ".tmp"
-    match File.write(staging, encode_session(session)) do
+    match File.write(staging, encode_session_with_route(session, route)) do
       Ok(Ok(_)) -> match File.rename(staging, path) do
         Ok(Ok(_)) -> Ok(())
         _ -> Err("Could not replace the saved city.")
@@ -1600,6 +1703,7 @@ mod Ur.Save do
       _ -> Err("Could not write the saved city.")
     end
   end
+  fn save_session(path : String, session : Session) : Result(Unit, String) do save_session_with_route(path, session, None) end
   -- The lighting settings live beside the saved city, a JSON array of each row's step.
   fn lighting_path() : String do path() ++ ".lighting" end
   pfn lighting_rows(l : NativeIntArr, xs : List(Int), row : Int) : NativeIntArr do

@@ -1,0 +1,96 @@
+-- A volcanic cone starts on the shelf and builds from the vent outwards.
+mod Ur.Subsea do
+  alias Ur.Sim as S
+
+  fn preview_seed() : Int do 74 end
+
+  pfn engineered(c : Ur.Sim.City, lot : Int) : Bool do
+    S.valid(lot) && (lot == c.harbour || lot == c.harbour_basin ||
+      S.get(c.canals, lot) > 0 || S.get(c.canal_docks, lot) > 0 || S.get(c.ferries, lot) > 0 ||
+      S.get(c.seawalls, lot) > 0 || S.get(c.seabed, lot) > 0 ||
+      S.get(c.roads, lot) > 0 || S.get(c.transit, lot) > 0 || S.get(c.grade_cover, lot) > 0 ||
+      S.get(c.pipes, lot) > 0 || S.get(c.grid, lot) > 0 || S.get(c.public_parking, lot) > 0 ||
+      S.get(c.buildings, lot) > 0 || S.get(c.construction, lot) > 0 || S.get(c.zones, lot) > 0 ||
+      S.get(c.plants, lot) > 0 || S.get(c.parks, lot) > 0 || S.public_work_stage(c, lot) > 0)
+  end
+
+  pfn clear_site(c : Ur.Sim.City, lot : Int) : Bool do
+    S.valid(lot) && !engineered(c, lot) &&
+      !List.any([0, 1, 2, 3], fn side -> engineered(c, S.neighbour(lot, side)))
+  end
+
+  pfn water_depth(ocean : Ur.Ocean.Field, lot : Int) : Int do
+    Ur.Ocean.depth(ocean, lot % S.width() * 32 + 16, lot / S.width() * 32 + 16)
+  end
+
+  pfn basalt_cap(c : Ur.Sim.City, lot : Int, height : Int) : Ur.Sim.City do
+    let basalt = List.fold_left(List.range(0, 64), c.basalt, fn (basalt, cell) ->
+      let key = 64 * lot + cell
+      Map.insert(basalt, key, Math.max_int(1, Map.get_or(basalt, key, 0, Map.int_cmp)), Map.int_cmp))
+    { c with basalt: basalt, heights: NativeArray.set_int(c.heights, lot, height),
+      subsea_depths: Map.remove(c.subsea_depths, lot, Map.int_cmp) }
+  end
+
+  pfn raise(c : Ur.Sim.City, ocean : Ur.Ocean.Field, lot : Int, peak : Int) : (Ur.Sim.City, Bool) do
+    if !clear_site(c, lot) do (c, false) else
+      let height = S.get(c.heights, lot)
+      let next = S.subsea_profile(c, lot % S.width() * 32 + 16, lot / S.width() * 32 + 16, peak)
+      let stored = Map.get_or(c.subsea_depths, lot, 0, Map.int_cmp)
+      if height > 0 do
+        if next > height && S.subsea_owned(c, lot) do
+          ({ c with heights: NativeArray.set_int(c.heights, lot, next) }, true)
+        else (c, false) end
+      else
+        let depth = if stored > 0 do stored else water_depth(ocean, lot) end
+        -- Keep the finer shoreline continuous even where the edge of a
+        -- parcel rises above its still-submerged centre.
+        if depth <= 0 || (next < -24 && next < 0 - depth) do (c, false)
+        else if next > 0 do (basalt_cap(c, lot, next), true)
+        else
+          let shallow = Math.min_int(depth, Math.max_int(1, 0 - next))
+          if stored == shallow do (c, false) else
+            ({ c with subsea_depths: Map.insert(c.subsea_depths, lot, shallow, Map.int_cmp) }, true)
+          end
+        end end
+      end
+    end
+  end
+
+  pfn grow(c : Ur.Sim.City, ocean : Ur.Ocean.Field, peak : Int) : (Ur.Sim.City, Bool) do
+    let x = c.subsea_vent % S.width()
+    let z = c.subsea_vent / S.width()
+    let reach = S.subsea_reach()
+    let xs = List.range(Math.max_int(0, x - reach), Math.min_int(S.width(), x + reach + 1))
+    let zs = List.range(Math.max_int(0, z - reach), Math.min_int(S.depth(), z + reach + 1))
+    List.fold_left(zs, (c, false), fn (state, row) ->
+      List.fold_left(xs, state, fn (state, column) ->
+        let (city, changed) = state
+        let (city, raised) = raise(city, ocean, S.index(column, row), peak)
+        (city, changed || raised)))
+  end
+
+  fn seed(c : Ur.Sim.City, ocean : Ur.Ocean.Field, force : Bool) : Ur.Sim.City do
+    if S.valid(c.subsea_vent) || (!force &&
+      (c.world_seed < 0 || c.volcanic || Strata.Seed.mix(c.world_seed, 2381) % 8 != 0)) do c else
+      let vent = Ur.SubseaSite.site(c, ocean)
+      if !S.valid(vent) do c else
+        let summit = 0 - Math.min_int(16, water_depth(ocean, vent))
+        let (city, _) = grow({ c with subsea_vent: vent }, ocean, summit)
+        city
+      end
+    end
+  end
+
+  fn settle(c : Ur.Sim.City, ocean : Ur.Ocean.Field, before : Float, after : Float) : (Ur.Sim.City, Bool) do
+    let earlier = Math.floor((before -. Ur.Volcano.settle_time()) /. Ur.Volcano.period())
+    let later = Math.floor((after -. Ur.Volcano.settle_time()) /. Ur.Volcano.period())
+    let vent = c.subsea_vent
+    if earlier >= later || !clear_site(c, vent) do (c, false) else
+      let peak = S.subsea_peak(c)
+      let next = if peak < 0 do
+        if peak + 5 > 0 do Math.max_int(4, peak + 5) else Math.min_int(-1, peak + 5) end
+      else Math.min_int(S.subsea_mature_height(), peak + 4) end
+      if next == peak do (c, false) else grow(c, ocean, next) end
+    end
+  end
+end
