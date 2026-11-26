@@ -8,6 +8,7 @@ mod Ur.Scene do
   alias Strata.Quad as Q
   alias Ur.Sim as S
   alias Ur.Landscape as L
+  alias Ur.UtilitiesNetwork as Net
   import Ur.SceneMesh.{empty, face, box, vehicle_body}
   pfn canal_material() : Int do 44 end
   pfn material_count() : Int do Ur.VolcanoRender.ash_material() + Ur.VolcanoRender.ash_materials() end
@@ -320,11 +321,18 @@ mod Ur.Scene do
   -- the heaped clouds, the hour: cumulus build after mid-morning and melt
   -- in the evening. A cloud forming or clearing grows or shrinks in place.
   fn cloud_bodies() : Int do 32 end
-  -- Above the ocean's slots: clouds, high terrain, rooftop electricity markers, then the upper band of each
-  -- lot's gradient overlay (for ground that rises more than 32 voxels across it).
+  -- Above the ocean's slots: clouds, high terrain, rooftop electricity markers, upper gradient
+  -- bands, and the ground and roof bands of the utility inspection.
   pfn power_marker_base() : Int do Ur.Ocean.slot_count() + cloud_bodies() + S.count() * 2 end
   pfn skin_high_slot(i : Int) : Int do power_marker_base() + S.count() + i end
-  pfn raised_slot(i : Int) : Int do power_marker_base() + S.count() * 2 + i end
+  pfn utility_ground_slot(i : Int) : Int do power_marker_base() + S.count() * 2 + i end
+  pfn utility_roof_slot(i : Int) : Int do power_marker_base() + S.count() * 3 + i end
+  pfn utility_group_columns() : Int do (S.width() + 3) / 4 end
+  pfn utility_group_count() : Int do utility_group_columns() * ((S.depth() + 3) / 4) end
+  pfn utility_group_slot(group : Int) : Int do power_marker_base() + S.count() * 4 + group end
+  pfn utility_waypoint_slot(i : Int) : Int do utility_group_slot(utility_group_count()) + i end
+  pfn utility_waypoint_limit() : Int do 64 end
+  pfn raised_slot(i : Int) : Int do utility_waypoint_slot(utility_waypoint_limit() + 1) + i end
   -- Strata's shadow handles have a smaller range than its mesh slots.
   pfn raised_shadow(i : Int) : Int do i * 4 + 3 end
   fn wildlife_base() : Int do raised_slot(S.count()) end
@@ -4022,19 +4030,290 @@ mod Ur.Scene do
       if tex == 10 do m else face(m, 15, 3, 11, 2, 10, 0, 19) end
     end
   end
-  pfn power_markers(c : Ur.Sim.City, report : Ur.Sim.UtilityDelivery, visible : Bool, i : Int) : Unit do
+  pfn utility_roof(c : Ur.Sim.City, lot : Int) : Int do
+    List.fold_left(L.structures(c, lot, 0), S.get(c.heights, lot), fn (height, piece) ->
+      Math.max_int(height, piece.y + piece.h))
+  end
+  pfn utility_digit_ink(digit : Int) : Int do
+    match digit do
+      0 -> 31599
+      1 -> 29874
+      2 -> 31183
+      3 -> 29647
+      4 -> 5101
+      5 -> 29671
+      6 -> 31719
+      7 -> 4687
+      8 -> 31727
+      _ -> 29679
+    end
+  end
+  pfn utility_digit(m : Ur.SceneMesh.Mesh, x : Int, ink : Int, i : Int) : Ur.SceneMesh.Mesh do
+    if i == 15 do m else
+      let bit = (i / 3) * 3 + 2 - i % 3
+      let m = if int_and(ink, int_shl(1, bit)) == 0 do m
+        else face(m, x + (i % 3) * 2, 3, 11 + (i / 3) * 2, 2, 2, 0, 19) end
+      utility_digit(m, x, ink, i + 1)
+    end
+  end
+  pfn utility_number_badge(value : Int, tex : Int) : Ur.SceneMesh.Mesh do
+    let m = box({ words: NativeArray.make_i32(80, 0), quads: 0 }, 6, 0, 10, 20, 3, 12, tex)
+    if value < 10 do utility_digit(m, 13, utility_digit_ink(value), 0)
+    else
+      let m = utility_digit(m, 9, utility_digit_ink(value / 10), 0)
+      utility_digit(m, 17, utility_digit_ink(value % 10), 0)
+    end
+  end
+  type UtilityCluster = { lot : Int, count : Int, priority : Int }
+  pfn utility_group_corner(group : Int) : (Int, Int) do
+    ((group % utility_group_columns()) * 4, (group / utility_group_columns()) * 4)
+  end
+  pfn utility_group(corner : (Int, Int), score : Int -> Int) : UtilityCluster do
+    let (west, north) = corner
+    List.fold_left(List.range(0, 16), { lot: -1, count: 0, priority: 0 }, fn (a, i) ->
+      let x = west + i % 4
+      let z = north + i / 4
+      if x >= S.width() || z >= S.depth() do a else
+        let lot = S.index(x, z)
+        let priority = score(lot)
+        if priority > a.priority do { lot: lot, count: 1, priority: priority }
+        else if priority > 0 && priority == a.priority do { a with count: a.count + 1 }
+        else a end end
+      end)
+  end
+  pfn utility_service_priority(c : Ur.Sim.City, st : Ur.Sim.Stats, layer : Int, lot : Int) : Int do
+    if Ur.UtilityView.site_kind(c, layer, lot) > 0 do 0 else
+      if layer == 2 do
+        match Ur.Layers.power_status_material(c, st, lot) do 30 -> 3 | 10 -> 2 | 20 -> 1 | _ -> 0 end
+      else
+        let (demand, delivered) = Ur.UtilityView.parcel_delivery(st.utilities, layer, lot)
+        if demand <= 0 do 0 else if !Ur.UtilityView.live_connection(st.utilities, layer, lot) do 3
+        else if delivered < demand do 2 else 1 end end end
+      end
+    end
+  end
+  pfn utility_status_markers(c : Ur.Sim.City, st : Ur.Sim.Stats, layer : Int, far : Bool, i : Int) : Unit do
     if i >= S.count() do () else
       let slot = power_marker_base() + i
-      let tex = if visible do Ur.Layers.power_material(c, report, i) else -1 end
-      if tex < 0 do Vk.chunk_free(slot) else
-        let roof = List.fold_left(L.structures(c, i, 0), S.get(c.heights, i), fn (height, piece) ->
-          if piece.y + piece.h > height do piece.y + piece.h else height end)
-        let badge = power_badge(tex)
-        if Vk.chunk_begin(slot, i % S.width() * 32, roof + 4, i / S.width() * 32, 0) &&
-          Vk.chunk_part(0, badge.words, badge.quads) && Vk.chunk_commit() do ()
-        else Ur.AppError.stop("Electricity marker upload failed") end
+      let x = i % S.width()
+      let z = i / S.width()
+      if far && Ur.Layers.is_utility(layer) && x % 4 == 0 && z % 4 == 0 do
+        let group = utility_group((x, z), fn lot -> utility_service_priority(c, st, layer, lot))
+        if group.count > 0 do
+          let tex = if group.priority == 3 do 30 else if group.priority == 2 do 10 else 20 end end
+          utility_chunk(slot, group.lot, utility_roof(c, group.lot) + 4, utility_number_badge(group.count, tex))
+        else Vk.chunk_free(slot) end
+      else
+        let tex = if !far && layer == 2 && Ur.UtilityView.site_kind(c, 2, i) == 0 do Ur.Layers.power_status_material(c, st, i) else -1 end
+        if tex >= 0 do utility_chunk(slot, i, utility_roof(c, i) + 4, power_badge(tex)) else Vk.chunk_free(slot) end
       end
-      power_markers(c, report, visible, i + 1)
+      utility_status_markers(c, st, layer, far, i + 1)
+    end
+  end
+  -- Each arrow points from the lot centre to the edge with positive outward flow.
+  pfn utility_arm_ink(m : Ur.SceneMesh.Mesh, arm : Int, start : Int, width : Int, across : Int, span : Int, tex : Int) : Ur.SceneMesh.Mesh do
+    match arm do
+      0 -> face(m, 16 - start - width, 1, 16 + across, width, span, 0, tex)
+      1 -> face(m, 16 + start, 1, 16 + across, width, span, 0, tex)
+      2 -> face(m, 16 + across, 1, 16 - start - width, span, width, 0, tex)
+      _ -> face(m, 16 + across, 1, 16 + start, span, width, 0, tex)
+    end
+  end
+  pfn utility_arrow(m : Ur.SceneMesh.Mesh, arm : Int, tex : Int) : Ur.SceneMesh.Mesh do
+    let m = utility_arm_ink(m, arm, 3, 6, -1, 2, tex)
+    let m = utility_arm_ink(m, arm, 8, 2, -4, 8, tex)
+    let m = utility_arm_ink(m, arm, 10, 2, -3, 6, tex)
+    let m = utility_arm_ink(m, arm, 12, 1, -2, 4, tex)
+    utility_arm_ink(m, arm, 13, 1, -1, 2, tex)
+  end
+  pfn utility_direction_marks(flow : Ur.UtilitiesNetwork.Network, lot : Int, sewer : Bool, arm : Int, m : Ur.SceneMesh.Mesh) : Ur.SceneMesh.Mesh do
+    if arm == 4 do m else
+      let units = Net.arm_flow(flow, lot, arm)
+      let outgoing = if sewer do units < 0 else units > 0 end
+      let m = if outgoing do utility_arrow(m, arm, 19) else m end
+      utility_direction_marks(flow, lot, sewer, arm + 1, m)
+    end
+  end
+  pfn utility_link_marks(m : Ur.SceneMesh.Mesh, lot : Int, target : Int, arm : Int) : Ur.SceneMesh.Mesh do
+    if !S.valid(target) || target == lot || arm == 4 do m
+    else if S.neighbour(lot, arm) == target do
+      let m = utility_arm_ink(m, arm, 6, 2, -1, 2, 31)
+      let m = utility_arm_ink(m, arm, 10, 2, -1, 2, 31)
+      utility_arm_ink(m, arm, 14, 2, -1, 2, 31)
+    else utility_link_marks(m, lot, target, arm + 1) end end
+  end
+  pfn utility_ground_mesh(flow : Ur.UtilitiesNetwork.Network, layer : Int, inspection : Ur.UtilityView.Inspection,
+    lot : Int, member : Bool, far : Bool) : Ur.SceneMesh.Mesh do
+    let m = { words: NativeArray.make_i32(64, 0), quads: 0 }
+    let tex = if lot == inspection.limit do 35
+      else if lot == inspection.tap || lot == inspection.lot do 31 else 29 end end
+    let m = if member && tex == 29 do
+      let m = face(m, 8, 0, 2, 16, 1, 0, tex)
+      let m = face(m, 8, 0, 29, 16, 1, 0, tex)
+      let m = face(m, 2, 0, 8, 1, 16, 0, tex)
+      face(m, 29, 0, 8, 1, 16, 0, tex)
+    else layer_outline(tex, m) end
+    let m = if member && !far do utility_direction_marks(flow, lot, layer == 31, 0, m) else m end
+    let connected = if lot == inspection.tap do inspection.lot else if lot == inspection.lot do inspection.tap else -1 end end
+    utility_link_marks(m, lot, connected, 0)
+  end
+  pfn utility_source_badge(m : Ur.SceneMesh.Mesh, x : Int, kind : Int, online : Bool) : Ur.SceneMesh.Mesh do
+    let tex = if !online do 17 else if kind == 2 do 36 else if kind == 3 do 31 else 20 end end end
+    let m = box(m, x, 0, 10, 12, 3, 12, tex)
+    match kind do
+      2 -> face(face(m, x + 2, 3, 13, 8, 2, 0, 19), x + 2, 3, 17, 8, 2, 0, 19)
+      3 ->
+        let m = face(m, x + 2, 3, 15, 4, 2, 0, 19)
+        let m = face(m, x + 6, 3, 12, 2, 8, 0, 19)
+        let m = face(m, x + 8, 3, 13, 1, 6, 0, 19)
+        face(m, x + 9, 3, 15, 1, 2, 0, 19)
+      _ ->
+        let m = face(m, x + 5, 3, 12, 2, 8, 0, 19)
+        let m = face(m, x + 3, 3, 14, 2, 4, 0, 19)
+        face(m, x + 7, 3, 14, 2, 4, 0, 19)
+    end
+  end
+  pfn utility_impact_badge(m : Ur.SceneMesh.Mesh, x : Int, impact : Int) : Ur.SceneMesh.Mesh do
+    let tex = match impact do
+      1 -> 11
+      2 -> 30
+      3 -> 20
+      _ -> 10
+    end
+    let positive = impact == 1 || impact == 3
+    let base = if positive do 12 else 17 end
+    let m = box(m, x, 0, 10, 12, 3, 12, tex)
+    let m = face(m, x + 5, 3, 12, 2, 8, 0, 19)
+    let m = face(m, x + 3, 3, if positive do base + 1 else base - 1 end, 6, 2, 0, 19)
+    face(m, x + 2, 3, if positive do base + 3 else base - 3 end, 8, 2, 0, 19)
+  end
+  pfn utility_chunk(slot : Int, lot : Int, y : Int, m : Ur.SceneMesh.Mesh) : Unit do
+    if Vk.chunk_begin(slot, lot % S.width() * 32, y, lot / S.width() * 32, 0) &&
+      Vk.chunk_part(0, m.words, m.quads) && Vk.chunk_commit() do ()
+    else Ur.AppError.stop("Utility inspection mesh upload failed") end
+  end
+  pfn utility_waypoint_marks(c : Ur.Sim.City, points : List(Int), i : Int) : Unit do
+    if i >= utility_waypoint_limit() do () else
+      let slot = utility_waypoint_slot(i)
+      match points do
+        Nil ->
+          Vk.chunk_free(slot)
+          utility_waypoint_marks(c, Nil, i + 1)
+        Cons(lot, rest) ->
+          if S.valid(lot) do utility_chunk(slot, lot, utility_roof(c, lot) + 19, utility_number_badge(i + 1, 36))
+          else Vk.chunk_free(slot) end
+          utility_waypoint_marks(c, rest, i + 1)
+      end
+    end
+  end
+  fn utility_waypoints(c : Ur.Sim.City, points : List(Int), target : Int) : Unit do
+    utility_waypoint_marks(c, points, 0)
+    let n = List.length(points)
+    let slot = utility_waypoint_slot(utility_waypoint_limit())
+    if n < utility_waypoint_limit() && S.valid(target) && !List.any(points, fn point -> point == target) do
+      utility_chunk(slot, target, utility_roof(c, target) + 19, utility_number_badge(n + 1, 31))
+    else Vk.chunk_free(slot) end
+  end
+  pfn utility_impact_priority(mark : Int) : Int do
+    match mark do
+      2 -> 4
+      4 -> 3
+      1 -> 2
+      3 -> 1
+      _ -> 0
+    end
+  end
+  pfn utility_forecast_groups(c : Ur.Sim.City, impact : Option(Ur.UtilityView.Impact), i : Int) : Unit do
+    if i >= utility_group_count() do () else
+      let slot = utility_group_slot(i)
+      match impact do
+        None -> Vk.chunk_free(slot)
+        Some(edit) ->
+          let group = utility_group(utility_group_corner(i), fn lot -> utility_impact_priority(S.get(edit.marks, lot)))
+          if group.count > 0 do
+            let tex = match group.priority do 4 -> 30 | 3 -> 10 | 2 -> 11 | _ -> 20 end
+            utility_chunk(slot, group.lot, utility_roof(c, group.lot) + 20, utility_number_badge(group.count, tex))
+          else Vk.chunk_free(slot) end
+      end
+      utility_forecast_groups(c, impact, i + 1)
+    end
+  end
+  pfn utility_details_at(c : Ur.Sim.City, report : Ur.Sim.UtilityDelivery, layer : Int, inspection : Ur.UtilityView.Inspection,
+    impact : Option(Ur.UtilityView.Impact), live : Bool, far : Bool, lot : Int) : Unit do
+    if lot >= S.count() do () else
+      let member = live && S.get(inspection.members, lot) > 0
+      let selected = live && (lot == inspection.lot || lot == inspection.tap || lot == inspection.limit)
+      let floor_slot = utility_ground_slot(lot)
+      if selected || member do
+        let floor = layer_floor(c, lot % S.width() * 32, lot / S.width() * 32) + 5
+        utility_chunk(floor_slot, lot, floor, utility_ground_mesh(report.flow, layer, inspection, lot, member, far))
+      else Vk.chunk_free(floor_slot) end
+      let kind = if live do Ur.UtilityView.site_kind(c, layer, lot) else 0 end
+      let change = if live && !far do match impact do Some(edit) -> S.get(edit.marks, lot) | None -> 0 end else 0 end
+      let roof_slot = utility_roof_slot(lot)
+      if kind > 0 || change > 0 do
+        let m = { words: NativeArray.make_i32(48, 0), quads: 0 }
+        let m = if kind > 0 do utility_source_badge(m, if change > 0 do 3 else 10 end, kind, S.get(report.sites, lot) > 0) else m end
+        let m = if change > 0 do utility_impact_badge(m, if kind > 0 do 17 else 10 end, change) else m end
+        utility_chunk(roof_slot, lot, utility_roof(c, lot) + 12, m)
+      else Vk.chunk_free(roof_slot) end
+      utility_details_at(c, report, layer, inspection, impact, live, far, lot + 1)
+    end
+  end
+  fn utility_details(c : Ur.Sim.City, st : Ur.Sim.Stats, layer : Int, inspection : Ur.UtilityView.Inspection,
+    impact : Option(Ur.UtilityView.Impact), far : Bool) : Unit do
+    let live = Ur.Layers.is_utility(layer)
+    utility_details_at(c, Ur.Layers.utility_layer(st, layer), layer, inspection, impact, live, far, 0)
+    utility_forecast_groups(c, if live && far do impact else None end, 0)
+  end
+  type BadgePointer = { view : Projection, mx : Float, my : Float, scale : Float, sine : Float, cosine : Float }
+  pfn utility_badge_target(pointer : BadgePointer, lot : Int, height : Int, half_x : Float, half_z : Float,
+    best : Int, nearest : Float) : (Int, Float) do
+    let x = int_to_float(lot % S.width() * 32 + 16)
+    let z = int_to_float(lot / S.width() * 32 + 16)
+    let height = int_to_float(height)
+    let (sx, sy) = world_point(pointer.view, x, height, z)
+    let right = (pointer.mx -. sx) /. pointer.scale
+    let along = (pointer.my -. sy) /. (pointer.scale *. 0.607)
+    let local_x = right *. pointer.cosine +. along *. pointer.sine
+    let local_z = along *. pointer.cosine -. right *. pointer.sine
+    let padding = Math.min_float(4.0, 1.5 /. pointer.scale)
+    let depth = height *. 0.607 +. (x *. pointer.sine +. z *. pointer.cosine) *. 0.795
+    if Math.abs(local_x) <= half_x +. padding && Math.abs(local_z) <= half_z +. padding && depth > nearest do
+      (lot, depth)
+    else (best, nearest) end
+  end
+  pfn utility_badge_at(c : Ur.Sim.City, st : Ur.Sim.Stats, layer : Int, pointer : BadgePointer,
+    far : Bool, lot : Int, best : Int, nearest : Float) : (Int, Float) do
+    if lot >= S.count() do (best, nearest) else
+      let x = int_to_float(lot % S.width() * 32 + 16)
+      let z = int_to_float(lot / S.width() * 32 + 16)
+      let (sx, _) = world_point(pointer.view, x, 0.0, z)
+      let (chosen, depth) = if Math.abs(sx -. pointer.mx) > pointer.scale *. 11.0 +. 2.0 do (best, nearest) else
+        let site = Ur.UtilityView.site_kind(c, layer, lot) > 0
+        if !site && (far || layer != 2 || Ur.Layers.power_status_material(c, st, lot) < 0) do (best, nearest) else
+          let height = utility_roof(c, lot) + (if site do 16 else 8 end)
+          let half = if site do 6.0 else 7.0 end
+          utility_badge_target(pointer, lot, height, half, half, best, nearest)
+        end
+      end
+      utility_badge_at(c, st, layer, pointer, far, lot + 1, chosen, depth)
+    end
+  end
+  pfn utility_group_hit(c : Ur.Sim.City, st : Ur.Sim.Stats, layer : Int, pointer : BadgePointer,
+    i : Int, best : Int, nearest : Float) : Int do
+    if i >= utility_group_count() do best else
+      let group = utility_group(utility_group_corner(i), fn lot -> utility_service_priority(c, st, layer, lot))
+      let (chosen, depth) = if group.count == 0 do (best, nearest)
+        else utility_badge_target(pointer, group.lot, utility_roof(c, group.lot) + 8, 10.0, 6.0, best, nearest) end
+      utility_group_hit(c, st, layer, pointer, i + 1, chosen, depth)
+    end
+  end
+  fn utility_badge_pick(c : Ur.Sim.City, st : Ur.Sim.Stats, layer : Int, view : Projection, mx : Float, my : Float, far : Bool) : Int do
+    if !Ur.Layers.is_utility(layer) || view.w <= 0.0 || view.zoom <= 0.0 do -1 else
+      let pointer = { view: view, mx: mx, my: my, scale: view.w /. (8.0 *. view.zoom), sine: Math.sin(view.yaw), cosine: Math.cos(view.yaw) }
+      let (chosen, depth) = utility_badge_at(c, st, layer, pointer, far, 0, -1, 0.0 -. 1000000.0)
+      if far do utility_group_hit(c, st, layer, pointer, 0, chosen, depth) else chosen end
     end
   end
   -- Project the utility network above the terrain so it is visible through the city view.
@@ -4390,8 +4669,8 @@ mod Ur.Scene do
       flood_map(c, fields, lot + 1)
     end
   end
-  fn map_layer(c : Ur.Sim.City, st : Ur.Sim.Stats, previous : Int, layer : Int) : Unit do
-    if layer == 2 || previous == 2 do power_markers(c, st.utilities.electric, layer == 2, 0) else () end
+  fn map_layer(c : Ur.Sim.City, st : Ur.Sim.Stats, previous : Int, layer : Int, far : Bool) : Unit do
+    if Ur.Layers.is_utility(layer) || Ur.Layers.is_utility(previous) do utility_status_markers(c, st, layer, far, 0) else () end
     let tag = match layer do
       4 -> 253
       5 -> 252

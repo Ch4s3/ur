@@ -5,18 +5,6 @@ mod ReviewFixesTest do
   alias Ur.Sim as S
   alias Ur.Ocean as O
 
-  -- the first water parcel of [c] at least 3 parcels from land on every side
-  pfn open_water(c : Ur.Sim.City, i : Int) : Int do
-    if i >= S.count() do -1 else
-      let x = i % S.width()
-      let z = i / S.width()
-      let clear = x >= 3 && z >= 3 && x < S.width() - 3 && z < S.depth() - 3 && all_water(c, x - 3, z - 3, 0)
-      if clear do i else open_water(c, i + 1) end
-    end
-  end
-  pfn all_water(c : Ur.Sim.City, x0 : Int, z0 : Int, k : Int) : Bool do
-    if k >= 49 do true else if S.get(c.heights, S.index(x0 + k % 7, z0 + k / 7)) > 0 do false else all_water(c, x0, z0, k + 1) end end
-  end
   -- the first water parcel whose centre is 2..4 m deep over open floor, 3 parcels or more from the map's edge
   pfn shallow_water(c : Ur.Sim.City, f : Ur.Ocean.Field, i : Int) : Int do
     if i >= S.count() do -1 else

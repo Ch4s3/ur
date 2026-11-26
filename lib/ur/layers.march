@@ -112,7 +112,7 @@ mod Ur.Layers do
   fn utility_tool(tool : Int) : Int do
     match tool do
       9 | 10 | 14 | 15 | 16 | 18 | 19 | 98 -> 1
-      4 | 8 | 20 | 21 | 22 | 23 | 26 | 27 | 86 | 97 -> 2
+      4 | 8 | 20 | 21 | 22 | 23 | 26 | 27 | 86 | 97 | 150 -> 2
       17 -> 31
       _ -> 0
     end
@@ -130,15 +130,21 @@ mod Ur.Layers do
     else if S.get(report.delivered, lot) < demand do 10
     else 20 end end end
   end
+  fn power_status_material(c : Ur.Sim.City, st : Ur.Sim.Stats, lot : Int) : Int do
+    let tex = power_material(c, st.utilities.electric, lot)
+    if tex == 20 && S.get(st.utilities.facility_demand, lot) > S.get(st.utilities.facility_delivered, lot) do 10
+    else tex end
+  end
   fn utility_caption(c : Ur.Sim.City, st : Ur.Sim.Stats, layer : Int, lot : Int) : String do
     let report = utility_layer(st, layer)
     let capacity = N.capacity(report.flow, lot)
-    let demand = S.get(report.demand, lot)
+    let demand = S.get(report.demand, lot) + (if layer == 2 do S.get(st.utilities.facility_demand, lot) else 0 end)
     let tap = N.tap(report.flow, lot, 0)
     let live = connected(report, tap)
-    let served = int_to_string(S.get(report.delivered, lot)) ++ "/" ++ int_to_string(demand)
+    let delivered = S.get(report.delivered, lot) + (if layer == 2 do S.get(st.utilities.facility_delivered, lot) else 0 end)
+    let served = int_to_string(delivered) ++ "/" ++ int_to_string(demand)
     let segment = int_to_string(N.used(report.flow, lot)) ++ "/" ++ int_to_string(capacity) ++ " on segment"
-    let power = if layer == 2 do power_material(c, report, lot) else -1 end
+    let power = if layer == 2 do power_status_material(c, st, lot) else -1 end
     let status = if power == 30 do
       if S.valid(tap) do "Off grid · Line has no live source" else "Off grid · No line within reach" end
     else if power == 10 do "On grid · Power shortfall"
@@ -201,7 +207,7 @@ mod Ur.Layers do
         let report = utility_layer(st, layer)
         let tier = S.get(if layer == 2 do c.grid else c.pipes end, i)
         if tier == 0 do
-          if layer == 2 do power_material(c, report, i)
+          if layer == 2 do power_status_material(c, st, i)
           else if S.get(report.demand, i) > S.get(report.delivered, i) do 6
           else if layer == 1 && land && connected(report, N.tap(report.flow, i, 0)) do 12
           else -1 end end end
