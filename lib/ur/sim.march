@@ -8262,7 +8262,7 @@ mod Ur.Sim do
           let wait = investment_delay(c, st.commutes, st.civic, i)
           "Eligible for development. Investors look again every " ++ int_to_string(wait.turns * investment_turn_days(c)) ++ " days" ++
             (if wait.tax + wait.energy + wait.commute == 0 && wait.market == 0 do "." else " (tax +" ++ int_to_string(wait.tax) ++ ", energy +" ++ int_to_string(wait.energy) ++ ", commute +" ++ int_to_string(wait.commute) ++
-              (if wait.market > 0 do ", market slump +1" else if wait.market < 0 do ", market boom −1" else "" end end) ++ " turns)." end)
+              (if wait.market > 0 do ", market slump +1" else if wait.market < 0 do ", market boom -1" else "" end end) ++ " turns)." end)
         else status_text(status) end
         _ -> status_text(status)
       end

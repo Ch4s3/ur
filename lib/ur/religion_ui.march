@@ -5,20 +5,18 @@ mod Ur.ReligionUi do
   alias Strata.Text as T
   alias Ur.Sim as S
 
-  pfn label(a : Strata.Ui.Ui, x : Float, y : Float, size : Float, content : String, bright : Bool) : Strata.Ui.Ui do
-    let color = if bright do (0.93, 0.95, 0.90, 1.0) else (0.58, 0.69, 0.70, 1.0) end
-    T.text(a, 0, x, y, T.default_font(), size, color, content)
-  end
+  alias Ur.UiTheme as Theme
+  import Ur.UiTheme.{label, fitted}
 
   pfn wrap(a : Strata.Ui.Ui, x : Float, y : Float, width : Float, content : String) : Strata.Ui.Ui do
-    T.styled(a, 0, x, y, T.default_font(), 11.0, (0.58, 0.69, 0.70, 1.0),
+    T.styled(a, 0, x, y, T.default_font(), 11.0, Theme.muted(),
       T.with_wrap(T.style(), width), content)
   end
 
   pfn button(a : Strata.Ui.Ui, x : Float, y : Float, width : Float, content : String, active : Bool, enabled : Bool) : Strata.Ui.Ui do
-    let color = if active && enabled do (0.18, 0.36, 0.39, 1.0) else (0.09, 0.17, 0.20, 1.0) end
-    let a = U.rect(a, 0, x, y, width -. 2.0, 27.0, color)
-    label(a, x +. 8.0, y +. 6.0, 11.0, content, enabled)
+    let a = U.rect(a, 0, x, y, width -. 2.0, 27.0, Theme.face(active, false, enabled))
+    let a = if active && enabled do U.rect(a, 0, x, y +. 25.0, width -. 2.0, 2.0, Theme.accent()) else a end
+    fitted(a, x +. 8.0, y +. 6.0, width -. 18.0, 11.0, content, enabled)
   end
 
   pfn hit(x : Float, y : Float, left : Float, top : Float, width : Float) : Bool do
@@ -224,7 +222,7 @@ mod Ur.ReligionUi do
     if goal == 0 do label(a, x, y +. 92.0, 12.0, "There is no pending request.", false) else
       let wards = signers(c, 79, Nil)
       let count = List.length(wards)
-      let a = label(a, x, y +. 86.0, 13.0, S.god_name(S.patron(c)) ++ " → " ++ S.god_name(goal) ++ "  ·  " ++ int_to_string(count) ++ " signatories", true)
+      let a = label(a, x, y +. 86.0, 13.0, S.god_name(S.patron(c)) ++ " to " ++ S.god_name(goal) ++ "  ·  " ++ int_to_string(count) ++ " signatories", true)
       let a = label(a, x, y +. 109.0, 11.0, "$" ++ int_to_string(S.rededication_fee(c)) ++ " reconsecration fee · Temples close for " ++ int_to_string(S.rededication_duration()) ++ " days", false)
       let a = label(a, x, y +. 128.0, 11.0, int_to_string(S.wrath_chance()) ++ "% chance of " ++ S.god_name(S.patron(c)) ++ " invoking " ++ S.curse_name(S.patron(c)), false)
       let a = label(a, x, y +. 147.0, 11.0, "Respond before the election in month " ++ int_to_string(Ur.Council.rededication_deadline(c)) ++ ".", false)
