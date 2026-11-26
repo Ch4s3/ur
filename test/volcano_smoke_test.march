@@ -1,0 +1,36 @@
+mod VolcanoSmokeTest do
+  needs IO
+  alias Ur.Sim as S
+  alias Ur.VolcanoSmoke as Smoke
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let shaded_lot = S.index(8, 21)
+    let clear_lot = S.index(8, 17)
+    let city = S.new()
+    let plants = NativeArray.set_int(NativeArray.set_int(city.plants, shaded_lot, 13), clear_lot, 13)
+    let city = { city with plants: plants, founding_map: false, volcanic: true, hour: 12 }
+    let phase = S.day_seconds() /. 2.0
+    let (sx, sy, sz) = Smoke.sun_direction(phase, S.day_seconds())
+    let x = int_to_float(shaded_lot % S.width() * 8 + 4)
+    let z = int_to_float(shaded_lot / S.width() * 8 + 4)
+    let y = int_to_float(S.get(city.heights, shaded_lot)) *. 0.25 +. 1.5
+    let ash : Ur.VolcanoSmoke.AshBlob = { x: x +. sx *. 30.0, y: y +. sy *. 30.0, z: z +. sz *. 30.0, radius: 12.0 }
+    let shaded = S.with_volcanic_shade(city, [ash], phase)
+    Test.assert_eq_int(S.solar_smoke_loss(shaded, shaded_lot), 40, "ash in the sunlight path reduces local solar output")
+    Test.assert_eq_int(S.solar_smoke_loss(shaded, clear_lot), 0, "solar arrays outside the plume's shadow stay clear")
+    Test.assert_true(S.solar_shade_changed(city, shaded), "arriving ash changes solar supply")
+    Test.assert_true(!S.solar_shade_changed(shaded, S.with_volcanic_shade(shaded, [ash], phase)), "unchanged losses do not refresh stats")
+    let clear = S.stats(city)
+    let dark = S.stats(shaded)
+    let clear_supply = S.plant_output(city, clear, shaded_lot)
+    let dark_supply = S.plant_output(shaded, dark, shaded_lot)
+    Test.assert_true(dark_supply < clear_supply && dark_supply > 0, "shaded solar arrays still supply reduced power to the grid")
+    Test.assert_eq_int(S.plant_output(shaded, dark, clear_lot), S.plant_output(city, clear, clear_lot), "nearby clear arrays retain their grid output")
+    Test.assert_eq_int(clear.generation.solar - dark.generation.solar, clear_supply - dark_supply, "aggregate solar supply reflects the local reduction")
+    let dissipated = S.with_volcanic_shade(shaded, [], phase)
+    Test.assert_true(S.solar_shade_changed(shaded, dissipated), "dissipating ash changes solar supply")
+    Test.assert_eq_int((S.stats(dissipated)).generation.solar, clear.generation.solar, "solar output recovers after smoke clears")
+    Test.assert_eq_int(S.solar_smoke_loss(S.with_volcanic_shade(shaded, [ash], 0.0), shaded_lot), 0,
+      "there is no ash shadow when the sun is below the horizon")
+  end
+end

@@ -1,0 +1,147 @@
+mod VolcanoTest do
+  needs IO
+  needs IO.Console
+  alias Ur.Sim as S
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let eligible = List.filter(List.range(0, 256), fn seed -> Ur.Caldera.eligible(seed))
+    Test.assert_true(List.length(eligible) >= 20 && List.length(eligible) <= 48, "only a minority of seeds are volcanic")
+    Test.assert_true(!Ur.Caldera.eligible(-1), "the legacy map has no generated caldera")
+
+    -- A flat base makes the footprint and profiles independently measurable.
+    let seed = Ur.Caldera.preview_seed()
+    let shape = Ur.Caldera.shape(seed)
+    let floor = Ur.Caldera.height(shape, shape.x, shape.z, 20)
+    let _ = List.each([(4, 0), (0, 4), (-4, 0), (0, -4)], fn direction ->
+      let (dx, dz) = direction
+      let rim = Ur.Caldera.height(shape, shape.x + dx, shape.z + dz, 20)
+      let flank = Ur.Caldera.height(shape, shape.x + dx * 2, shape.z + dz * 2, 20)
+      Test.assert_true(rim - floor >= 24, "the rim stands at least six metres above the basin on every side")
+      Test.assert_true(rim - flank >= 24 && flank > 20, "the shield descends across a broad flank"))
+    Test.assert_eq_int(Ur.Caldera.height(shape, shape.x + 14, shape.z, 20), 20, "the skirt merges with the island")
+    Test.assert_eq_int(Ur.Caldera.height(shape, shape.x + 14, shape.z, 0), 0, "sea beyond the skirt stays open")
+    Test.assert_true(Ur.Caldera.height(shape, shape.x + 4, shape.z, 0) - floor >= 24,
+      "the shield closes its rim where the old map had water")
+
+    let c = S.unclaimed()
+    let heights = List.fold_left(List.range(0, S.count()), NativeArray.make_int(S.count(), 0), fn (a, i) ->
+      NativeArray.set_int(a, i, Ur.Caldera.height(shape, i % S.width(), i / S.width(), 20)))
+    let c = { c with heights: heights, world_seed: seed }
+    Test.assert_true(Option.is_none(Ur.Volcano.site(c)), "a seed on its own cannot retrofit a saved mountain")
+    let c = { c with volcanic: true }
+    let covers = List.map(List.range(0, 17), fn i -> Ur.Landscape.volcanic_cover(
+      shape.x * 32 + i * 16, shape.z * 32, 78, 3))
+    Test.assert_true(List.any(covers, fn cover -> cover == 21 || cover == 25) &&
+      List.any(covers, fn cover -> cover >= Ur.Landscape.volcanic_ash_material()),
+      "moderate slopes mix vegetated soil and exposed volcanic material")
+    Test.assert_true(Ur.Landscape.volcanic_cover(shape.x * 32, shape.z * 32, 148, 8) >= Ur.Landscape.volcanic_ash_material(),
+      "the exposed caldera rim is rocky")
+    let site = Ur.Volcano.site(c)
+    Test.assert_true(Option.is_some(site), "the generated volcano has a flank vent")
+    let path = Ur.Volcano.path(c, site)
+    Test.assert_true(List.length(path) >= 28 && List.length(path) <= Ur.Volcano.flow_steps() + 1,
+      "a pulse can travel across the mountain flank")
+    let first = head(path)
+    let vent = S.index(first.x / 32, first.z / 32)
+    let neighbor = S.neighbour(vent, 0)
+    let built = { c with buildings: NativeArray.set_int(NativeArray.set_int(c.buildings, vent, 2), neighbor, 1),
+      zones: NativeArray.set_int(c.zones, vent, 1), shop_stock: NativeArray.set_int(c.shop_stock, vent, 9) }
+    Test.assert_true(!List.is_empty(Ur.Volcano.path(built, site)), "buildings do not stop the flow at the vent")
+    let patch = { cell: first, source: first, lane: 0, insulation: 0 }
+    let run = { vent: 1, sections: [{ spine: first, along_x: true, patches: [patch] }] }
+    let (early, too_soon) = Ur.Volcano.burn(built, [run], 2.0)
+    Test.assert_true(!too_soon && S.get(early.buildings, vent) == 2, "buildings stay intact before lava arrives")
+    let (damaged, burned) = Ur.Volcano.burn(early, [run], 4.0)
+    Test.assert_true(burned && S.get(damaged.buildings, vent) == 0 && S.fire_rebuilding(damaged, vent) &&
+      S.get(damaged.shop_stock, vent) == 0 && S.get(damaged.buildings, neighbor) == 1,
+      "lava burns the building it reaches and leaves uncontacted buildings alone")
+    let (_, repeated_fire) = Ur.Volcano.burn(damaged, [run], 5.0)
+    Test.assert_true(!repeated_fire, "an existing ruin is not burned again")
+    Test.assert_true(List.is_empty(Ur.Volcano.reached([run], 2.0)) &&
+      !List.is_empty(Ur.Volcano.reached([run], 4.0)), "vegetation is cleared only after lava arrives")
+    let last = List.fold_left(path, first, fn (_, cell) -> cell)
+    Test.assert_true(first.y - last.y >= 32, "the run descends at least eight metres")
+    Test.assert_true(first.y > 96, "the caldera terrain is rendered above the old height cap")
+    let _ = List.fold_left(path, first, fn (previous, cell) ->
+      Test.assert_true(cell.y > 6 && previous.y >= cell.y, "lava stays on dry ground and never climbs")
+      Test.assert_true(previous.x == cell.x && previous.z == cell.z ||
+        int_abs(previous.x - cell.x) + int_abs(previous.z - cell.z) == 4, "the flow is connected")
+      cell)
+    Test.assert_eq_int(Ur.Volcano.spread(20, 4), 0, "a steep grade confines the lava")
+    Test.assert_eq_int(Ur.Volcano.spread(0, 4), 10, "a level grade allows a broad lobe")
+    let footprint = Ur.Volcano.flow(c, path)
+    Test.assert_true(List.any(footprint, fn section -> List.length(section.patches) >= 3), "the route spreads into a sheet")
+    let _ = List.each(footprint, fn section -> List.each(section.patches, fn patch ->
+      Test.assert_true(patch.cell.y <= patch.source.y + (if patch.lane > 0 do 1 else 0 end), "only lateral pools can overtop a small lip")
+      Test.assert_true(patch.cell.y == Ur.Landscape.height(c, patch.cell.x, patch.cell.z), "each patch lies on sampled terrain")
+      let gap = int_abs(patch.cell.x - patch.source.x) + int_abs(patch.cell.z - patch.source.z)
+      Test.assert_true(gap == 4 || (gap == 0 && patch.lane == 0), "each patch touches its source")))
+    Test.assert_true(!Ur.Volcano.arrived(1.0, 2, 2) && Ur.Volcano.arrived(1.0, 2, 0), "the core arrives before the margin")
+    Test.assert_true(!Ur.Volcano.patch_hot(7.0, 2, 2, 0) && Ur.Volcano.patch_hot(7.0, 2, 1, 1) &&
+      Ur.Volcano.patch_hot(7.0, 2, 0, 0), "a margin crusts while the insulated interior still glows")
+    let paved = { c with roads: NativeArray.set_int(c.roads, Option.unwrap_or(site, 0), 1) }
+    Test.assert_true(Ur.Volcano.site(paved) == site, "blocking a vent preserves its location")
+    Test.assert_true(List.is_empty(Ur.Volcano.path(paved, site)), "building on the vent stops the effect")
+    Test.assert_eq_int(Ur.Volcano.reach(0.0), 0, "lava starts at the vent")
+    Test.assert_true(Ur.Volcano.reach(9.0) > 0 && Ur.Volcano.reach(9.0) < Ur.Volcano.flow_steps(), "the front advances gradually")
+    Test.assert_true(!Ur.Volcano.hot(44.0, Ur.Volcano.flow_steps()) && Ur.Volcano.hot(44.0, 0), "the distal crust cools first")
+    Test.assert_true(!Ur.Volcano.hot(60.0, 0) && Ur.Volcano.hot(Ur.Volcano.period(), 0), "the vent cools before the next pulse")
+    let runs = Ur.Volcano.layout(c, site)
+    Test.assert_eq_int(List.length(runs), 3, "three different flanks carry lava")
+    Test.assert_true(List.all(runs, fn run -> List.length(run.sections) >= 12), "each vent has its own flank route")
+    let cells = List.fold_left(runs, Nil, fn (cells, run) ->
+      List.fold_left(run.sections, cells, fn (cells, section) ->
+        List.fold_left(section.patches, cells, fn (cells, patch) ->
+          let key = S.basalt_cell(patch.cell.x, patch.cell.z)
+          Test.assert_true(!List.any(cells, fn previous -> previous == key), "eruption meshes occupy each terrain cell once")
+          Cons(key, cells))))
+    Test.assert_true(List.length(cells) > List.length(path) * 4, "the combined flows cover a broad footprint")
+    Test.assert_true(List.any(runs, fn run -> List.any(run.sections, fn section -> List.length(section.patches) >= 12)),
+      "at least one lobe is twelve metres wide")
+    Test.assert_true(Ur.Volcano.run_time(0.0, 0) == 0.0 && Ur.Volcano.run_time(0.0, 2) < 0.0, "the vents open at different times")
+    match Ur.CalderaLake.form(c) do
+      Some(lake) ->
+        Test.assert_true(List.length(lake.covered) >= 30, "the low caldera floor holds a visible pool")
+        Test.assert_true(List.all(lake.covered, fn tile ->
+          Ur.Landscape.height(c, tile.x, tile.z) < lake.level), "the lake never covers ground above its level")
+        let first = head(lake.covered)
+        Test.assert_true(Ur.CalderaLake.molten(first, 20.0), "the pool feeds molten lava during an eruption")
+        Test.assert_true(!List.is_empty(Ur.VolcanoRender.ash(c, Some(lake), runs, 12.0)), "the erupting vents release smoke")
+        Test.assert_true(List.is_empty(Ur.VolcanoRender.ash(c, Some(lake), runs, 65.0)), "the plume disperses before the resting phase")
+      None -> Test.assert_true(false, "the volcanic caldera holds a lava lake")
+    end
+    let settled = Ur.Volcano.settle_time()
+    let (first_deposit, deposited) = Ur.Volcano.settle(c, runs, settled -. 1.0, settled)
+    Test.assert_true(deposited, "the cooling boundary lays basalt")
+    Test.assert_eq_int(S.basalt_depth(first_deposit, first.x, first.z), 1, "one eruption lays one layer")
+    Test.assert_eq_int(Ur.Landscape.height(first_deposit, first.x, first.z), first.y + 1, "basalt raises the sampled terrain")
+    let (repeated, deposited_again) = Ur.Volcano.settle(first_deposit, runs, settled, settled +. 1.0)
+    Test.assert_true(!deposited_again && S.basalt_depth(repeated, first.x, first.z) == 1, "a pulse settles once")
+    let next_route = Ur.Volcano.layout(repeated, site)
+    let period = Ur.Volcano.period()
+    let (second_deposit, _) = Ur.Volcano.settle(repeated, next_route, period +. settled -. 1.0, period +. settled)
+    Test.assert_eq_int(S.basalt_depth(second_deposit, first.x, first.z), 2, "successive deposits build up")
+    let (blocked, _) = Ur.Volcano.settle(paved, runs, settled -. 1.0, settled)
+    Test.assert_eq_int(S.basalt_depth(blocked, first.x, first.z), 0, "a developed parcel receives no deposit")
+    let c = { second_deposit with volcano_ms: float_to_int(settled *. 1000.0) }
+    let encoded = Ur.Save.encode({ city: c, cx: 0.0, cz: 0.0, zoom: 88.0, yaw: 0.55, paused: true, speed: 1 })
+    match Ur.Save.decode(encoded) do
+      Ok(game) ->
+        Test.assert_true(game.city.volcanic && Ur.Volcano.site(game.city) == site, "a generated volcano survives save and load")
+        Test.assert_eq_int(S.get(game.city.heights, S.index(shape.x, shape.z)), floor, "the caldera floor survives save and load")
+        Test.assert_true(game.city.volcano_ms == c.volcano_ms && S.basalt_depth(game.city, first.x, first.z) == 2,
+          "the basalt layers and eruption phase survive reload")
+      Err(message) -> Test.assert_true(false, message)
+    end
+    let legacy_city = { c with basalt: Map.empty(), volcano_ms: 0 }
+    let old = Ur.Save.encode({ city: legacy_city, cx: 0.0, cz: 0.0, zoom: 88.0, yaw: 0.55, paused: true, speed: 1 })
+    let legacy = String.replace(old, "\"volcanic\":true,\"basalt\":[],\"volcano_ms\":0,", "")
+    Test.assert_true(legacy != old, "the legacy fixture omits volcano and deposit fields")
+    match Ur.Save.decode(legacy) do
+      Ok(game) -> Test.assert_true(Option.is_none(Ur.Volcano.site(game.city)) && Map.is_empty(game.city.basalt) && game.city.volcano_ms == 0,
+        "a legacy save defaults to empty deposits and an initial eruption phase")
+      Err(message) -> Test.assert_true(false, message)
+    end
+    Authority.must(println("Caldera and volcano: all assertions passed"))
+  end
+end

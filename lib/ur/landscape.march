@@ -95,6 +95,28 @@ mod Ur.Landscape do
     else 0 end end end end end
   end
   fn side_material(h : Int) : Int do if h > 28 do 2 else if h <= 5 do 16 else 1 end end end
+  fn volcanic_ash_material() : Int do 54 end
+  fn volcanic_scoria_material() : Int do 55 end
+  fn volcanic_rock_material() : Int do 56 end
+
+  fn slope(h : Int, west : Int, east : Int, north : Int, south : Int) : Int do
+    let low = Math.min_int(Math.min_int(west, east), Math.min_int(north, south))
+    let high = Math.max_int(Math.max_int(west, east), Math.max_int(north, south))
+    Math.max_int(h - low, high - h)
+  end
+
+  fn volcanic_cover(x : Int, z : Int, h : Int, grade : Int) : Int do
+    let u = int_to_float(x) *. 0.25
+    let v = int_to_float(z) *. 0.25
+    let patch = Math.sin(u *. 0.12 +. Math.sin(v *. 0.16) *. 1.7) +.
+      Math.sin(v *. 0.19 -. u *. 0.09) *. 0.7
+    let exposed = h + grade * 6 + float_to_int(patch *. 19.0)
+    if h < 42 do top_material(x, z, h)
+    else if exposed < 96 do (if patch < 0.15 do 21 else 25 end)
+    else if patch > 0.55 do volcanic_scoria_material()
+    else if exposed >= 140 || grade >= 8 do volcanic_rock_material()
+    else volcanic_ash_material() end end end end
+  end
   pfn crosswalk(n : Int, deck : Int, side : Int, width : Int, out : List(Ur.Architecture.Piece)) : List(Ur.Architecture.Piece) do
     if n >= width / 2 do out else
       let offset = 17 - width + n * 4
@@ -274,23 +296,34 @@ mod Ur.Landscape do
       Cons(p, rest) -> Cons({ p with y: p.y + h }, shift(rest, h))
     end
   end
-  pfn vegetation(c : Ur.Sim.City, i : Int, site : (Int, Int, Bool, Bool), n : Int, out : List(Ur.Architecture.Piece)) : List(Ur.Architecture.Piece) do
+  type Clearing = { x : Int, z : Int, w : Int, d : Int }
+  fn overlaps(piece : Ur.Architecture.Piece, clear : Clearing) : Bool do
+    piece.x < clear.x + clear.w && clear.x < piece.x + piece.w &&
+      piece.z < clear.z + clear.d && clear.z < piece.z + piece.d
+  end
+  pfn vegetation(c : Ur.Sim.City, i : Int, site : (Int, Int, Bool, Bool), clearings : List(Clearing), n : Int, out : List(Ur.Architecture.Piece)) : List(Ur.Architecture.Piece) do
     if n >= 3 do out else
       let seed = Strata.Seed.mix(i, n + 1)
       let x = 7 + seed % 18
       let z = 7 + (seed / 13) % 18
-      let h = height(c, i % S.width() * 32 + x, i / S.width() * 32 + z)
+      let wx = i % S.width() * 32 + x
+      let wz = i / S.width() * 32 + z
+      let h = height(c, wx, wz)
+      let bare = h >= 42 && S.volcanic_highland(c, i % S.width(), i / S.width()) &&
+        volcanic_cover(wx, wz, h, slope(h, height(c, wx - 4, wz), height(c, wx + 4, wz),
+          height(c, wx, wz - 4), height(c, wx, wz + 4))) >= volcanic_ash_material()
       -- what grows here follows the island (Ur.Flora): zone, wind side, coast
       let kind = Ur.Flora.pick_at(site, c, h, seed)
       let stand = Ur.Flora.mangrove_spot(c, i, h)
-      let next = if stand > 0 && seed % 11 < (if stand == 2 do 4 else 7 end) do
-        List.append(Ur.Trees.mangrove_stand(stand, x, z, seed), out)
+      let parts = if bare do Nil else if stand > 0 && seed % 11 < (if stand == 2 do 4 else 7 end) do
+        Ur.Trees.mangrove_stand(stand, x, z, seed)
         else if kind >= 0 && seed % 11 < 7 && S.grade_kind(c, S.grade_source(c, i)) != 1 do
-        List.append(Ur.Trees.shape(kind, x, z, h, seed), out)
-        else if h > 1 && seed % 5 == 0 do Cons(A.piece(x, h, z, 4, 2, 3, 2), Cons(A.piece(x + 1, h + 2, z, 2, 1, 2, 23), out))
-        else if h > 7 && h < 37 && seed % 3 == 0 do Cons(A.piece(x, h, z, 2, 2, 2, 25), Cons(A.piece(x, h + 2, z, 1, 1, 1, 20), out))
-        else out end end end end
-      vegetation(c, i, site, n + 1, next)
+        Ur.Trees.shape(kind, x, z, h, seed)
+        else if h > 1 && seed % 5 == 0 do [A.piece(x, h, z, 4, 2, 3, 2), A.piece(x + 1, h + 2, z, 2, 1, 2, 23)]
+        else if h > 7 && h < 37 && seed % 3 == 0 do [A.piece(x, h, z, 2, 2, 2, 25), A.piece(x, h + 2, z, 1, 1, 1, 20)]
+        else Nil end end end end end
+      let blocked = List.any(clearings, fn clear -> List.any(parts, fn piece -> overlaps(piece, clear)))
+      vegetation(c, i, site, clearings, n + 1, if blocked do out else List.append(parts, out) end)
     end
   end
   pfn zone_edge(c : Ur.Sim.City, i : Int, n : Int, tex : Int, out : List(Ur.Architecture.Piece)) : List(Ur.Architecture.Piece) do
@@ -838,7 +871,7 @@ mod Ur.Landscape do
     end
     List.append(structure, apron)
   end
-  pfn buildings_and_land(c : Ur.Sim.City, i : Int, lighting : Int) : List(Ur.Architecture.Piece) do
+  pfn buildings_and_land(c : Ur.Sim.City, i : Int, lighting : Int, clearings : List(Clearing)) : List(Ur.Architecture.Piece) do
     let h = S.get(c.heights, i)
     let b = S.get(c.buildings, i)
     let stage = S.get(c.construction, i)
@@ -917,7 +950,7 @@ mod Ur.Landscape do
       shift(A.orient(parts, side), h)
     else if zone > 0 do zone_edge(c, i, 0, if zone == 1 do 11 else if zone == 4 do 10 else 12 end end, Nil)
     else if !c.founding_map && i % S.width() == 9 && i / S.width() >= 22 && i / S.width() <= 25 do harbour_piece(i / S.width(), h)
-    else vegetation(c, i, Ur.Flora.site(c, i), 0, Nil) end end end end end end end end end end end
+    else vegetation(c, i, Ur.Flora.site(c, i), clearings, 0, Nil) end end end end end end end end end end end
   end
   pfn tunnel_approach(c : Ur.Sim.City, lot : Int, peer : Int, z : Int, ground : Int) : List(Ur.Architecture.Piece) do
     if z >= 16 do Nil else
@@ -1235,9 +1268,12 @@ mod Ur.Landscape do
     canal_bank(c, i, 0, works)
   end
   fn structures(c : Ur.Sim.City, i : Int, lighting : Int) : List(Ur.Architecture.Piece) do
+    structures_cleared(c, i, lighting, Nil)
+  end
+  fn structures_cleared(c : Ur.Sim.City, i : Int, lighting : Int, clearings : List(Clearing)) : List(Ur.Architecture.Piece) do
     let base = if S.canal_water(c, i) do canal_parts(c, i)
       else if S.get(c.seawalls, i) > 0 do seawall_parts(c, i)
-      else if S.get(c.parks, i) > 0 do park(c, i) else buildings_and_land(c, i, lighting) end end end
+      else if S.get(c.parks, i) > 0 do park(c, i) else buildings_and_land(c, i, lighting, clearings) end end end
     let spill = RoadSurface.pieces(c, i, false)
     let base = if List.is_empty(spill) do base else
       -- Street shoulders displace natural decorations in their neighboring parcel.

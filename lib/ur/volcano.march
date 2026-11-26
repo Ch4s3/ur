@@ -1,0 +1,393 @@
+mod Ur.Volcano do
+  alias Ur.Sim as S
+  alias Ur.Landscape as L
+
+  type Cell = { x : Int, y : Int, z : Int }
+  type LavaPatch = { cell : Cell, source : Cell, lane : Int, insulation : Int }
+  type LavaSection = { spine : Cell, along_x : Bool, patches : List(LavaPatch) }
+
+  type LavaRun = { vent : Int, sections : List(LavaSection) }
+
+  fn vent_count() : Int do 3 end
+  fn max_lanes() : Int do 10 end
+  fn flow_steps() : Int do 52 end
+  fn period() : Float do 138.0 end
+  fn phase(time : Float) : Float do time -. Math.floor(time /. period()) *. period() end
+  fn reach(time : Float) : Int do S.clamp(float_to_int(phase(time) /. 0.44), 0, flow_steps()) end
+  fn hot(time : Float, step : Int) : Bool do
+    step <= reach(time) && phase(time) < 35.0 +. int_to_float(flow_steps() - step) *. 0.31
+  end
+
+  pfn arrival(step : Int, lane : Int) : Float do
+    int_to_float(step) *. 0.44 +. int_to_float(lane) *. 0.58
+  end
+  fn arrived(time : Float, step : Int, lane : Int) : Bool do phase(time) >= arrival(step, lane) end
+  fn patch_hot(time : Float, step : Int, lane : Int, insulation : Int) : Bool do
+    let age = phase(time) -. arrival(step, lane)
+    age >= 0.0 && hot(time, step) &&
+      (lane == 0 || age < 3.6 +. int_to_float(insulation) *. 4.8)
+  end
+
+  fn spread(drop : Int, distance : Int) : Int do
+    if drop <= distance * 2 do max_lanes()
+    else if drop * 2 <= distance * 5 do 6
+    else if drop <= distance * 3 do 3
+    else if drop <= distance * 4 do 1
+    else 0 end end end end
+  end
+
+  fn settle_time() : Float do 53.0 end
+  pfn vent_delay(vent : Int) : Float do int_to_float(vent) *. 3.2 end
+  fn run_time(time : Float, vent : Int) : Float do
+    let delay = vent_delay(vent)
+    (phase(time) -. delay) *. settle_time() /. (settle_time() -. delay)
+  end
+  fn spreading(time : Float) : Bool do
+    run_time(time, vent_count() - 1) < arrival(flow_steps(), max_lanes())
+  end
+  fn animating(time : Float) : Bool do phase(time) < settle_time() end
+
+  fn visible(flow : List(LavaRun), time : Float) : List(LavaRun) do
+    if animating(time) do flow else Nil end
+  end
+
+  pfn open_ground(c : Ur.Sim.City, lot : Int) : Bool do
+    S.valid(lot) && lot != c.harbour && S.get(c.roads, lot) == 0 &&
+      S.get(c.transit, lot) == 0 && S.get(c.ferries, lot) == 0 && S.get(c.seawalls, lot) == 0 &&
+      !S.canal_water(c, lot) &&
+      !S.valid(S.grade_source(c, lot)) && !S.valid(S.campus_root(c, lot)) &&
+      S.public_work_stage(c, lot) == 0
+  end
+  pfn cell_lot(cell : Cell) : Int do S.index(cell.x / 32, cell.z / 32) end
+  pfn cell_key(x : Int, z : Int) : Int do x / 4 + S.width() * 8 * (z / 4) end
+  pfn claim(path : List(Cell), used : Map(Int, Bool)) : Map(Int, Bool) do
+    List.fold_left(path, used, fn (occupied, cell) ->
+      Map.insert(occupied, cell_key(cell.x, cell.z), true, Map.int_cmp))
+  end
+  pfn next_cell(c : Ur.Sim.City, current : Cell, seen : List(Cell), bearing : (Int, Int), blocked : Map(Int, Bool)) : Option(Cell) do
+    let (dx, dz) = bearing
+    -- Keep the established heading on equal grades, then try either side.
+    let directions = [(dx, dz), (-dz, dx), (dz, -dx), (-dx, -dz)]
+    List.fold_left(directions, None, fn (best, direction) ->
+      let (u, v) = direction
+      let x = current.x + 4 * u
+      let z = current.z + 4 * v
+      if x < 0 || z < 0 || x >= S.width() * 32 || z >= S.depth() * 32 ||
+        !open_ground(c, S.index(x / 32, z / 32)) ||
+        Map.get_or(blocked, cell_key(x, z), false, Map.int_cmp) ||
+        List.any(seen, fn cell -> cell.x == x && cell.z == z) do best else
+        let y = L.height(c, x, z)
+        let ceiling = match best do
+          Some(cell) -> cell.y - 1
+          None -> current.y
+        end
+        if y > 0 && y <= ceiling do Some({ x: x, y: y, z: z }) else best end
+      end)
+  end
+  pfn descend(c : Ur.Sim.City, current : Cell, seen : List(Cell), bearing : (Int, Int), remaining : Int, level_steps : Int, blocked : Map(Int, Bool)) : List(Cell) do
+    let seen = Cons(current, seen)
+    if remaining == 0 || level_steps >= 8 do List.reverse(seen) else
+      match next_cell(c, current, seen, bearing, blocked) do
+        Some(next) ->
+          let heading = ((next.x - current.x) / 4, (next.z - current.z) / 4)
+          let level_steps = if next.y == current.y do level_steps + 1 else 0 end
+          descend(c, next, seen, heading, remaining - 1, level_steps, blocked)
+        None -> List.reverse(seen)
+      end
+    end
+  end
+  pfn vent_centre(lot : Int) : (Int, Int) do
+    (lot % S.width() * 32 + 16, lot / S.width() * 32 + 16)
+  end
+  pfn channel(c : Ur.Sim.City, lot : Int, bearing : (Int, Int), blocked : Map(Int, Bool)) : List(Cell) do
+    let (x, z) = vent_centre(lot)
+    let y = L.height(c, x, z)
+    if y <= 0 || !open_ground(c, lot) || Map.get_or(blocked, cell_key(x, z), false, Map.int_cmp) do Nil else
+      descend(c, { x: x, y: y, z: z }, Nil, bearing, flow_steps(), 0, blocked)
+    end
+  end
+
+  fn path(c : Ur.Sim.City, summit : Option(Int)) : List(Cell) do
+    match summit do
+      Some(lot) -> channel(c, lot, Ur.Caldera.flank(Ur.Caldera.shape(c.world_seed), 0), Map.empty())
+      None -> Nil
+    end
+  end
+  pfn bank(c : Ur.Sim.City, source : Cell, dx : Int, dz : Int, lane : Int, width : Int, spill_height : Int,
+    occupied : Map(Int, Bool)) : (List(LavaPatch), Map(Int, Bool)) do
+    let x = source.x + dx
+    let z = source.z + dz
+    if lane > width || x < 0 || z < 0 || x >= S.width() * 32 || z >= S.depth() * 32 do (Nil, occupied) else
+      let key = cell_key(x, z)
+      if Map.get_or(occupied, key, false, Map.int_cmp) || !open_ground(c, S.index(x / 32, z / 32)) do (Nil, occupied) else
+        let y = L.height(c, x, z)
+        -- A broad pool has one voxel of head. The lip is relative to the
+        -- spine so lateral spreading cannot repeatedly climb uphill.
+        let limit = Math.min_int(spill_height, source.y + (if width >= 5 do 1 else 0 end))
+        if y <= 0 || y > limit || source.y - y > 4 do (Nil, occupied) else
+          let cell = { x: x, y: y, z: z }
+          let (outer, occupied) = bank(c, cell, dx, dz, lane + 1, width, spill_height, Map.insert(occupied, key, true, Map.int_cmp))
+          (Cons({ cell: cell, source: source, lane: lane, insulation: List.length(outer) }, outer), occupied)
+        end
+      end
+    end
+  end
+
+  pfn sections(c : Ur.Sim.City, path : List(Cell), previous : Cell, occupied : Map(Int, Bool), step : Int) : (List(LavaSection), Map(Int, Bool)) do
+    match path do
+      Nil -> (Nil, occupied)
+      Cons(cell, rest) ->
+        let next = match rest do
+          Cons(a, _) -> a
+          Nil -> cell
+        end
+        let (dx, dz) = if step == 0 do (next.x - cell.x, next.z - cell.z)
+          else (cell.x - previous.x, cell.z - previous.z) end
+        let ahead = List.take(rest, 3)
+        let far = List.fold_left(ahead, cell, fn (_, point) -> point)
+        let spread_width = spread(previous.y - far.y, 1 + List.length(ahead))
+        let width = if step < 2 do 0 else Math.min_int(spread_width, Math.min_int((step + 2) / 2, 3 + List.length(rest) * 2)) end
+        let lip = cell.y + (if width >= 5 do 1 else 0 end)
+        let (left, occupied) = bank(c, cell, -dz, dx, 1, width, lip, occupied)
+        let (right, occupied) = bank(c, cell, dz, -dx, 1, width, lip, occupied)
+        let core = { cell: cell, source: previous, lane: 0, insulation: 0 }
+        let section = { spine: cell, along_x: dx != 0, patches: Cons(core, List.append(left, right)) }
+        let (tail, occupied) = sections(c, rest, cell, occupied, step + 1)
+        (Cons(section, tail), occupied)
+    end
+  end
+  pfn spread_path(c : Ur.Sim.City, path : List(Cell), occupied : Map(Int, Bool)) : (List(LavaSection), Map(Int, Bool)) do
+    match path do
+      Nil -> (Nil, occupied)
+      Cons(vent, _) -> sections(c, path, vent, occupied, 0)
+    end
+  end
+  fn flow(c : Ur.Sim.City, path : List(Cell)) : List(LavaSection) do
+    let (lanes, _) = spread_path(c, path, claim(path, Map.empty()))
+    lanes
+  end
+  fn layout(c : Ur.Sim.City, summit : Option(Int)) : List(LavaRun) do
+    match summit do
+      None -> Nil
+      Some(primary) ->
+        let formation = Ur.Caldera.shape(c.world_seed)
+        let vents = List.map(List.range(0, vent_count()), fn id ->
+          let (dx, dz) = Ur.Caldera.flank(formation, id)
+          let lot = if id == 0 do primary else S.index(formation.x + dx * 5, formation.z + dz * 5) end
+          let (x, z) = vent_centre(lot)
+          { id: id, lot: lot, bearing: (dx, dz), key: cell_key(x, z) })
+        -- Claim vent origins and downhill spines before spreading laterally.
+        let origins = List.fold_left(vents, Map.empty(), fn (used, vent) ->
+          Map.insert(used, vent.key, true, Map.int_cmp))
+        let (routes, occupied) = List.fold_left(vents, (Nil, origins), fn (state, vent) ->
+          let (routes, used) = state
+          let route = channel(c, vent.lot, vent.bearing, Map.remove(used, vent.key, Map.int_cmp))
+          (Cons((vent.id, route), routes), claim(route, used)))
+        let (runs, _) = List.fold_left(List.reverse(routes), (Nil, occupied), fn (state, entry) ->
+          let (runs, used) = state
+          let (vent, route) = entry
+          let (lanes, used) = spread_path(c, route, used)
+          (if List.is_empty(lanes) do runs else Cons({ vent: vent, sections: lanes }, runs) end, used))
+        List.reverse(runs)
+    end
+  end
+  fn main_flow(runs : List(LavaRun)) : List(LavaSection) do
+    match runs do
+      Cons(run, _) -> run.sections
+      Nil -> Nil
+    end
+  end
+
+  -- The scene updates its lava meshes in eighths of a second. Use that same
+  -- clock for vegetation so the clearing advances with the visible lava.
+  fn reached(runs : List(LavaRun), time : Float) : List(LavaRun) do
+    let time = Math.floor(time *. 8.0) /. 8.0
+    let reached = List.fold_left(visible(runs, time), Nil, fn (reached, run) ->
+      let local = run_time(time, run.vent)
+      if local < 0.0 do reached else
+        let (_, sections) = List.fold_left(List.take(run.sections, reach(local) + 1), (0, Nil), fn (state, section) ->
+          let (step, sections) = state
+          let patches = List.filter(section.patches, fn patch -> arrived(local, step, patch.lane))
+          (step + 1, Cons({ section with patches: patches }, sections)))
+        Cons({ run with sections: List.reverse(sections) }, reached)
+      end)
+    List.reverse(reached)
+  end
+
+  pfn patch_bounds(cell : Cell) : Ur.Landscape.Clearing do
+    { x: cell.x % 32, z: cell.z % 32, w: 4, d: 4 }
+  end
+
+  fn burn(c : Ur.Sim.City, runs : List(LavaRun), time : Float) : (Ur.Sim.City, Bool) do
+    List.fold_left(visible(runs, time), (c, false), fn (state, run) ->
+      let local = run_time(time, run.vent)
+      if local < 0.0 do state else
+        let (_, state) = List.fold_left(List.take(run.sections, reach(local) + 1), (0, state), fn (acc, section) ->
+          let (step, state) = acc
+          let state = List.fold_left(section.patches, state, fn (state, patch) ->
+            let (city, _) = state
+            let lot = cell_lot(patch.cell)
+            let occupied = S.get(city.buildings, lot) > 0 || S.get(city.construction, lot) > 0 ||
+              S.get(city.plants, lot) > 0 || S.get(city.parks, lot) > 0
+            if occupied && open_ground(city, lot) && patch_hot(local, step, patch.lane, patch.insulation) &&
+              List.any(L.structures(city, lot, 0), fn piece -> piece.h > 1 && L.overlaps(piece, patch_bounds(patch.cell))) do
+              (S.lava_burn_structure(city, lot), true)
+            else state end)
+          (step + 1, state))
+        state
+      end)
+  end
+
+  -- Removing a facility or park can expose the original grade under its
+  -- level foundation. Keep the reached footprint at the new surface.
+  fn regrade(c : Ur.Sim.City, runs : List(LavaRun)) : List(LavaRun) do
+    let on_ground = fn (cell : Cell) -> { cell with y: L.height(c, cell.x, cell.z) }
+    List.map(runs, fn run ->
+      let sections = List.map(run.sections, fn section ->
+        let patches = List.map(section.patches, fn patch ->
+          { patch with cell: on_ground(patch.cell), source: on_ground(patch.source) })
+        { section with spine: on_ground(section.spine), patches: patches })
+      { run with sections: sections })
+  end
+
+  type ShoreContact = { water : Cell, lot : Int, born : Float }
+
+  pfn sea_lot(c : Ur.Sim.City, lot : Int) : Bool do
+    S.canal_open_sea(c, lot) && open_ground(c, lot) && S.get(c.seabed, lot) == 0 &&
+      !List.any([0, 1, 2, 3], fn side ->
+        let peer = S.neighbour(lot, side)
+        S.valid(peer) && (peer == c.harbour || S.get(c.ferries, peer) > 0 ||
+          S.canal_water(c, peer) || S.get(c.seawalls, peer) > 0))
+  end
+
+  -- The fine shoreline can be inside a nominally dry parcel. Follow the
+  -- first wet cells to an adjoining sea parcel, without crossing dry ground.
+  pfn wet_parcel(c : Ur.Sim.City, x : Int, z : Int, dx : Int, dz : Int, left : Int) : Int do
+    if left == 0 || x < 0 || z < 0 || x >= S.width() * 32 || z >= S.depth() * 32 do -1 else
+      let lot = S.index(x / 32, z / 32)
+      if !open_ground(c, lot) || L.height(c, x, z) > 0 do -1
+      else if S.get(c.heights, lot) == 0 do (if sea_lot(c, lot) do lot else -1 end)
+      else wet_parcel(c, x + dx, z + dz, dx, dz, left - 1) end end
+    end
+  end
+
+  pfn patch_contact(c : Ur.Sim.City, patch : LavaPatch, born : Float) : Option(ShoreContact) do
+    let cell = patch.cell
+    let lot = cell_lot(cell)
+    let coastal = S.get(c.heights, lot) == 0 ||
+      List.any([0, 1, 2, 3], fn side -> sea_lot(c, S.neighbour(lot, side)))
+    if !coastal || !open_ground(c, lot) || L.height(c, cell.x, cell.z) <= 0 do None else
+      let directions = [(4, 0), (0, 4), (-4, 0), (0, -4)]
+      List.fold_left(directions, None, fn (found, direction) ->
+        if Option.is_some(found) do found else
+          let (dx, dz) = direction
+          let x = cell.x + dx
+          let z = cell.z + dz
+          let wet = wet_parcel(c, x, z, dx, dz, 8)
+          if S.valid(wet) do Some({ water: { x: x, y: 0, z: z }, lot: wet, born: born }) else None end
+        end)
+    end
+  end
+
+  pfn first_contact(c : Ur.Sim.City, sections : List(LavaSection), local : Float, step : Int,
+    best : Option(ShoreContact)) : Option(ShoreContact) do
+    let limit = match best do Some(source) -> source.born | None -> local end
+    if arrival(step, 0) > limit do best else
+      match sections do
+        Nil -> best
+        Cons(section, rest) ->
+          let best = List.fold_left(section.patches, best, fn (best, patch) ->
+            let born = arrival(step, patch.lane)
+            let earlier = match best do Some(source) -> born < source.born | None -> born <= local end
+            if !earlier do best else
+              match patch_contact(c, patch, born) do
+                Some(contact) -> Some(contact)
+                None -> best
+              end
+            end)
+          first_contact(c, rest, local, step + 1, best)
+      end
+    end
+  end
+
+  doc "First hot contact per vent. Vents entering the same parcel share a plume and a basalt shelf."
+  fn sea_entries(c : Ur.Sim.City, runs : List(LavaRun), time : Float) : List(ShoreContact) do
+    if !animating(time) do Nil else
+      List.fold_left(runs, Nil, fn (sources, run) ->
+        match first_contact(c, run.sections, run_time(time, run.vent), 0, None) do
+          None -> sources
+          Some(contact) ->
+            let delay = vent_delay(run.vent)
+            let source = { contact with born: delay +. contact.born *. (settle_time() -. delay) /. settle_time() }
+            if List.any(sources, fn old -> old.lot == source.lot && old.born <= source.born) do sources
+            else Cons(source, List.filter(sources, fn old -> old.lot != source.lot)) end
+        end)
+    end
+  end
+
+  fn sea_contacts(c : Ur.Sim.City, flow : List(LavaRun), time : Float) : List(Cell) do
+    List.map(sea_entries(c, flow, time), fn contact -> contact.water)
+  end
+
+  pfn build_shelf(c : Ur.Sim.City, contact : ShoreContact) : Ur.Sim.City do
+    let lot = contact.lot
+    let basalt = List.fold_left(List.range(0, 64), c.basalt, fn (basalt, local) ->
+      let key = lot * 64 + local
+      let depth = Math.min_int(S.terrain_ceiling(), Map.get_or(basalt, key, 0, Map.int_cmp) + 1)
+      Map.insert(basalt, key, depth, Map.int_cmp))
+    { c with basalt: basalt, heights: NativeArray.set_int(c.heights, lot, 4) }
+  end
+
+  -- A complete basalt cap distinguishes fully formed volcanic ground from
+  -- the few scattered coastal cells an earlier flow may already have coated.
+  fn keep_shore(current : Ur.Sim.City, restored : Ur.Sim.City) : Ur.Sim.City do
+    let heights = List.fold_left(Map.keys(current.basalt), restored.heights, fn (heights, key) ->
+      let lot = key / 64
+      let height = S.get(current.heights, lot)
+      if height > 0 && S.get(heights, lot) == 0 &&
+        List.all(List.range(0, 64), fn cell -> Map.get_or(current.basalt, lot * 64 + cell, 0, Map.int_cmp) > 0) do
+        NativeArray.set_int(heights, lot, height)
+      else heights end)
+    { restored with basalt: current.basalt, heights: heights }
+  end
+
+  fn settle(c : Ur.Sim.City, flow : List(LavaRun), before : Float, after : Float) : (Ur.Sim.City, Bool) do
+    let earlier = Math.floor((before -. settle_time()) /. period())
+    let later = Math.floor((after -. settle_time()) /. period())
+    if !c.volcanic || earlier >= later || List.is_empty(flow) do (c, false) else
+      let basalt = List.fold_left(flow, c.basalt, fn (basalt, run) ->
+        List.fold_left(run.sections, basalt, fn (basalt, section) ->
+          List.fold_left(section.patches, basalt, fn (basalt, patch) ->
+            let cell = patch.cell
+            let key = S.basalt_cell(cell.x, cell.z)
+            let y = L.height(c, cell.x, cell.z)
+            if open_ground(c, cell_lot(cell)) && y > 0 && y < S.terrain_ceiling() do
+              Map.insert(basalt, key, Map.get_or(c.basalt, key, 0, Map.int_cmp) + 1, Map.int_cmp)
+            else basalt end)))
+      let contacts = sea_entries(c, flow, settle_time() -. 0.01)
+      let city = List.fold_left(contacts, { c with basalt: basalt }, build_shelf)
+      (city, true)
+    end
+  end
+
+  fn clearings(c : Ur.Sim.City, flow : List(LavaRun)) : Map(Int, List(Ur.Landscape.Clearing)) do
+    let cooled = List.fold_left(Map.keys(c.basalt), Map.empty(), fn (clear, key) ->
+      let lot = key / 64
+      let bounds = { x: key % 8 * 4, z: key / 8 % 8 * 4, w: 4, d: 4 }
+      Map.insert(clear, lot, Cons(bounds, Map.get_or(clear, lot, Nil, Map.int_cmp)), Map.int_cmp))
+    List.fold_left(flow, cooled, fn (clear, run) ->
+      List.fold_left(run.sections, clear, fn (clear, section) ->
+        List.fold_left(section.patches, clear, fn (clear, patch) ->
+          let cell = patch.cell
+          let lot = cell_lot(cell)
+          let bounds = patch_bounds(cell)
+          Map.insert(clear, lot, Cons(bounds, Map.get_or(clear, lot, Nil, Map.int_cmp)), Map.int_cmp))))
+  end
+
+  fn site(c : Ur.Sim.City) : Option(Int) do
+    if !c.volcanic do None else
+      let formation = Ur.Caldera.shape(c.world_seed)
+      Some(S.index(formation.x + formation.dx * 5, formation.z + formation.dz * 5))
+    end
+  end
+end

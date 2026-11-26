@@ -1,0 +1,58 @@
+mod Ur.CalderaLake do
+  alias Ur.Sim as S
+
+  type LakeTile = { x : Int, z : Int, distance : Int }
+  type LavaLake = { x : Int, z : Int, level : Int, covered : List(LakeTile) }
+
+  pfn available(c : Ur.Sim.City, x : Int, z : Int) : Bool do
+    let lot = S.index(x / 32, z / 32)
+    S.get(c.heights, lot) > 0 && S.get(c.roads, lot) == 0 && S.get(c.zones, lot) == 0 &&
+      S.get(c.buildings, lot) == 0 && S.get(c.construction, lot) == 0 && S.get(c.plants, lot) == 0 &&
+      S.get(c.parks, lot) == 0 && S.public_work_stage(c, lot) == 0 && !S.canal_water(c, lot) &&
+      !S.valid(S.grade_source(c, lot)) && !S.valid(S.campus_root(c, lot))
+  end
+  pfn flood(c : Ur.Sim.City, x : Int, z : Int, level : Int, front : List(LakeTile), back : List(LakeTile),
+    seen : Map(Int, Bool), covered : List(LakeTile)) : List(LakeTile) do
+    match front do
+      Nil -> if List.is_empty(back) do List.reverse(covered) else flood(c, x, z, level, List.reverse(back), Nil, seen, covered) end
+      Cons(tile, rest) ->
+        let dx = tile.x - x
+        let dz = tile.z - z
+        if dx * dx + dz * dz > 52 * 52 do flood(c, x, z, level, rest, back, seen, covered) else
+          let key = S.basalt_cell(tile.x, tile.z)
+          if Map.get_or(seen, key, false, Map.int_cmp) do flood(c, x, z, level, rest, back, seen, covered) else
+            let seen = Map.insert(seen, key, true, Map.int_cmp)
+            if !available(c, tile.x, tile.z) || Ur.Landscape.height(c, tile.x, tile.z) >= level do
+              flood(c, x, z, level, rest, back, seen, covered)
+            else
+              let next = tile.distance + 1
+              let back = List.fold_left([(4, 0), (0, 4), (-4, 0), (0, -4)], back, fn (queue, offset) ->
+                let (u, v) = offset
+                Cons({ x: tile.x + u, z: tile.z + v, distance: next }, queue))
+              flood(c, x, z, level, rest, back, seen, Cons(tile, covered))
+            end
+          end
+        end
+    end
+  end
+
+  fn form(c : Ur.Sim.City) : Option(LavaLake) do
+    if !c.volcanic do None else
+      let (cx, cz) = Ur.Caldera.centre(c.world_seed)
+      let x = cx * 32 + 16
+      let z = cz * 32 + 16
+      let bed = Ur.Landscape.height(c, x, z)
+      if bed <= 4 || bed > S.terrain_ceiling() - 6 || !available(c, x, z) do None else
+        let level = bed + 5
+        let covered = flood(c, x, z, level, [{ x: x, z: z, distance: 0 }], Nil, Map.empty(), Nil)
+        if List.is_empty(covered) do None else Some({ x: x, z: z, level: level, covered: covered }) end
+      end
+    end
+  end
+
+  fn molten(tile : LakeTile, time : Float) : Bool do
+    let phase = Ur.Volcano.phase(time)
+    let warm = if Ur.Volcano.animating(time) do 2 + float_to_int(Math.min_float(14.0, Math.min_float(phase *. 1.25, (Ur.Volcano.settle_time() -. phase) *. 1.15))) else 2 end
+    tile.distance < warm
+  end
+end

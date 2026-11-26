@@ -1,0 +1,278 @@
+mod Ur.VolcanoRender do
+  needs IO.Console
+  needs IO.Process
+  needs IO.Foreign
+  needs Window
+  alias Strata.Ffi.Vk as Vk
+  alias Ur.Sim as S
+  import Ur.SceneMesh.{box, face}
+
+  fn crust_material() : Int do 49 end
+  fn ember_material() : Int do 50 end
+  fn steam_material() : Int do 51 end
+  pfn bands() : Int do 3 end
+  pfn puff_slots() : Int do 6 end
+  pfn run_slots() : Int do puff_slots() + bands() * (Ur.Volcano.flow_steps() + 1) end
+  pfn pool_offset() : Int do Ur.Volcano.vent_count() * run_slots() end
+  pfn steam_offset() : Int do pool_offset() + 16 + puff_slots() end
+  pfn steam_puffs_per_vent() : Int do 11 end
+  pfn steam_slots() : Int do Ur.Volcano.vent_count() * steam_puffs_per_vent() end
+  fn slots() : Int do steam_offset() + steam_slots() end
+
+  pfn upload(slot : Int, x : Int, y : Int, z : Int, level : Int, part : Int, m : Ur.SceneMesh.Mesh) : Unit do
+    if m.quads == 0 do Vk.chunk_free(slot)
+    else if Vk.chunk_begin(slot, x, y, z, level) && Vk.chunk_part(part, m.words, m.quads) && Vk.chunk_commit() do ()
+    else Ur.AppError.stop("Volcano mesh upload failed") end end
+  end
+
+  pfn hot_bank(section : Ur.Volcano.LavaSection, side : Int, time : Float, step : Int) : Bool do
+    let spine = section.spine
+    List.any(section.patches, fn patch ->
+      let offset = if section.along_x do patch.cell.z - spine.z else patch.cell.x - spine.x end
+      patch.lane == 1 && offset * side > 0 && Ur.Volcano.patch_hot(time, step, patch.lane, patch.insulation))
+  end
+
+  pfn lava_patch(m : Ur.SceneMesh.Mesh, patch : Ur.Volcano.LavaPatch, section : Ur.Volcano.LavaSection,
+    origin : Ur.Volcano.Cell, time : Float, step : Int) : Ur.SceneMesh.Mesh do
+    let cell = patch.cell
+    let x = cell.x - origin.x
+    let z = cell.z - origin.z
+    let y = cell.y - origin.y
+    let hot = Ur.Volcano.patch_hot(time, step, patch.lane, patch.insulation)
+    let shimmer = int_mod_euclid(cell.x + cell.z + float_to_int(time *. 2.0), 11)
+    let grain = (cell.x / 4 * 19 + cell.z / 4 * 13 + (cell.x / 4) * (cell.z / 4) * 3) % 23
+    let rock = if !hot do crust_material()
+      else if patch.lane > 0 do
+        if grain >= 19 && Ur.Volcano.phase(time) > int_to_float(step) *. 0.44 +. 5.0 do crust_material()
+        else if grain < 4 && patch.insulation > 0 do 35 else ember_material() end end
+      else if shimmer == 0 do 36 else if shimmer < 4 do ember_material() else 35 end end end end
+    let cooled = patch.lane == 0 && hot && Ur.Volcano.phase(time) > int_to_float(step) *. 0.44 +. 2.5
+    let low = if cooled && !hot_bank(section, -1, time, step) do 1 else 0 end
+    let high = if cooled && !hot_bank(section, 1, time, step) do 1 else 0 end
+    let span = 4 - low - high
+    let m = if section.along_x do box(m, x, y, z + low, 4, 1, span, rock)
+      else box(m, x + low, y, z, span, 1, 4, rock) end
+    let m = if low == 0 do m else if section.along_x do box(m, x, y, z, 4, 1, 1, crust_material())
+      else box(m, x, y, z, 1, 1, 4, crust_material()) end end
+    let m = if high == 0 do m else if section.along_x do box(m, x, y, z + 3, 4, 1, 1, crust_material())
+      else box(m, x + 3, y, z, 1, 1, 4, crust_material()) end end
+    let fall = S.clamp(patch.source.y - cell.y, 0, 31 - y)
+    if fall == 0 do m else
+      let across_x = patch.source.x != cell.x
+      let x = x + (if !across_x do low else if patch.source.x > cell.x do 3 else 0 end end)
+      let z = z + (if across_x do low else if patch.source.z > cell.z do 3 else 0 end end)
+      box(m, x, y + 1, z, if across_x do 1 else span end, fall, if across_x do span else 1 end, rock)
+    end
+  end
+
+  pfn band_of(section : Ur.Volcano.LavaSection, patch : Ur.Volcano.LavaPatch) : Int do
+    if patch.lane <= 3 do 0 else
+      let offset = if section.along_x do patch.cell.z - section.spine.z else patch.cell.x - section.spine.x end
+      if offset < 0 do 1 else 2 end
+    end
+  end
+  pfn lava_band(section : Ur.Volcano.LavaSection, time : Float, step : Int, band : Int, slot : Int) : Unit do
+    let strip = List.filter(section.patches, fn patch ->
+      band_of(section, patch) == band && Ur.Volcano.arrived(time, step, patch.lane))
+    match strip do
+      Nil -> Vk.chunk_free(slot)
+      Cons(first, rest) ->
+        let origin = List.fold_left(rest, first.cell, fn (low, patch) ->
+          { x: Math.min_int(low.x, patch.cell.x), y: Math.min_int(low.y, patch.cell.y), z: Math.min_int(low.z, patch.cell.z) })
+        -- Seven patches per strip fit the 32-voxel mesh range.
+        let m = List.fold_left(strip, { words: NativeArray.make_i32(192, 0), quads: 0 }, fn (m, patch) ->
+          lava_patch(m, patch, section, origin, time, step))
+        upload(slot, origin.x, origin.y, origin.z, 0, 0, m)
+    end
+  end
+  pfn render_flow(flow : List(Ur.Volcano.LavaSection), time : Float, reach : Int, step : Int, base : Int) : Unit do
+    match (step <= reach, flow) do
+      (true, Cons(section, rest)) ->
+        List.each(List.range(0, bands()), fn band -> lava_band(section, time, step, band, base + step * bands() + band))
+        render_flow(rest, time, reach, step + 1, base)
+      _ -> List.each(List.range(step * bands(), run_slots() - puff_slots()), fn i -> Vk.chunk_free(base + i))
+    end
+  end
+
+  pfn column(x : Int, y : Int, z : Int, wind : Ur.Sim.Wind, time : Float, large : Bool) : List(Ur.VolcanoSmoke.AshBlob) do
+    if time < 0.0 do Nil else
+      let life = if large do 13.0 else 10.0 end
+      List.fold_left(List.range(0, puff_slots()), Nil, fn (puffs, i) ->
+        let offset = int_to_float(i) *. life /. int_to_float(puff_slots())
+        let born = offset +. Math.floor((time -. offset) /. life) *. life
+        if born < 0.0 || born >= 34.0 do puffs else
+          let age = time -. born
+          let progress = age /. life
+          let drift = progress *. age *. int_to_float(wind.speed) /. 11.0
+          let sway = Math.sin(age *. 1.1 +. offset) *. progress *. (if large do 3.2 else 1.4 end)
+          let radius = if large do 1.8 +. progress *. 4.0 else 0.8 +. progress *. 2.2 end
+          let puff = { x: int_to_float(x + 2) *. 0.25 +. Math.cos(wind.heading) *. drift -. Math.sin(wind.heading) *. sway,
+            y: int_to_float(y) *. 0.25 +. radius *. 0.64 +. progress *. (if large do 20.0 else 13.0 end),
+            z: int_to_float(z + 2) *. 0.25 +. Math.sin(wind.heading) *. drift +. Math.cos(wind.heading) *. sway, radius: radius }
+          Cons(puff, puffs)
+        end)
+    end
+  end
+  pfn lake_ash(lake : Option(Ur.CalderaLake.LavaLake), wind : Ur.Sim.Wind, time : Float) : List(Ur.VolcanoSmoke.AshBlob) do
+    match lake do
+      Some(pool) -> column(pool.x, pool.level, pool.z, wind, Ur.Volcano.phase(time), true)
+      None -> Nil
+    end
+  end
+  pfn vent_ash(run : Ur.Volcano.LavaRun, wind : Ur.Sim.Wind, time : Float) : List(Ur.VolcanoSmoke.AshBlob) do
+    match run.sections do
+      Cons(first, _) -> column(first.spine.x, first.spine.y, first.spine.z, wind, Ur.Volcano.run_time(time, run.vent), false)
+      Nil -> Nil
+    end
+  end
+  fn ash(c : Ur.Sim.City, lake : Option(Ur.CalderaLake.LavaLake), runs : List(Ur.Volcano.LavaRun), time : Float) : List(Ur.VolcanoSmoke.AshBlob) do
+    if !Ur.Volcano.animating(time) do Nil else
+      let wind = S.regional_wind(c)
+      List.fold_left(runs, lake_ash(lake, wind, time), fn (blobs, run) -> List.append(blobs, vent_ash(run, wind, time)))
+    end
+  end
+
+  pfn draw_puffs(puffs : List(Ur.VolcanoSmoke.AshBlob), base : Int, i : Int) : Unit do
+    match puffs do
+      Nil -> List.each(List.range(i, puff_slots()), fn index -> Vk.chunk_free(base + index))
+      Cons(p, rest) ->
+        let size = S.clamp(float_to_int(p.radius *. 4.0), 5, 25)
+        let height = S.clamp(size / 2, 3, 12)
+        let ox = float_to_int(p.x *. 4.0) - size
+        let oy = float_to_int(p.y *. 4.0) - height
+        let oz = float_to_int(p.z *. 4.0) - size
+        let texture = if p.radius > 4.3 do 33 else 32 end
+        let m = { words: NativeArray.make_i32(36, 0), quads: 0 }
+        let m = box(m, 1, 0, 1, size - 2, 1, size - 2, texture)
+        let m = box(m, 0, 1, 0, size, height - 2, size, texture)
+        let m = box(m, 1, height - 1, 1, size - 2, 1, size - 2, texture)
+        upload(base + i, ox, oy, oz, 1, 2, m)
+        draw_puffs(rest, base, i + 1)
+    end
+  end
+
+  type SteamPuff = { x : Float, y : Float, z : Float, radius : Float, material : Int }
+
+  fn steam_puffs(sources : List(Ur.Volcano.ShoreContact), wind : Ur.Sim.Wind, time : Float) : List(SteamPuff) do
+    let phase = Ur.Volcano.phase(time)
+    let windward = Math.cos(wind.heading)
+    let southward = Math.sin(wind.heading)
+    let speed = int_to_float(wind.speed) /. 3.6
+    List.fold_left(sources, Nil, fn (puffs, source) ->
+      List.fold_left(List.range(0, steam_puffs_per_vent()), puffs, fn (puffs, i) ->
+        let age = phase -. source.born -. int_to_float(i) *. 0.55
+        if age < 0.0 || age >= 8.0 do puffs else
+          let drift = age *. speed *. (0.26 +. age *. 0.048)
+          let sway = Math.sin(int_to_float(i) *. 2.4) *. (0.75 +. age *. 0.32)
+          let material = steam_material() + (if age < 3.0 do 0 else if age < 5.5 do 1 else 2 end end)
+          Cons({ x: int_to_float(source.water.x + 2) *. 0.25 +. windward *. drift -. southward *. sway,
+            y: 1.3 +. 2.2 *. age, z: int_to_float(source.water.z + 2) *. 0.25 +. southward *. drift +. windward *. sway,
+            radius: 2.8 +. age *. 0.72, material: material }, puffs)
+        end))
+  end
+
+  pfn draw_steam(puffs : List(SteamPuff), base : Int, i : Int) : Unit do
+    match puffs do
+      Nil -> List.each(List.range(i, steam_slots()), fn index -> Vk.chunk_free(base + index))
+      Cons(p, rest) ->
+        -- Level two packs one mesh cell per metre. The stepped lobes round the plume.
+        let size = Math.max_int(6, float_to_int(p.radius *. 2.0))
+        let height = Math.max_int(3, size / 2)
+        let edge = size / 4
+        let inner = size - edge * 2
+        let x = float_to_int(p.x *. 4.0) - size * 2
+        let y = float_to_int(Math.max_float(0.0, p.y -. int_to_float(height) *. 0.5) *. 4.0)
+        let z = float_to_int(p.z *. 4.0) - size * 2
+        let m = { words: NativeArray.make_i32(60, 0), quads: 0 }
+        let m = box(m, edge, 0, edge, inner, 1, inner, p.material)
+        let m = box(m, 0, 1, edge, edge, height - 2, inner, p.material)
+        let m = box(m, edge, 1, 0, inner, height - 2, size, p.material)
+        let m = box(m, size - edge, 1, edge, edge, height - 2, inner, p.material)
+        let m = box(m, edge, height - 1, edge, inner, 1, inner, p.material)
+        upload(base + i, x, y, z, 2, 2, m)
+        draw_steam(rest, base, i + 1)
+    end
+  end
+
+  pfn lake_mesh(lake : Ur.CalderaLake.LavaLake, time : Float, slot : Int, band : Int) : Unit do
+    let x = lake.x - 64 + band % 4 * 32
+    let z = lake.z - 64 + band / 4 * 32
+    let m = List.fold_left(lake.covered, { words: NativeArray.make_i32(160, 0), quads: 0 }, fn (m, tile) ->
+      let u = tile.x - x
+      let v = tile.z - z
+      if u < 0 || u >= 32 || v < 0 || v >= 32 do m else
+        let grain = (tile.x / 4 * 19 + tile.z / 4 * 13 + (tile.x / 4) * (tile.z / 4) * 3) % 23
+        let active = Ur.CalderaLake.molten(tile, time)
+        let glow = int_mod_euclid(grain + float_to_int(time *. 2.0), 17)
+        let material = if !active || (tile.distance > 4 && grain >= 19) do crust_material()
+          else if glow < 2 || tile.distance < 2 do 36 else if grain < 10 do 35 else ember_material() end end end
+        let m = face(m, u, 0, v, 4, 4, 0, material)
+        if tile.distance == 0 && Ur.Volcano.animating(time) do
+          box(m, u + 1, 1, v + 1, 2, 1 + glow / 9, 2, 36)
+        else m end
+      end)
+    upload(slot + band, x, lake.level - 1, z, 0, 0, m)
+  end
+
+  pfn flow_lights(sections : List(Ur.Volcano.LavaSection), time : Float, step : Int) : Unit do
+    match sections do
+      Nil -> ()
+      Cons(section, rest) ->
+        if step % 9 == 0 && Ur.Volcano.hot(time, step) do
+          let p = section.spine
+          Vk.beacon(int_to_float(p.x + 2), int_to_float(p.y + 4), int_to_float(p.z + 2), 36)
+          match List.find(section.patches, fn patch -> patch.lane >= 5 && Ur.Volcano.patch_hot(time, step, patch.lane, patch.insulation)) do
+            Some(patch) -> Vk.beacon(int_to_float(patch.cell.x + 2), int_to_float(patch.cell.y + 4), int_to_float(patch.cell.z + 2), 36)
+            None -> ()
+          end
+        else () end
+        flow_lights(rest, time, step + 1)
+    end
+  end
+  fn lights(lake : Option(Ur.CalderaLake.LavaLake), runs : List(Ur.Volcano.LavaRun), time : Float) : Unit do
+    match lake do
+      Some(pool) ->
+        let lit = List.filter(pool.covered, fn tile ->
+          (tile.x - pool.x) % 16 == 0 && (tile.z - pool.z) % 16 == 0 && Ur.CalderaLake.molten(tile, time))
+        List.each(List.take(lit, 24), fn tile ->
+          Vk.beacon(int_to_float(tile.x + 2), int_to_float(pool.level + 4), int_to_float(tile.z + 2), 37))
+      None -> ()
+    end
+    if !Ur.Volcano.animating(time) do () else
+      List.each(runs, fn run ->
+        let local = Ur.Volcano.run_time(time, run.vent)
+        if local >= 0.0 do flow_lights(run.sections, local, 0) else () end)
+    end
+  end
+
+  fn draw(base : Int, c : Ur.Sim.City, lake : Option(Ur.CalderaLake.LavaLake), runs : List(Ur.Volcano.LavaRun), time : Float, terrain_changed : Bool) : Unit do
+    let wind = S.regional_wind(c)
+    let steam = steam_puffs(Ur.Volcano.sea_entries(c, runs, time), wind, time)
+    draw_steam(steam, base + steam_offset(), 0)
+    let pool = base + pool_offset()
+    match lake do
+      Some(surface) ->
+        List.each(List.range(0, 16), fn band -> lake_mesh(surface, time, pool, band))
+        draw_puffs(lake_ash(lake, wind, time), pool + 16, 0)
+      None ->
+        if terrain_changed do List.each(List.range(0, 16 + puff_slots()), fn i -> Vk.chunk_free(pool + i)) else () end
+    end
+    if !Ur.Volcano.animating(time) || List.is_empty(runs) do
+      if terrain_changed do List.each(List.range(0, pool_offset()), fn i -> Vk.chunk_free(base + i)) else () end
+    else
+      List.each(List.range(0, Ur.Volcano.vent_count()), fn vent ->
+        let slot = base + vent * run_slots()
+        let local = Ur.Volcano.run_time(time, vent)
+        let found = List.find(runs, fn run -> run.vent == vent)
+        match found do
+          Some(run) ->
+            if local >= 0.0 do
+              render_flow(run.sections, local, Ur.Volcano.reach(local), 0, slot + puff_slots())
+              draw_puffs(vent_ash(run, wind, time), slot, 0)
+            else () end
+          None ->
+            if terrain_changed do List.each(List.range(0, run_slots()), fn i -> Vk.chunk_free(slot + i)) else () end
+        end)
+    end
+  end
+end

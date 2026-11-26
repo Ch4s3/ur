@@ -427,6 +427,27 @@ development and does not assign individual passengers to vehicles.
 Run `UR_DEMO=2 ./run.sh` for the transport showcase. Add
 `UR_CHANNEL_VIEW=1` for the ferry crossing or `UR_REGION_VIEW=1` for both islands.
 
+## Volcanoes
+
+About one in eight seeds generates a shield volcano. Its broad slopes rise
+to a sunken summit caldera with exposed rock, ash and rusty scoria. Scrub
+and trees grow on gentler slopes between old lava deposits. During an eruption,
+the lava pool spreads across the caldera floor and staggered vents open on
+three flanks. The pool and hot flows light nearby terrain. Lava follows
+gullies downhill and spreads into broad lobes where the grade eases. The
+edges form a dark crust around the molten core. Smoke drifts with the wind,
+casting moving shadows that temporarily reduce solar output below.
+Lava burns trees and damages structures when it reaches them.
+
+Each completed eruption adds a permanent 25 cm layer of black basalt
+where the flow reached. Lava hitting the sea sends up a cloud of white
+steam that drifts downwind and can leave a permanent basalt shelf. Later
+eruptions follow the raised surface.
+
+Run `UR_VOLCANO_VIEW=1 ./run.sh` to see an active eruption,
+`UR_VOLCANO_VIEW=2 ./run.sh` to see the deposits after three eruptions, or
+`UR_VOLCANO_VIEW=3 ./run.sh` for a close-up of steam at the coast.
+
 ## Map layers
 
 Open **Layers** and select a map view. Click the active view again or choose

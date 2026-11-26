@@ -1,0 +1,67 @@
+-- Geometry in parcels horizontally and quarter-metres vertically.
+mod Ur.Caldera do
+  type CalderaShape = { x : Int, z : Int, dx : Int, dz : Int, phase : Float, radius : Float, floor : Float, crest : Float }
+
+  fn preview_seed() : Int do 4 end
+  fn eligible(seed : Int) : Bool do seed >= 0 && Strata.Seed.mix(seed, 1673) % 8 == 0 end
+  pfn location(layout : Int) : (Int, Int) do (15 + layout / 4 % 3, 12 + layout / 12 % 3) end
+  fn centre(seed : Int) : (Int, Int) do location(Strata.Seed.mix(seed, 1674)) end
+  fn shape(seed : Int) : CalderaShape do
+    let layout = Strata.Seed.mix(seed, 1674)
+    let (dx, dz) = match layout % 4 do
+      0 -> (1, 0)
+      1 -> (0, 1)
+      2 -> (-1, 0)
+      _ -> (0, -1)
+    end
+    let (x, z) = location(layout)
+    { x: x, z: z, dx: dx, dz: dz,
+      phase: Strata.Seed.unit(Strata.Seed.mix(seed, 1675)) *. 6.2831853,
+      radius: 3.15 +. Strata.Seed.unit(Strata.Seed.mix(seed, 1676)) *. 0.45,
+      floor: 69.0 +. int_to_float(layout / 36 % 12), crest: 156.0 +. int_to_float(layout / 432 % 11) }
+  end
+
+  fn flank(s : CalderaShape, vent : Int) : (Int, Int) do
+    match vent do
+      0 -> (s.dx, s.dz)
+      1 -> (s.dz, -s.dx)
+      _ -> (-s.dz, s.dx)
+    end
+  end
+
+  pfn smooth(value : Float) : Float do
+    let t = Math.clamp_float(value, 0.0, 1.0)
+    t *. t *. (3.0 -. 2.0 *. t)
+  end
+  pfn gully(s : CalderaShape, dx : Float, dz : Float, vent : Int) : Float do
+    let (x, z) = flank(s, vent)
+    let along = dx *. int_to_float(x) +. dz *. int_to_float(z)
+    let cross = dz *. int_to_float(x) -. dx *. int_to_float(z)
+    let fan = smooth((along -. 6.4) /. 3.0)
+    let bend = 1.25 *. Math.sin((along -. 5.0) *. 0.77) *. Math.cos(s.phase +. int_to_float(vent) *. 1.7)
+    let width = 1.55 +. 1.8 *. fan
+    (15.0 -. int_to_float(vent)) *. smooth(along -. 3.9) *. smooth((11.8 -. along) /. 2.0) *.
+      Math.max_float(0.0, 1.0 -. Math.abs(cross -. bend) /. width)
+  end
+
+  fn height(s : CalderaShape, x : Int, z : Int, base : Int) : Int do
+    let dx = int_to_float(x - s.x)
+    let dz = int_to_float(z - s.z)
+    let r2 = dx *. dx +. dz *. dz
+    if r2 >= 144.0 do base else
+      let r = Math.sqrt(r2)
+      let angle = Math.atan2(dz, dx) +. s.phase
+      let rim = s.radius +. 0.33 *. Math.sin(angle *. 2.0) +. 0.19 *. Math.sin(angle *. 5.0)
+      let crest = s.crest +. 6.0 *. Math.sin(angle *. 3.0) +. 3.0 *. Math.sin(angle *. 7.0)
+      let inner = s.floor +. (crest -. s.floor) *. smooth((r -. 1.1) /. (rim -. 1.1))
+      let shoulder = (12.0 -. r) /. (12.0 -. rim)
+      let outer = 14.0 +. (crest -. 14.0) *. Math.pow(shoulder, 1.42)
+      let channel = Math.max_float(gully(s, dx, dz, 0), Math.max_float(gully(s, dx, dz, 1), gully(s, dx, dz, 2)))
+      let shield = if r <= rim do inner else outer -. channel end
+      let blend = smooth((12.0 -. r) /. 4.0)
+      let height = float_to_int(shield *. blend +. int_to_float(base) *. (1.0 -. blend) +. 0.5)
+      -- The shield can build out the coast. Thin skirt tips stay underwater.
+      if base == 0 && height < 4 do 0 else height end
+    end
+  end
+end

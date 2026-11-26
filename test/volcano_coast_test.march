@@ -1,0 +1,65 @@
+mod VolcanoCoastTest do
+  needs IO
+  needs IO.Console
+  alias Ur.Sim as S
+
+  pfn shoreline(c : Ur.Sim.City, x : Int, z : Int, end_x : Int) : Ur.Volcano.Cell do
+    let y = Ur.Landscape.height(c, x, z)
+    if y > 0 && Ur.Landscape.height(c, x + 4, z) == 0 do { x: x, y: y, z: z }
+    else if x < end_x do shoreline(c, x + 4, z, end_x)
+    else panic("Missing dry edge in the fixture.") end end
+  end
+
+  pfn run(cell : Ur.Volcano.Cell, vent : Int) : Ur.Volcano.LavaRun do
+    let patch = { cell: cell, source: cell, lane: 0, insulation: 0 }
+    { vent: vent, sections: [{ spine: cell, along_x: true, patches: [patch] }] }
+  end
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let heights = List.fold_left(List.range(10, 13), NativeArray.make_int(S.count(), 0), fn (heights, z) ->
+      List.fold_left(List.range(9, 14), heights, fn (heights, x) ->
+        NativeArray.set_int(heights, S.index(x, z), if x == 13 do 4 else 8 end)))
+    let c = { S.unclaimed() with volcanic: true, world_seed: Ur.Caldera.preview_seed(), heights: heights }
+    let water = S.index(14, 11)
+    let z = 11 * 32 + 16
+    let edge = shoreline(c, 13 * 32 + 16, z, 14 * 32 + 24)
+    let flows = [run(edge, 0), run(edge, 1)]
+    let delayed = [run(edge, 1)]
+    Test.assert_true(List.is_empty(Ur.Volcano.sea_entries(c, delayed, 2.0)), "no steam before lava reaches the water")
+    let sources = Ur.Volcano.sea_entries(c, flows, 4.0)
+    Test.assert_eq_int(List.length(sources), 1, "shared water contact triggers one steam plume")
+    Test.assert_true(List.any(sources, fn source -> source.lot == water && source.born == 0.0),
+      "steam and the basalt shelf share the first water contact")
+    let wind : Ur.Sim.Wind = { heading: 0.0, speed: 18 }
+    let fresh = Ur.VolcanoRender.steam_puffs(sources, wind, 4.0)
+    let drifting = Ur.VolcanoRender.steam_puffs(sources, wind, 7.0)
+    Test.assert_true(!List.is_empty(fresh) && List.any(drifting, fn puff ->
+      puff.x > int_to_float(edge.x) *. 0.25 +. 5.0 && puff.y > 8.0 && puff.radius > 4.0),
+      "shore steam rises, expands and follows the wind")
+    Test.assert_true(List.is_empty(Ur.VolcanoRender.steam_puffs(sources, wind, 20.0)), "shore steam dissipates")
+    let touches = Ur.Volcano.sea_contacts(c, flows, 16.0)
+    Test.assert_eq_int(List.length(touches), 1, "flows touching the same water share one quench point")
+    Test.assert_eq_int(S.get(c.heights, water), 0, "the destination starts as open sea")
+    let finish = Ur.Volcano.settle_time()
+    let (next, settled) = Ur.Volcano.settle(c, flows, finish -. 1.0, finish)
+    Test.assert_true(settled && S.get(next.heights, water) == 4, "quenching adds a low dry shelf at the contacted coast")
+    Test.assert_eq_int(S.basalt_depth(next, 14 * 32 + 16, z), 1, "the new lava shelf is capped in basalt")
+    Test.assert_true(Ur.Landscape.height(next, 14 * 32 + 16, z) > 0 && Ur.Ocean.coast_touched(c, next),
+      "the shelf is real new terrain and changes the shoreline")
+    let (later, updated) = Ur.Volcano.settle(next, flows, finish, finish +. 1.0)
+    Test.assert_true(!updated && S.basalt_depth(later, 14 * 32 + 16, z) == 1, "settling a pulse cannot repeatedly build the shelf")
+
+    let restored = Ur.Volcano.keep_shore(next, c)
+    Test.assert_eq_int(S.get(restored.heights, water), 4, "undo leaves the volcanic shelf above water")
+
+    let sheltered = { c with seawalls: NativeArray.set_int(c.seawalls, water, 1) }
+    Test.assert_true(List.is_empty(Ur.Volcano.sea_entries(sheltered, flows, 4.0)), "sheltered water without a contact produces no steam")
+    let (blocked, _) = Ur.Volcano.settle(sheltered, flows, finish -. 1.0, finish)
+    Test.assert_eq_int(S.get(blocked.heights, water), 0, "protected water does not become land")
+    let inland = { edge with x: 12 * 32 + 16, y: Ur.Landscape.height(c, 12 * 32 + 16, z) }
+    Test.assert_true(List.is_empty(Ur.Volcano.sea_entries(c, [run(inland, 0)], 4.0)), "inland flows produce no coastal steam")
+    let (unchanged, _) = Ur.Volcano.settle(c, [run(inland, 0)], finish -. 1.0, finish)
+    Test.assert_eq_int(S.get(unchanged.heights, water), 0, "lava that stops inland does not extend the coast")
+    Authority.must(println("Volcanic coastline: all assertions passed"))
+  end
+end

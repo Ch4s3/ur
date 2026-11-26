@@ -1,0 +1,41 @@
+-- A smoke volume and the shadow cast by it use the renderer's world coordinates.
+mod Ur.VolcanoSmoke do
+  type AshBlob = { x : Float, y : Float, z : Float, radius : Float }
+
+  fn darkness() : Float do 0.4 end
+
+  fn sun_direction(phase : Float, day_seconds : Float) : (Float, Float, Float) do
+    let angle = phase /. day_seconds *. 6.283185307 -. 1.570796327
+    let elevation = Math.sin(angle)
+    let x = 0.82 *. Math.cos(angle)
+    let y = Math.max_float(0.0 -. 0.035, 0.93 *. elevation)
+    let z = 0.38 +. 0.35 *. (1.0 -. elevation)
+    let length = Math.sqrt(x *. x +. y *. y +. z *. z)
+    (x /. length, y /. length, z /. length)
+  end
+
+  -- Match Strata's cloud shadow falloff along the ray toward the sun.
+  pfn transmission(blob : AshBlob, sun : (Float, Float, Float), x : Float, y : Float, z : Float) : Float do
+    let (sx, sy, sz) = sun
+    let dx = blob.x -. x
+    let dy = blob.y -. y
+    let dz = blob.z -. z
+    let along = dx *. sx +. dy *. sy +. dz *. sz
+    if along <= 0.0 || blob.radius <= 0.0 do 1.0 else
+      let distance_sq = dx *. dx +. dy *. dy +. dz *. dz -. along *. along
+      let radius_sq = blob.radius *. blob.radius
+      let edge = Math.max_float(0.0, Math.min_float(1.0, (distance_sq -. 0.1 *. radius_sq) /. (0.9 *. radius_sq)))
+      let falloff = edge *. edge *. (3.0 -. 2.0 *. edge)
+      1.0 -. darkness() *. (1.0 -. falloff)
+    end
+  end
+
+  doc "Fraction of direct sunlight screened by ash at a world-space point."
+  fn shadow(blobs : List(AshBlob), sun : (Float, Float, Float), x : Float, y : Float, z : Float) : Float do
+    let (_, sy, _) = sun
+    if sy <= 0.02 do 0.0 else
+      let light = List.fold_left(blobs, 1.0, fn (light, blob) -> light *. transmission(blob, sun, x, y, z))
+      1.0 -. light
+    end
+  end
+end
