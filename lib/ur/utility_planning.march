@@ -214,7 +214,8 @@ mod Ur.UtilityPlanning do
       let c = draft.city
       let c = { c with plants: NativeArray.set_int(c.plants, lot, kind),
         paused_facilities: NativeArray.set_int(c.paused_facilities, lot, 0),
-        facility_staff: NativeArray.set_int(c.facility_staff, lot, 0) }
+        facility_staff: NativeArray.set_int(c.facility_staff, lot, 0),
+        staffing_targets: NativeArray.set_int(c.staffing_targets, lot, 0) }
       let report = S.utility_snapshot(c)
       let power = S.power_plant(kind)
       let layer = if power do 2 else if kind == 11 do 31 else 1 end end

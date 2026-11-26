@@ -13,7 +13,37 @@ mod FundingTest do
   pfn all_at(c : Ur.Sim.City, level : Int, group : Int) : Ur.Sim.City do
     if group > 5 do c else all_at(set_level(c, group, level), level, group + 1) end
   end
+  pfn staffing_controls() : Unit do
+    let city = Ur.Scenario.upgrade_corridor(Ur.Scenario.employment_corridor())
+    let depot = Ur.Scenario.corridor_depot()
+    let stop = Ur.Scenario.corridor_stop()
+    Test.assert_eq_int(S.staffing_target(city, depot), 2, "Bus depots default to full staffing")
+    let reduced = S.adjust_staffing(city, depot, -1)
+    Test.assert_eq_int(S.job_slots(reduced, depot), 1, "A building target caps its job openings")
+    match S.bus_line_at((S.stats(reduced)).buses, stop) do
+      Some(line) -> Test.assert_eq_int(line.departures, 2, "One depot post supports one extra departure")
+      None -> panic("The base bus line should still run")
+    end
+    let closed = S.adjust_staffing(reduced, depot, -1)
+    Test.assert_eq_int(S.job_slots(closed, depot), 0, "A zero target takes all posts off the job market")
+    Test.assert_eq_int(S.facility_staffed(closed, depot), 0, "A zero target caps effective staffing immediately")
+    let stats = S.stats(closed)
+    match S.bus_line_at(stats.buses, stop) do
+      Some(line) -> Test.assert_eq_int(line.departures, 1, "A depot at zero staffing offers no extra departures")
+      None -> panic("The base bus line should still run")
+    end
+    Test.assert_false(List.any(Ur.Fleet.routes_with(closed, stats.running_transit, stats.buses), fn trip ->
+      trip.mode == 2 && trip.source == depot), "A depot with no posts dispatches no vehicles")
+    let game = { city: closed, cx: 78.0, cz: 151.0, zoom: 52.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(game)) do
+      Ok(loaded) -> Test.assert_eq_int(S.staffing_target(loaded.city, depot), 0, "Staffing targets survive save and load")
+      Err(error) -> panic(error)
+    end
+    let replaced = S.act(S.act(closed, depot, 7), depot, 76)
+    Test.assert_eq_int(S.staffing_target(replaced, depot), 2, "Replacing a depot restores its default staffing")
+  end
   fn main(_cap : Cap(IO)) : Unit do
+    staffing_controls()
     let c = S.new()
     Test.assert_eq_int(S.funding_level(c, 0), 100, "Services start fully funded")
     Test.assert_eq_int(S.funding_level(Ur.Treasury.adjust(c, 0, -1), 0), 90, "Funding moves in steps of ten")

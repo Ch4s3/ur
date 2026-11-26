@@ -5,7 +5,8 @@ mod Ur.Toolbar do
   alias Strata.Text as T
   alias Ur.Sim as S
 
-  type Layout = { x : Float, y : Float, width : Float, columns : Int, cell : Float, cards_y : Float }
+  type Layout = { x : Float, y : Float, width : Float, columns : Int, cell : Float, cards_y : Float,
+    card_height : Float, tab_columns : Int, tab_step : Float }
   type Menu = { span : Int, pages : List(String), items : List(Int) }
   pfn menu(group : Int, page : Int) : Menu do
     match group do
@@ -14,7 +15,7 @@ mod Ur.Toolbar do
           else if page == 3 do [99, 100, 101] else if page == 2 do Cons(71, Cons(72, Cons(73, Cons(74, Cons(75, Nil)))))
           else if page == 1 do [124, 125, 126, 50, 51, 52, 54]
           else Cons(1, Cons(48, Cons(49, Cons(33, Cons(40, Nil))))) end end end end
-        { span: if page == 4 do 7 else 5 end, pages: ["Streets", "Crossings", "Car-free days", "Flood protection", "Canals"], items: items }
+        { span: 7, pages: ["Streets", "Crossings", "Car-free days", "Flood protection", "Canals"], items: items }
       2 ->
         let items = match page do
           2 -> Cons(64, Cons(65, Cons(66, Cons(63, Nil))))
@@ -57,7 +58,7 @@ mod Ur.Toolbar do
           _ -> Cons(44, Cons(45, Cons(62, Cons(46, Cons(47, Cons(78, Nil))))))
         end
         { span: 6, pages: ["Services", "Parks", "Street planting", "Education", "Faculties", "Worship", "Disaster", "Expansions", "Community"], items: items }
-      6 -> { span: 3, pages: Nil, items: [6, 7, 118, 119, 120, 121] }
+      6 -> { span: 6, pages: Nil, items: [6, 7, 118, 119, 120, 121] }
       7 ->
         let items = match page do
           1 -> [5, 6, 7, 8, 39, 40, 41]
@@ -168,7 +169,7 @@ mod Ur.Toolbar do
       75 | 63 | 67 -> "clear"
       64 | 70 -> "housing"
       71 | 72 | 73 | 74 -> "promenade"
-      76 | 77 -> "road"
+      76 | 77 -> "depot"
       65 | 66 | 68 | 69 -> "jobs"
       45 | 62 -> "clinic"
       46 | 78 -> "fire"
@@ -231,32 +232,50 @@ mod Ur.Toolbar do
   pfn bar_cell(w : Float) : Float do minimum(110.0, (w -. 24.0) /. 7.0) end
   pfn bar_x(w : Float) : Float do (w -. 7.0 *. bar_cell(w)) *. 0.5 end
   pfn bar_y(h : Float) : Float do h -. 92.0 end
+  pfn grid_rows(count : Int, columns : Int) : Int do (count + columns - 1) / columns end
+  pfn drawer_bottom(h : Float) : Float do bar_y(h) -. 9.0 end
+  pfn tab_top(l : Layout) : Float do l.y +. 39.0 end
+  pfn card_step(l : Layout) : Float do l.card_height +. 5.0 end
   pfn layout(w : Float, h : Float, m : Menu) : Layout do
-    let count = List.length(m.items)
-    let room = w -. 36.0
-    let columns = S.clamp(float_to_int(room /. 116.0), 1, m.span)
-    let cell = minimum(132.0, room /. int_to_float(columns))
-    let rows = (count + columns - 1) / columns
-    let grid = cell *. int_to_float(columns)
-    let tabs = int_to_float(List.length(m.pages)) *. 78.0
-    let width = (if tabs > grid do minimum(tabs, room) else grid end) +. 16.0
-    let page_height = if List.length(m.pages) > 0 do 34.0 else 0.0 end
-    let y = bar_y(h) -. 21.0 -. page_height -. int_to_float(rows) *. 106.0
-    { x: (w -. width) *. 0.5, y: y, width: width, columns: columns, cell: cell, cards_y: y +. 8.0 +. page_height }
+    let tabs = List.length(m.pages)
+    let wanted = Math.max_int(m.span * 148, tabs * 96)
+    let width = minimum(w -. 24.0, int_to_float(wanted) +. 16.0)
+    let inner = width -. 16.0
+    let compact = w < 720.0 || h < 620.0
+    let columns = S.clamp(float_to_int(inner /. (if compact do 121.0 else 142.0 end)), 1, m.span)
+    let card_height = if compact do 57.0 else 78.0 end
+    let rows = grid_rows(List.length(m.items), columns)
+    let tab_columns = S.clamp(float_to_int(inner /. 94.0), 1, Math.max_int(1, tabs))
+    let tab_step = minimum(112.0, inner /. int_to_float(tab_columns))
+    let cards_y = drawer_bottom(h) -. 8.0 -. int_to_float(rows) *. (card_height +. 5.0) +. 5.0
+    let y = cards_y -. int_to_float(grid_rows(tabs, tab_columns)) *. 27.0 -. 39.0
+    { x: (w -. width) *. 0.5, y: y, width: width, columns: columns, cell: inner /. int_to_float(columns),
+      cards_y: cards_y, card_height: card_height, tab_columns: tab_columns, tab_step: tab_step }
   end
   fn group_at(x : Float, y : Float, w : Float, h : Float) : Int do
     let left = bar_x(w)
     if y < bar_y(h) || y >= bar_y(h) +. 56.0 || x < left || x >= w -. left do 0
     else 1 + float_to_int((x -. left) /. bar_cell(w)) end
   end
-  pfn page_cell(l : Layout, count : Int) : Float do minimum(92.0, (l.width -. 16.0) /. int_to_float(count)) end
+  pfn close_x(l : Layout) : Float do l.x +. l.width -. 35.0 end
+  fn close_at(x : Float, y : Float, w : Float, h : Float, group : Int, page : Int) : Bool do
+    if group == 0 do false else
+      let l = layout(w, h, menu(group, page))
+      let left = close_x(l)
+      x >= left && x < left +. 27.0 && y >= l.y +. 7.0 && y < l.y +. 32.0
+    end
+  end
   fn page_at(x : Float, y : Float, w : Float, h : Float, group : Int, page : Int) : Int do
     let m = menu(group, page)
     let l = layout(w, h, m)
-    let count = List.length(m.pages)
-    if count == 0 || y < l.y +. 7.0 || y >= l.y +. 34.0 || x < l.x +. 8.0 do -1 else
-      let i = float_to_int((x -. l.x -. 8.0) /. page_cell(l, count))
-      if i >= count do -1 else i end
+    let dx = x -. l.x -. 8.0
+    let dy = y -. tab_top(l)
+    if dy < 0.0 || y >= l.cards_y || dx < 0.0 || dx >= l.tab_step *. int_to_float(l.tab_columns) do -1 else
+      let col = float_to_int(dx /. l.tab_step)
+      let row = float_to_int(dy /. 27.0)
+      let i = row * l.tab_columns + col
+      if i >= List.length(m.pages) || dx -. int_to_float(col) *. l.tab_step >= l.tab_step -. 4.0 ||
+        dy -. int_to_float(row) *. 27.0 >= 23.0 do -1 else i end
     end
   end
   pfn item(items : List(Int), i : Int) : Int do
@@ -268,12 +287,12 @@ mod Ur.Toolbar do
   fn option_at(x : Float, y : Float, w : Float, h : Float, group : Int, page : Int) : Int do
     let m = menu(group, page)
     let l = layout(w, h, m)
-    if y < l.cards_y || y >= bar_y(h) -. 13.0 || x < l.x +. 8.0 || x >= l.x +. 8.0 +. l.cell *. int_to_float(l.columns) do -1 else
+    if y < l.cards_y || y >= drawer_bottom(h) -. 8.0 || x < l.x +. 8.0 || x >= l.x +. 8.0 +. l.cell *. int_to_float(l.columns) do -1 else
       let dx = x -. l.x -. 8.0
       let dy = y -. l.cards_y
       let col = float_to_int(dx /. l.cell)
-      let row = float_to_int(dy /. 106.0)
-      if dx -. int_to_float(col) *. l.cell >= l.cell -. 5.0 || dy -. int_to_float(row) *. 106.0 >= 102.0 do -1
+      let row = float_to_int(dy /. card_step(l))
+      if dx -. int_to_float(col) *. l.cell >= l.cell -. 5.0 || dy -. int_to_float(row) *. card_step(l) >= l.card_height do -1
       else item(m.items, row * l.columns + col) end
     end
   end
@@ -282,87 +301,137 @@ mod Ur.Toolbar do
     if y >= h -. 30.0 || over_bar do true
     else if group == 0 do false else
       let l = layout(w, h, menu(group, page))
-      x >= l.x && x < l.x +. l.width && y >= l.y && y < bar_y(h) -. 5.0
+      x >= l.x && x < l.x +. l.width && y >= l.y && y < drawer_bottom(h)
     end end
   end
 
-  pfn background() : (Float, Float, Float, Float) do (0.048, 0.089, 0.112, 0.98) end
+  pfn background() : (Float, Float, Float, Float) do (0.045, 0.084, 0.106, 0.99) end
+  pfn accent(group : Int) : (Float, Float, Float, Float) do
+    match group do
+      1 -> (0.56, 0.78, 0.95, 1.0)
+      2 -> (0.66, 0.86, 0.54, 1.0)
+      3 -> (0.98, 0.72, 0.40, 1.0)
+      4 -> (0.45, 0.86, 0.77, 1.0)
+      5 -> (0.76, 0.74, 0.98, 1.0)
+      6 -> (0.86, 0.76, 0.57, 1.0)
+      _ -> (0.69, 0.82, 0.94, 1.0)
+    end
+  end
   pfn face(active : Bool, hover : Bool) : (Float, Float, Float, Float) do
-    if active do (0.16, 0.32, 0.35, 1.0)
-    else if hover do (0.12, 0.23, 0.28, 1.0)
-    else (0.078, 0.15, 0.19, 1.0) end end
+    if active do (0.15, 0.27, 0.31, 1.0)
+    else if hover do (0.12, 0.22, 0.26, 1.0)
+    else (0.075, 0.137, 0.168, 1.0) end end
   end
   pfn text(u : Strata.Ui.Ui, x : Float, y : Float, size : Float, name : String, bright : Bool) : Strata.Ui.Ui do
     T.text(u, 0, x, y, T.default_font(), size,
       if bright do (0.93, 0.95, 0.92, 1.0) else (0.68, 0.79, 0.80, 1.0) end, name)
   end
-  pfn centred(u : Strata.Ui.Ui, centre : Float, y : Float, size : Float, name : String) : Strata.Ui.Ui do
-    let (width, _, _) = T.measure(T.default_font(), size, name, 0.0)
-    text(u, centre -. width *. 0.5, y, size, name, true)
+  pfn fitted(u : Strata.Ui.Ui, x : Float, y : Float, width : Float, size : Float, name : String, bright : Bool) : Strata.Ui.Ui do
+    let (measured, _, _) = T.measure(T.default_font(), size, name, 0.0)
+    text(u, x, y, if measured > width do size *. width /. measured else size end, name, bright)
+  end
+  pfn centred(u : Strata.Ui.Ui, centre : Float, y : Float, width : Float, size : Float, name : String, bright : Bool) : Strata.Ui.Ui do
+    let (measured, _, _) = T.measure(T.default_font(), size, name, 0.0)
+    let fit = minimum(width, measured)
+    text(u, centre -. fit *. 0.5, y, if measured > width do size *. width /. measured else size end, name, bright)
   end
   pfn groups(u : Strata.Ui.Ui, group : Int, hot : Int, i : Int) : Strata.Ui.Ui do
     if i > 7 do u else
       let w = bar_cell(U.width(u))
       let x = bar_x(U.width(u)) +. int_to_float(i - 1) *. w
       let y = bar_y(U.height(u))
-      let centre = x +. w *. 0.5
       let active = i == group
       let (name, art) = category(i)
       let a = U.rect(u, 0, x +. 2.0, y, w -. 4.0, 56.0, face(active, i == hot))
-      let a = if active do U.rect(a, 0, x +. 2.0, y, w -. 4.0, 2.0, (0.40, 0.82, 0.77, 1.0)) else a end
-      let a = Ur.ToolArt.draw(a, art, centre, y +. 7.0, if w < 61.0 do 2.4 else 3.2 end)
-      groups(centred(a, centre, y +. 36.0, if w < 61.0 do 10.0 else 12.0 end, name), group, hot, i + 1)
+      let a = if active do U.rect(a, 0, x +. 2.0, y +. 54.0, w -. 4.0, 2.0, accent(i)) else a end
+      let a = if w < 90.0 do
+        let centre = x +. w *. 0.5
+        let a = Ur.ToolArt.draw(a, art, centre, y +. 7.0, if w < 61.0 do 2.4 else 3.2 end)
+        centred(a, centre, y +. 36.0, w -. 8.0, 11.0, name, active || i == hot)
+      else
+        let a = Ur.ToolArt.draw(a, art, x +. 23.0, y +. 15.0, 2.9)
+        fitted(a, x +. 43.0, y +. 20.0, w -. 49.0, 12.0, name, active || i == hot)
+      end
+      groups(a, group, hot, i + 1)
     end
   end
-  pfn pages(u : Strata.Ui.Ui, labels : List(String), l : Layout, step : Float, page : Int, hot : Int, i : Int) : Strata.Ui.Ui do
+  pfn pages(u : Strata.Ui.Ui, labels : List(String), l : Layout, group : Int, page : Int, hot : Int, i : Int) : Strata.Ui.Ui do
     match labels do
       Nil -> u
       Cons(name, rest) ->
-        let x = l.x +. 8.0 +. int_to_float(i) *. step
-        let y = l.y +. 7.0
-        let a = U.rect(u, 0, x, y, step -. 3.0, 27.0, face(i == page, i == hot))
-        pages(centred(a, x +. step *. 0.5, y +. 6.0, 11.0, name), rest, l, step, page, hot, i + 1)
+        let x = l.x +. 8.0 +. int_to_float(i % l.tab_columns) *. l.tab_step
+        let y = tab_top(l) +. int_to_float(i / l.tab_columns) *. 27.0
+        let width = l.tab_step -. 4.0
+        let a = U.rect(u, 0, x, y, width, 23.0, face(i == page, i == hot))
+        let a = if i == page do U.rect(a, 0, x, y +. 21.0, width, 2.0, accent(group)) else a end
+        let a = centred(a, x +. width *. 0.5, y +. 3.0, width -. 10.0, 11.0, name, i == page || i == hot)
+        pages(a, rest, l, group, page, hot, i + 1)
     end
   end
-  pfn cards(u : Strata.Ui.Ui, c : Ur.Sim.City, items : List(Int), l : Layout, map : Bool, selected : Int, hot : Int, i : Int) : Strata.Ui.Ui do
+  pfn card_name(a : Strata.Ui.Ui, x : Float, y : Float, width : Float, name : String, compact : Bool, locked : Bool) : Strata.Ui.Ui do
+    let size = if compact do 11.0 else 12.0 end
+    let (_, _, lines) = T.measure(T.default_font(), size, name, width)
+    let size = if compact && lines > 2 do size *. 2.0 /. int_to_float(lines) else size end
+    let colour = if locked do (0.65, 0.74, 0.75, 1.0) else (0.93, 0.95, 0.92, 1.0) end
+    T.styled(a, 0, x, y, T.default_font(), size, colour, T.with_wrap(T.style(), width), name)
+  end
+  pfn card_caption(a : Strata.Ui.Ui, c : Ur.Sim.City, tool : Int, x : Float, y : Float, width : Float, locked : Bool) : Strata.Ui.Ui do
+    if locked do T.text(a, 0, x, y, T.default_font(), 10.0, (0.98, 0.72, 0.40, 1.0), "Locked")
+    else if tool == 55 do text(a, x, y, 10.5, "Click a park", true)
+    else
+      let cost = S.cost(c, 0, tool)
+      let upkeep = S.civic_tool_upkeep(tool)
+      let unit = if tool == 53 || tool == 127 || S.grade_tool(tool) do "/tile" else "" end
+      let price = if cost > 0 do "$" ++ int_to_string(cost) ++ unit else "" end
+      let monthly = if upkeep > 0 do "$" ++ int_to_string(upkeep) ++ "/mo" else "" end
+      let caption = if cost > 0 && upkeep > 0 do price ++ " · " ++ monthly else price ++ monthly end
+      if caption == "" do a else fitted(a, x, y, width, 10.5, caption, c.cash >= cost) end
+    end end
+  end
+  pfn cards(u : Strata.Ui.Ui, c : Ur.Sim.City, items : List(Int), l : Layout, group : Int, selected : Int, hot : Int, i : Int) : Strata.Ui.Ui do
     match items do
       Nil -> u
       Cons(tool, rest) ->
         let x = l.x +. 8.0 +. int_to_float(i % l.columns) *. l.cell
-        let y = l.cards_y +. int_to_float(i / l.columns) *. 106.0
-        let prerequisite = if map do "" else S.construction_requirement(c, tool) end
-        let active = tool == selected && prerequisite == ""
+        let y = l.cards_y +. int_to_float(i / l.columns) *. card_step(l)
+        let map = group == 7
+        let locked = !map && S.construction_requirement(c, tool) != ""
+        let active = tool == selected && !locked
+        let compact = l.card_height <= 57.0
         let width = l.cell -. 5.0
-        let a = U.rect(u, 0, x, y, width, 102.0, face(active, tool == hot))
-        let a = U.rect(a, 0, x +. 5.0, y +. 5.0, width -. 10.0, 45.0, (0.049, 0.105, 0.133, 1.0))
-        let a = if active do U.rect(a, 0, x, y +. 100.0, width, 2.0, (0.40, 0.82, 0.77, 1.0)) else a end
+        let art_width = if compact do 32.0 else 48.0 end
+        let a = U.rect(u, 0, x, y, width, l.card_height, face(active, tool == hot))
+        let a = if active do U.rect(a, 0, x, y, 2.0, l.card_height, accent(group)) else a end
+        let a = U.rect(a, 0, x +. 6.0, y +. 6.0, art_width, if compact do 25.0 else 39.0 end, (0.04, 0.095, 0.123, 1.0))
         let art = if map do layer_icon(tool) else icon(tool) end
-        let a = Ur.ToolArt.draw(a, art, x +. width *. 0.5, y +. 9.0, 4.5)
+        let a = Ur.ToolArt.draw(a, art, x +. 6.0 +. art_width *. 0.5, y +. (if compact do 9.0 else 12.0 end), if compact do 2.4 else 3.6 end)
         let name = if map do Ur.Layers.name(tool) else S.tool_name(tool) end
-        let a = T.styled(a, 0, x +. 8.0, y +. 55.0, T.default_font(), 12.0, (0.92, 0.95, 0.93, 1.0), T.with_wrap(T.style(), width -. 16.0), name)
-        let cost = if map do 0 else S.cost(c, 0, tool) end
-        let upkeep = if map do 0 else S.civic_tool_upkeep(tool) end
-        let affordable = c.cash >= cost
-        let unit = if tool == 53 || tool == 127 || S.grade_tool(tool) do "/tile" else "" end
-        let caption = "$" ++ int_to_string(cost) ++ unit ++ (if upkeep > 0 do "  +  $" ++ int_to_string(upkeep) ++ "/mo" else "" end)
-        let a = if prerequisite != "" do text(a, x +. 8.0, y +. 85.0, 10.0, "Locked", false)
-          else if tool == 55 && !map do text(a, x +. 8.0, y +. 85.0, 10.5, "Click a park", true) else if cost > 0 do text(a, x +. 8.0, y +. 85.0, 10.5, caption, affordable) else a end end end
-        cards(a, c, rest, l, map, selected, hot, i + 1)
+        let a = card_name(a, x +. art_width +. 12.0, y +. 8.0, width -. art_width -. 18.0, name, compact, locked)
+        let a = if map do a else card_caption(a, c, tool, x +. 8.0, y +. l.card_height -. 19.0, width -. 16.0, locked) end
+        cards(a, c, rest, l, group, selected, hot, i + 1)
     end
+  end
+  pfn drawer(u : Strata.Ui.Ui, c : Ur.Sim.City, tool : Int, group : Int, page : Int, layer : Int, mx : Float, my : Float) : Strata.Ui.Ui do
+    let w = U.width(u)
+    let h = U.height(u)
+    let m = menu(group, page)
+    let l = layout(w, h, m)
+    let height = drawer_bottom(h) -. l.y
+    let a = U.rect(u, 0, l.x +. 3.0, l.y +. 4.0, l.width, height, (0.015, 0.028, 0.035, 0.56))
+    let a = U.rect(a, 0, l.x, l.y, l.width, height, background())
+    let a = U.rect(a, 0, l.x, l.y, l.width, 2.0, accent(group))
+    let (name, _) = category(group)
+    let a = text(a, l.x +. 12.0, l.y +. 7.0, 18.0, name, true)
+    let close = close_x(l)
+    let a = U.rect(a, 0, close, l.y +. 7.0, 27.0, 25.0, face(false, close_at(mx, my, w, h, group, page)))
+    let a = text(a, close +. 8.0, l.y +. 8.0, 16.0, "×", true)
+    let a = pages(a, m.pages, l, group, page, page_at(mx, my, w, h, group, page), 0)
+    cards(a, c, m.items, l, group, if group == 7 do layer else tool end, option_at(mx, my, w, h, group, page), 0)
   end
   fn draw(u : Strata.Ui.Ui, c : Ur.Sim.City, tool : Int, group : Int, page : Int, layer : Int, mx : Float, my : Float) : Strata.Ui.Ui do
     let w = U.width(u)
     let h = U.height(u)
-    let a = if group == 0 do u else
-      let m = menu(group, page)
-      let l = layout(w, h, m)
-      let map = group == 7
-      let a = U.rect(u, 0, l.x, l.y, l.width, bar_y(h) -. l.y -. 7.0, background())
-      let a = if List.length(m.pages) == 0 do a else
-        pages(a, m.pages, l, page_cell(l, List.length(m.pages)), page, page_at(mx, my, w, h, group, page), 0)
-      end
-      cards(a, c, m.items, l, map, if map do layer else tool end, option_at(mx, my, w, h, group, page), 0)
-    end
+    let a = if group == 0 do u else drawer(u, c, tool, group, page, layer, mx, my) end
     let a = U.rect(a, 0, bar_x(w) -. 6.0, bar_y(h) -. 4.0, 7.0 *. bar_cell(w) +. 12.0, 64.0, background())
     let a = groups(a, group, group_at(mx, my, w, h), 1)
     let a = U.rect(a, 0, 0.0, h -. 30.0, w, 30.0, background())
@@ -372,14 +441,19 @@ mod Ur.Toolbar do
       else if prerequisite != "" do prerequisite ++ "."
       else if group == 7 && layer > 0 && !Ur.Layers.is_utility(layer) do Ur.Layers.legend(layer)
       else c.message end end end
-    let a = text(a, 14.0, h -. 23.0, 11.5, status, true)
-    let a = if w >= 1250.0 do
-      centred(a, w *. 0.60, h -. 22.0, 10.5, "WASD pan   ·   Q / E orbit   ·   Scroll zoom   ·   Space pause")
+    let controls = w >= 1250.0
+    let selected = w >= 830.0 && tool > 0 && c.harbour >= 0 && group != 7
+    let selected_width = if selected do minimum(220.0, w *. 0.24) else 0.0 end
+    let status_width = if controls do w *. 0.44 else w -. selected_width -. 32.0 end
+    let a = fitted(a, 14.0, h -. 23.0, status_width, 11.5, status, true)
+    let a = if controls do
+      centred(a, w *. 0.60, h -. 22.0, w *. 0.27, 10.5, "WASD pan   ·   Q / E orbit   ·   Scroll zoom   ·   Space pause", false)
     else a end
-    if w >= 830.0 && tool > 0 && c.harbour >= 0 && !(group == 7 && layer > 0) do
+    if selected do
       let name = S.tool_name(tool)
-      let (size, _, _) = T.measure(T.default_font(), 11.5, name, 0.0)
-      text(a, w -. 16.0 -. size, h -. 23.0, 11.5, name, true)
+      let (measured, _, _) = T.measure(T.default_font(), 11.5, name, 0.0)
+      let width = minimum(measured, selected_width)
+      fitted(a, w -. 16.0 -. width, h -. 23.0, width, 11.5, name, true)
     else a end
   end
 end

@@ -1713,11 +1713,13 @@ mod UrTest do
     wind_checks(S.new())
     Test.assert_eq_int(Ur.Toolbar.group_at(1320.0, 830.0, 1440.0, 900.0), 0, "space beside the toolbar stays available to the world")
     Test.assert_eq_int(Ur.Toolbar.group_at(720.0, 830.0, 1440.0, 900.0), 4, "Utilities opens from the centre button")
-    Test.assert_eq_int(Ur.Toolbar.page_at(295.0, 657.0, 1440.0, 900.0, 4, 0), 1, "Water has its own submenu")
-    Test.assert_eq_int(Ur.Toolbar.option_at(215.0, 690.0, 1440.0, 900.0, 4, 1), 18, "the first Water card lays pipes")
-    Test.assert_eq_int(Ur.Toolbar.option_at(75.0, 448.0, 600.0, 750.0, 4, 1), 18, "the first Water card stays accessible when the tray wraps")
-    Test.assert_eq_int(Ur.Toolbar.option_at(75.0, 554.0, 600.0, 750.0, 4, 1), 14, "the second row exposes additional tools")
-    Test.assert_true(Ur.Toolbar.over(75.0, 448.0, 600.0, 750.0, 4, 1), "the toolbar intercepts placement clicks")
+    Test.assert_eq_int(Ur.Toolbar.page_at(220.0, 698.0, 1440.0, 900.0, 4, 0), 1, "Water has its own submenu")
+    Test.assert_eq_int(Ur.Toolbar.option_at(110.0, 744.0, 1440.0, 900.0, 4, 1), 18, "the first Water card lays pipes")
+    Test.assert_eq_int(Ur.Toolbar.option_at(75.0, 540.0, 600.0, 750.0, 4, 1), 18, "the first Water card stays accessible when the tray wraps")
+    Test.assert_eq_int(Ur.Toolbar.option_at(75.0, 610.0, 600.0, 750.0, 4, 1), 14, "the second row exposes additional tools")
+    Test.assert_true(Ur.Toolbar.over(75.0, 540.0, 600.0, 750.0, 4, 1), "the toolbar intercepts placement clicks")
+    Test.assert_eq_int(Ur.Toolbar.page_at(70.0, 505.0, 600.0, 750.0, 4, 1), 5, "wrapped submenu tabs stay selectable")
+    Test.assert_true(Ur.Toolbar.close_at(565.0, 443.0, 600.0, 750.0, 4, 1), "the compact tray can be closed from its header")
     Test.assert_false(Ur.Toolbar.over(100.0, 250.0, 1440.0, 900.0, 4, 1), "the old sidebar area is available for building")
     Test.assert_true(Ur.Hud.toggle_at(1340.0, 104.0, 1440.0), "the details toggle stays accessible")
     Test.assert_true(Ur.Hud.over_panel(810.0, 300.0, 1440.0, 900.0, true), "open details consume map clicks")
@@ -1970,6 +1972,12 @@ mod UrTest do
     let rising = { two_months with finance_history: Cons(
       { month: 2, revenue: 100, expenditures: 280, budget: { budget with infrastructure: 80, operations: 0 }, construction: 200, property_receipts: 0, debt_service: 0 },
       Cons({ month: 1, revenue: 100, expenditures: 60, budget: { budget with infrastructure: 60, operations: 0 }, construction: 0, property_receipts: 0, debt_service: 0 }, Nil)) }
+    let sparse = { rising with month: 40 }
+    let recorded = Ur.Hud.finance_click(sparse, 445.0, 410.0, 1440.0, 900.0, selected)
+    Test.assert_eq_int(recorded.month, 1, "chart columns select the stored month even when history has gaps")
+    let compact = Ur.Hud.finance_click(two_months, 404.0, 245.0, 480.0, 750.0, selected)
+    Test.assert_true(compact.lines && compact.month == selected.month, "chart mode stays reachable with compact finance controls")
+    Test.assert_eq_int(Ur.Hud.economy_page_at(69.0, 245.0, 480.0, 750.0, 4), 17, "compact finance controls open Funding")
     let rising_forecast = Ur.Hud.forecast(rising, { budget with revenue: 100, infrastructure: 80, operations: 0 })
     Test.assert_eq_int(Ur.Hud.first_deficit(rising_forecast), 5, "rising recurring costs cross income after breakeven, excluding one-off construction")
     let projected_click = Ur.Hud.finance_click(two_months, 550.0, 410.0, 1440.0, 900.0, selected)

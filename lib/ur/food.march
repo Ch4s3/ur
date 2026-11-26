@@ -78,7 +78,8 @@ mod Ur.Food do
   end
 
   pfn yard_at(c : Ur.Sim.City, kind : Int, i : Int) : Int do
-    if S.get(c.plants, i) == kind && !S.building_offline(c, i) do S.fleet_frontage(c, i, 0)
+    if S.get(c.plants, i) == kind && !S.building_offline(c, i) && (kind != 23 || S.staffing_target(c, i) > 0) do
+      S.fleet_frontage(c, i, 0)
     else -1 end
   end
 
