@@ -1,0 +1,43 @@
+mod IguanaTest do
+  needs IO
+  needs IO.Console
+  alias Ur.Iguanas as I
+  alias Ur.Sim as S
+  alias Ur.Wildlife as W
+
+  pfn off_camera(view : Ur.Wildlife.WildlifeView, p : Ur.Iguanas.IguanaPose) : Bool do
+    let (right, up) = W.screen_offset(view, p.x, p.y, p.z)
+    Math.abs(right) > view.zoom +. 1.3 || Math.abs(up) > view.zoom /. view.aspect +. 1.3
+  end
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let city = S.new()
+    let view : Ur.Wildlife.WildlifeView = { x: 100.0, z: 116.0, zoom: 20.0, aspect: 1.6, yaw: 0.55 }
+    let waiting = I.empty(0.0)
+    let wide = I.step(city, { view with zoom: 40.0 }, 10.0, waiting, false, 19)
+    let sea = I.step(city, { view with x: -60.0, z: -60.0 }, 10.0, waiting, false, 19)
+    Test.assert_true(Option.is_none(wide.route) && Option.is_none(sea.route), "iguanas require land and a close view")
+
+    let active = I.step(city, view, 10.0, waiting, false, 19)
+    match active.route do
+      None -> Test.assert_true(false, "open grass near the camera has a walkable iguana route")
+      Some(route) ->
+        let length = I.duration(route)
+        let a = I.pose(city, route, length *. 0.5 -. 0.7)
+        let b = I.pose(city, route, length *. 0.5 +. 0.7)
+        let (right, up) = W.screen_offset(view, a.x, a.y, a.z)
+        Test.assert_true(a.x == b.x && a.z == b.z && a.y > 0.0 && a.gait == 0.0,
+          "the iguana pauses to bask on land")
+        Test.assert_true(Math.abs(right) < view.zoom && Math.abs(up) < view.zoom /. view.aspect,
+          "the basking spot is in view")
+        Test.assert_true(off_camera(view, I.pose(city, route, 0.0)) && off_camera(view, I.pose(city, route, length)),
+          "the iguana enters and leaves off camera")
+        let first = I.pose(city, route, 0.0)
+        let next = I.pose(city, route, 1.0)
+        Test.assert_true(first.x != next.x || first.z != next.z, "the iguana walks onto the land")
+        let after = I.step(city, view, 10.1 +. length, active, false, 19)
+        Test.assert_true(Option.is_none(after.route) && after.due > 30.0 +. length, "the next sighting waits")
+    end
+    Authority.must(println("Iguana checks passed"))
+  end
+end

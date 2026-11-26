@@ -1,0 +1,243 @@
+-- An occasional walk across a quiet piece of land, with a pause to bask.
+mod Ur.Iguanas do
+  needs IO.Console
+  needs IO.Process
+  needs IO.Foreign
+  needs Window
+  alias Ur.Sim as S
+  alias Ur.Landscape as L
+  alias Ur.Wildlife as W
+  alias Ur.WildlifeMesh as Draw
+  alias Strata.Model as Model
+  import Ur.SwimMesh.{section, loft}
+
+  type IguanaRoute = { x : Float, z : Float, dx : Float, dz : Float, travel : Float, sweep : Float }
+  type IguanaPose = { x : Float, y : Float, z : Float, heading : Float, gait : Float }
+  type IguanaTrack = { due : Float, route : Option(IguanaRoute) }
+
+  fn empty(now : Float) : IguanaTrack do { due: now +. 9.0, route: None } end
+  pfn walk_time(route : IguanaRoute) : Float do 5.0 +. route.travel *. 2.15 end
+  pfn bask_time() : Float do 3.4 end
+  fn duration(route : IguanaRoute) : Float do walk_time(route) +. bask_time() end
+
+  pfn voxels(coordinate : Float) : Int do float_to_int(Math.floor(coordinate *. 4.0)) end
+  pfn ground(c : Ur.Sim.City, x : Float, z : Float) : Int do L.height(c, voxels(x), voxels(z)) end
+  pfn ground_metres(c : Ur.Sim.City, x : Float, z : Float) : Float do int_to_float(ground(c, x, z)) *. 0.25 end
+
+  pfn trail_point(route : IguanaRoute, t : Float) : (Float, Float) do
+    let away = route.travel *. (1.0 -. Math.sin(3.14159265 *. t))
+    let across = route.sweep *. (2.0 *. t -. 1.0)
+    (route.x +. route.dx *. away +. route.dz *. across,
+      route.z +. route.dz *. away -. route.dx *. across)
+  end
+
+  fn pose(c : Ur.Sim.City, route : IguanaRoute, age : Float) : IguanaPose do
+    let walk = walk_time(route)
+    let pause_at = walk *. 0.5
+    let t = if age < pause_at do Math.max_float(0.0, age /. walk)
+      else Math.min_float(1.0, Math.max_float(0.5, (age -. bask_time()) /. walk)) end
+    let (x, z) = trail_point(route, t)
+    let forward = 0.0 -. route.travel *. 3.14159265 *. Math.cos(t *. 3.14159265)
+    let side = 2.0 *. route.sweep
+    let move = W.ease(Math.max_float(pause_at -. age, age -. pause_at -. bask_time()) /. 0.5)
+    let step = Math.sin(age *. 9.2) *. move
+    { x: x, y: ground_metres(c, x, z), z: z, gait: step,
+      heading: Math.atan2(route.dx *. forward +. route.dz *. side, route.dz *. forward -. route.dx *. side) }
+  end
+
+  pfn clear_ground(c : Ur.Sim.City, x : Float, z : Float, h : Int) : Bool do
+    let vx = voxels(x)
+    let vz = voxels(z)
+    let px = int_div_euclid(vx, 32)
+    let pz = int_div_euclid(vz, 32)
+    if h <= 0 || px < 0 || pz < 0 || px >= S.width() || pz >= S.depth() do false else
+      let i = S.index(px, pz)
+      let lx = int_mod_euclid(vx, 32)
+      let lz = int_mod_euclid(vz, 32)
+      i != c.harbour && S.get(c.roads, i) == 0 && S.get(c.buildings, i) == 0 && S.get(c.plants, i) == 0 &&
+        S.get(c.construction, i) == 0 && S.get(c.parks, i) == 0 && S.get(c.seawalls, i) == 0 &&
+        S.get(c.ferries, i) == 0 && S.grade_kind(c, i) == 0 && !S.canal_water(c, i) &&
+        !S.ground_closed(c, i) && !S.volcanic_highland(c, px, pz) &&
+        !List.any(L.structures(c, i, 0), fn p ->
+          p.y < h + 3 && p.y + p.h > h && lx + 2 >= p.x && lx - 2 < p.x + p.w &&
+          lz + 2 >= p.z && lz - 2 < p.z + p.d)
+    end
+  end
+
+  pfn clear_trail(c : Ur.Sim.City, route : IguanaRoute, previous : Int, n : Int, count : Int) : Bool do
+    if n > count do true else
+      let (x, z) = trail_point(route, int_to_float(n) /. int_to_float(count))
+      let height = ground(c, x, z)
+      int_abs(height - previous) <= 1 && clear_ground(c, x, z, height) &&
+        clear_trail(c, route, height, n + 1, count)
+    end
+  end
+
+  pfn trail_clear(c : Ur.Sim.City, route : IguanaRoute) : Bool do
+    let (x, z) = trail_point(route, 0.0)
+    clear_trail(c, route, ground(c, x, z), 0, 30 + float_to_int(route.travel *. 8.0))
+  end
+
+  pfn off_camera(c : Ur.Sim.City, view : Ur.Wildlife.WildlifeView, route : IguanaRoute, t : Float) : Bool do
+    let (x, z) = trail_point(route, t)
+    let (right, up) = W.screen_offset(view, x, ground_metres(c, x, z), z)
+    Math.abs(right) > view.zoom +. 1.35 || Math.abs(up) > view.zoom /. view.aspect +. 1.35
+  end
+
+  pfn approach(c : Ur.Sim.City, view : Ur.Wildlife.WildlifeView, x : Float, z : Float, y : Float, seed : Int, n : Int) : Option(IguanaRoute) do
+    if n >= 4 do None else
+      let direction = int_mod_euclid(seed + n, 4)
+      let horizontal = direction % 2 == 0
+      let sign = if direction < 2 do 1.0 else -1.0 end
+      let angle = if horizontal do view.yaw +. 1.57079633 else view.yaw end
+      let (right, up) = W.screen_offset(view, x, y, z)
+      let half_height = view.zoom /. view.aspect
+      let (edge, offset, scale) = if horizontal do (view.zoom, right, 1.0) else (half_height, 0.0 -. up, 0.607) end
+      let travel = (edge +. 2.0 -. sign *. offset) /. scale
+      let sweep = if int_mod_euclid(seed, 2) == 0 do 2.6 else -2.6 end
+      let route = { x: x, z: z, dx: sign *. Math.sin(angle), dz: sign *. Math.cos(angle), travel: travel, sweep: sweep }
+      if travel <= 14.0 && off_camera(c, view, route, 0.0) && off_camera(c, view, route, 1.0) && trail_clear(c, route) do Some(route)
+      else approach(c, view, x, z, y, seed, n + 1) end
+    end
+  end
+
+  pfn find_trail(c : Ur.Sim.City, view : Ur.Wildlife.WildlifeView, seed : Int, n : Int) : Option(IguanaRoute) do
+    if n >= 225 do None else
+      let k = int_mod_euclid(seed + n * 17, 225)
+      let x = view.x +. int_to_float(k % 15 - 7) *. 2.75
+      let z = view.z +. int_to_float(k / 15 - 7) *. 2.75
+      let h = ground(c, x, z)
+      let y = int_to_float(h) *. 0.25
+      let (right, up) = W.screen_offset(view, x, y, z)
+      let trail = if Math.abs(right) <= view.zoom *. 0.84 && Math.abs(up) <= view.zoom /. view.aspect *. 0.80 &&
+        clear_ground(c, x, z, h) do approach(c, view, x, z, y, Strata.Seed.mix(seed, k), 0)
+        else None end
+      match trail do
+        Some(_) -> trail
+        None -> find_trail(c, view, seed, n + 1)
+      end
+    end
+  end
+
+  fn step(c : Ur.Sim.City, view : Ur.Wildlife.WildlifeView, now : Float, old : IguanaTrack, changed : Bool, seed : Int) : IguanaTrack do
+    if view.zoom > 26.0 do empty(now) else
+      match old.route do
+        Some(route) ->
+          if now -. old.due >= duration(route) || (changed && !trail_clear(c, route)) do
+            { due: now +. 27.0 +. int_to_float(int_mod_euclid(seed, 23)), route: None }
+          else old end
+        None ->
+          if now < old.due do old else
+            match find_trail(c, view, seed, 0) do
+              Some(route) -> { due: now, route: Some(route) }
+              None -> { due: now +. 5.0, route: None }
+            end
+          end
+      end
+    end
+  end
+
+  fn slots() : Int do 6 end
+  pfn voxel() : Float do 0.073 end
+
+  pfn body() : Strata.Model.Geometry do
+    let mesh = loft(Model.empty(), [
+      section(7.5, 3.34, 3.6, 1.29, 1.12), section(7.5, 3.54, 6.4, 2.40, 1.82),
+      section(7.5, 3.63, 10.2, 2.54, 1.96), section(7.5, 4.18, 13.9, 1.57, 1.52),
+      section(7.5, 5.14, 15.8, 2.11, 1.57), section(7.5, 5.28, 17.6, 2.33, 1.40),
+      section(7.5, 4.94, 19.4, 1.61, 0.97), section(7.5, 4.74, 21.1, 0.70, 0.42)
+    ], :forward, 7, 16)
+    let mesh = loft(mesh, [
+      section(7.5, 3.99, 16.8, 0.49, 2.45), section(7.5, 2.72, 16.2, 0.32, 1.54),
+      section(7.5, 1.36, 15.5, 0.07, 0.21)
+    ], :down, 18, 18)
+    let mesh = List.fold_left([(5.4, 0.62), (7.0, 0.82), (8.65, 1.02), (10.28, 1.24),
+      (11.93, 1.45), (13.55, 1.60), (15.08, 1.30)], mesh, fn (out, spine) ->
+      let (z, height) = spine
+      let y = if z > 14.0 do 6.20 else 5.20 end
+      loft(out, [section(7.5, y, z, 0.35, 0.61),
+        section(7.5, y +. height *. 0.64, z -. 0.28, 0.22, 0.38),
+        section(7.5, y +. height, z -. 0.65, 0.05, 0.07)], :up, 18, 18))
+    List.fold_left([-1.0, 1.0], mesh, fn (out, side) ->
+      let eye = 7.5 +. side *. 1.96
+      let pupil = 7.5 +. side *. 2.29
+      let nostril = 7.5 +. side *. 1.19
+      let out = Model.box(out, eye -. 0.37, 5.91, 17.21, eye +. 0.37, 6.48, 18.03, 10)
+      let out = Model.box(out, pupil -. 0.15, 6.06, 17.51, pupil +. 0.15, 6.38, 17.86, 13)
+      Model.box(out, nostril -. 0.16, 5.17, 19.43, nostril +. 0.16, 5.43, 19.76, 19))
+  end
+
+  pfn tail_bands(mesh : Strata.Model.Geometry, sections : List(Ur.SwimMesh.SwimSection), band : Int) : Strata.Model.Geometry do
+    match sections do
+      Cons(a, Cons(b, rest)) ->
+        let colour = if band % 2 == 0 do 7 else 14 end
+        let next = loft(mesh, [a, b], :forward, colour, colour)
+        tail_bands(next, Cons(b, rest), band + 1)
+      _ -> mesh
+    end
+  end
+
+  pfn tail() : Strata.Model.Geometry do
+    tail_bands(Model.empty(), [
+      section(8.9, 1.33, 0.0, 0.05, 0.06), section(8.64, 1.52, 2.6, 0.36, 0.36),
+      section(8.30, 1.68, 5.15, 0.61, 0.49), section(8.04, 1.91, 7.9, 0.76, 0.63),
+      section(7.74, 2.31, 10.5, 1.00, 0.79), section(7.52, 2.72, 12.8, 1.17, 0.96),
+      section(7.5, 3.06, 14.8, 1.40, 1.11)
+    ], 0)
+  end
+
+  pfn foot_box(mesh : Strata.Model.Geometry, left : Bool, x : Float, y : Float, z : Float,
+    width : Float, height : Float, length : Float, colour : Int) : Strata.Model.Geometry do
+    let x = if left do 6.0 -. x -. width else x end
+    Model.box(mesh, x, y, z, x +. width, y +. height, z +. length, colour)
+  end
+
+  pfn leg(left : Bool) : Strata.Model.Geometry do
+    let mesh = foot_box(Model.empty(), left, 0.0, 0.92, 2.0, 3.95, 1.49, 1.95, 7)
+    let mesh = foot_box(mesh, left, 3.12, 0.0, 2.19, 2.22, 1.24, 2.42, 14)
+    List.fold_left([3.20, 4.00, 4.80], mesh, fn (out, x) ->
+      let length = if x == 4.0 do 1.95 else 1.56 end
+      let out = foot_box(out, left, x, 0.07, 4.14, 0.47, 0.43, length, 21)
+      foot_box(out, left, x +. 0.07, 0.04, 4.14 +. length, 0.31, 0.23, 0.36, 16))
+  end
+
+  fn setup(base : Int) : Unit do
+    Draw.upload_model(base, body(), voxel())
+    Draw.upload_model(base + 1, tail(), voxel())
+    let left = leg(true)
+    let right = leg(false)
+    List.each([0, 1, 2, 3], fn i -> Draw.upload_model(base + 2 + i, if i % 2 == 0 do left else right end, voxel()))
+  end
+
+  fn hide(base : Int) : Unit do
+    List.each([0, 1, 2, 3, 4, 5], fn i -> Draw.show(base + i, false))
+  end
+
+  pfn draw_leg(base : Int, c : Ur.Sim.City, p : IguanaPose, i : Int) : Unit do
+    let left = i % 2 == 0
+    let front = i < 2
+    let across = if left do -0.14 else 0.14 end
+    let stride = if left == front do p.gait else 0.0 -. p.gait end
+    let along = (if front do 0.32 else -0.29 end) +. stride *. 0.082
+    let dx = Math.sin(p.heading)
+    let dz = Math.cos(p.heading)
+    let x = p.x +. dx *. along +. dz *. across
+    let z = p.z +. dz *. along -. dx *. across
+    let lift = Math.max_float(0.0, stride) *. 0.053
+    let yaw = p.heading +. (if left do -0.15 else 0.15 end) +. stride *. 0.26
+    Draw.pose(base + i, x, ground_metres(c, x, z) +. lift, z, yaw, 0.0, 0.0,
+      if left do 6.0 *. voxel() else 0.0 end, 0.0, 3.0 *. voxel())
+    ()
+  end
+
+  fn draw(base : Int, c : Ur.Sim.City, route : IguanaRoute, age : Float) : Unit do
+    let p = pose(c, route, age)
+    let size = voxel()
+    let y = p.y +. 0.02 +. Math.abs(p.gait) *. 0.025
+    let tail_x = p.x -. Math.sin(p.heading) *. 5.0 *. size
+    let tail_z = p.z -. Math.cos(p.heading) *. 5.0 *. size
+    Draw.pose(base, p.x, y, p.z, p.heading, 0.0, p.gait *. 0.055, 7.5 *. size, 0.0, 9.0 *. size)
+    Draw.pose(base + 1, tail_x, y, tail_z, p.heading -. p.gait *. 0.18, 0.0, 0.0, 7.5 *. size, 0.0, 14.0 *. size)
+    List.each([0, 1, 2, 3], fn i -> draw_leg(base + 2, c, p, i))
+  end
+end

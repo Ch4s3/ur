@@ -9,12 +9,12 @@ mod Ur.Wildlife do
   type WildlifeView = { x : Float, z : Float, zoom : Float, aspect : Float, yaw : Float }
   type SightingTrack = { due : Float, site : Option(WildlifeSite) }
   type Sightings = { bird : SightingTrack, bird_kind : Int, whale : SightingTrack, turtle : Ur.Turtles.TurtleTrack,
-    fish : Ur.ReefFish.FishTrack, large_fish : Ur.LargeFish.SwimTrack }
+    fish : Ur.ReefFish.FishTrack, large_fish : Ur.LargeFish.SwimTrack, iguana : Ur.Iguanas.IguanaTrack }
 
   fn empty(now : Float) : Sightings do
     { bird: { due: now +. 1.5, site: None }, bird_kind: 0,
       whale: { due: now +. 7.0, site: None }, turtle: Ur.Turtles.empty(now), fish: Ur.ReefFish.empty(now),
-      large_fish: Ur.LargeFish.empty(now) }
+      large_fish: Ur.LargeFish.empty(now), iguana: Ur.Iguanas.empty(now) }
   end
 
   fn close(view : WildlifeView) : Bool do view.zoom <= 48.0 end
@@ -248,7 +248,8 @@ mod Ur.Wildlife do
       let turtle = Ur.Turtles.step(c, ocean, view.x, view.z, visible, now, old.turtle, changed, seed)
       let fish = Ur.ReefFish.step(ocean, view, now, old.fish, changed, seed)
       let large_fish = Ur.LargeFish.step(c, ocean, view, now, old.large_fish, changed, seed)
-      { bird: bird, bird_kind: bird_kind, whale: whale, turtle: turtle, fish: fish, large_fish: large_fish }
+      let iguana = Ur.Iguanas.step(c, view, now, old.iguana, changed, seed)
+      { bird: bird, bird_kind: bird_kind, whale: whale, turtle: turtle, fish: fish, large_fish: large_fish, iguana: iguana }
     end
   end
 end
