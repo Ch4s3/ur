@@ -1,0 +1,35 @@
+mod Ur.CanalCrane do
+  type Hoist = { reach : Float, bottom : Float, carrying : Bool }
+
+  pfn ease(t : Float) : Float do
+    let t = Math.max_float(0.0, Math.min_float(1.0, t))
+    t *. t *. (3.0 -. 2.0 *. t)
+  end
+  pfn move(a : Float, b : Float, t : Float) : Float do a +. (b -. a) *. ease(t) end
+
+  doc "One transfer while the boat is moored. The empty hoist returns to its parking position."
+  fn hoist(transfer : Int, dwell : Float, rail : Float, apron : Float, vessel : Float) : Hoist do
+    let berth = 16.0
+    let park = 27.0
+    let lifted = rail -. 7.0
+    if transfer == 0 || dwell < 0.0 || dwell >= 1.0 do { reach: park, bottom: lifted, carrying: false } else
+      let loading = transfer > 0
+      let start = if loading do park else berth end
+      let finish = if loading do berth else park end
+      let pickup = if loading do apron else vessel end
+      let drop = if loading do vessel else apron end
+      let reach = if dwell < 0.10 do move(park, start, dwell /. 0.10)
+        else if dwell < 0.40 do start
+        else if dwell < 0.65 do move(start, finish, (dwell -. 0.40) /. 0.25)
+        else if dwell < 0.91 do finish
+        else move(finish, park, (dwell -. 0.91) /. 0.09) end end end end
+      let bottom = if dwell < 0.10 do lifted
+        else if dwell < 0.24 do move(lifted, pickup, (dwell -. 0.10) /. 0.14)
+        else if dwell < 0.40 do move(pickup, lifted, (dwell -. 0.24) /. 0.16)
+        else if dwell < 0.65 do lifted
+        else if dwell < 0.80 do move(lifted, drop, (dwell -. 0.65) /. 0.15)
+        else move(drop, lifted, (dwell -. 0.80) /. 0.11) end end end end end
+      { reach: reach, bottom: bottom, carrying: dwell >= 0.24 && dwell < 0.80 }
+    end
+  end
+end

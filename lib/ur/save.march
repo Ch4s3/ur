@@ -898,6 +898,7 @@ mod Ur.Save do
       Cons(("island_catch", Json.encode_int(v.island_catch)),
       Cons(("shop_imports", Json.encode_int(v.shop_imports)),
       Cons(("harbour", Json.encode_int(v.harbour)),
+      Cons(("harbour_basin", Json.encode_int(v.harbour_basin)),
       Cons(("ferry_start", Json.encode_int(v.ferry_start)),
       Cons(("trash", Json.encode_int(v.trash)),
       Cons(("cash", Json.encode_int(v.cash)),
@@ -915,6 +916,7 @@ mod Ur.Save do
       Cons(("heights", enc_array(v.heights, NativeArray.length_int(v.heights) - 1, Nil)),
       Cons(("road_shapes", enc_array(v.road_shapes, S.count() - 1, Nil)),
       Cons(("canals", enc_array(v.canals, S.count() - 1, Nil)),
+      Cons(("water_bus", enc_array(v.water_bus, S.count() - 1, Nil)),
       Cons(("canal_docks", enc_array(v.canal_docks, S.count() - 1, Nil)),
       Cons(("grades", enc_array(v.grades, S.count() - 1, Nil)),
       Cons(("grade_cover", enc_array(v.grade_cover, S.count() - 1, Nil)),
@@ -1008,7 +1010,7 @@ mod Ur.Save do
       Cons(("soil_moisture", Json.encode_int(v.soil_moisture)),
       Cons(("pumping_cost", Json.encode_int(v.pumping_cost)),
       Cons(("battery", Json.encode_int(v.battery)),
-      Cons(("message", Json.encode_string(v.message)), Nil)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+      Cons(("message", Json.encode_string(v.message)), Nil)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
   end
   pfn encode_cell(c : Ur.Rain.Cell) : Json.JsonValue do
     Json.encode_array([Json.encode_number(c.x), Json.encode_number(c.z), Json.encode_number(c.vx), Json.encode_number(c.vz),
@@ -1107,6 +1109,7 @@ mod Ur.Save do
     let? shop_imports = integer(raw_shop_imports)
     let? raw_harbour = field(j, "harbour")
     let? harbour = integer(raw_harbour)
+    let? raw_basin = opt_int(j, "harbour_basin", -1)
     let? raw_ferry_start = field(j, "ferry_start")
     let? ferry_start = integer(raw_ferry_start)
     let? raw_trash = field(j, "trash")
@@ -1139,7 +1142,8 @@ mod Ur.Save do
     let? heights = array(raw_heights, S.count(), 200)
     let? public_parking = optional_array(j, "public_parking", 3)
     let? road_shapes = optional_array(j, "road_shapes", Ur.RoadShape.save_limit())
-    let? canals = optional_array(j, "canals", 4)
+    let? canals = optional_array(j, "canals", 6)
+    let? water_bus = optional_array(j, "water_bus", S.water_bus_limit())
     let? canal_docks = optional_array(j, "canal_docks", 2)
     let? grades = optional_array(j, "grades", S.grade_save_limit())
     let? grade_cover = optional_array(j, "grade_cover", S.count())
@@ -1395,15 +1399,17 @@ mod Ur.Save do
     end
     let? raw_message = field(j, "message")
     let? message = string(raw_message)
+    let harbour_basin = if S.valid(harbour) && S.valid(raw_basin) && S.get(canals, raw_basin) > 0 &&
+      List.any([0, 1, 2, 3], fn side -> S.neighbour(harbour, side) == raw_basin) do raw_basin else -1 end
     if !((harbour == -1 || S.valid(harbour)) && (ferry_start == -1 || S.valid(ferry_start)) && month >= 0 && construction_spend >= 0 && tax >= 0 && tax <= 25 && energy >= 1 && energy <= 12) do Err("Invalid city values.") else
     Ok(S.restore_rain({ lift_decks: Map.empty(), lift_vessels: Map.empty(), public_works: public_works, rain_uniform: rain_uniform, watch: S.clamp(watch, 0, 2), rain_now: NativeArray.make_int(S.count(), 0), storms: storms, air: air, milestones: milestones, facility_staff: facility_staff, facility_expansion: facility_expansion, founders: S.clamp(founders, 0, 12), world_seed: world_seed, volcanic: volcanic, basalt: basalt, volcano_ms: S.clamp(volcano_ms, 0, float_to_int(Ur.Volcano.period() *. 1000.0) - 1), volcanic_shade: Map.empty(), setup: setup, climate_seed: S.clamp(climate_seed, 0, 2147483646), storm_drains: storm_drains, seawalls: seawalls, seabed: seabed, sea_heights: sea_heights, ferry_works: ferry_works, mangrove_harm: mangrove_harm, sea_counted: S.clamp(sea_counted, 0, 4), sea_features: S.clamp(sea_features, 0, 1), sand_changes: sand_changes, sea_run: S.clamp(NativeArray.get_int(sand_storm, 0), 0, 1000), sand_peak: NativeArray.get_int(sand_storm, 1), sand_sector: S.clamp(NativeArray.get_int(sand_storm, 2), 0, 15), sand_day: NativeArray.get_int(sand_storm, 3), sand_marks: NativeArray.make_int(S.count(), 0), sea_shoals: sea_shoals, sea_reefs: NativeArray.make_int(S.count(), 0), fish: fish, fish_capacity: fish_capacity, fish_last: NativeArray.make_int(S.count(), 0), fish_alerts: NativeArray.make_int(S.count(), 0), pump_orders: pump_orders, surface_water: surface_water, flood_damage: flood_damage, flood_active: flood_active, rain_tanks: rain_tanks, subway_water: subway_water, soil_moisture: S.clamp(soil, 0, 100), pumping_cost: S.clamp(pumping, 0, 200000), battery: S.clamp(battery, 0, 1000000), hour: 9,
       waste_live: waste_live, waste_bins: waste_bins, waste_stock: waste_stock, waste_sites: waste_sites,
       waste_last: waste_last, waste_log: waste_log, waste_runs: waste_runs, council: council, religion: religion, construction_spend: construction_spend, island_exports: island_exports, island_crops: island_crops, island_catch: island_catch,
-      shop_imports: shop_imports, harbour: harbour, ferry_start: ferry_start, trash: trash,
+      shop_imports: shop_imports, harbour: harbour, harbour_basin: harbour_basin, ferry_start: ferry_start, trash: trash,
       cash: cash, month: month, tax: tax, business_rate: business_rate,
       import_rate: import_rate, export_rate: export_rate, energy: energy, income: income,
       island_spend: island_spend, freight: freight, shop_stock: shop_stock, shop_sales: shop_sales, shop_delivered: shop_delivered,
-      heights: heights, roads: roads, road_shapes: road_shapes, canals: canals, canal_docks: canal_docks, grades: grades, grade_cover: grade_cover, parks: parks, calendar_day: S.clamp(calendar_day, 0, S.days_per_month() - 1), clock_ms: S.clamp(clock_ms, 0, float_to_int(S.day_seconds() *. 1000.0) - 1), street_day: S.clamp(street_day, 0, 6), car_free_days: car_free_days, ground_rule: ground_rule, quiet_rule: quiet_rule, ground_areas: ground_areas, quiet_areas: quiet_areas, storefronts: storefronts, footfall: footfall, fire_recovery: fire_recovery, park_tiers: park_tiers, streetscape: streetscape, sidewalk_items: sidewalk_items, tolls: tolls, public_parking: public_parking, transit: transit,
+      heights: heights, roads: roads, road_shapes: road_shapes, canals: canals, canal_docks: canal_docks, water_bus: water_bus, water_bus_selection: -1, grades: grades, grade_cover: grade_cover, parks: parks, calendar_day: S.clamp(calendar_day, 0, S.days_per_month() - 1), clock_ms: S.clamp(clock_ms, 0, float_to_int(S.day_seconds() *. 1000.0) - 1), street_day: S.clamp(street_day, 0, 6), car_free_days: car_free_days, ground_rule: ground_rule, quiet_rule: quiet_rule, ground_areas: ground_areas, quiet_areas: quiet_areas, storefronts: storefronts, footfall: footfall, fire_recovery: fire_recovery, park_tiers: park_tiers, streetscape: streetscape, sidewalk_items: sidewalk_items, tolls: tolls, public_parking: public_parking, transit: transit,
       stops: stops, ferries: ferries, service: service, bus_fare: S.clamp(bus_fare, 0, 6), bus_headways: NativeArray.make_int(S.count(), 0), zones: zones,
       density: density, nuisance: nuisance, buildings: buildings, housing_losses: housing_losses,
       business_losses: business_losses, construction: construction, plants: plants, paused_facilities: paused_facilities, pipes: pipes,

@@ -15,10 +15,12 @@ mod Ur.Food do
   end
 
   pfn visit(c : Ur.Sim.City, r : Routes, i : Int, d : Int, mode : Int) : Routes do
-    if d >= 6 do r else
+    if d >= 8 do r else
       let j = if d < 4 do S.neighbour(i, d)
         else if d == 4 do S.grade_peer(c, i)
-        else if mode == 0 || mode == 4 do S.canal_taxi_peer(c, i) else -1 end end end
+        else if mode != 0 && mode != 4 do -1
+        else if d == 5 do S.canal_taxi_peer(c, i)
+        else S.water_bus_peer(c, i, d == 6) end end end end
       let open = match mode do
         1 -> S.motor_road(c, j)
         2 -> S.motor_street(c, j)
@@ -147,7 +149,7 @@ mod Ur.Food do
       Cons(a, Cons(b, rest)) ->
         let ferry = S.ferry_peer(c, a) == b
         let adjacent = S.neighbour(a, S.direction(a, b)) == b
-        if ferry || S.grade_link(c, a, b) || (adjacent && int_abs(S.get(c.heights, a) - S.get(c.heights, b)) <= 12) do
+        if ferry || S.grade_link(c, a, b) || (adjacent && S.canal_land_link(c, a, b) && int_abs(S.get(c.heights, a) - S.get(c.heights, b)) <= 12) do
           match rest do
             Nil -> (!S.building_offline(c, b) && (S.retail_kind(c, b) > 0 || Option.is_some(S.production_at(c, b)))) || b == c.harbour
             _ -> (S.motor_road(c, b) || (S.get(c.ferries, b) > 0 && !S.ground_closed(c, b))) && route_open(c, Cons(b, rest))

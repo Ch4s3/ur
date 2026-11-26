@@ -99,7 +99,7 @@ mod Ur.Citizens do
   type RouteChecks = { steps : NativeIntArr, walks : NativeIntArr }
   pfn step_ok(c : Ur.Sim.City, a : Int, b : Int) : Bool do
     !S.ground_closed(c, b) && (S.grade_link(c, a, b) || (S.span_distance(a, b) == 1 && int_abs(S.get(c.heights, a) - S.get(c.heights, b)) <= 12) ||
-      (S.valid(b) && S.canal_taxi_peer(c, a) == b))
+      (S.valid(b) && (S.canal_taxi_peer(c, a) == b || S.water_bus_peer(c, a, true) == b || S.water_bus_peer(c, a, false) == b)))
   end
   pfn passable(c : Ur.Sim.City, a : Int) : Bool do
     Ur.Food.walkable(c, a) || S.valid(S.campus_root(c, a)) || S.get(c.parks, a) > 0
@@ -676,7 +676,7 @@ mod Ur.Citizens do
     if i >= S.count() do false
     else if S.storefront(c, i) != S.storefront(old, i) || S.ground_at(c, i) != S.ground_at(old, i) || S.building_offline(c, i) != S.building_offline(old, i) || S.get(c.parks, i) != S.get(old.parks, i) || S.get(c.roads, i) != S.get(old.roads, i) || S.get(c.grades, i) != S.get(old.grades, i) || S.get(c.transit, i) != S.get(old.transit, i) || S.get(c.stops, i) != S.get(old.stops, i) || S.get(c.heights, i) != S.get(old.heights, i) ||
       S.get(c.buildings, i) != S.get(old.buildings, i) || S.job_requirement(c, i) != S.job_requirement(old, i) || S.get(c.plants, i) != S.get(old.plants, i) || S.get(c.waste_bins, i) != S.get(old.waste_bins, i) || S.get(c.public_parking, i) != S.get(old.public_parking, i) || S.resident_homes(c, i) != S.resident_homes(old, i) || S.business_closed(c, i) != S.business_closed(old, i) || S.get(c.zones, i) != S.get(old.zones, i) do true
-    else if S.get(c.canals, i) != S.get(old.canals, i) || S.get(c.canal_docks, i) != S.get(old.canal_docks, i) do true
+    else if S.get(c.water_bus, i) != S.get(old.water_bus, i) || S.get(c.canals, i) != S.get(old.canals, i) || S.get(c.canal_docks, i) != S.get(old.canal_docks, i) do true
     else if ((S.get(c.roads, i) > 0 || S.get(c.transit, i) == 1 || S.get(c.parks, i) > 0 || S.canal_water(c, i) || S.valid(S.campus_root(c, i))) &&
       S.ground_closed(c, i) != S.ground_closed(old, i)) do true
     else changed(c, old, i + 1) end end end end
@@ -1407,12 +1407,15 @@ mod Ur.Citizens do
     else next_leg(c, person, occupied, b, tail) end
   end
   pfn ride_canal_taxi(c : Ur.Sim.City, person : Citizen, occupied : Occupied, dt : Float, a : Int, b : Int, tail : List(Int)) : (Citizen, Occupied) do
-    let progress = match S.lift_passenger(c, a, b, person.progress) do
-      Some(progress) -> progress
-      None -> person.progress +. dt *. S.canal_taxi_rate(c, a, b)
+    let progress = if S.water_bus_leg(c, a, b) do S.water_bus_passenger(c, a, b, person.progress) else
+      match S.lift_passenger(c, a, b, person.progress) do
+        Some(progress) -> progress
+        None -> person.progress +. dt *. S.canal_taxi_rate(c, a, b)
+      end
     end
-    if progress >= 1.0 do next_leg(c, person, occupied, b, tail)
-    else ({ person with progress: progress }, occupied) end
+    if progress < 0.0 do ({ person with route: Nil, location: a, progress: 0.0 }, occupied)
+    else if progress >= 1.0 do next_leg(c, person, occupied, b, tail)
+    else ({ person with progress: progress }, occupied) end end
   end
   pfn junction_clear(c : Ur.Sim.City, occupied : Occupied, i : Int, approach : Int, d : Int) : Bool do
     if d >= 4 do true else

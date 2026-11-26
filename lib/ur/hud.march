@@ -298,7 +298,8 @@ mod Ur.Hud do
       let a = label(a, x, top +. 282.0, 11.0, "Pollution " ++ int_to_string(S.land_pollution_at(c, hover)) ++ "%   ·   " ++ S.nuisance_name(S.get(c.nuisance, hover)) ++ " nuisance limit   ·   Land $" ++ int_to_string(S.land_value(c, hover)) ++
         (if zone == 3 && !S.live_work(c, hover) && S.workshop_allowed(c, hover) do " · workshop allowed" else "" end), false)
       let trip = S.commute(st.commutes, hover)
-      let travel = if S.get(c.ferries, hover) > 0 do S.ferry_summary(c, hover)
+      let travel = if S.water_bus_site(c, hover) do S.water_bus_summary(c, hover)
+      else if S.get(c.ferries, hover) > 0 do S.ferry_summary(c, hover)
       else if S.get(c.transit, hover) >= 2 do
         let running = S.get(c.ferries, hover) > 0 || S.get(st.running_transit, hover) > 0
         (if running do "Service running" else "Service inactive" end) ++ "   ·   Frequency " ++ int_to_string(S.frequency(c, hover)) ++ "/3"
@@ -309,7 +310,7 @@ mod Ur.Hud do
           "Busiest direction " ++ int_to_string(load) ++ " / " ++ int_to_string(capacity) ++ "   ·   Delay +" ++ int_to_string(S.delay_for(c, hover, load)) ++ " min"
         end
       else if trip < 999 do "Nearest jobs   " ++ int_to_string(trip) ++ " min"
-      else "" end end end end
+      else "" end end end end end
       let a = label(a, x, top +. 304.0, 11.0, travel, false)
       let a = if zone > 0 do label(a, x, top +. 325.0, 11.0, "Storeys " ++ int_to_string(S.get(c.buildings, hover)) ++ " / " ++ int_to_string(S.get(c.density, hover)) ++ "   ·   " ++ civic_label(S.get(st.civic, hover)), false) else a end
       let homes = S.homes_at(c, hover)
@@ -1409,7 +1410,7 @@ mod Ur.Hud do
     if !S.valid(lot) || !over_tile_popup(w, h, point, mx, my) do 0 else
       let (x, y, width) = popup_frame(w, h, point)
       if mx >= x +. width -. 36.0 && mx < x +. width -. 8.0 && my >= y +. 6.0 && my < y +. 34.0 do 1
-      else if (S.freight_port(c, lot) || (Option.is_none(c.freight) && S.get(c.ferries, lot) > 0)) &&
+      else if (S.freight_port(c, lot) || (Option.is_none(c.freight) && S.get(c.ferries, lot) > 0 && S.get(c.canal_docks, lot) == 0)) &&
         mx >= x +. 12.0 && mx < x +. width -. 12.0 && my >= y +. 139.0 && my < y +. 195.0 do
         if Option.is_none(c.freight) do 5 else 6 + (if mx < x +. width *. 0.5 do 0 else 1 end) +
           (if my < y +. 167.0 do 0 else 2 end) end
@@ -1698,12 +1699,17 @@ mod Ur.Hud do
       let road = S.get(c.roads, lot)
       let kind = S.get(c.plants, lot)
       let shelter = Ur.Evacuation.capacity(c, lot)
-      let name = if S.undeveloped_zone(c, lot) do zone_heading(c, lot) else if S.freight_port(c, lot) || S.get(c.ferries, lot) > 0 do "Freight dock" else if S.get(c.stops, lot) == 2 do "Bus stop" else if S.get(c.stops, lot) == 4 do "Subway station" else if road > 0 do S.road_name(road)
+      let name = if lot == c.harbour do "Founding harbour" else if S.get(c.canal_docks, lot) == 2 do "Canal freight quay"
+        else if S.get(c.canal_docks, lot) == 1 do "Water taxi dock"
+        else if S.undeveloped_zone(c, lot) do zone_heading(c, lot) else if S.freight_port(c, lot) || S.get(c.ferries, lot) > 0 do "Freight dock" else if S.get(c.stops, lot) == 2 do "Bus stop" else if S.get(c.stops, lot) == 4 do "Subway station" else if road > 0 do S.road_name(road)
         else if kind > 0 do S.facility_name(kind)
         else if S.fire_rebuilding(c, lot) do "Fire ruin"
         else if S.get(c.buildings, lot) > 0 do S.building_name(c, lot)
         else if S.get(c.public_parking, lot) > 0 do S.parking_name(S.get(c.public_parking, lot))
-        else if S.get(c.heights, lot) == 0 do "Water" else "Parcel" end end end end end end end end end end
+        else if S.get(c.heights, lot) == 0 do "Water" else "Parcel" end end end end end end end end end end end end end
+      let name = if S.automatic_canal_gate(c, lot) do "Automatic flood gate"
+        else if S.water_bus_yard(c, lot) do "Water bus maintenance dock"
+        else if S.water_bus_site(c, lot) do "Water bus stop" else name end end end
       let box = label(box, x, y +. 9.0, 15.0, name, true)
       let heat = S.local_temperature(c, lot)
       let temp = int_to_string(heat / 10) ++ "." ++ int_to_string(heat % 10) ++ " °C"
@@ -1741,6 +1747,11 @@ mod Ur.Hud do
         let box = label(box, x, y +. 82.0, 11.0, int_to_string(shelter) ++ " households of capacity", false)
         label(box, x, y +. 105.0, 11.0, int_to_string(here) ++ " sheltered · " ++ int_to_string(coming) ++ " arriving (shown)", false)
       else if S.undeveloped_zone(c, lot) do zone_reason(box, x, y +. 57.0, width, reason)
+      else if S.automatic_canal_gate(c, lot) do
+        label(box, x, y +. 57.0, 12.0,
+          if S.canal_gate_closed(c, lot) do "Closed · Ocean surge" else "Open · Monitoring sea level" end, true)
+      else if S.water_bus_site(c, lot) do label(box, x, y +. 57.0, 12.0, S.water_bus_summary(c, lot), true)
+      else if S.get(c.canal_docks, lot) > 0 do label(box, x, y +. 57.0, 12.0, S.ferry_summary(c, lot), true)
       else if S.freight_port(c, lot) || (S.get(c.ferries, lot) > 0 && Option.is_none(c.freight)) do freight_popup(box, c, st, x, y, width)
       else if S.get(c.stops, lot) == 2 do bus_popup(box, c, st.buses, lot, x, y, width)
       else if S.get(c.stops, lot) == 4 do
@@ -1843,7 +1854,7 @@ mod Ur.Hud do
           label(box, x, y +. 181.0, 10.0, "Trash " ++ int_to_string(stock) ++ state ++ " · " ++ pickup, false)
         else box end
       end
-    end end end end end end end end end end end end
+    end end end end end end end end end end end end end end end
   end
   pfn emergency_panel_top(startup_step : Int) : Float do
     if startup_step > 0 do 326.0 else 168.0 end

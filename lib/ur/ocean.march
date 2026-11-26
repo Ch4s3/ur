@@ -24,9 +24,10 @@ mod Ur.Ocean do
   -- a Strata.Seabed shelf from the coast, the map's natural reefs and sand
   -- bars, the sand storms moved (City.sand_changes), and the city's dredging
   -- and reefs (City.seabed) on top. [kind] says what each cell is made of
-  -- (0 open floor, 1 reef, 2 sand bar, 3 a reef the city built); [shelf] is the bare shelf's depth.
+  -- (0 open floor, 1 reef, 2 sand bar, 3 built reef, 4 canal mouth); [shelf] is the bare shelf's depth.
   -- [reef_type] is what the map's reefs are, from its temperature (Ur.Sim setup 2): 0 rocky, 1 mixed, 2 coral.
   -- [corals] are the coral templates its reefs are dotted with (Strata.Corals; none without reef), in Ur.Scene's material ids.
+  -- [canals] marks parcels where only the cut channel can have a sea-level surface.
   type Field = { floor : NativeIntArr, kind : NativeIntArr, shelf : NativeIntArr, reef_type : Int, corals : List(Strata.Template.Template), canals : NativeIntArr }
 
   doc "Ground cells across and down the map and its ring (8 to a parcel)."

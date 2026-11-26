@@ -327,8 +327,12 @@ mod Ur.Scene do
   -- Strata's shadow handles have a smaller range than its mesh slots.
   pfn raised_shadow(i : Int) : Int do i * 4 + 3 end
   fn wildlife_base() : Int do raised_slot(S.count()) end
-  pfn arch_slot(i : Int) : Int do wildlife_base() + Ur.WildlifeRender.slots() + i end
-  pfn volcano_base() : Int do arch_slot(S.count()) end
+  pfn flood_gate_slot(i : Int) : Int do wildlife_base() + Ur.WildlifeRender.slots() + i end
+  -- Each canal-to-sea edge takes two moving leaves.
+  pfn arch_slot(i : Int) : Int do flood_gate_slot(4 * S.count()) + i end
+  pfn crane_slot(i : Int, part : Int) : Int do arch_slot(S.count()) + i * 4 + part end
+  pfn water_bus_slot(i : Int) : Int do crane_slot(S.count(), 0) + i end
+  pfn volcano_base() : Int do water_bus_slot(S.count()) end
   fn chunk_slots() : Int do volcano_base() + Ur.VolcanoRender.slots() end
   fn volcano(c : Ur.Sim.City, lake : Option(Ur.CalderaLake.LavaLake), path : List(Ur.Volcano.LavaRun), time : Float, terrain_changed : Bool) : Unit do
     Ur.VolcanoRender.draw(volcano_base(), c, lake, path, time, terrain_changed)
@@ -1457,7 +1461,8 @@ mod Ur.Scene do
   end
   pfn changed(a : Ur.Sim.City, b : Ur.Sim.City, i : Int) : Bool do
     S.valid(i) && (S.get(a.road_shapes, i) != S.get(b.road_shapes, i) ||
-      S.get(a.canals, i) != S.get(b.canals, i) || S.get(a.canal_docks, i) != S.get(b.canal_docks, i) ||
+      S.get(a.water_bus, i) != S.get(b.water_bus, i) || S.get(a.canals, i) != S.get(b.canals, i) || S.get(a.canal_docks, i) != S.get(b.canal_docks, i) ||
+      (a.harbour_basin != b.harbour_basin && (i == a.harbour_basin || i == b.harbour_basin || i == a.harbour || i == b.harbour)) ||
       S.public_work_stage(a, i) != S.public_work_stage(b, i) || S.get(a.seawalls, i) != S.get(b.seawalls, i) || S.flood_repair_days(a, i) != S.flood_repair_days(b, i) || S.get(a.sidewalk_items, i) != S.get(b.sidewalk_items, i) || S.get(a.waste_bins, i) != S.get(b.waste_bins, i) || (a.harbour != b.harbour && (i == a.harbour || i == b.harbour)) || S.get(a.heights, i) != S.get(b.heights, i) || S.campus_root(a, i) != S.campus_root(b, i) || S.get(a.roads, i) != S.get(b.roads, i) || S.get(a.grade_cover, i) != S.get(b.grade_cover, i) || S.get(a.fire_recovery, i) != S.get(b.fire_recovery, i) || S.get(a.park_tiers, i) != S.get(b.park_tiers, i) || S.get(a.streetscape, i) != S.get(b.streetscape, i) || S.get(a.parks, i) != S.get(b.parks, i) || S.get(a.tolls, i) != S.get(b.tolls, i) || S.get(a.public_parking, i) != S.get(b.public_parking, i) ||
       S.get(a.transit, i) != S.get(b.transit, i) || S.get(a.stops, i) != S.get(b.stops, i) || S.get(a.ferries, i) != S.get(b.ferries, i) ||
       (Option.is_some(S.industry_at(b, i)) && S.production_running(a, i) != S.production_running(b, i)) ||
@@ -1994,6 +1999,111 @@ mod Ur.Scene do
       Some((x, z, int_abs(x1 - x0) >= int_abs(z1 - z0)))
     end end
   end
+  type FloodGate = { slot : Int, lot : Int, side : Int, bottom : Int, height : Int,
+    closed : Bool, from : Float, since : Float, moving : Bool }
+
+  fn flood_gate_hinge(side : Int, leaf : Int, opening : Float) : (Float, Float, Float) do
+    let x = if leaf == 0 do 8.0 else 24.0 end
+    let pi = 3.141592653589793
+    let swing = opening *. pi *. 0.5
+    let yaw = if leaf == 0 do swing else pi -. swing end
+    match side do
+      0 -> (0.0, x, yaw -. pi *. 0.5)
+      1 -> (32.0, 32.0 -. x, yaw +. pi *. 0.5)
+      2 -> (32.0 -. x, 0.0, yaw +. pi)
+      _ -> (x, 32.0, yaw)
+    end
+  end
+
+  pfn gate_target(closed : Bool) : Float do if closed do 0.0 else 1.0 end end
+  pfn gate_time() : Float do 0.45 end
+  fn flood_gate_opening(gate : FloodGate, time : Float) : Float do
+    if !gate.moving do gate_target(gate.closed) else
+      let t = Math.max_float(0.0, Math.min_float(1.0, (time -. gate.since) /. gate_time()))
+      let ease = t *. t *. (3.0 -. 2.0 *. t)
+      gate.from +. (gate_target(gate.closed) -. gate.from) *. ease
+    end
+  end
+
+  pfn pose_flood_gate(gate : FloodGate, time : Float) : Unit do
+    let opening = flood_gate_opening(gate, time)
+    List.each([0, 1], fn leaf ->
+      let (u, v, yaw) = flood_gate_hinge(gate.side, leaf, opening)
+      let x = int_to_float(gate.lot % S.width() * 32) +. u -. Math.sin(yaw) *. 0.5
+      let z = int_to_float(gate.lot / S.width() * 32) +. v -. Math.cos(yaw) *. 0.5
+      let angle = yaw *. 0.5
+      Vk.slot_pose(flood_gate_slot(gate.slot + leaf), x *. 0.25, int_to_float(gate.bottom) *. 0.25, z *. 0.25,
+        0.0, Math.sin(angle), 0.0, Math.cos(angle)))
+  end
+
+  pfn upload_flood_gate(gate : FloodGate) : Unit do
+    let mesh = box(empty(), 0, 0, 0, 8, gate.height - 1, 1, 19)
+    let mesh = box(mesh, 0, gate.height - 1, 0, 8, 1, 1, 10)
+    List.each([0, 1], fn leaf ->
+      let slot = flood_gate_slot(gate.slot + leaf)
+      if Vk.body_begin(slot) && Vk.chunk_part(0, mesh.words, mesh.quads) && Vk.chunk_commit() do ()
+      else Ur.AppError.stop("Flood gate leaf upload failed") end)
+  end
+
+  pfn gate_sites(c : Ur.Sim.City, lot : Int, sites : List((Int, Int))) : List((Int, Int)) do
+    if lot < 0 do sites else
+      let sites = if S.automatic_canal_gate(c, lot) do
+        List.fold_left([3, 2, 1, 0], sites, fn (out, side) ->
+          if S.canal_outlet(c, lot, side) do Cons((lot, side), out) else out end)
+        else sites end
+      gate_sites(c, lot - 1, sites)
+    end
+  end
+
+  pfn gate_key(lot : Int, side : Int) : Int do lot * 4 + side end
+  pfn refresh_gates(c : Ur.Sim.City, sites : List((Int, Int)), previous : Map(Int, FloodGate), time : Float, slot : Int) : List(FloodGate) do
+    match sites do
+      Nil -> Nil
+      Cons((lot, side), rest) ->
+        let closed = S.canal_gate_closed(c, lot)
+        let water = S.canal_level(c, lot)
+        let bottom = water - S.canal_depth()
+        let height = Math.max_int(water + 17, S.canal_bank_height(c, lot) + 3) - bottom
+        let old = Map.get(previous, gate_key(lot, side), Map.int_cmp)
+        let gate = match old do
+          Some(gate) ->
+            let gate = if gate.closed == closed do gate
+              else { gate with from: flood_gate_opening(gate, time), since: time, moving: true, closed: closed } end
+            { gate with slot: slot, bottom: bottom, height: height }
+          None -> { lot: lot, side: side, slot: slot, bottom: bottom, height: height,
+            closed: closed, from: gate_target(closed), since: time, moving: false }
+        end
+        let needs_mesh = match old do
+          Some(gate) -> gate.slot != slot || gate.height != height
+          None -> true
+        end
+        if needs_mesh do upload_flood_gate(gate) else () end
+        pose_flood_gate(gate, time)
+        Cons(gate, refresh_gates(c, rest, previous, time, slot + 2))
+    end
+  end
+
+  fn clear_flood_gates(gates : List(FloodGate)) : Unit do
+    List.each(gates, fn gate ->
+      Vk.chunk_free(flood_gate_slot(gate.slot))
+      Vk.chunk_free(flood_gate_slot(gate.slot + 1)))
+  end
+
+  fn flood_gates(c : Ur.Sim.City, previous : List(FloodGate), time : Float, refresh : Bool) : List(FloodGate) do
+    let gates = if refresh do
+      let previous_by_site = List.fold_left(previous, Map.empty(), fn (out, gate) ->
+        Map.insert(out, gate_key(gate.lot, gate.side), gate, Map.int_cmp))
+      let next = refresh_gates(c, gate_sites(c, S.count() - 1, Nil), previous_by_site, time, 0)
+      clear_flood_gates(List.drop(previous, List.length(next)))
+      next
+    else previous end
+    List.map(gates, fn gate ->
+      if gate.moving do
+        pose_flood_gate(gate, time)
+        { gate with moving: time -. gate.since < gate_time() }
+      else gate end)
+  end
+
   -- A ferry is a body, posed every frame on the swell (float_ferries); a refresh uploads its mesh and sets it level.
   pfn canal_boat_mesh(taxi : Bool) : Ur.SceneMesh.Mesh do
     if taxi do vessel_mesh(true, true) else
@@ -2001,7 +2111,7 @@ mod Ur.Scene do
       let m = box(m, 0, 1, 0, 19, 2, 8, 13)
       let m = box(m, 0, 3, 0, 19, 1, 8, 8)
       let m = box(m, 2, 4, 1, 5, 3, 6, 9)
-      let m = box(m, 8, 4, 1, 5, 3, 6, 7)
+      -- The center bay is clear for the crane's suspended load.
       box(m, 14, 4, 1, 4, 3, 6, 10)
     end
   end
@@ -2014,6 +2124,75 @@ mod Ur.Scene do
       Cons(a, Nil) -> (a, a, 0.0)
       Nil -> (dock, dock, 0.0)
     end
+  end
+  pfn canal_boat_point(c : Ur.Sim.City, lot : Int, peer : Int) : (Float, Float, Float) do
+    let x = lot % S.width()
+    let z = lot / S.width()
+    let offset = if lot == c.harbour do 26 else 0 end
+    let dx = peer % S.width() - x
+    let dz = peer / S.width() - z
+    let level = if S.canal_water(c, lot) do S.canal_level(c, lot) else 0 end
+    (int_to_float(x * 32 + 16 + dx * offset), int_to_float(z * 32 + 16 + dz * offset), int_to_float(level))
+  end
+  pfn upload_boat_body(slot : Int, mesh : Ur.SceneMesh.Mesh) : Unit do
+    if Vk.body_begin(slot) && Vk.chunk_part(0, mesh.words, mesh.quads) && Vk.chunk_commit() do ()
+    else Ur.AppError.stop("Waterfront body upload failed") end
+  end
+  pfn refresh_crane(c : Ur.Sim.City, quay : Int) : Unit do
+    if S.get(c.canal_docks, quay) != 2 || S.canal_crane_bank(c, quay) < 0 do
+      List.each([0, 1, 2, 3], fn part -> Vk.chunk_free(crane_slot(quay, part)))
+    else
+      let trolley = box(vehicle_body(), 0, 1, 0, 8, 2, 4, 19)
+      let trolley = box(trolley, 2, 0, 1, 4, 2, 2, 10)
+      upload_boat_body(crane_slot(quay, 0), trolley)
+      let mesh = Strata.Model.box(Strata.Model.empty(), -0.012, 0.0, -0.012, 0.012, 1.0, 0.012, 19)
+      -- The renderer copies the scratch model when committing the instance.
+      let model = 2
+      let cable = NativeArray.set_i32(NativeArray.make_i32(2, 0), 0, Q.pack_instance0(0, 0, 0, model))
+      if Vk.model_set(model, Strata.Model.floats(mesh), Strata.Model.count(mesh)) && Vk.body_begin(crane_slot(quay, 1)) &&
+        Vk.chunk_part(3, cable, 1) && Vk.chunk_commit() do ()
+      else Ur.AppError.stop("Canal crane cable upload failed") end
+      upload_boat_body(crane_slot(quay, 2), box(box(vehicle_body(), 0, 0, 0, 4, 1, 4, 19), 1, 1, 1, 2, 1, 2, 10))
+      upload_boat_body(crane_slot(quay, 3), box(vehicle_body(), 0, 0, 0, 4, 3, 4, 6))
+    end
+  end
+  pfn crane_transfer(c : Ur.Sim.City, quay : Int, peer : Int, dwell : Float) : Unit do
+    let bank = S.canal_crane_bank(c, quay)
+    if bank < 0 || S.get(c.canal_docks, quay) != 2 do () else
+      let transfer = if dwell >= 0.0 do S.canal_crane_transfer(c, quay, peer) else 0 end
+      let rail = int_to_float(L.crane_rail_height(c, quay))
+      let apron = int_to_float(S.canal_bank_height(c, quay) + 2)
+      let vessel = int_to_float(S.canal_level(c, quay) + 5)
+      let pose = Ur.CanalCrane.hoist(transfer, dwell, rail, apron, vessel)
+      let hook = pose.bottom +. 3.0
+      let (dx, dz, half_yaw) = match bank do
+        0 -> (-1.0, 0.0, -0.7853981634)
+        1 -> (1.0, 0.0, 0.7853981634)
+        2 -> (0.0, -1.0, 1.5707963268)
+        _ -> (0.0, 1.0, 0.0)
+      end
+      let x = int_to_float(quay % S.width() * 32 + 16) +. dx *. (pose.reach -. 16.0) -. dz *. 2.0
+      let z = int_to_float(quay / S.width() * 32 + 16) +. dz *. (pose.reach -. 16.0) +. dx *. 2.0
+      let place = fn (part, along, across, y) ->
+        Vk.slot_pose(crane_slot(quay, part), (x +. dx *. along +. dz *. across) *. 0.25, y *. 0.25,
+          (z +. dz *. along -. dx *. across) *. 0.25, 0.0, Math.sin(half_yaw), 0.0, Math.cos(half_yaw))
+      place(0, -2.0, -4.0, rail +. 1.0)
+      place(1, 0.0, 0.0, hook +. 2.0)
+      Vk.slot_voxel(crane_slot(quay, 1), (rail +. 1.0 -. hook -. 2.0) *. 0.25)
+      place(2, -2.0, -2.0, hook)
+      place(3, -2.0, -2.0, pose.bottom)
+      Vk.chunk_show(crane_slot(quay, 3), pose.carrying)
+    end
+  end
+  pfn canal_voyage(time : Float, spans : Float, stop : Float) : (Float, Bool, Float) do
+    let travel = Math.max_float(1.5, spans *. 1.5)
+    let leg = travel +. stop
+    let cycle = time -. Math.floor(time /. (leg *. 2.0)) *. leg *. 2.0
+    let outbound = cycle < leg
+    let elapsed = if outbound do cycle else cycle -. leg end
+    let progress = Math.max_float(0.0, (elapsed -. stop) /. travel)
+    let dwell = if elapsed < stop do elapsed /. stop else -1.0 end
+    (if outbound do progress else 1.0 -. progress end, outbound, dwell)
   end
   pfn canal_vessel(c : Ur.Sim.City, i : Int, time : Float, refresh : Bool) : Unit do
     let slot = rotor_slot(i)
@@ -2029,19 +2208,32 @@ mod Ur.Scene do
       else () end
       let path = S.canal_service_path(c, i, peer)
       let spans = int_to_float(List.length(path) - 1)
-      let phase = time /. (if spans > 0.0 do spans *. 3.0 else 3.0 end)
-      let phase = phase -. Math.floor(phase)
       let lift = List.any(path, fn lot -> S.movable_leaf(c, lot))
-      let (position, direction) = lift_vessel(c, i)
-      let outward = if lift do direction else phase < 0.5 end
-      let progress = spans *. (if lift do position
-        else (if outward do phase else 1.0 -. phase end) *. 2.0 end)
-      let (a, b, u) = canal_boat_segment(path, progress, i)
+      let stop = if !taxi && (S.canal_crane_bank(c, i) >= 0 || S.canal_crane_bank(c, peer) >= 0) do 3.5 else 0.0 end
+      let (position, outward, dwell) = if lift do
+        match Map.get(c.lift_vessels, i, Map.int_cmp) do
+          Some(voyage) ->
+            let (position, outward) = S.vessel_position(voyage)
+            let dwell = if voyage.moored > 0.0 do (3.0 -. voyage.moored) /. 3.0 else -1.0 end
+            (position, outward, dwell)
+          None -> (0.0, true, -1.0)
+        end
+      else canal_voyage(time, spans, stop) end
+      if !taxi do
+        let dwell = if spans > 0.0 do dwell else -1.0 end
+        crane_transfer(c, i, peer, if outward do dwell else -1.0 end)
+        crane_transfer(c, peer, i, if outward do -1.0 else dwell end)
+      else () end
+      let progress = spans *. position
+      let berth = if i == c.harbour do peer else i end
+      let (a, b, u) = canal_boat_segment(path, progress, berth)
       let dx = int_to_float(b % S.width() - a % S.width())
       let dz = int_to_float(b / S.width() - a / S.width())
-      let x = int_to_float(a % S.width() * 32 + 16) +. dx *. u *. 32.0
-      let z = int_to_float(a / S.width() * 32 + 16) +. dz *. u *. 32.0
-      let level = int_to_float(S.canal_level(c, a)) +. int_to_float(S.canal_level(c, b) - S.canal_level(c, a)) *. u
+      let (ax, az, low) = canal_boat_point(c, a, b)
+      let (bx, bz, high) = canal_boat_point(c, b, a)
+      let x = ax +. (bx -. ax) *. u
+      let z = az +. (bz -. az) *. u
+      let level = low +. (high -. low) *. u
       let direction = if outward do 1.0 else -1.0 end
       let (dx, dz) = if a == b do (if S.canal_arm(c, a, 0) || S.canal_arm(c, a, 1) do (1.0, 0.0) else (0.0, 1.0) end)
         else (dx *. direction, dz *. direction) end
@@ -2052,7 +2244,49 @@ mod Ur.Scene do
         (z -. dz *. half_length -. dx *. half_width) *. 0.25, 0.0, Math.sin(yaw), 0.0, Math.cos(yaw))
     end
   end
+  pfn water_bus_mesh() : Ur.SceneMesh.Mesh do
+    let mesh = box(vehicle_body(), 1, 0, 1, 16, 1, 6, 19)
+    let mesh = box(mesh, 0, 1, 0, 18, 2, 8, 7)
+    let mesh = box(mesh, 0, 3, 0, 18, 1, 8, 17)
+    let mesh = box(mesh, 2, 4, 1, 13, 3, 6, 9)
+    let mesh = List.fold_left([4, 7, 10, 13], mesh, fn (mesh, x) -> box(mesh, x, 4, 1, 1, 3, 6, 17))
+    let mesh = box(mesh, 1, 7, 0, 15, 1, 8, 17)
+    let mesh = box(mesh, 3, 8, 3, 10, 1, 2, 7)
+    box(mesh, 15, 4, 1, 2, 1, 6, 10)
+  end
+  fn water_buses(c : Ur.Sim.City, routes : List(Ur.Lift.Vessel), old_routes : List(Ur.Lift.Vessel), refresh : Bool) : Unit do
+    if refresh do List.each(old_routes, fn boat ->
+      if !List.is_empty(boat.calls) && !List.any(routes, fn active -> active.source == boat.source) do
+        Vk.chunk_free(water_bus_slot(boat.source - S.water_bus_source(0)))
+      else () end) else () end
+    List.each(routes, fn boat ->
+      if List.is_empty(boat.calls) do () else
+        let yard = boat.source - S.water_bus_source(0)
+        let slot = water_bus_slot(yard)
+        if refresh do upload_boat_body(slot, water_bus_mesh()) else () end
+        let (position, outward) = match Map.get(c.lift_vessels, boat.source, Map.int_cmp) do
+          Some(motion) -> S.vessel_position(motion)
+          None -> (0.0, true)
+        end
+        let (a, b, u) = canal_boat_segment(boat.path, position *. int_to_float(List.length(boat.path) - 1), yard)
+        let (ax, az, low) = canal_boat_point(c, a, a)
+        let (bx, bz, high) = canal_boat_point(c, b, b)
+        let direction = if outward do 1.0 else -1.0 end
+        let dx = (bx -. ax) *. direction /. 32.0
+        let dz = (bz -. az) *. direction /. 32.0
+        let x = ax +. (bx -. ax) *. u
+        let z = az +. (bz -. az) *. u
+        let level = low +. (high -. low) *. u
+        let yaw = Math.atan2(0.0 -. dz, dx) *. 0.5
+        Vk.slot_pose(slot, (x -. dx *. 9.0 +. dz *. 4.0) *. 0.25, (level +. 1.0) *. 0.25,
+          (z -. dz *. 9.0 -. dx *. 4.0) *. 0.25, 0.0, Math.sin(yaw), 0.0, Math.cos(yaw))
+      end)
+  end
   pfn ferry_slot(c : Ur.Sim.City, i : Int, time : Float, clock : Float, refresh : Bool) : Unit do
+    if refresh do
+      refresh_crane(c, i)
+      crane_transfer(c, i, -1, -1.0)
+    else () end
     if S.get(c.canal_docks, i) > 0 do
       if refresh do canal_vessel(c, i, time, true) else () end
     else
@@ -2155,7 +2389,8 @@ mod Ur.Scene do
         NativeArray.set_f32(phases, i, angle)
       else
         if S.get(c.ferries, i) > 0 || (refresh && (was_turbine || S.get(old.ferries, i) > 0)) do
-          ferry_slot(c, i, time, clock, refresh)
+          let crane_changed = S.get(c.canal_docks, i) == 2 && S.canal_crane_bank(c, i) != S.canal_crane_bank(old, i)
+          ferry_slot(c, i, time, clock, refresh || crane_changed)
         else () end
         phases
       end

@@ -72,7 +72,7 @@ mod Ur.Build do
   end
 
   pfn changed(old : Ur.Sim.City, next : Ur.Sim.City, i : Int) : Bool do
-    old.cash != next.cash || S.get(old.canals, i) != S.get(next.canals, i) || S.get(old.canal_docks, i) != S.get(next.canal_docks, i) || S.public_work_stage(old, i) != S.public_work_stage(next, i) || S.get(old.pump_orders, i) != S.get(next.pump_orders, i) || S.get(old.seawalls, i) != S.get(next.seawalls, i) || S.get(old.waste_bins, i) != S.get(next.waste_bins, i) || old.harbour != next.harbour || old.ferry_start != next.ferry_start ||
+    old.cash != next.cash || S.get(old.water_bus, i) != S.get(next.water_bus, i) || S.get(old.canals, i) != S.get(next.canals, i) || S.get(old.canal_docks, i) != S.get(next.canal_docks, i) || S.public_work_stage(old, i) != S.public_work_stage(next, i) || S.get(old.pump_orders, i) != S.get(next.pump_orders, i) || S.get(old.seawalls, i) != S.get(next.seawalls, i) || S.get(old.waste_bins, i) != S.get(next.waste_bins, i) || old.harbour != next.harbour || old.ferry_start != next.ferry_start || old.water_bus_selection != next.water_bus_selection ||
       S.get(old.car_free_days, i) != S.get(next.car_free_days, i) || S.get(old.ground_areas, i) != S.get(next.ground_areas, i) || S.get(old.quiet_areas, i) != S.get(next.quiet_areas, i) ||
       S.get(old.streetscape, i) != S.get(next.streetscape, i) || S.get(old.parks, i) != S.get(next.parks, i) || S.get(old.grade_cover, i) != S.get(next.grade_cover, i) || S.get(old.pipes, i) != S.get(next.pipes, i) || S.get(old.grid, i) != S.get(next.grid, i) ||
       S.get(old.public_parking, i) != S.get(next.public_parking, i) || S.get(old.nuisance, i) != S.get(next.nuisance, i) || S.get(old.tolls, i) != S.get(next.tolls, i) ||
@@ -432,9 +432,18 @@ mod Ur.Build do
       road_preview(c, tool, Cons(a, route_legs(a, List.drop(points, 1))), false)
     end end end end end end
   end
+  pfn skip_open_sea(c : Ur.Sim.City, tiles : List(Int)) : List(Int) do
+    match tiles do
+      Cons(lot, rest) -> if S.canal_open_sea(c, lot) do skip_open_sea(c, rest) else tiles end
+      Nil -> Nil
+    end
+  end
   fn preview(c : Ur.Sim.City, tool : Int, anchor : Int, target : Int) : Preview do
-    let tiles = if c.harbour < 0 do footprint(0, -1, target) else footprint(tool, anchor, target) end
-    let tiles = if tool == 0 && c.harbour >= 0 do Nil else tiles end
+    let tiles = if c.harbour < 0 && S.can_land(c, target) do [target, S.harbour_basin_site(c, target)]
+      else if c.harbour < 0 do footprint(0, -1, target) else footprint(tool, anchor, target) end end
+    let tiles = if tool == 0 && c.harbour >= 0 do Nil
+      else if tool == 127 && c.harbour >= 0 do List.reverse(skip_open_sea(c, List.reverse(skip_open_sea(c, tiles))))
+      else tiles end end
     let campus = if S.campus_tool(tool) && c.harbour >= 0 do S.campus_footprint(c, tool, target) else Nil end
     let clicked_campus = S.campus_root(c, target)
     let clear_campus = tool == 7 && S.valid(clicked_campus) && List.length(tiles) == 1
@@ -444,7 +453,9 @@ mod Ur.Build do
       else tiles end end
     let draft = empty_preview(c, tiles)
     if c.harbour < 0 && S.valid(target) && !S.can_land(c, target) do
-      { draft with valid: false, reason: "Choose a low shoreline parcel for the harbour." }
+      { draft with valid: false, reason: "Choose a low shoreline parcel with room for the harbour basin." }
+    else if tool == 127 && c.harbour >= 0 && List.is_empty(tiles) && S.valid(target) do
+      { draft with valid: false, reason: "Draw the canal on land. You can start or finish the stroke in open water." }
     else if Ur.Council.building_block(c, tool, tiles) do
       { draft with valid: false, reason: Ur.Council.member(c, Ur.Council.sponsor(c)) ++ " placed a hold. See Details / Council." }
     else if S.campus_tool(tool) && c.harbour >= 0 && S.valid(target) do
@@ -454,12 +465,12 @@ mod Ur.Build do
     else if street(tool) && c.harbour >= 0 do road_preview(c, tool, tiles, false)
     else if tool == 53 && c.harbour >= 0 do park_preview(c, tiles)
     else
-      let placement = if clear_campus do Cons(target, Nil) else tiles end
+      let placement = if clear_campus || (c.harbour < 0 && S.valid(target)) do Cons(target, Nil) else tiles end
       let p = apply(c, tool, placement, draft, -1)
       if tool == 7 && p.changed do { p with city: S.resize_parks(p.city) }
       else if tool == 55 && p.changed do { p with tiles: upgraded_tiles(c.park_tiers, p.city.park_tiers, 0, Nil) }
       else p end end
-    end end end end end end
+    end end end end end end end
   end
 
   fn sidewalk_preview(c : Ur.Sim.City, lot : Int, spot : Int, tool : Int) : Preview do

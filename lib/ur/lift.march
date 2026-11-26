@@ -2,7 +2,7 @@ mod Ur.Lift do
   alias Ur.Sim as S
 
   type ShipWindow = { portal : Int, entry : Float, exit : Float, lead : Float }
-  type Vessel = { source : Int, speed : Float, windows : List(ShipWindow) }
+  type Vessel = { source : Int, speed : Float, windows : List(ShipWindow), path : List(Int), calls : List((Int, Float)) }
 
   pfn windows_in_leg(c : Ur.Sim.City, a : Int, b : Int, offset : Float, length : Float,
     steps : Int, at : Int, out : List(ShipWindow)) : List(ShipWindow) do
@@ -44,13 +44,19 @@ mod Ur.Lift do
     end
   end
 
-  fn vessel(c : Ur.Sim.City, source : Int, stops : List(Int), speed : Float) : List(Vessel) do
-    let (length, windows) = route_windows(c, stops, 0.0, Nil)
-    if List.is_empty(windows) do Nil else
+  pfn make_vessel(c : Ur.Sim.City, source : Int, path : List(Int), speed : Float, calls : List((Int, Int))) : List(Vessel) do
+    let (length, windows) = route_windows(c, path, 0.0, Nil)
+    if length <= 0.0 || (List.is_empty(windows) && List.is_empty(calls)) do Nil else
       let windows = List.map(List.reverse(windows), fn w -> { w with
         entry: w.entry /. length, exit: w.exit /. length, lead: w.lead /. length })
-      [{ source: source, speed: speed /. length, windows: windows }]
+      let calls = List.map(calls, fn call ->
+        let (lot, spans) = call
+        (lot, int_to_float(spans) /. length))
+      [{ source: source, speed: speed /. length, windows: windows, path: path, calls: calls }]
     end
+  end
+  fn vessel(c : Ur.Sim.City, source : Int, stops : List(Int), speed : Float) : List(Vessel) do
+    make_vessel(c, source, stops, speed, Nil)
   end
 
   fn fishing_legs(c : Ur.Sim.City, stops : List(Int), legs : Int) : Int do
@@ -70,6 +76,10 @@ mod Ur.Lift do
           else if S.ferry_status(c, lot) < 2 do [lot, peer] else Nil end end
         List.append(vessel(c, lot, path, if canal do 0.64 else 0.85 end), found)
       end
+      let found = match S.water_bus_course(c, lot) do
+        Some(course) -> List.append(make_vessel(c, S.water_bus_source(lot), course.path, 0.58, course.calls), found)
+        None -> found
+      end
       ferry_routes(c, lot + 1, found)
     end
   end
@@ -83,10 +93,20 @@ mod Ur.Lift do
     ferry_routes(c, 0, fishing)
   end
 
+  fn reconcile_water_buses(positions : Map(Int, Ur.Sim.VesselMotion), old : List(Vessel), next : List(Vessel)) : Map(Int, Ur.Sim.VesselMotion) do
+    Map.fold(positions, Map.empty(), fn (out, source, motion) ->
+      let same_line = source >= S.water_bus_source(0) && List.any(next, fn boat ->
+        boat.source == source && List.any(old, fn previous ->
+          previous.source == source && previous.path == boat.path && previous.calls == boat.calls))
+      if source < S.water_bus_source(0) || same_line do
+        Map.insert(out, source, motion, Map.int_cmp)
+      else out end)
+  end
+
   pfn voyage(positions : Map(Int, Ur.Sim.VesselMotion), source : Int) : Ur.Sim.VesselMotion do
     match Map.get(positions, source, Map.int_cmp) do
       Some(motion) -> motion
-      None -> { progress: 0.0, outbound: true, moored: 0.0 }
+      None -> { progress: 0.0, outbound: true, moored: 0.0, call_from: -1, call_to: -1, call_progress: 0.0 }
     end
   end
 
@@ -122,8 +142,30 @@ mod Ur.Lift do
         if motion.progress < exit && limit > entry && S.lift_amount(c, w.portal) < 1.0 do
           Math.min_float(limit, Math.max_float(entry, motion.progress))
         else limit end)
-      if allowed >= 1.0 do { motion with progress: 0.0, outbound: !motion.outbound, moored: 3.0 }
-      else { motion with progress: allowed } end
+      let berth = List.fold_left(boat.calls, 1.0, fn (next, call) ->
+        let (_, at) = call
+        let at = if motion.outbound do at else 1.0 -. at end
+        if at > motion.progress +. 0.000001 && at < next do at else next end)
+      if allowed >= 1.0 && berth >= 1.0 do
+        let dwell = if !motion.outbound && !List.is_empty(boat.calls) do 6.0 else 3.0 end
+        { motion with progress: 0.0, outbound: !motion.outbound, moored: dwell }
+      else if berth < 1.0 && allowed >= berth do { motion with progress: berth, moored: 2.5 }
+      else { motion with progress: allowed } end end
+    end
+  end
+
+  pfn bus_leg(calls : List((Int, Float)), motion : Ur.Sim.VesselMotion) : Ur.Sim.VesselMotion do
+    let at = motion.progress
+    let outward = motion.outbound
+    match calls do
+      Cons((a, start), Cons((b, finish), rest)) ->
+        let on_leg = if outward do at < finish else at >= 1.0 -. finish && at < 1.0 -. start end
+        if on_leg do
+          let elapsed = if outward do at -. start else at -. (1.0 -. finish) end
+          { motion with call_from: if outward do a else b end, call_to: if outward do b else a end,
+            call_progress: elapsed /. (finish -. start) }
+        else bus_leg(Cons((b, finish), rest), motion) end
+      _ -> motion
     end
   end
 
@@ -143,7 +185,8 @@ mod Ur.Lift do
       end)
     let live = { c with lift_decks: decks }
     let positions = List.fold_left(boats, Map.empty(), fn (out, boat) ->
-      Map.insert(out, boat.source, ship_advance(live, boat, voyage(c.lift_vessels, boat.source), dt), Map.int_cmp))
+      let motion = ship_advance(live, boat, voyage(c.lift_vessels, boat.source), dt)
+      Map.insert(out, boat.source, bus_leg(boat.calls, motion), Map.int_cmp))
     let decks = Map.fold(requests(boats, positions), decks, fn (decks, portal, _) ->
       if Option.is_some(Map.get(decks, portal, Map.int_cmp)) do decks
       else Map.insert(decks, portal, 0.0, Map.int_cmp) end)

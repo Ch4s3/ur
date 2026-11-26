@@ -29,7 +29,7 @@ mod Ur.Sim do
   type ShelterDemand = { from_home : NativeIntArr, at_shelter : NativeIntArr, commute_from : NativeIntArr }
   type Households = { addresses : Map(Int, List(Int)), next : Int }
   type PublicWork = { lot : Int, tool : Int, remaining : Int, god : Int }
-  type VesselMotion = { progress : Float, outbound : Bool, moored : Float }
+  type VesselMotion = { progress : Float, outbound : Bool, moored : Float, call_from : Int, call_to : Int, call_progress : Float }
   type City = {
     lift_decks : Map(Int, Float), lift_vessels : Map(Int, VesselMotion),
     public_works : List(PublicWork),
@@ -72,7 +72,7 @@ mod Ur.Sim do
     ground_rule : Int, quiet_rule : Int, ground_areas : NativeIntArr, quiet_areas : NativeIntArr, storefronts : NativeIntArr, footfall : NativeIntArr,
     fire_recovery : NativeIntArr,
     crime_history : List(CrimeMonth), livability_history : List(NativeIntArr),
-    road_shapes : NativeIntArr, canals : NativeIntArr, canal_docks : NativeIntArr,
+    road_shapes : NativeIntArr, canals : NativeIntArr, canal_docks : NativeIntArr, water_bus : NativeIntArr, water_bus_selection : Int,
     grades : NativeIntArr, grade_cover : NativeIntArr, parks : NativeIntArr, park_tiers : NativeIntArr, streetscape : NativeIntArr, sidewalk_items : NativeIntArr,
     campus : NativeIntArr, education : NativeIntArr, specializations : NativeIntArr, business_sector : NativeIntArr,
     empty_homes : NativeIntArr, home_arrivals : NativeIntArr, neighborhood_rents : NativeIntArr,
@@ -83,7 +83,7 @@ mod Ur.Sim do
     expansion : Expansion, island_spend : NativeIntArr, island_exports : Int, island_crops : Int, island_catch : Int,
     production_freight : Ur.ProductionFreight.ProductionState,
     freight : Option(Ur.FreightNetwork.Route), shop_stock : NativeIntArr, shop_sales : NativeIntArr, shop_delivered : NativeIntArr, shop_imports : Int, shipments : List(Shipment),
-    harbour : Int, founding_map : Bool, heights : NativeIntArr, roads : NativeIntArr, tolls : NativeIntArr, public_parking : NativeIntArr, transit : NativeIntArr, stops : NativeIntArr, ferries : NativeIntArr, ferry_start : Int, service : NativeIntArr, bus_headways : NativeIntArr, bus_fare : Int, zones : NativeIntArr,
+    harbour : Int, harbour_basin : Int, founding_map : Bool, heights : NativeIntArr, roads : NativeIntArr, tolls : NativeIntArr, public_parking : NativeIntArr, transit : NativeIntArr, stops : NativeIntArr, ferries : NativeIntArr, ferry_start : Int, service : NativeIntArr, bus_headways : NativeIntArr, bus_fare : Int, zones : NativeIntArr,
     density : NativeIntArr, nuisance : NativeIntArr, buildings : NativeIntArr, housing_losses : NativeIntArr, business_losses : NativeIntArr, construction : NativeIntArr, plants : NativeIntArr, paused_facilities : NativeIntArr,
     pipes : NativeIntArr, grid : NativeIntArr, pollution : NativeIntArr, land_pollution : NativeIntArr, air_pollution : NativeIntArr, trash : Int,
     waste_live : Bool, waste_bins : NativeIntArr, waste_stock : NativeIntArr, waste_sites : NativeIntArr,
@@ -625,21 +625,52 @@ mod Ur.Sim do
   end
   pfn unclaimed_with_heights(heights : NativeIntArr) : City do
     let zero = NativeArray.make_int(count(), 0)
-    { lift_decks: Map.empty(), lift_vessels: Map.empty(), public_works: Nil, households: new_households(), economy: new_economy(), utility_service: zero, milestones: NativeArray.make_int(64, 0), facility_staff: NativeArray.make_int(count(), 0), facility_expansion: NativeArray.make_int(count(), 0), shelter_demand: None, census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(count(), 0), religion: new_religion(), climate_seed: 0, rain_uniform: false, watch: 1, rain_now: NativeArray.make_int(count(), 0), storms: Nil, air: Ur.Air.empty(), world_seed: -1, volcanic: false, basalt: Map.empty(), volcano_ms: 0, volcanic_shade: Map.empty(), setup: default_setup(), founders: 0, storm_drains: zero, seawalls: zero, seabed: NativeArray.make_int(count(), 0), sea_heights: NativeArray.make_int(count(), 0), ferry_works: NativeArray.make_int(count(), 0), mangrove_harm: NativeArray.make_int(count(), 0), sea_counted: 2, sea_features: 1, sand_changes: NativeArray.make_int(0, 0), sea_run: 0, sand_peak: 0, sand_sector: 0, sand_day: 0, sand_marks: NativeArray.make_int(count(), 0), sea_shoals: NativeArray.make_int(count(), 63), sea_reefs: NativeArray.make_int(count(), 0), fish: NativeArray.make_int(count(), 0), fish_capacity: NativeArray.make_int(count(), 0), fish_last: NativeArray.make_int(count(), 0), fish_alerts: NativeArray.make_int(count(), 0), pump_orders: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, road_shapes: zero, canals: zero, canal_docks: zero, soil_moisture: 70, pumping_cost: 0, battery: 0, hour: 9, grades: NativeArray.make_int(count(), 0), grade_cover: NativeArray.make_int(count(), 0), parks: NativeArray.make_int(count(), 0), park_tiers: NativeArray.make_int(count(), 0), streetscape: NativeArray.make_int(count(), 0), sidewalk_items: NativeArray.make_int(count(), 0), campus: NativeArray.make_int(count(), 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(count(), 0), empty_homes: NativeArray.make_int(count(), 0), home_arrivals: NativeArray.make_int(count(), 0), housing_search: zero, newcomer_grace: zero, neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(count(), 0), property_status: NativeArray.make_int(count(), 0), property_arrears: NativeArray.make_int(count(), 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(count(), 0), calendar_day: 0, clock_ms: 675, street_day: 0, car_free_days: NativeArray.make_int(count(), 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(count(), 0), quiet_areas: NativeArray.make_int(count(), 0), storefronts: NativeArray.make_int(count(), 0), footfall: NativeArray.make_int(count(), 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, production_freight: Production.empty(), freight: None, shop_stock: zero, shop_sales: zero, shop_delivered: zero, shop_imports: 0, shipments: Nil, harbour: -1, founding_map: true, heights: heights, roads: zero, tolls: zero, public_parking: zero,
+    { lift_decks: Map.empty(), lift_vessels: Map.empty(), public_works: Nil, households: new_households(), economy: new_economy(), utility_service: zero, milestones: NativeArray.make_int(64, 0), facility_staff: NativeArray.make_int(count(), 0), facility_expansion: NativeArray.make_int(count(), 0), shelter_demand: None, census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(count(), 0), religion: new_religion(), climate_seed: 0, rain_uniform: false, watch: 1, rain_now: NativeArray.make_int(count(), 0), storms: Nil, air: Ur.Air.empty(), world_seed: -1, volcanic: false, basalt: Map.empty(), volcano_ms: 0, volcanic_shade: Map.empty(), setup: default_setup(), founders: 0, storm_drains: zero, seawalls: zero, seabed: NativeArray.make_int(count(), 0), sea_heights: NativeArray.make_int(count(), 0), ferry_works: NativeArray.make_int(count(), 0), mangrove_harm: NativeArray.make_int(count(), 0), sea_counted: 2, sea_features: 1, sand_changes: NativeArray.make_int(0, 0), sea_run: 0, sand_peak: 0, sand_sector: 0, sand_day: 0, sand_marks: NativeArray.make_int(count(), 0), sea_shoals: NativeArray.make_int(count(), 63), sea_reefs: NativeArray.make_int(count(), 0), fish: NativeArray.make_int(count(), 0), fish_capacity: NativeArray.make_int(count(), 0), fish_last: NativeArray.make_int(count(), 0), fish_alerts: NativeArray.make_int(count(), 0), pump_orders: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, road_shapes: zero, canals: zero, canal_docks: zero, water_bus: zero, water_bus_selection: -1, soil_moisture: 70, pumping_cost: 0, battery: 0, hour: 9, grades: NativeArray.make_int(count(), 0), grade_cover: NativeArray.make_int(count(), 0), parks: NativeArray.make_int(count(), 0), park_tiers: NativeArray.make_int(count(), 0), streetscape: NativeArray.make_int(count(), 0), sidewalk_items: NativeArray.make_int(count(), 0), campus: NativeArray.make_int(count(), 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(count(), 0), empty_homes: NativeArray.make_int(count(), 0), home_arrivals: NativeArray.make_int(count(), 0), housing_search: zero, newcomer_grace: zero, neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(count(), 0), property_status: NativeArray.make_int(count(), 0), property_arrears: NativeArray.make_int(count(), 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(count(), 0), calendar_day: 0, clock_ms: 675, street_day: 0, car_free_days: NativeArray.make_int(count(), 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(count(), 0), quiet_areas: NativeArray.make_int(count(), 0), storefronts: NativeArray.make_int(count(), 0), footfall: NativeArray.make_int(count(), 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, production_freight: Production.empty(), freight: None, shop_stock: zero, shop_sales: zero, shop_delivered: zero, shop_imports: 0, shipments: Nil, harbour: -1, harbour_basin: -1, founding_map: true, heights: heights, roads: zero, tolls: zero, public_parking: zero,
       transit: zero, stops: zero, ferries: zero, ferry_start: -1, service: NativeArray.make_int(count(), 1), bus_headways: NativeArray.make_int(count(), 0), bus_fare: 1,
       zones: zero, density: NativeArray.make_int(count(), 3), nuisance: NativeArray.make_int(count(), 3),
       buildings: zero, housing_losses: zero, business_losses: zero, construction: zero, plants: zero, paused_facilities: zero, pipes: zero, grid: zero, pollution: zero, land_pollution: zero, air_pollution: zero,
       trash: 0, waste_live: true, waste_bins: zero, waste_stock: zero, waste_sites: zero, waste_last: zero, waste_log: zero, waste_runs: Nil, cash: 18000, month: 0, tax: 10, business_rate: 10, import_rate: 0, export_rate: 0, energy: 4, income: 0,
       message: "Survey the islands. Click a low shoreline parcel to establish your harbour." }
   end
+  pfn clear_basin_site(c : City, i : Int) : Bool do
+    valid(i) && get(c.heights, i) <= 18 && get(c.roads, i) == 0 && get(c.zones, i) == 0 &&
+      get(c.buildings, i) == 0 && get(c.plants, i) == 0 && get(c.construction, i) == 0 &&
+      get(c.transit, i) == 0 && get(c.ferries, i) == 0 && get(c.canal_docks, i) == 0 && !water_bus_site(c, i) &&
+      get(c.canals, i) <= 1 && get(c.seawalls, i) == 0 && get(c.parks, i) == 0 &&
+      get(c.grade_cover, i) == 0 && get(c.public_parking, i) == 0 && get(c.campus, i) == 0 &&
+      Option.is_none(public_work_at(c, i))
+  end
+  fn harbour_basin_site(c : City, terminal : Int) : Int do
+    if !valid(terminal) do -1 else
+      let candidates = List.filter(List.map([0, 1, 2, 3], fn side -> neighbour(terminal, side)), fn lot ->
+        clear_basin_site(c, lot) && List.any([0, 1, 2, 3], fn side -> canal_open_sea(c, neighbour(lot, side))))
+      let connection = fn lot -> List.any([0, 1, 2, 3], fn side ->
+        let bank = neighbour(lot, side)
+        valid(bank) && bank != terminal && get(c.heights, bank) > 0)
+      let first = List.find(candidates, fn lot -> get(c.heights, lot) == 0 && connection(lot))
+      match first do
+        Some(lot) -> lot
+        None ->
+          match List.find(candidates, connection) do
+            Some(lot) -> lot
+            None -> match candidates do Cons(lot, _) -> lot | Nil -> -1 end
+          end
+      end
+    end
+  end
+  pfn install_harbour_basin(c : City, basin : Int) : City do
+    { c with harbour_basin: basin, canals: NativeArray.set_int(c.canals, basin, 1) }
+  end
   fn can_land(c : City, i : Int) : Bool do
-    c.harbour < 0 && valid(i) && get(c.heights, i) <= 18 && coastal(c, i)
+    c.harbour < 0 && valid(i) && get(c.heights, i) <= 18 && coastal(c, i) && valid(harbour_basin_site(c, i))
   end
   fn land(c : City, i : Int) : City do
     if can_land(c, i) do
-      { c with harbour: i, founders: clamp(get(c.setup, 3), 16, 48) / 4, census: D.seed(clamp(get(c.setup, 3), 16, 48)), roads: NativeArray.set_int(c.roads, i, 1),
+      let basin = harbour_basin_site(c, i)
+      install_harbour_basin({ c with harbour: i, founders: clamp(get(c.setup, 3), 16, 48) / 4,
+        census: D.seed(clamp(get(c.setup, 3), 16, 48)), roads: NativeArray.set_int(c.roads, i, 1),
         pipes: NativeArray.set_int(c.pipes, i, 1), grid: NativeArray.set_int(c.grid, i, 1),
-        message: "Harbour established. Extend a local street inland." }
+        message: "Harbour established. Extend a street inland or join a canal to its basin." }, basin)
     else c end
   end
   pfn terrain_fill(a : NativeIntArr, i : Int) : NativeIntArr do
@@ -659,7 +690,7 @@ mod Ur.Sim do
   end
   fn new() : City do
     let zero = NativeArray.make_int(count(), 0)
-    seed({ lift_decks: Map.empty(), lift_vessels: Map.empty(), public_works: Nil, households: new_households(), economy: new_economy(), utility_service: zero, milestones: NativeArray.make_int(64, 0), facility_staff: NativeArray.make_int(count(), 0), facility_expansion: NativeArray.make_int(count(), 0), shelter_demand: None, census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(count(), 0), religion: new_religion(), climate_seed: 0, rain_uniform: false, watch: 0, rain_now: NativeArray.make_int(count(), 0), storms: Nil, air: Ur.Air.empty(), world_seed: -1, volcanic: false, basalt: Map.empty(), volcano_ms: 0, volcanic_shade: Map.empty(), setup: default_setup(), founders: 0, storm_drains: zero, seawalls: zero, seabed: NativeArray.make_int(count(), 0), sea_heights: NativeArray.make_int(count(), 0), ferry_works: NativeArray.make_int(count(), 0), mangrove_harm: NativeArray.make_int(count(), 0), sea_counted: 2, sea_features: 1, sand_changes: NativeArray.make_int(0, 0), sea_run: 0, sand_peak: 0, sand_sector: 0, sand_day: 0, sand_marks: NativeArray.make_int(count(), 0), sea_shoals: NativeArray.make_int(count(), 63), sea_reefs: NativeArray.make_int(count(), 0), fish: NativeArray.make_int(count(), 0), fish_capacity: NativeArray.make_int(count(), 0), fish_last: NativeArray.make_int(count(), 0), fish_alerts: NativeArray.make_int(count(), 0), pump_orders: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, road_shapes: zero, canals: zero, canal_docks: zero, soil_moisture: 70, pumping_cost: 0, battery: 0, hour: 9, grades: NativeArray.make_int(count(), 0), grade_cover: NativeArray.make_int(count(), 0), parks: NativeArray.make_int(count(), 0), park_tiers: NativeArray.make_int(count(), 0), streetscape: NativeArray.make_int(count(), 0), sidewalk_items: NativeArray.make_int(count(), 0), campus: NativeArray.make_int(count(), 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(count(), 0), empty_homes: NativeArray.make_int(count(), 0), home_arrivals: NativeArray.make_int(count(), 0), housing_search: zero, newcomer_grace: zero, neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(count(), 0), property_status: NativeArray.make_int(count(), 0), property_arrears: NativeArray.make_int(count(), 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(count(), 0), calendar_day: 0, clock_ms: 0, street_day: 0, car_free_days: NativeArray.make_int(count(), 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(count(), 0), quiet_areas: NativeArray.make_int(count(), 0), storefronts: NativeArray.make_int(count(), 0), footfall: NativeArray.make_int(count(), 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, production_freight: Production.empty(), freight: None, shop_stock: NativeArray.make_int(count(), 0), shop_sales: NativeArray.set_int(NativeArray.make_int(count(), 0), index(8, 20), 8), shop_delivered: NativeArray.make_int(count(), 0), shop_imports: 0, shipments: Nil, harbour: index(9, 21), founding_map: false, heights: terrain_fill(NativeArray.make_int(count(), 0), 0), roads: NativeArray.make_int(count(), 0), tolls: NativeArray.make_int(count(), 0), public_parking: NativeArray.make_int(count(), 0), transit: NativeArray.make_int(count(), 0), stops: NativeArray.make_int(count(), 0), ferries: NativeArray.make_int(count(), 0), ferry_start: -1, service: NativeArray.make_int(count(), 1), bus_headways: NativeArray.make_int(count(), 0), bus_fare: 1,
+    seed({ lift_decks: Map.empty(), lift_vessels: Map.empty(), public_works: Nil, households: new_households(), economy: new_economy(), utility_service: zero, milestones: NativeArray.make_int(64, 0), facility_staff: NativeArray.make_int(count(), 0), facility_expansion: NativeArray.make_int(count(), 0), shelter_demand: None, census: D.empty(), population_history: Nil, immigration: 1, council: NativeArray.make_int(count(), 0), religion: new_religion(), climate_seed: 0, rain_uniform: false, watch: 0, rain_now: NativeArray.make_int(count(), 0), storms: Nil, air: Ur.Air.empty(), world_seed: -1, volcanic: false, basalt: Map.empty(), volcano_ms: 0, volcanic_shade: Map.empty(), setup: default_setup(), founders: 0, storm_drains: zero, seawalls: zero, seabed: NativeArray.make_int(count(), 0), sea_heights: NativeArray.make_int(count(), 0), ferry_works: NativeArray.make_int(count(), 0), mangrove_harm: NativeArray.make_int(count(), 0), sea_counted: 2, sea_features: 1, sand_changes: NativeArray.make_int(0, 0), sea_run: 0, sand_peak: 0, sand_sector: 0, sand_day: 0, sand_marks: NativeArray.make_int(count(), 0), sea_shoals: NativeArray.make_int(count(), 63), sea_reefs: NativeArray.make_int(count(), 0), fish: NativeArray.make_int(count(), 0), fish_capacity: NativeArray.make_int(count(), 0), fish_last: NativeArray.make_int(count(), 0), fish_alerts: NativeArray.make_int(count(), 0), pump_orders: zero, surface_water: zero, flood_damage: zero, flood_active: false, rain_tanks: zero, subway_water: zero, road_shapes: zero, canals: zero, canal_docks: zero, water_bus: zero, water_bus_selection: -1, soil_moisture: 70, pumping_cost: 0, battery: 0, hour: 9, grades: NativeArray.make_int(count(), 0), grade_cover: NativeArray.make_int(count(), 0), parks: NativeArray.make_int(count(), 0), park_tiers: NativeArray.make_int(count(), 0), streetscape: NativeArray.make_int(count(), 0), sidewalk_items: NativeArray.make_int(count(), 0), campus: NativeArray.make_int(count(), 0), education: new_education(), specializations: new_specializations(), business_sector: NativeArray.make_int(count(), 0), empty_homes: NativeArray.make_int(count(), 0), home_arrivals: NativeArray.make_int(count(), 0), housing_search: zero, newcomer_grace: zero, neighborhood_rents: NativeArray.make_int(80, 0), market_history: Nil, rent_pressure: neutral_rent_pressure(), business_age: NativeArray.make_int(count(), 0), property_status: NativeArray.make_int(count(), 0), property_arrears: NativeArray.make_int(count(), 0), property_sales: 0, finance_history: Nil, crime_history: Nil, fire_recovery: NativeArray.make_int(count(), 0), calendar_day: 0, clock_ms: 0, street_day: 0, car_free_days: NativeArray.make_int(count(), 0), ground_rule: 2, quiet_rule: 1, ground_areas: NativeArray.make_int(count(), 0), quiet_areas: NativeArray.make_int(count(), 0), storefronts: NativeArray.make_int(count(), 0), footfall: NativeArray.make_int(count(), 0), livability_history: Nil, construction_spend: 0, expansion: new_expansion(), island_spend: NativeArray.make_int(3, 0), island_exports: 0, island_crops: 0, island_catch: 0, production_freight: Production.empty(), freight: None, shop_stock: NativeArray.make_int(count(), 0), shop_sales: NativeArray.set_int(NativeArray.make_int(count(), 0), index(8, 20), 8), shop_delivered: NativeArray.make_int(count(), 0), shop_imports: 0, shipments: Nil, harbour: index(9, 21), harbour_basin: -1, founding_map: false, heights: terrain_fill(NativeArray.make_int(count(), 0), 0), roads: NativeArray.make_int(count(), 0), tolls: NativeArray.make_int(count(), 0), public_parking: NativeArray.make_int(count(), 0), transit: NativeArray.make_int(count(), 0), stops: NativeArray.make_int(count(), 0), ferries: NativeArray.make_int(count(), 0), ferry_start: -1, service: NativeArray.make_int(count(), 1), bus_headways: NativeArray.make_int(count(), 0), bus_fare: 1,
       zones: NativeArray.make_int(count(), 0), density: NativeArray.make_int(count(), 3), nuisance: NativeArray.make_int(count(), 3), buildings: NativeArray.make_int(count(), 0), housing_losses: NativeArray.make_int(count(), 0), business_losses: NativeArray.make_int(count(), 0), construction: NativeArray.make_int(count(), 0),
       plants: NativeArray.set_int(NativeArray.set_int(NativeArray.make_int(count(), 0), index(8, 21), 1), index(9, 22), 3),
       paused_facilities: NativeArray.make_int(count(), 0), pipes: NativeArray.set_int(NativeArray.make_int(count(), 0), index(9, 21), 1), grid: NativeArray.make_int(count(), 0), pollution: NativeArray.make_int(count(), 0), land_pollution: NativeArray.make_int(count(), 0), air_pollution: NativeArray.make_int(count(), 0), trash: 0, waste_live: false, waste_bins: NativeArray.make_int(count(), 0), waste_stock: NativeArray.make_int(count(), 0), waste_sites: NativeArray.make_int(count(), 0), waste_last: NativeArray.make_int(count(), 0), waste_log: NativeArray.make_int(count(), 0), waste_runs: Nil,
@@ -1156,18 +1187,33 @@ mod Ur.Sim do
     if died > 0 do { c with message: "Mangroves died in polluted water: the shore behind them has lost its storm buffer." } else c end
   end
 
-  fn canal_tool(tool : Int) : Bool do tool >= 127 && tool <= 132 end
+  fn canal_tool(tool : Int) : Bool do tool >= 127 && tool <= 133 end
   fn canal_water(c : City, lot : Int) : Bool do get(c.canals, lot) > 0 end
+  fn automatic_canal_gate(c : City, lot : Int) : Bool do get(c.canals, lot) >= 5 end
+  fn canal_gate_closed(c : City, lot : Int) : Bool do
+    let kind = get(c.canals, lot)
+    kind == 4 || kind == 6
+  end
+  pfn canal_passes_surge(c : City, lot : Int) : Bool do
+    canal_water(c, lot) && get(c.canals, lot) != 2 && !canal_gate_closed(c, lot)
+  end
   fn canal_open_sea(c : City, lot : Int) : Bool do
-    valid(lot) && get(c.heights, lot) == 0 && get(c.seawalls, lot) == 0
+    valid(lot) && get(c.heights, lot) == 0 && get(c.seawalls, lot) == 0 && !canal_water(c, lot)
   end
   pfn canal_lock_outlet(c : City, lot : Int, side : Int) : Bool do
     canal_open_sea(c, neighbour(lot, side)) && canal_water(c, neighbour(lot, opposite(side)))
   end
+  pfn canal_harbour_edge(c : City, lot : Int, side : Int) : Bool do
+    valid(c.harbour) && neighbour(lot, side) == c.harbour &&
+      (!valid(c.harbour_basin) || lot == c.harbour_basin)
+  end
+  pfn canal_lock_port(c : City, lot : Int, side : Int) : Bool do
+    canal_harbour_edge(c, lot, side) && canal_water(c, neighbour(lot, opposite(side)))
+  end
   fn canal_level(c : City, lot : Int) : Int do
     let sea_lock = get(c.canals, lot) == 2 &&
-      List.any([0, 1, 2, 3], fn side -> canal_lock_outlet(c, lot, side))
-    if sea_lock do 0 else clamp(get(c.heights, lot) - 2, 0, 96) / 8 * 8 end
+      List.any([0, 1, 2, 3], fn side -> canal_lock_outlet(c, lot, side) || canal_lock_port(c, lot, side))
+    if lot == c.harbour_basin || sea_lock do 0 else clamp(get(c.heights, lot) - 2, 0, 96) / 8 * 8 end
   end
   fn canal_outlet(c : City, lot : Int, side : Int) : Bool do
     canal_water(c, lot) && canal_open_sea(c, neighbour(lot, side)) &&
@@ -1187,8 +1233,15 @@ mod Ur.Sim do
     (x >= 8 && x < 24 && ((z < reach && int_and(mask, 4) != 0) || (z >= 32 - reach && int_and(mask, 8) != 0)))
   end
   fn canal_depth() : Int do 6 end
+  fn canal_bank_height(c : City, lot : Int) : Int do
+    let ground = get(c.heights, lot)
+    if lot == c.harbour_basin do Math.max_int(4, ground) else ground end
+  end
+  fn canal_port_side(c : City, lot : Int, side : Int) : Bool do
+    canal_water(c, lot) && canal_harbour_edge(c, lot, side) && canal_level(c, lot) == 0
+  end
   fn canal_arm(c : City, lot : Int, arm : Int) : Bool do
-    canal_water(c, neighbour(lot, arm)) || canal_outlet(c, lot, arm)
+    canal_water(c, neighbour(lot, arm)) || canal_outlet(c, lot, arm) || canal_port_side(c, lot, arm)
   end
   fn canal_wet(c : City, lot : Int, x : Int, z : Int) : Bool do
     let across = x >= 8 && x < 24
@@ -1199,8 +1252,25 @@ mod Ur.Sim do
   pfn canal_navigation(c : City, a : Int, b : Int) : Bool do
     let left = get(c.canals, a)
     let right = get(c.canals, b)
-    left > 0 && right > 0 && left != 4 && right != 4 && bridge_air_clearance(c, b) >= 12 &&
+    left > 0 && right > 0 && !canal_gate_closed(c, a) && !canal_gate_closed(c, b) && bridge_air_clearance(c, b) >= 12 &&
       (canal_level(c, a) == canal_level(c, b) || left == 2 || right == 2)
+  end
+  pfn canal_port_water(c : City, lot : Int) : Bool do
+    canal_open_sea(c, lot) && get(c.sea_shoals, lot) >= canal_depth() && bridge_air_clearance(c, lot) >= 12
+  end
+  pfn canal_port_channel(c : City, lot : Int, side : Int) : Bool do
+    canal_port_side(c, lot, side) && !canal_gate_closed(c, lot) && bridge_air_clearance(c, lot) >= 12
+  end
+  pfn canal_port_navigation(c : City, a : Int, b : Int, side : Int) : Bool do
+    if a == c.harbour do (!valid(c.harbour_basin) && canal_port_water(c, b)) || canal_port_channel(c, b, opposite(side))
+    else if b == c.harbour do (!valid(c.harbour_basin) && canal_port_water(c, a)) || canal_port_channel(c, a, side)
+    else if canal_water(c, a) && canal_water(c, b) do canal_navigation(c, a, b)
+    else if canal_water(c, a) do
+      !canal_gate_closed(c, a) && canal_outlet(c, a, side) && canal_port_water(c, b)
+    else if canal_water(c, b) do
+      !canal_gate_closed(c, b) && canal_outlet(c, b, opposite(side)) &&
+        canal_port_water(c, a) && bridge_air_clearance(c, b) >= 12
+    else canal_port_water(c, a) && canal_port_water(c, b) end end end end end
   end
   pfn canal_route_back(parent : Map(Int, Int), lot : Int, out : List(Int)) : List(Int) do
     let out = Cons(lot, out)
@@ -1209,29 +1279,92 @@ mod Ur.Sim do
       None -> Nil
     end
   end
-  pfn canal_route_queue(c : City, target : Int, queue : List(Int), pending : List(Int), parent : Map(Int, Int)) : List(Int) do
+  pfn canal_route_queue(c : City, target : Int, port : Bool, use_harbour : Bool, queue : List(Int), pending : List(Int), parent : Map(Int, Int)) : List(Int) do
     match queue do
-      Nil -> if List.is_empty(pending) do Nil else canal_route_queue(c, target, List.reverse(pending), Nil, parent) end
+      Nil -> if List.is_empty(pending) do Nil else canal_route_queue(c, target, port, use_harbour, List.reverse(pending), Nil, parent) end
       Cons(lot, rest) ->
         if lot == target do canal_route_back(parent, lot, Nil) else
           let (pending, parent) = List.fold_left([0, 1, 2, 3], (pending, parent), fn (state, arm) ->
             let (pending, parent) = state
             let other = neighbour(lot, arm)
-            if canal_navigation(c, lot, other) && Option.is_none(Map.get(parent, other, Map.int_cmp)) do
+            let available = if port do canal_port_navigation(c, lot, other, arm) else canal_navigation(c, lot, other) end
+            if available && (use_harbour || other != c.harbour) && Option.is_none(Map.get(parent, other, Map.int_cmp)) do
               (Cons(other, pending), Map.insert(parent, other, lot, Map.int_cmp))
             else state end)
-          canal_route_queue(c, target, rest, pending, parent)
+          canal_route_queue(c, target, port, use_harbour, rest, pending, parent)
         end
     end
   end
   fn canal_path(c : City, a : Int, b : Int) : List(Int) do
-    if !canal_water(c, a) || !canal_water(c, b) || get(c.canals, a) == 4 || get(c.canals, b) == 4 do Nil
-    else canal_route_queue(c, b, [a], Nil, Map.insert(Map.empty(), a, a, Map.int_cmp)) end
+    if !canal_water(c, a) || !canal_water(c, b) || canal_gate_closed(c, a) || canal_gate_closed(c, b) do Nil
+    else canal_route_queue(c, b, false, true, [a], Nil, Map.insert(Map.empty(), a, a, Map.int_cmp)) end
+  end
+  pfn harbour_water_access(c : City) : Bool do
+    valid(c.harbour) && List.any([0, 1, 2, 3], fn side ->
+      canal_port_navigation(c, c.harbour, neighbour(c.harbour, side), side))
+  end
+  pfn harbour_canal_path(c : City, quay : Int) : List(Int) do
+    if !canal_water(c, quay) || canal_gate_closed(c, quay) || !harbour_water_access(c) do Nil
+    else canal_route_queue(c, c.harbour, true, true, [quay], Nil, Map.insert(Map.empty(), quay, quay, Map.int_cmp)) end
+  end
+  pfn canal_freight_path(c : City, a : Int, b : Int) : List(Int) do
+    if a == c.harbour do List.reverse(harbour_canal_path(c, b))
+    else if b == c.harbour do harbour_canal_path(c, a)
+    else canal_path(c, a, b) end end
+  end
+  fn canal_crane_site(c : City, quay : Int, side : Int) : Bool do
+    let lot = neighbour(quay, side)
+    get(c.canals, quay) == 1 && quay != c.harbour_basin && !valid(grade_source(c, quay)) &&
+      valid(lot) && get(c.heights, lot) > 0 && !building_offline(c, lot) &&
+      int_abs(get(c.heights, lot) - get(c.heights, quay)) <= 12 &&
+      ((get(c.buildings, lot) > 0 && Option.is_some(industry_at(c, lot))) || get(c.plants, lot) == 24)
+  end
+  fn canal_crane_bank(c : City, quay : Int) : Int do
+    unwrap_or(List.find([0, 1, 2, 3], fn side -> canal_crane_site(c, quay, side)), -1)
+  end
+  pfn cargo_leg(path : List(Int), from : Int, to : Int) : Bool do
+    match path do
+      Cons(a, Cons(b, rest)) -> (a == from && b == to) || cargo_leg(Cons(b, rest), from, to)
+      _ -> false
+    end
+  end
+  fn canal_crane_transfer(c : City, quay : Int, peer : Int) : Int do
+    let moves = c.production_freight.movements
+    if List.any(moves, fn move -> move.arrived && move.units > 0 && cargo_leg(move.path, peer, quay)) do -1
+    else if List.any(moves, fn move -> !move.arrived && move.units > 0 && cargo_leg(move.path, quay, peer)) do 1
+    else 0 end end
+  end
+  pfn canal_freight_access(c : City, lot : Int) : Bool do
+    if lot == c.harbour do motor_road(c, lot) else
+      canal_crane_bank(c, lot) >= 0 || List.any([0, 1, 2, 3], fn side ->
+        let road = neighbour(lot, side)
+        road != c.harbour && motor_road(c, road) && int_abs(get(c.heights, lot) - get(c.heights, road)) <= 12)
+    end
   end
   fn canal_service_path(c : City, a : Int, b : Int) : List(Int) do
-    if a == b || !valid(b) || ground_closed(c, a) || ground_closed(c, b) do Nil
-    else if get(c.canal_docks, a) == 2 && (!valid(fleet_frontage(c, a, 0)) || !valid(fleet_frontage(c, b, 0))) do Nil
+    if a == b || !valid(a) || !valid(b) || ground_closed(c, a) || ground_closed(c, b) do Nil
+    else if get(c.canal_docks, a) == 2 do
+      if canal_freight_access(c, a) && canal_freight_access(c, b) do canal_freight_path(c, a, b) else Nil end
     else canal_path(c, a, b) end end
+  end
+  fn harbour_quay_side(c : City) : Int do
+    if valid(c.harbour_basin) do direction(c.harbour, c.harbour_basin)
+    else if get(c.canal_docks, c.harbour) != 2 do -1
+    else match List.reverse(harbour_canal_path(c, get(c.ferries, c.harbour) - 1)) do
+      Cons(_, Cons(water, _)) -> direction(c.harbour, water)
+      _ -> match List.find([0, 1, 2, 3], fn side ->
+        let water = neighbour(c.harbour, side)
+        canal_open_sea(c, water) || canal_port_side(c, water, opposite(side))) do
+        Some(side) -> side
+        None -> -1
+      end
+    end end end
+  end
+  -- The harbour's waterfront borders the canal, but cargo crosses it by boat.
+  fn canal_land_link(c : City, a : Int, b : Int) : Bool do
+    let left = canal_water(c, a)
+    let right = canal_water(c, b)
+    !(left && right) && !(left && b == c.harbour) && !(right && a == c.harbour)
   end
   fn canal_service_status(c : City, lot : Int) : Int do
     let peer = get(c.ferries, lot) - 1
@@ -1243,7 +1376,7 @@ mod Ur.Sim do
   pfn offshore_barrier(c : City, x : Int, z : Int, dx : Int, dz : Int, remaining : Int) : Bool do
     if remaining <= 0 || x < 0 || x >= width() || z < 0 || z >= depth() do false else
       let lot = index(x, z)
-      get(c.seawalls, lot) > 0 || (get(c.heights, lot) == 0 &&
+      get(c.seawalls, lot) > 0 || canal_gate_closed(c, lot) || (get(c.heights, lot) == 0 &&
         offshore_barrier(c, x + dx, z + dz, dx, dz, remaining - 1))
     end
   end
@@ -1256,7 +1389,7 @@ mod Ur.Sim do
       let lot = index(x, z)
       let h = get(c.heights, lot)
       let loss = (distance - 1) * (if dx != 0 && dz != 0 do 3 else 2 end)
-      if crest + loss >= 16 || get(c.seawalls, lot) > 0 || get(c.canals, lot) == 4 do 0
+      if crest + loss >= 16 || get(c.seawalls, lot) > 0 || canal_gate_closed(c, lot) do 0
       else if h == 0 do
         if offshore_barrier(c, x + dx, z + dz, dx, dz, 3) do 0 else
           let level = (if sea do mangrove_damp(c, lot, surge_at(c, lot)) else 16 end) - loss
@@ -2101,7 +2234,7 @@ mod Ur.Sim do
       let lot = index(x / 32, z / 32)
       let grade = grade_source(c, lot)
       let overhead = lot != a && lot != b && valid(grade) && (get(c.heights, lot) == 0 || canal_water(c, lot))
-      if overhead && bridge_air_clearance_at(c, lot, x % 32, z % 32) < draft do -2 else
+      if canal_gate_closed(c, lot) || (overhead && bridge_air_clearance_at(c, lot, x % 32, z % 32) < draft) do -2 else
         let lift = if overhead && movable_leaf(c, lot) do grade else lift end
         crossing_navigation_go(c, a, b, at + 1, steps, draft, lift)
       end
@@ -2121,11 +2254,22 @@ mod Ur.Sim do
     if mountain_tunnel(c, portal, peer) do 16
     else tunnel_lip_at(c, portal, peer, tunnel_mouth_run(), int_to_float(span_distance(portal, peer) * 32)) end
   end
+  pfn access_ferry_terminal(c : City, lot : Int) : Bool do
+    let dock = get(c.canal_docks, lot)
+    get(c.ferries, lot) > 0 && (dock == 2 || (c.founding_map && dock == 0))
+  end
   pfn visit(c : City, network : Int, dist : NativeIntArr, queue : NativeIntArr, tail : Int, i : Int, d : Int) : (NativeIntArr, NativeIntArr, Int) do
     if d >= 4 do (dist, queue, tail)
     else
       let j = neighbour(i, d)
-      let next = if valid(j) && (if network == 1 do get(c.pipes, j) > 0 else if network == 2 do get(c.grid, j) > 0 else ((if network == 3 do motor_road(c, j) else get(c.roads, j) > 0 end) || (c.founding_map && get(c.ferries, j) > 0 && get(c.canal_docks, j) != 1)) && int_abs(get(c.heights, i) - get(c.heights, j)) <= 12 end end) && get(dist, j) < 0 do
+      let accessible = if network == 1 do get(c.pipes, j) > 0
+        else if network == 2 do get(c.grid, j) > 0
+        else
+          let street = if network == 3 do motor_road(c, j) else get(c.roads, j) > 0 end
+          (street || access_ferry_terminal(c, j)) && canal_land_link(c, i, j) &&
+            int_abs(get(c.heights, i) - get(c.heights, j)) <= 12
+        end end
+      let next = if valid(j) && accessible && get(dist, j) < 0 do
         (NativeArray.set_int(dist, j, get(dist, i) + 1), NativeArray.set_int(queue, tail, j), tail + 1)
       else (dist, queue, tail) end
       match next do (ds, qs, n) -> visit(c, network, ds, qs, n, i, d + 1) end
@@ -2135,9 +2279,8 @@ mod Ur.Sim do
     if head >= tail do dist
     else
       let i = NativeArray.get_int(queue, head)
-      let j = ferry_peer(c, i)
-      let link = (network == 0 || network == 3) && c.founding_map && get(c.canal_docks, i) != 1 && valid(j) && get(dist, j) < 0
-      let next = if link do (NativeArray.set_int(dist, j, get(dist, i) + 1), NativeArray.set_int(queue, tail, j), tail + 1)
+      let j = if (network == 0 || network == 3) && access_ferry_terminal(c, i) do ferry_peer(c, i) else -1 end
+      let next = if valid(j) && get(dist, j) < 0 do (NativeArray.set_int(dist, j, get(dist, i) + 1), NativeArray.set_int(queue, tail, j), tail + 1)
         else (dist, queue, tail) end
       let (dist, queue, tail) = next
       let peer = grade_peer(c, i)
@@ -3664,7 +3807,7 @@ mod Ur.Sim do
   fn ferry_closed_note(c : City, lot : Int) : String do
     let peer = get(c.ferries, lot) - 1
     if get(c.canal_docks, lot) > 0 do "Canal service is blocked by a closed gate or a disconnected channel."
-    else if crossing_navigation(c, lot, peer, ferry_air_draft(c, lot)) == -2 do "Ferry route closed: a bridge obstructs the channel."
+    else if crossing_navigation(c, lot, peer, ferry_air_draft(c, lot)) == -2 do "Ferry route closed: a gate or bridge obstructs the channel."
     else
       let (d, at) = crossing_shoal_at(c, lot, peer)
       "Ferry route closed: " ++ depth_m(d) ++ " m over " ++ (if get(c.sea_reefs, at) == 1 do "a reef" else "a sand bar" end) ++ ". Dredge a channel or move a terminal."
@@ -3691,17 +3834,28 @@ mod Ur.Sim do
     end
   end
   pfn canal_sea_head(c : City, lot : Int) : Int do
-    if !canal_water(c, lot) || get(c.canals, lot) == 4 || canal_level(c, lot) > 0 do 0 else
-      List.fold_left([0, 1, 2, 3], 0, fn (head, side) ->
-        let other = neighbour(lot, side)
-        if valid(other) && get(c.heights, other) == 0 && get(c.seawalls, other) == 0 do
-          Math.max_int(head, surge_at(c, other))
-        else head end)
-    end
+    List.fold_left([0, 1, 2, 3], 0, fn (head, side) ->
+      if canal_outlet(c, lot, side) do Math.max_int(head, surge_at(c, neighbour(lot, side)))
+      else head end)
+  end
+  pfn auto_gate_state(c : City, lot : Int) : Int do
+    if canal_sea_head(c, lot) > 0 do 6 else 5 end
+  end
+  pfn update_canal_gates(c : City, lot : Int) : City do
+    if lot >= count() do c
+    else if !automatic_canal_gate(c, lot) do update_canal_gates(c, lot + 1)
+    else
+      let kind = auto_gate_state(c, lot)
+      let next = if kind == get(c.canals, lot) do c else
+        { c with canals: NativeArray.set_int(c.canals, lot, kind),
+          message: if kind == 6 do "Automatic flood gate closed for an ocean surge." else "Automatic flood gate reopened as the water fell." end }
+      end
+      update_canal_gates(next, lot + 1)
+    end end
   end
   pfn seed_canal_tide(c : City, i : Int, levels : NativeIntArr, queue : List(Int)) : (NativeIntArr, List(Int)) do
     if i >= count() do (levels, queue) else
-      let head = canal_sea_head(c, i)
+      let head = if canal_passes_surge(c, i) do canal_sea_head(c, i) else 0 end
       if head > 0 do seed_canal_tide(c, i + 1, NativeArray.set_int(levels, i, head), Cons(i, queue))
       else seed_canal_tide(c, i + 1, levels, queue) end
     end
@@ -3715,8 +3869,7 @@ mod Ur.Sim do
           List.fold_left([0, 1, 2, 3], (rest, levels), fn (state, side) ->
             let (next, levels) = state
             let other = neighbour(lot, side)
-            let works = get(c.canals, other)
-            if (works == 1 || works == 3) && canal_level(c, other) == canal_level(c, lot) && head > get(levels, other) do
+            if canal_passes_surge(c, other) && canal_level(c, other) == canal_level(c, lot) && head > get(levels, other) do
               (Cons(other, next), NativeArray.set_int(levels, other, head))
             else state end)
         end
@@ -3748,13 +3901,14 @@ mod Ur.Sim do
   end
   doc "Today's sea surge: low shore land facing a rough sea floods to the surge's depth for the day (and drains as standing water does)."
   fn surge_day(c : City) : City do
+    let c = update_canal_gates(c, 0)
     if c.sea_counted == 0 do c else
       let (levels, queue) = seed_canal_tide(c, 0, NativeArray.make_int(count(), 0), Nil)
       surge_day_go(c, 0, spread_canal_tide(c, queue, levels), c.surface_water, c.flood_damage, c.flood_active)
     end
   end
   doc "[c] counting the sea, from now, at its Sea storms setting: the day roll's first step, so a change made in play waits for the next day."
-  fn start_sea_day(c : City) : City do { c with sea_counted: sea_storms(c) } end
+  fn start_sea_day(c : City) : City do update_canal_gates({ c with sea_counted: sea_storms(c) }, 0) end
   pfn sea_fill(heights : NativeIntArr, cm : Int, a : NativeIntArr, i : Int) : NativeIntArr do
     if i >= count() do a else sea_fill(heights, cm, if get(heights, i) == 0 do NativeArray.set_int(a, i, cm) else a end, i + 1) end
   end
@@ -3773,7 +3927,7 @@ mod Ur.Sim do
     else
     let passage = crossing_navigation(c, lot, peer, ferry_air_draft(c, lot))
     let status = match ferry_status(c, lot) do
-      3 -> if passage == -2 do "Closed: bridge clearance" else "Closed: too shallow (" ++ depth_m(crossing_shoal(c, lot, peer)) ++ " m)" end
+      3 -> if passage == -2 do "Closed: gate or bridge obstruction" else "Closed: too shallow (" ++ depth_m(crossing_shoal(c, lot, peer)) ++ " m)" end
       2 -> "Ferry suspended"
       1 -> "Ferry slowed, half cargo"
       _ -> if passage >= 0 do "Ferry running at lift openings" else "Ferry running" end
@@ -3787,6 +3941,150 @@ mod Ur.Sim do
     let peer = get(c.ferries, lot) - 1
     if valid(peer) && ferry_status(c, lot) < 2 do peer else -1 end
   end
+  -- A line is an ordered chain rooted at its maintenance dock. Each parcel stores
+  -- its two neighbors and the dock flag so stop lookups need no map scan.
+  pfn water_bus_stride() : Int do count() + 1 end
+  fn water_bus_limit() : Int do 2 * water_bus_stride() * water_bus_stride() end
+  fn water_bus_site(c : City, lot : Int) : Bool do get(c.water_bus, lot) > 0 end
+  fn water_bus_yard(c : City, lot : Int) : Bool do get(c.water_bus, lot) > water_bus_limit() / 2 end
+  pfn water_bus_link(c : City, lot : Int, forward : Bool) : Int do
+    let value = get(c.water_bus, lot) - 1
+    let stride = water_bus_stride()
+    if value < 0 do -1 else
+      (if forward do value % stride else value / stride % stride end) - 1
+    end
+  end
+  pfn water_bus_set(sites : NativeIntArr, lot : Int, prev : Int, next : Int, yard : Bool) : NativeIntArr do
+    NativeArray.set_int(sites, lot, 1 + (prev + 1) * water_bus_stride() + next + 1 +
+      (if yard do water_bus_limit() / 2 else 0 end))
+  end
+  fn water_bus_source(yard : Int) : Int do count() * 2 + yard end
+  pfn water_bus_root(c : City, lot : Int, remaining : Int) : Int do
+    if !water_bus_site(c, lot) || remaining < 0 do -1
+    else if water_bus_yard(c, lot) do lot
+    else water_bus_root(c, water_bus_link(c, lot, false), remaining - 1) end end
+  end
+  pfn water_bus_stops(c : City, at : Int, remaining : Int) : List(Int) do
+    let next = water_bus_link(c, at, true)
+    if remaining <= 0 || !water_bus_site(c, next) || water_bus_yard(c, next) ||
+      water_bus_link(c, next, false) != at do Nil
+    else Cons(next, water_bus_stops(c, next, remaining - 1)) end
+  end
+  fn water_bus_bank(c : City, lot : Int) : Int do
+    unwrap_or(List.find([0, 1, 2, 3], fn side ->
+      let bank = neighbour(lot, side)
+      valid(bank) && get(c.heights, bank) > 0 && !canal_arm(c, lot, side) &&
+        int_abs(get(c.heights, bank) - get(c.heights, lot)) <= 12), -1)
+  end
+  pfn water_bus_usable(c : City, lot : Int) : Bool do
+    get(c.canals, lot) == 1 && lot != c.harbour_basin && bridge_air_clearance(c, lot) >= 12 &&
+      !valid(grade_source(c, lot)) && get(c.canal_docks, lot) == 0 &&
+      water_bus_bank(c, lot) >= 0 && !ground_closed(c, lot)
+  end
+  pfn water_bus_path(c : City, from : Int, to : Int) : List(Int) do
+    if !water_bus_usable(c, from) || !water_bus_usable(c, to) do Nil
+    else canal_route_queue(c, to, true, false, [from], Nil, Map.insert(Map.empty(), from, from, Map.int_cmp)) end
+  end
+  type WaterBusCourse = { path : List(Int), calls : List((Int, Int)) }
+  pfn water_bus_course_legs(c : City, at : Int, stops : List(Int), spans : Int,
+    path : List(Int), calls : List((Int, Int))) : Option(WaterBusCourse) do
+    match stops do
+      Nil -> Some({ path: List.reverse(path), calls: List.reverse(calls) })
+      Cons(stop, rest) ->
+        match water_bus_path(c, at, stop) do
+          Cons(_, Cons(next, tail)) ->
+            let leg = Cons(next, tail)
+            let spans = spans + List.length(leg)
+            water_bus_course_legs(c, stop, rest, spans, List.fold_left(leg, path, fn (out, lot) -> Cons(lot, out)),
+              Cons((stop, spans), calls))
+          _ -> None
+        end
+    end
+  end
+  fn water_bus_course(c : City, yard : Int) : Option(WaterBusCourse) do
+    if !water_bus_yard(c, yard) do None else
+      match water_bus_stops(c, yard, count()) do
+        Cons(a, Cons(b, rest)) -> water_bus_course_legs(c, yard, Cons(a, Cons(b, rest)), 0, [yard], [(yard, 0)])
+        _ -> None
+      end
+    end
+  end
+  fn water_bus_leg(c : City, a : Int, b : Int) : Bool do
+    water_bus_site(c, a) && water_bus_site(c, b) && !water_bus_yard(c, a) && !water_bus_yard(c, b) &&
+      (water_bus_link(c, a, true) == b || water_bus_link(c, a, false) == b)
+  end
+  fn water_bus_peer(c : City, lot : Int, forward : Bool) : Int do
+    let other = water_bus_link(c, lot, forward)
+    if !water_bus_leg(c, lot, other) do -1 else
+      let yard = water_bus_root(c, lot, count())
+      if valid(yard) && (Option.is_some(Map.get(c.lift_vessels, water_bus_source(yard), Map.int_cmp)) ||
+        Option.is_some(water_bus_course(c, yard))) do other else -1 end
+    end
+  end
+  fn water_bus_passenger(c : City, a : Int, b : Int, progress : Float) : Float do
+    let yard = water_bus_root(c, a, count())
+    let motion = if valid(yard) do Map.get(c.lift_vessels, water_bus_source(yard), Map.int_cmp) else None end
+    match motion do
+      Some(motion) ->
+        if motion.call_from == a && motion.call_to == b do
+          if progress > 0.0 || motion.call_progress <= 0.04 do Math.max_float(0.001, motion.call_progress) else 0.0 end
+        else if progress > 0.0 do 1.0 else 0.0 end end
+      None -> -1.0
+    end
+  end
+  fn water_bus_summary(c : City, lot : Int) : String do
+    let yard = water_bus_root(c, lot, count())
+    let stops = water_bus_stops(c, yard, count())
+    let count = List.length(stops)
+    if count < 2 do "Add at least two passenger stops"
+    else
+      let status = match Map.get(c.lift_vessels, water_bus_source(yard), Map.int_cmp) do
+        Some(motion) ->
+          if motion.call_from == yard && motion.moored > 0.0 do "In maintenance" else "In service" end
+        None -> "Route blocked"
+      end
+      status ++ " · " ++ int_to_string(count) ++ " stops"
+    end
+  end
+  pfn water_bus_remove(c : City, lot : Int) : City do
+    let yard = water_bus_yard(c, lot)
+    let prev = water_bus_link(c, lot, false)
+    let next = water_bus_link(c, lot, true)
+    let sites = NativeArray.set_int(c.water_bus, lot, 0)
+    let sites = if yard do List.fold_left(water_bus_stops(c, lot, count()), sites,
+      fn (sites, stop) -> NativeArray.set_int(sites, stop, 0))
+    else
+      let sites = if valid(prev) do water_bus_set(sites, prev, water_bus_link(c, prev, false), next, water_bus_yard(c, prev)) else sites end
+      if valid(next) do water_bus_set(sites, next, prev, water_bus_link(c, next, true), false) else sites end
+    end
+    { c with water_bus: sites, water_bus_selection: if c.water_bus_selection == lot do -1 else c.water_bus_selection end,
+      message: if yard do "Water bus line and maintenance dock removed." else "Water bus stop removed." end }
+  end
+  pfn water_bus_work(c : City, lot : Int, tool : Int) : City do
+    let yard = c.water_bus_selection
+    let price = cost(c, lot, tool)
+    if tool == 136 || tool == 7 || tool == 38 || tool == 132 do
+      if water_bus_site(c, lot) do water_bus_remove(c, lot) else { c with message: "Choose a water bus stop or maintenance dock." } end
+    else if water_bus_yard(c, lot) do { c with water_bus_selection: lot, message: "Water bus line selected. Place stops in service order." }
+    else if !water_bus_usable(c, lot) || water_bus_site(c, lot) || get(c.ferries, lot) > 0 do
+      { c with message: "Choose a clear canal parcel with room on the bank." }
+    else if tool == 135 && !water_bus_yard(c, yard) do { c with message: "Select or build a maintenance dock first." }
+    else if c.cash < price do { c with message: "Not enough funds for water bus construction." }
+    else if tool == 134 do
+      { c with cash: c.cash - price, water_bus: water_bus_set(c.water_bus, lot, -1, -1, true),
+        water_bus_selection: lot, message: "Maintenance dock built. Switch to Water Bus Stop and place at least two stops." }
+    else
+      let stops = water_bus_stops(c, yard, count())
+      let last = List.fold_left(stops, yard, fn (_, stop) -> stop)
+      if List.is_empty(water_bus_path(c, last, lot)) do { c with message: "The new stop needs a navigable route from the previous stop." }
+      else
+        let sites = water_bus_set(c.water_bus, last, water_bus_link(c, last, false), lot, last == yard)
+        { c with cash: c.cash - price, water_bus: water_bus_set(sites, lot, last, -1, false),
+          message: if last == yard do "First stop added. Add a second stop to start water bus service."
+            else "Water bus stop added to the line." end }
+      end
+    end end end end end end
+  end
   fn canal_taxi_peer(c : City, lot : Int) : Int do
     if get(c.canal_docks, lot) != 1 || ground_closed(c, lot) do -1 else
       let peer = ferry_peer(c, lot)
@@ -3794,7 +4092,7 @@ mod Ur.Sim do
     end
   end
   fn canal_taxi_leg(c : City, a : Int, b : Int) : Bool do
-    valid(b) && get(c.canal_docks, a) == 1 && get(c.ferries, a) == b + 1
+    valid(b) && ((get(c.canal_docks, a) == 1 && get(c.ferries, a) == b + 1) || water_bus_leg(c, a, b))
   end
   fn canal_taxi_rate(c : City, a : Int, b : Int) : Float do
     let path = canal_service_path(c, a, b)
@@ -4519,6 +4817,9 @@ mod Ur.Sim do
   end
   fn tool_name(t : Int) : String do
     match t do
+      134 -> "Maintenance Dock"
+      135 -> "Water Bus Stop"
+      136 -> "Remove Water Bus"
       112 -> "Add fire vehicle bay"
       113 -> "Add police vehicle bay"
       115 -> "Add hospital ward"
@@ -4555,6 +4856,7 @@ mod Ur.Sim do
       130 -> "Pair water taxi docks"
       131 -> "Pair freight quays"
       132 -> "Remove canal works"
+      133 -> "Automatic flood gate"
       53 -> "Paint park"
       54 -> "Remove crossing"
       55 -> "Upgrade park"
@@ -4612,6 +4914,9 @@ mod Ur.Sim do
   end
   fn cost(c : City, i : Int, tool : Int) : Int do
     match tool do
+      134 -> 2200
+      135 -> 450
+      136 -> 0
       117 -> 20
       118 -> 600
       119 -> 900
@@ -4664,6 +4969,7 @@ mod Ur.Sim do
       130 -> 600
       131 -> 900
       132 -> 0
+      133 -> if automatic_canal_gate(c, i) do 0 else if get(c.canals, i) >= 3 do 200 else 980 end end
       53 -> 45
       56 -> 25
       57 -> 30
@@ -5914,19 +6220,20 @@ mod Ur.Sim do
     end end end end end end
   end
   pfn canal_dock_available(c : City, lot : Int, kind : Int) : Bool do
-    canal_water(c, lot) && get(c.canals, lot) == 1 && get(c.ferries, lot) == 0 && !ground_closed(c, lot) &&
-      (kind == 1 || valid(fleet_frontage(c, lot, 0)))
+    get(c.ferries, lot) == 0 && !water_bus_site(c, lot) && !ground_closed(c, lot) &&
+      (if lot == c.harbour do kind == 2 && canal_freight_access(c, lot) && harbour_water_access(c)
+      else lot != c.harbour_basin && get(c.canals, lot) == 1 && (kind == 1 || canal_freight_access(c, lot)) end)
   end
   pfn pair_canal_dock(c : City, lot : Int, tool : Int) : City do
     let kind = tool - 129
     let start = c.ferry_start
     let name = if kind == 1 do "Water taxi" else "Canal freight" end
     if !canal_dock_available(c, lot, kind) do
-      { c with message: "Choose a clear canal bank. Freight quays also need an adjacent street." }
-    else if !canal_water(c, start) do { c with ferry_start: lot, message: "Choose the other canal dock." }
+      { c with message: if kind == 2 do "Choose the harbour or a clear canal quay with road access." else "Choose a clear canal bank." end }
+    else if !valid(start) do { c with ferry_start: lot, message: "Choose the other canal dock." }
     else if start == lot do { c with ferry_start: -1, message: "Canal service cancelled." }
     else if !canal_dock_available(c, start, kind) do { c with ferry_start: lot, message: "Choose the other canal dock." }
-    else if List.is_empty(canal_path(c, start, lot)) do
+    else if List.is_empty(if kind == 2 do canal_freight_path(c, start, lot) else canal_path(c, start, lot) end) do
       { c with message: "These banks need a navigable canal route. Add locks at changes in level and open barriers." }
     else if c.cash < cost(c, lot, tool) do { c with message: "Not enough funds for canal service." }
     else
@@ -5947,43 +6254,68 @@ mod Ur.Sim do
         message: "Canal dock pair removed." }
     else if get(c.canals, lot) > 1 do
       { c with canals: NativeArray.set_int(c.canals, lot, 1), message: "Canal control removed." }
+    else if lot == c.harbour_basin do { c with message: "The harbour basin keeps its channel open." }
     else
       { c with canals: NativeArray.set_int(c.canals, lot, 0), ferry_start: if c.ferry_start == lot do -1 else c.ferry_start end,
         message: "Canal filled in." }
-    end end
+    end end end
+  end
+  pfn build_automatic_gate(c : City, lot : Int, price : Int) : City do
+    let kind = get(c.canals, lot)
+    if automatic_canal_gate(c, lot) do c
+    else if kind == 0 || kind == 2 || get(c.canal_docks, lot) > 0 ||
+      !List.any([0, 1, 2, 3], fn side -> canal_outlet(c, lot, side)) do
+      { c with message: "Put the automatic flood gate at a clear sea-level canal opening." }
+    else if c.cash < price do { c with message: "Not enough funds for the automatic flood gate." }
+    else
+      let state = auto_gate_state(c, lot)
+      { c with canals: NativeArray.set_int(c.canals, lot, state), cash: c.cash - price,
+        message: if state == 6 do "Automatic flood gate installed closed for the surge."
+          else "Automatic flood gate installed. It closes when ocean water rises." end }
+    end end end
   end
   pfn canal_work(c : City, lot : Int, tool : Int) : City do
     let works = get(c.canals, lot)
     let price = cost(c, lot, tool)
     if tool == 130 || tool == 131 do pair_canal_dock(c, lot, tool)
-    else if tool == 132 || tool == 7 do
-      if works == 0 do { c with message: "Choose a canal parcel." } else remove_canal_work(c, lot) end
+    else if tool == 133 do build_automatic_gate(c, lot, price)
+    else if tool == 132 || tool == 38 || tool == 7 do
+      if works == 0 && get(c.canal_docks, lot) == 0 do { c with message: "Choose a canal parcel." } else remove_canal_work(c, lot) end
     else if tool == 127 do
-      if works > 0 do c
-      else if get(c.heights, lot) < 1 || lot == c.harbour || get(c.roads, lot) > 0 ||
+      if lot == c.harbour do
+        let basin = harbour_basin_site(c, lot)
+        if valid(c.harbour_basin) do c
+        else if !valid(basin) do { c with message: "Clear an adjacent shoreline parcel for the harbour basin." }
+        else if c.cash < price do { c with message: "Not enough funds to excavate the harbour basin." }
+        else install_harbour_basin({ c with cash: c.cash - price, message: "Harbour basin opened. Join a canal to its channel." }, basin)
+        end end end
+      else if works > 0 do c
+      else if get(c.heights, lot) < 1 || get(c.roads, lot) > 0 ||
         get(c.ferries, lot) > 0 || get(c.transit, lot) > 0 || get(c.parks, lot) > 0 || get(c.zones, lot) > 0 ||
         get(c.buildings, lot) > 0 || get(c.construction, lot) > 0 || get(c.plants, lot) > 0 ||
         valid(grade_source(c, lot)) || surface_parking(c, lot) || valid(campus_root(c, lot)) do
         { c with message: "Dig canals through clear, unzoned land." }
       else if c.cash < price do { c with message: "Not enough funds to dig the canal." }
       else { c with canals: NativeArray.set_int(c.canals, lot, 1), cash: c.cash - price, message: "Canal dug." }
-      end end end
+      end end end end
     else if works <= 0 || get(c.canal_docks, lot) > 0 do { c with message: "Choose a canal parcel away from docks." }
     else if tool == 128 do
-      let arms = List.filter([0, 1, 2, 3], fn arm -> canal_arm(c, lot, arm))
+      let arms = List.filter([0, 1, 2, 3], fn arm ->
+        canal_water(c, neighbour(lot, arm)) || canal_lock_outlet(c, lot, arm) || canal_lock_port(c, lot, arm))
       let aligned = match arms do Cons(a, Cons(b, Nil)) -> opposite(a) == b | _ -> false end
       if works == 2 do c
-      else if works != 1 || !aligned do { c with message: "Locks need a straight canal with two clear approaches." }
+      else if lot == c.harbour_basin || works != 1 || !aligned do { c with message: "Locks need a straight canal with two clear approaches." }
       else if c.cash < price do { c with message: "Not enough funds for the lock." }
       else { c with canals: NativeArray.set_int(c.canals, lot, 2), cash: c.cash - price, message: "Navigation lock opened." } end end end
+    else if automatic_canal_gate(c, lot) do { c with message: "The automatic gate is controlled by ocean conditions." }
     else if works == 3 || works == 4 do
       { c with canals: NativeArray.set_int(c.canals, lot, if works == 3 do 4 else 3 end),
         message: if works == 3 do "Flood barrier closed. Canal shipping is blocked here." else "Flood barrier open." end }
-    else if works != 1 || !coastal(c, lot) || canal_level(c, lot) > 0 do
+    else if works != 1 || !List.any([0, 1, 2, 3], fn side -> canal_outlet(c, lot, side)) do
       { c with message: "Put a flood barrier at a sea-level canal opening." }
     else if c.cash < price do { c with message: "Not enough funds for the barrier." }
     else { c with canals: NativeArray.set_int(c.canals, lot, 3), cash: c.cash - price, message: "Flood barrier built open. Click again to close it." }
-    end end end end end end end end
+    end end end end end end end end end end
   end
   pfn expand_service(c : City, lot : Int, tool : Int) : City do
     let campus = campus_root(c, lot)
@@ -6073,7 +6405,10 @@ mod Ur.Sim do
       else if frozen do { c with message: "The administrator has frozen city construction. Demolition is still allowed." }
       else if c.harbour >= 0 && valid(i) && ((tool >= 109 && tool <= 113) || tool == 115) do expand_service(c, i, tool)
       else if prerequisite != "" do { c with message: prerequisite ++ "." }
-      else if c.harbour >= 0 && valid(i) && (canal_tool(tool) || (tool == 7 && canal_water(c, i))) do canal_work(c, i, tool)
+      else if c.harbour >= 0 && valid(i) && ((tool >= 134 && tool <= 136) ||
+        (water_bus_site(c, i) && (tool == 7 || tool == 38 || tool == 132))) do water_bus_work(c, i, tool)
+      else if water_bus_site(c, i) && canal_tool(tool) do { c with message: "Clear the water bus berth before replacing it." }
+      else if c.harbour >= 0 && valid(i) && (canal_tool(tool) || (tool == 7 && canal_water(c, i)) || (tool == 38 && get(c.canal_docks, i) > 0)) do canal_work(c, i, tool)
       else if canal_water(c, i) && uses_site && tool != 39 do { c with message: "Remove the canal before building on the parcel." }
       else if c.harbour >= 0 && valid(i) && (tool == 99 || tool == 100 || tool == 101 || (tool >= 118 && tool <= 123)) do
         (if tool >= 118 do sea_work(c, i, tool) else flood_work(c, i, tool) end)
@@ -6085,7 +6420,7 @@ mod Ur.Sim do
       else if surface_parking(c, i) && (road_tool(tool) || facility_kind(tool) > 0 || tool == 2 || tool == 3 || tool == 28 || tool == 117 || tool == 53 || tool == 6 || (tool >= 33 && tool <= 36)) do
         { c with message: "Remove the parking facility to build on the surface." }
       else if get(c.public_parking, i) == 3 && tool == 36 do { c with message: "The underground garage occupies this parcel." }
-      else campus_action(c, i, tool) end end end end end end end end end end end end end end
+      else campus_action(c, i, tool) end end end end end end end end end end end end end end end end
     let next = if get(c.roads, i) == 0 || get(next.roads, i) > 0 || get(c.storm_drains, i) == 0 do next else
       { next with storm_drains: NativeArray.set_int(next.storm_drains, i, 0) } end
     let next = if tool == 7 && get(next.plants, i) == 0 && get(next.buildings, i) == 0 && flood_repair_days(c, i) > 0 do
@@ -7502,8 +7837,10 @@ mod Ur.Sim do
     else if get(c.ferries, i) > 0 do ferry_summary(c, i)
     else if canal_water(c, i) do
       let kind = get(c.canals, i)
-      let name = if kind == 2 do "Navigation lock" else if kind == 3 do "Flood barrier open"
-        else if kind == 4 do "Flood barrier closed" else "Canal with sidewalks" end end end
+      let name = if automatic_canal_gate(c, i) do
+        if canal_gate_closed(c, i) do "Automatic flood gate closed for surge" else "Automatic flood gate open" end
+        else if kind == 2 do "Navigation lock" else if kind == 3 do "Flood barrier open"
+        else if kind == 4 do "Flood barrier closed" else "Canal with sidewalks" end end end end
       name ++ " · " ++ int_to_string(canal_level(c, i) / 4) ++ " m water level"
     else if valid(grade_peer(c, i)) do
       let rise = bridge_rise(c, i)
@@ -7707,7 +8044,8 @@ mod Ur.Sim do
       let cost = (if mode >= 2 do mode - 1 else 0 end) + (if larger do 10 else if ferry do 5 else 0 end end)
       let works = get(c.canals, i)
       let channel = if works == 0 do 0 else if works == 1 do 1 else 3 end end
-      transit_upkeep(c, i + 1, total + channel + cost * (if mode == 2 do 1 else frequency(c, i) end))
+      let bus = if water_bus_yard(c, i) do 18 else if water_bus_site(c, i) do 2 else 0 end end
+      transit_upkeep(c, i + 1, total + channel + bus + cost * (if mode == 2 do 1 else frequency(c, i) end))
     end
   end
   pfn toll_receipts(c : City, traffic : NativeIntArr, i : Int, total : Int) : Int do
@@ -7772,9 +8110,11 @@ mod Ur.Sim do
   end
   pfn freight_edges(c : City, room : NativeIntArr, r : FreightSearch, i : Int, d : Int, shared : Bool) : FreightSearch do
     if d == 6 do r else
-      let j = if d == 5 do grade_peer(c, i) else if d == 4 do ferry_peer(c, i) else neighbour(i, d) end end
+      let j = if d == 5 do grade_peer(c, i)
+        else if d == 4 do (if get(room, i) > 0 && (shared || !freight_port(c, i)) do ferry_peer(c, i) else -1 end)
+        else neighbour(i, d) end end
       let r = if valid(j) && freight_stop(c, j) && get(r.links, j) < 0 &&
-        (if d == 5 do true else if d == 4 do get(room, i) > 0 && (shared || !freight_port(c, i)) else int_abs(get(c.heights, i) - get(c.heights, j)) <= 12 end end) do freight_add(r, j, i) else r end
+        (d >= 4 || (canal_land_link(c, i, j) && int_abs(get(c.heights, i) - get(c.heights, j)) <= 12)) do freight_add(r, j, i) else r end
       freight_edges(c, room, r, i, d + 1, shared)
     end
   end
@@ -7797,7 +8137,7 @@ mod Ur.Sim do
   pfn freight_entrance(c : City, links : NativeIntArr, i : Int, d : Int) : Int do
     if d >= 4 do -1 else
       let j = neighbour(i, d)
-      if valid(j) && get(links, j) >= 0 && int_abs(get(c.heights, i) - get(c.heights, j)) <= 12 do j
+      if valid(j) && get(links, j) >= 0 && canal_land_link(c, i, j) && int_abs(get(c.heights, i) - get(c.heights, j)) <= 12 do j
       else freight_entrance(c, links, i, d + 1) end
     end
   end
@@ -7995,7 +8335,7 @@ mod Ur.Sim do
     match c.freight do
       None ->
         let peer = get(c.ferries, lot) - 1
-        if !valid(peer) do c else
+        if !valid(peer) || get(c.canal_docks, lot) > 0 do c else
           let mainland = freight_from(c, c.harbour)
           let port = if get(mainland, lot) >= 0 do lot else peer end
           let island = if port == lot do peer else lot end
@@ -8269,7 +8609,7 @@ mod Ur.Sim do
   pfn freight_link(c : City, a : Int, b : Int) : Bool do
     if get(c.ferries, a) == b + 1 do ferry_peer(c, a) == b && production_ferry_room(c, a) > 0 && freight_stop(c, a) && freight_stop(c, b)
     else if grade_peer(c, a) == b do freight_stop(c, a) && freight_stop(c, b)
-    else span_distance(a, b) == 1 && int_abs(get(c.heights, a) - get(c.heights, b)) <= 12 &&
+    else span_distance(a, b) == 1 && canal_land_link(c, a, b) && int_abs(get(c.heights, a) - get(c.heights, b)) <= 12 &&
       !ground_closed(c, a) && !ground_closed(c, b) end end
   end
   fn production_route_open(c : City, path : List(Int)) : Bool do
@@ -8297,14 +8637,14 @@ mod Ur.Sim do
   fn production_frontage(c : City, lot : Int, direction : Int) : Int do
     if direction >= 4 do -1 else
       let other = neighbour(lot, direction)
-      if valid(other) && freight_stop(c, other) && int_abs(get(c.heights, lot) - get(c.heights, other)) <= 12 do other
+      if valid(other) && freight_stop(c, other) && canal_land_link(c, lot, other) && int_abs(get(c.heights, lot) - get(c.heights, other)) <= 12 do other
       else production_frontage(c, lot, direction + 1) end
     end
   end
   pfn production_entrance(c : City, links : NativeIntArr, lot : Int, direction : Int) : Int do
     if direction >= 4 do -1 else
       let other = neighbour(lot, direction)
-      if freight_stop(c, other) && get(links, other) >= 0 && int_abs(get(c.heights, lot) - get(c.heights, other)) <= 12 do other
+      if freight_stop(c, other) && get(links, other) >= 0 && canal_land_link(c, lot, other) && int_abs(get(c.heights, lot) - get(c.heights, other)) <= 12 do other
       else production_entrance(c, links, lot, direction + 1) end
     end
   end
@@ -9646,7 +9986,7 @@ mod Ur.Sim do
     let city = if valid(city.harbour) && absolute_day(city) % 5 == 0 do update_facility_staff(city) else city end
     let city = open_religion_day(city)
     let day_number = waste_date(city)
-    let c = surge_day(ferry_day(day_weather(start_sea_day(city), weather_sites(city, 0, Nil))))
+    let c = ferry_day(surge_day(day_weather(start_sea_day(city), weather_sites(city, 0, Nil))))
     let c = sanitation_day(c, traffic, day_number)
     let industry = c.production_freight.last_day >= 0 || has_industry(c, 0)
     let c = if industry do production_day(c, traffic, day_number) else freight_day(c, traffic, day_number) end

@@ -10,11 +10,11 @@ mod Ur.Toolbar do
   pfn menu(group : Int, page : Int) : Menu do
     match group do
       1 ->
-        let items = if page == 4 do [127, 128, 129, 130, 131, 132]
+        let items = if page == 4 do [127, 128, 129, 133, 130, 131, 132]
           else if page == 3 do [99, 100, 101] else if page == 2 do Cons(71, Cons(72, Cons(73, Cons(74, Cons(75, Nil)))))
           else if page == 1 do [124, 125, 126, 50, 51, 52, 54]
           else Cons(1, Cons(48, Cons(49, Cons(33, Cons(40, Nil))))) end end end end
-        { span: if page == 4 do 6 else 5 end, pages: ["Streets", "Crossings", "Car-free days", "Flood protection", "Canals"], items: items }
+        { span: if page == 4 do 7 else 5 end, pages: ["Streets", "Crossings", "Car-free days", "Flood protection", "Canals"], items: items }
       2 ->
         let items = match page do
           2 -> Cons(64, Cons(65, Cons(66, Cons(63, Nil))))
@@ -30,9 +30,10 @@ mod Ur.Toolbar do
           3 -> [37, 122, 123]
           4 -> Cons(39, Cons(38, Nil))
           5 -> [87, 88, 89, 90]
+          6 -> [134, 135, 136]
           _ -> Cons(34, Cons(41, Cons(76, Nil)))
         end
-        { span: 4, pages: ["Bus", "Tram", "Subway", "Ferry", "Manage", "Parking"], items: items }
+        { span: 4, pages: ["Bus", "Tram", "Subway", "Ferry", "Manage", "Parking", "Water Bus"], items: items }
       4 ->
         let items = match page do
           1 -> [18, 19, 9, 10, 14, 15, 16, 17]
@@ -110,9 +111,11 @@ mod Ur.Toolbar do
       127 -> "outfall"
       128 -> "grade"
       129 -> "well"
+      133 -> "grade"
       130 -> "ferry"
       131 -> "harbour"
-      132 -> "clear"
+      134 -> "depot"
+      132 | 136 -> "clear"
       2 | 29 -> "homes"
       3 | 31 -> "jobs"
       28 | 30 -> "mixed"
@@ -121,7 +124,7 @@ mod Ur.Toolbar do
       35 -> "tram"
       36 | 43 -> "metro"
       37 -> "ferry"
-      41 | 42 -> "stop"
+      41 | 42 | 135 -> "stop"
       39 -> "manage"
       26 | 97 -> "power"
       4 | 32 -> "plant"

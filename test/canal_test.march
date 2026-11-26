@@ -57,6 +57,41 @@ mod CanalTest do
       S.surface_flood(S.surge_day(reopened), bank) > 0, "Reopening restores the entrance")
   end
 
+  pfn automatic_surge_gate() : Unit do
+    let c = fixture()
+    let sea = S.index(4, 10)
+    let mouth = S.index(5, 10)
+    let inland = S.index(12, 10)
+    let bank = S.index(12, 11)
+    let heights = NativeArray.set_int(c.heights, sea, 0)
+    let calm = S.sea_on_water(heights, 190)
+    let rising = S.sea_on_water(heights, 350)
+    let c = { c with heights: heights, sea_heights: calm }
+    let canal = (Ur.Build.preview(c, 127, mouth, inland)).city
+    let quote = Ur.Build.preview(canal, 133, -1, mouth)
+    let open = quote.city
+    Test.assert_true(quote.valid && quote.changed && quote.cost > 0 && S.automatic_canal_gate(open, mouth) &&
+      !S.canal_gate_closed(open, mouth) && List.length(S.canal_path(open, mouth, inland)) == 8,
+      "The canal tool installs an open automatic gate at the sea entrance")
+    Test.assert_true(!((Ur.Build.preview(canal, 133, -1, inland)).valid),
+      "Automatic gates need an ocean-facing entrance")
+    let closed = S.surge_day({ open with sea_heights: rising })
+    Test.assert_true(S.canal_gate_closed(closed, mouth) && S.surface_flood(closed, bank) == 0 &&
+      List.is_empty(S.canal_path(closed, mouth, inland)), "An incoming surge closes the gate before flooding or navigation")
+    let placed_during_surge = S.act({ canal with sea_heights: rising }, mouth, 133)
+    Test.assert_true(S.canal_gate_closed(placed_during_surge, mouth), "Installing a gate mid-surge closes it immediately")
+    let saved = { city: closed, cx: 44.0, cz: 84.0, zoom: 36.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(saved)) do
+      Ok(loaded) ->
+        Test.assert_true(S.automatic_canal_gate(loaded.city, mouth) && S.canal_gate_closed(loaded.city, mouth),
+          "A closed automatic gate survives save and load")
+        let reopened = S.surge_day({ loaded.city with sea_heights: calm })
+        Test.assert_true(!S.canal_gate_closed(reopened, mouth) && List.length(S.canal_path(reopened, mouth, inland)) == 8,
+          "A falling sea reopens the gate and restores shipping")
+      Err(message) -> Test.assert_true(false, "Automatic gate save failed: " ++ message)
+    end
+  end
+
   pfn movable_crossing() : Unit do
     let c = fixture()
     let west = S.index(3, 10)
@@ -75,6 +110,42 @@ mod CanalTest do
     Test.assert_true(S.canal_taxi_peer(taxi, north) == south &&
       !S.bridge_road_open(waiting, west, east) && !S.bridge_ship_open(waiting, S.index(8, 10)),
       "An approaching canal taxi requests the lift and waits for the road deck")
+    let yard = north - S.width()
+    let city = S.act(S.act(S.act(S.act(bridge, yard, 127), yard, 134), north, 135), south, 135)
+    let routes = Ur.Lift.routes(city, Nil)
+    let waiting = List.fold_left(List.range(0, 32), city, fn (city, _) ->
+      Ur.Lift.step(city, routes, Map.insert(Map.empty(), west, true, Map.int_cmp), 0.25))
+    Test.assert_true(List.length(routes) == 1 && !S.bridge_road_open(waiting, west, east) &&
+      !S.bridge_ship_open(waiting, S.index(8, 10)), "Water buses request the same drawbridge protocol as other ships")
+    let crossing = List.fold_left(List.range(0, 8), waiting, fn (city, _) -> Ur.Lift.step(city, routes, Map.empty(), 0.25))
+    Test.assert_true(S.bridge_ship_open(crossing, S.index(8, 10)), "The drawbridge opens once the road deck clears")
+  end
+
+  pfn shore_connection() : Unit do
+    let sea = S.index(4, 10)
+    let offshore = S.index(3, 10)
+    let mouth = S.index(5, 10)
+    let inland = S.index(6, 10)
+    let c = fixture()
+    let heights = NativeArray.set_int(NativeArray.set_int(c.heights, sea, 0), offshore, 0)
+    let c = { c with heights: heights }
+    let from_land = Ur.Build.preview(c, 127, inland, offshore)
+    let from_water = Ur.Build.preview(c, 127, offshore, inland)
+    Test.assert_true(from_land.valid && from_water.valid && from_land.cost == 280 && from_water.cost == 280 &&
+      List.length(from_land.tiles) == 2 && !S.canal_water(from_land.city, sea),
+      "A canal stroke can start or finish in open water without charging for sea parcels")
+    Test.assert_true(S.canal_wet(from_land.city, mouth, 0, 16) &&
+      Ur.Landscape.height(from_land.city, 4 * 32 + 30, 10 * 32 + 16) <= 0,
+      "The channel stays submerged across the shoreline")
+    let blocked = { c with seawalls: NativeArray.set_int(c.seawalls, sea, 1) }
+    let rejected = Ur.Build.preview(blocked, 127, inland, offshore)
+    Test.assert_true(!rejected.valid && !rejected.changed, "A canal stroke cannot cut through a seawall")
+    let raised = { c with heights: NativeArray.set_int(NativeArray.set_int(c.heights, mouth, 11), inland, 11) }
+    let raised = (Ur.Build.preview(raised, 127, mouth, inland)).city
+    let lock = S.act(raised, mouth, 128)
+    Test.assert_true(!S.canal_wet(raised, mouth, 0, 16) && S.canal_wet(lock, mouth, 0, 16) &&
+      S.canal_level(lock, mouth) == 0 && List.length(S.canal_path(lock, mouth, inland)) == 2,
+      "A coastal lock links a raised canal to the sea-level opening")
   end
 
   pfn shore_silt() : Unit do
@@ -124,11 +195,258 @@ mod CanalTest do
     end
   end
 
+  pfn channel_bed() : Unit do
+    let low = S.index(5, 10)
+    let high = S.index(7, 10)
+    let c = fixture()
+    let c = { c with heights: NativeArray.set_int(c.heights, high, 11) }
+    let dug = S.act(S.act(c, low, 127), high, 127)
+    let before = Ur.Ocean.field(c)
+    let after = Ur.Ocean.field(dug)
+    let lo = Ur.Ocean.padded_cell(5, 10)
+    let hi = Ur.Ocean.padded_cell(7, 10)
+    Test.assert_true(Ur.Ocean.canal_parcel(after, lo) && Ur.Ocean.canal_parcel(after, hi) &&
+      Ur.Ocean.parcel_changed(before, after, hi) && Ur.Ocean.coast_touched(c, dug),
+      "Both levels of canal own the water surface and update the ocean renderer")
+    Test.assert_true(Ur.Ocean.depth(after, 5 * 32 + 16, 10 * 32 + 16) == 6 &&
+      Ur.Ocean.depth(after, 5 * 32 + 2, 10 * 32 + 16) == 0 &&
+      Ur.Ocean.depth(after, 7 * 32 + 16, 10 * 32 + 16) == 0,
+      "The ocean field carries only the submerged portion of the canal bed")
+  end
+
+  pfn harbour_freight() : Unit do
+    let c = fixture()
+    let harbour = c.harbour
+    let inlet = S.index(3, 10)
+    let bend = S.index(3, 11)
+    let sea = S.index(4, 11)
+    let mouth = S.index(5, 11)
+    let quay = S.index(8, 11)
+    let road = S.index(8, 12)
+    let shop = S.index(8, 13)
+    let heights = NativeArray.set_int(NativeArray.set_int(NativeArray.set_int(c.heights, inlet, 0), bend, 0), sea, 0)
+    let roads = NativeArray.set_int(NativeArray.set_int(c.roads, harbour, 1), road, 1)
+    let zones = NativeArray.set_int(c.zones, shop, 2)
+    let buildings = NativeArray.set_int(c.buildings, shop, 2)
+    let c = (Ur.Build.preview({ c with heights: heights, roads: roads, zones: zones, buildings: buildings }, 127, mouth, quay)).city
+    let open = S.act(c, mouth, 129)
+    let linked = S.act(S.act(open, harbour, 131), quay, 131)
+    let path = S.canal_service_path(linked, harbour, quay)
+    Test.assert_true(S.ferry_peer(linked, harbour) == quay && S.ferry_peer(linked, quay) == harbour &&
+      List.length(path) == 8 && List.any(path, fn lot -> lot == bend) &&
+      S.canal_taxi_peer(linked, harbour) < 0, "Freight links the harbour to the canal via a turning sea approach")
+    let supplied = Ur.Clock.month(linked)
+    Test.assert_eq_int(S.get(supplied.shop_delivered, shop), 16, "The harbour delivers imports to the canal-side shop")
+    let closed = S.act(linked, mouth, 129)
+    Test.assert_true(S.ferry_peer(closed, harbour) < 0 && List.is_empty(S.canal_service_path(closed, quay, harbour)),
+      "Closing the flood gate suspends the harbour service")
+    Test.assert_eq_int(S.get((Ur.Clock.month(closed)).shop_delivered, shop), 0, "A closed gate stops port cargo")
+    let reopened = S.act(closed, mouth, 129)
+    Test.assert_true(S.ferry_peer(reopened, harbour) == quay, "Reopening the gate restores the port link")
+    let removed = S.act(reopened, harbour, 38)
+    Test.assert_true(S.get(removed.canal_docks, quay) == 0 && S.get(removed.canal_docks, harbour) == 0 &&
+      S.canal_water(removed, quay), "Removing the port service clears both berths and preserves the canal")
+  end
+
+  pfn harbour_direct_quay() : Unit do
+    let c = fixture()
+    let harbour = c.harbour
+    let quay = S.index(3, 10)
+    let road = S.index(3, 11)
+    let shop = S.index(3, 12)
+    let roads = NativeArray.set_int(NativeArray.set_int(c.roads, harbour, 1), road, 1)
+    let zones = NativeArray.set_int(c.zones, shop, 2)
+    let buildings = NativeArray.set_int(c.buildings, shop, 2)
+    let dug = S.act({ c with roads: roads, zones: zones, buildings: buildings }, quay, 127)
+    Test.assert_eq_int(S.get((Ur.Clock.month(dug)).shop_delivered, shop), 0, "An unpaired canal quay cannot move cargo from the port")
+    let linked = S.act(S.act(dug, quay, 131), harbour, 131)
+    Test.assert_true(S.canal_wet(linked, quay, 0, 16) && List.length(S.canal_service_path(linked, harbour, quay)) == 2,
+      "A sea-level canal can berth directly at the harbour")
+    Test.assert_eq_int(S.get((Ur.Clock.month(linked)).shop_delivered, shop), 16, "A direct harbour berth carries port imports")
+    let cut = { linked with roads: NativeArray.set_int(linked.roads, road, 0) }
+    Test.assert_true(S.ferry_peer(cut, harbour) < 0, "The quay suspends freight when its inland road is removed")
+  end
+
+  pfn founding_basin() : Unit do
+    let terminal = S.index(5, 10)
+    let basin = S.index(4, 10)
+    let quay = S.index(4, 8)
+    let heights = List.fold_left(List.range(0, S.count()), NativeArray.make_int(S.count(), 0), fn (out, lot) ->
+      if lot / S.width() <= 10 do NativeArray.set_int(out, lot, 8) else out end)
+    let survey = { S.unclaimed() with heights: heights }
+    let preview = Ur.Build.preview(survey, 0, -1, terminal)
+    let city = preview.city
+    Test.assert_true(preview.valid && preview.tiles == [terminal, basin] && city.harbour == terminal &&
+      city.harbour_basin == basin && S.get(city.roads, terminal) == 1 && !S.canal_water(city, terminal),
+      "Founding reserves a dry terminal and a second parcel for the basin")
+    let water = (Ur.Build.preview(city, 127, quay, basin)).city
+    Test.assert_true(S.canal_level(water, basin) == 0 && S.canal_outlet(water, basin, 3) &&
+      S.canal_wet(water, basin, 16, 0) && S.canal_wet(water, basin, 16, 31) &&
+      List.length(S.canal_path(water, quay, basin)) == 3,
+      "The inland canal reaches open ocean through the basin")
+    let road = S.index(3, 8)
+    let water = { water with roads: NativeArray.set_int(water.roads, road, 1) }
+    let linked = S.act(S.act(water, terminal, 131), quay, 131)
+    Test.assert_true(S.canal_service_path(linked, terminal, quay) == [terminal, basin, S.index(4, 9), quay],
+      "Harbour barges depart through the basin")
+    let closed = S.act(S.act(linked, basin, 129), basin, 129)
+    Test.assert_true(S.ferry_peer(closed, terminal) < 0 &&
+      S.ferry_peer(S.act(closed, basin, 129), terminal) == quay,
+      "The basin's flood gate suspends and restores harbour freight")
+    let protected = S.act(city, basin, 132)
+    Test.assert_true(S.canal_water(protected, basin), "Clearing canal works leaves the harbour channel intact")
+    let saved = { city: closed, cx: 44.0, cz: 84.0, zoom: 36.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(saved)) do
+      Ok(loaded) -> Test.assert_true(loaded.city.harbour_basin == basin &&
+        S.get(loaded.city.canals, basin) == 4, "The two parcels and the closed basin gate survive save and load")
+      Err(message) -> Test.assert_true(false, "Harbour save failed: " ++ message)
+    end
+  end
+
+  pfn dock_keeps_channel_clear() : Unit do
+    let c = fixture()
+    let centre = S.index(12, 12)
+    let other = S.neighbour(centre, 0)
+    let canals = List.fold_left([0, 1, 2, 3], S.act(c, centre, 127), fn (city, side) ->
+      S.act(city, S.neighbour(centre, side), 127))
+    let taxi = S.act(S.act(canals, centre, 130), other, 130)
+    let pieces = Ur.Landscape.structures(taxi, centre, 0)
+    Test.assert_true(S.canal_taxi_peer(taxi, centre) == other && !List.is_empty(pieces) &&
+      List.all(pieces, fn piece ->
+        List.all(List.range(piece.x, piece.x + piece.w), fn x ->
+          List.all(List.range(piece.z, piece.z + piece.d), fn z -> !S.canal_wet(taxi, centre, x, z)))),
+      "A dock at a four-way junction keeps all branches clear")
+  end
+
+  pfn swing_gate_geometry() : Unit do
+    List.each([0, 1, 2, 3], fn side ->
+      let (lx, lz, left) = Ur.Scene.flood_gate_hinge(side, 0, 0.0)
+      let (rx, rz, right) = Ur.Scene.flood_gate_hinge(side, 1, 0.0)
+      let closed_x = lx +. 8.0 *. Math.cos(left) -. (rx +. 8.0 *. Math.cos(right))
+      let closed_z = lz -. 8.0 *. Math.sin(left) -. (rz -. 8.0 *. Math.sin(right))
+      let (u, v, turned_left) = Ur.Scene.flood_gate_hinge(side, 0, 1.0)
+      let (_, _, turned_right) = Ur.Scene.flood_gate_hinge(side, 1, 1.0)
+      let inside_x = u +. 8.0 *. Math.cos(turned_left)
+      let inside_z = v -. 8.0 *. Math.sin(turned_left)
+      Test.assert_true(Math.abs(closed_x) < 0.01 && Math.abs(closed_z) < 0.01 &&
+        u == lx && v == lz && Math.abs(turned_left -. turned_right) < 0.01 &&
+        inside_x >= 7.99 && inside_x <= 24.01 && inside_z >= 7.99 && inside_z <= 24.01,
+        "The hinged leaves meet across the opening and park lengthwise along its banks"))
+    let closing = { slot: 0, lot: 0, side: 3, bottom: -6, height: 23, closed: true,
+      from: 1.0, since: 6.0, moving: true }
+    Test.assert_true(Ur.Scene.flood_gate_opening(closing, 6.0) == 1.0 &&
+      Math.abs(Ur.Scene.flood_gate_opening(closing, 6.225) -. 0.5) < 0.01 &&
+      Ur.Scene.flood_gate_opening(closing, 7.0) == 0.0, "Closure sweeps through intermediate angles")
+  end
+
+  pfn waterfront_cranes() : Unit do
+    let c = fixture()
+    let quay = S.index(8, 10)
+    let other = S.index(8, 13)
+    let factory = S.index(7, 10)
+    let warehouse = S.index(9, 13)
+    let home = S.index(9, 10)
+    let c = (Ur.Build.preview(c, 127, quay, other)).city
+    let buildings = NativeArray.set_int(NativeArray.set_int(c.buildings, factory, 2), home, 1)
+    let zones = NativeArray.set_int(NativeArray.set_int(c.zones, factory, 4), home, 1)
+    let c = { c with buildings: buildings, zones: zones, plants: NativeArray.set_int(c.plants, warehouse, 24) }
+    Test.assert_true(S.canal_crane_bank(c, quay) == 0 && S.canal_crane_bank(c, other) == 1 &&
+      !S.canal_crane_site(c, quay, 1), "Factories and warehouses get cranes on their canal bank")
+    let berths = S.act(S.act(c, quay, 131), other, 131)
+    Test.assert_true(List.length(S.canal_service_path(berths, quay, other)) == 4,
+      "A factory and a warehouse can connect by freight without a separate road at each berth")
+    let cargo = { from: factory, to: warehouse, item: Ur.ProductionFreight.parts(), units: 5,
+      path: [factory, quay, other, warehouse], arrived: false }
+    let outgoing = { berths.production_freight with movements: [cargo] }
+    let incoming = { outgoing with movements: [{ cargo with arrived: true }] }
+    Test.assert_true(S.canal_crane_transfer(berths, quay, other) == 0 &&
+      S.canal_crane_transfer({ berths with production_freight: outgoing }, quay, other) == 1 &&
+      S.canal_crane_transfer({ berths with production_freight: incoming }, other, quay) == -1,
+      "Cranes carry a crate only for cargo with a directed leg on their route")
+    let parts = Ur.Landscape.structures(berths, quay, 0)
+    Test.assert_true(List.any(parts, fn p -> p.y == Ur.Landscape.crane_rail_height(berths, quay) && p.material == 10 && p.w == 18),
+      "The crane boom is oriented from the factory bank over the water")
+  end
+
+  pfn advance_water_bus(c : Ur.Sim.City, routes : List(Ur.Lift.Vessel), frames : Int) : Ur.Sim.City do
+    if frames == 0 do c else advance_water_bus(Ur.Lift.step(c, routes, Map.empty(), 0.1), routes, frames - 1) end
+  end
+  pfn water_bus_schedule() : Unit do
+    let yard = S.index(6, 14)
+    let first = S.index(8, 14)
+    let second = S.index(12, 14)
+    let last = S.index(15, 14)
+    let canal = (Ur.Build.preview(fixture(), 127, yard, last)).city
+    let quote = Ur.Build.preview(canal, 134, -1, yard)
+    Test.assert_true(quote.changed && quote.valid && S.water_bus_yard(quote.city, yard), "Buildable maintenance dock selects a line")
+    let waiting = S.act(quote.city, first, 135)
+    Test.assert_true(Option.is_none(S.water_bus_course(waiting, yard)), "A line needs two passenger stops")
+    let city = S.act(S.act(waiting, second, 135), last, 135)
+    match S.water_bus_course(city, yard) do
+      Some(course) -> Test.assert_true(course.calls == [(yard, 0), (first, 2), (second, 6), (last, 9)],
+        "Water buses call at every stop in placement order")
+      None -> Test.assert_true(false, "A connected line is navigable")
+    end
+    let routes = Ur.Lift.routes(city, Nil)
+    Test.assert_true(List.length(routes) == 1 && S.water_bus_peer(city, yard, true) < 0, "The depot dispatches one boat and has no passenger service")
+    Test.assert_true(S.water_bus_peer(city, first, true) == second &&
+      S.get(Ur.Food.destinations(city, fn lot -> lot == last), first) == second &&
+      Ur.Citizens.checked_route(city, Ur.Citizens.route_checks(city), [first, second, last], true),
+      "Pedestrian routes connect through successive passenger stops")
+    let at_first = advance_water_bus(city, routes, 37)
+    let boarded = S.water_bus_passenger(at_first, first, second, 0.0)
+    Test.assert_true(boarded > 0.0 && boarded < 0.05 &&
+      S.water_bus_passenger(at_first, second, first, 0.0) == 0.0, "Riders board during the correct stop and direction")
+    let at_second = advance_water_bus(at_first, routes, 98)
+    Test.assert_true(S.water_bus_passenger(at_second, first, second, boarded) == 1.0, "A rider alights when the boat reaches the scheduled berth")
+    let at_yard = advance_water_bus(city, routes, 450)
+    match Map.get(at_yard.lift_vessels, S.water_bus_source(yard), Map.int_cmp) do
+      Some(motion) -> Test.assert_true(motion.call_from == yard && motion.moored > 0.0, "The return trip pauses at the maintenance dock")
+      None -> Test.assert_true(false, "Water bus continues to run")
+    end
+    let cut = S.act(city, S.index(10, 14), 132)
+    Test.assert_true(Option.is_none(S.water_bus_course(cut, yard)), "A severed canal suspends service")
+    let changed = S.act(city, second, 136)
+    Test.assert_true(!S.water_bus_site(changed, second) && S.water_bus_peer(changed, first, true) == last, "Removing a stop reconnects its neighbors")
+    let removed = S.act(city, yard, 136)
+    Test.assert_true(!S.water_bus_site(removed, yard) && !S.water_bus_site(removed, first) &&
+      !S.water_bus_site(removed, last) && S.canal_water(removed, yard), "Removing the depot removes its line and keeps the canal")
+    let saved = { city: city, cx: 44.0, cz: 84.0, zoom: 36.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(saved)) do
+      Ok(loaded) -> Test.assert_true(S.water_bus_yard(loaded.city, yard) && S.water_bus_peer(loaded.city, second, true) == last,
+        "The maintenance dock and stop order survive save and load")
+      Err(message) -> Test.assert_true(false, "Water bus save failed: " ++ message)
+    end
+  end
+  pfn crane_hoist() : Unit do
+    let park = Ur.CanalCrane.hoist(0, 0.4, 26.0, 9.0, 5.0)
+    let pickup = Ur.CanalCrane.hoist(1, 0.24, 26.0, 9.0, 5.0)
+    let travel = Ur.CanalCrane.hoist(1, 0.52, 26.0, 9.0, 5.0)
+    let set_down = Ur.CanalCrane.hoist(1, 0.80, 26.0, 9.0, 5.0)
+    let unload = Ur.CanalCrane.hoist(-1, 0.24, 26.0, 9.0, 5.0)
+    Test.assert_true(!park.carrying && park.reach == 27.0 && pickup.carrying && pickup.reach == park.reach &&
+      pickup.bottom == 9.0 && travel.carrying && travel.reach > 16.0 && travel.reach < 27.0 &&
+      travel.bottom > pickup.bottom && !set_down.carrying && set_down.reach == 16.0 &&
+      set_down.bottom == 5.0 && unload.carrying && unload.reach == 16.0 && unload.bottom == 5.0,
+      "The crane picks up, raises, traverses, delivers and reverses for unloading")
+  end
+
   fn main(_cap : Cap(IO)) : Unit do
     navigation()
     flood_gate()
+    automatic_surge_gate()
+    waterfront_cranes()
+    crane_hoist()
+    water_bus_schedule()
+    swing_gate_geometry()
     movable_crossing()
+    channel_bed()
+    shore_connection()
     shore_silt()
+    harbour_freight()
+    harbour_direct_quay()
+    founding_basin()
+    dock_keeps_channel_clear()
     Authority.must(println("Canal checks passed"))
   end
 end
