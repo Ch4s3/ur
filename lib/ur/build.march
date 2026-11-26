@@ -57,7 +57,7 @@ mod Ur.Build do
   fn footprint(tool : Int, anchor : Int, target : Int) : List(Int) do
     if !S.valid(target) do Nil else
       let anchor = if S.valid(anchor) do anchor else target end
-      if S.area_policy_tool(tool) || tool == 2 || tool == 3 || tool == 28 || tool == 117 || (tool >= 29 && tool <= 32) do
+      if S.area_policy_tool(tool) || S.fishing_policy_tool(tool) || tool == 2 || tool == 3 || tool == 28 || tool == 117 || (tool >= 29 && tool <= 32) do
         let ax = anchor % S.width()
         let az = anchor / S.width()
         let bx = target % S.width()
@@ -73,7 +73,7 @@ mod Ur.Build do
 
   pfn changed(old : Ur.Sim.City, next : Ur.Sim.City, i : Int) : Bool do
     old.cash != next.cash || S.get(old.water_bus, i) != S.get(next.water_bus, i) || S.get(old.canals, i) != S.get(next.canals, i) || S.get(old.canal_docks, i) != S.get(next.canal_docks, i) || S.public_work_stage(old, i) != S.public_work_stage(next, i) || S.get(old.pump_orders, i) != S.get(next.pump_orders, i) || S.get(old.seawalls, i) != S.get(next.seawalls, i) || S.get(old.waste_bins, i) != S.get(next.waste_bins, i) || old.harbour != next.harbour || old.ferry_start != next.ferry_start || old.water_bus_selection != next.water_bus_selection ||
-      S.get(old.car_free_days, i) != S.get(next.car_free_days, i) || S.get(old.ground_areas, i) != S.get(next.ground_areas, i) || S.get(old.quiet_areas, i) != S.get(next.quiet_areas, i) ||
+      S.get(old.car_free_days, i) != S.get(next.car_free_days, i) || S.get(old.fishing_policy, i) != S.get(next.fishing_policy, i) || S.get(old.ground_areas, i) != S.get(next.ground_areas, i) || S.get(old.quiet_areas, i) != S.get(next.quiet_areas, i) ||
       S.get(old.streetscape, i) != S.get(next.streetscape, i) || S.get(old.parks, i) != S.get(next.parks, i) || S.get(old.grade_cover, i) != S.get(next.grade_cover, i) || S.get(old.pipes, i) != S.get(next.pipes, i) || S.get(old.grid, i) != S.get(next.grid, i) ||
       S.get(old.public_parking, i) != S.get(next.public_parking, i) || S.get(old.nuisance, i) != S.get(next.nuisance, i) || S.get(old.tolls, i) != S.get(next.tolls, i) ||
       S.get(old.transit, i) != S.get(next.transit, i) || S.get(old.stops, i) != S.get(next.stops, i) ||
@@ -442,8 +442,9 @@ mod Ur.Build do
     let tiles = if c.harbour < 0 && S.can_land(c, target) do [target, S.harbour_basin_site(c, target)]
       else if c.harbour < 0 do footprint(0, -1, target) else footprint(tool, anchor, target) end end
     let tiles = if tool == 0 && c.harbour >= 0 do Nil
+      else if S.fishing_policy_tool(tool) do List.filter(tiles, fn i -> S.fishing_sea(c, i))
       else if tool == 127 && c.harbour >= 0 do List.reverse(skip_open_sea(c, List.reverse(skip_open_sea(c, tiles))))
-      else tiles end end
+      else tiles end end end
     let campus = if S.campus_tool(tool) && c.harbour >= 0 do S.campus_footprint(c, tool, target) else Nil end
     let clicked_campus = S.campus_root(c, target)
     let clear_campus = tool == 7 && S.valid(clicked_campus) && List.length(tiles) == 1

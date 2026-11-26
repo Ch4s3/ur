@@ -109,34 +109,20 @@ mod Ur.Food do
     end
   end
 
-  pfn open_water(c : Ur.Sim.City, i : Int, d : Int) : Int do
-    if d >= 4 do -1 else
-      let j = S.neighbour(i, d)
-      if S.valid(j) && S.get(c.heights, j) == 0 do d else open_water(c, i, d + 1) end
-    end
-  end
-
-  pfn fishing_run(c : Ur.Sim.City, i : Int, d : Int, left : Int) : (List(Int), Int) do
-    let j = S.neighbour(i, d)
-    if left == 0 || !S.valid(j) || S.get(c.heights, j) > 0 do (Cons(i, Nil), 0) else
-      let (stops, legs) = fishing_run(c, j, d, left - 1)
-      (Cons(i, stops), legs + 1)
-    end
-  end
-
   pfn producers(c : Ur.Sim.City, roads : NativeIntArr, pipes : NativeIntArr, irrigation : NativeIntArr, i : Int, farms : Int, island_farms : Int, left : Int, out : List(Trip)) : List(Trip) do
     if i >= S.count() || left <= 0 do out else
       let kind = S.get(c.plants, i)
       let connected = (kind == 5 || kind == 6) && !S.building_offline(c, i) && S.building_access(c, roads, i) >= 0
       let island = kind == 5 && S.food_island(c, i) == 1 && S.food_island(c, c.harbour) != 1
       let farm = kind == 5 && connected && (if island do island_farms > 0 && S.distance(irrigation, i) >= 0 else farms > 0 && S.distance(pipes, i) >= 0 end)
-      let fish = kind == 6 && connected && S.pollution_at(c, i) < 100
-      if !farm && !fish do producers(c, roads, pipes, irrigation, i + 1, farms, island_farms, left, out) else
+      let course = if kind == 6 && connected && S.catch_yield(c, i) > 0 do S.fishing_course(c, i) else Nil end
+      let berth = if List.is_empty(course) && S.private_fishing_dock(c, i) && !S.building_offline(c, i) do
+        List.take(S.fishing_water(c, i), 1)
+      else Nil end
+      if !farm && List.is_empty(course) && List.is_empty(berth) do producers(c, roads, pipes, irrigation, i + 1, farms, island_farms, left, out) else
         let work = if farm do { mode: 7, stops: Cons(i, Cons(i, Nil)), legs: 1, source: i }
         else
-          let d = open_water(c, i, 0)
-          let (stops, legs) = if d < 0 do (Nil, 0) else fishing_run(c, S.neighbour(i, d), d, 3) end
-          { mode: 8, stops: Cons(i, stops), legs: if d < 0 do 0 else legs + 1 end, source: i }
+          { mode: 8, stops: Cons(i, if List.is_empty(course) do berth else course end), legs: List.length(course), source: i }
         end
         let out = Cons(work, out)
         producers(c, roads, pipes, irrigation, i + 1, if farm && !island do farms - 1 else farms end, if farm && island do island_farms - 1 else island_farms end, left - 1, out)

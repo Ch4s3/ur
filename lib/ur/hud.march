@@ -1702,7 +1702,7 @@ mod Ur.Hud do
       let name = if lot == c.harbour do "Founding harbour" else if S.get(c.canal_docks, lot) == 2 do "Canal freight quay"
         else if S.get(c.canal_docks, lot) == 1 do "Water taxi dock"
         else if S.undeveloped_zone(c, lot) do zone_heading(c, lot) else if S.freight_port(c, lot) || S.get(c.ferries, lot) > 0 do "Freight dock" else if S.get(c.stops, lot) == 2 do "Bus stop" else if S.get(c.stops, lot) == 4 do "Subway station" else if road > 0 do S.road_name(road)
-        else if kind > 0 do S.facility_name(kind)
+        else if kind > 0 do S.building_name(c, lot)
         else if S.fire_rebuilding(c, lot) do "Fire ruin"
         else if S.get(c.buildings, lot) > 0 do S.building_name(c, lot)
         else if S.get(c.public_parking, lot) > 0 do S.parking_name(S.get(c.public_parking, lot))
@@ -1765,6 +1765,19 @@ mod Ur.Hud do
           let box = label(box, x, y +. 104.0, 10.0, "Automatic pumps need 8 spare local power", false)
           label(box, x, y +. 125.0, 10.0, "$2 per pumping day after severe rain", false)
         else box end
+      else if kind == 5 do
+        let crop = S.crop_profile(S.crop_at(c, lot))
+        let box = label(box, x, y +. 57.0, 13.0, crop.name, true)
+        let box = label(box, x, y +. 81.0, 11.0, "Seed temperature " ++ int_to_string(crop.seed_min) ++ "–" ++ int_to_string(crop.seed_max) ++ " °C", false)
+        label(box, x, y +. 104.0, 11.0, "Soil fertility " ++ int_to_string(S.soil_fertility(c, lot)) ++ "% · Soil moisture " ++ int_to_string(c.soil_moisture) ++ "%", false)
+      else if S.private_fishing_dock(c, lot) do
+        let box = label(box, x, y +. 57.0, 13.0, "Privately owned fishing boat", true)
+        let box = label(box, x, y +. 81.0, 11.0, "Resident crew " ++ int_to_string(S.fishing_crew(c, lot)) ++ " / 4", false)
+        let catch = if S.fishery_working(c, st.routes, lot) do S.catch_yield(c, lot) else 0 end
+        label(box, x, y +. 104.0, 11.0, "Catch potential " ++ int_to_string(catch) ++ " food", false)
+      else if S.fishing_sea(c, lot) do
+        let box = label(box, x, y +. 57.0, 13.0, S.fishing_policy_name(S.get(c.fishing_policy, lot)), true)
+        label(box, x, y +. 81.0, 11.0, Ur.Fish.inspect(c, lot), false)
       else if kind == 8 do
         let stock = S.get(c.rain_tanks, lot) * 100 / S.rain_tank_capacity()
         let box = label(box, x, y +. 57.0, 12.0, "Tank " ++ int_to_string(stock) ++ "% full", true)
@@ -1854,7 +1867,7 @@ mod Ur.Hud do
           label(box, x, y +. 181.0, 10.0, "Trash " ++ int_to_string(stock) ++ state ++ " · " ++ pickup, false)
         else box end
       end
-    end end end end end end end end end end end end end end end
+    end end end end end end end end end end end end end end end end end end
   end
   pfn emergency_panel_top(startup_step : Int) : Float do
     if startup_step > 0 do 326.0 else 168.0 end
@@ -2073,6 +2086,19 @@ mod Ur.Hud do
     let a = label(a, w -. 180.0, 18.0, 11.0, date ++ "  " ++ clock, true)
     let a = speed_buttons(a, w -. 180.0, if paused do 0 else speed end, 0)
     let a = if layer > 0 do label(a, 24.0, 94.0, 13.0, "Layer: " ++ Ur.Layers.name(layer), true) else a end
+    let a = if layer >= 39 && layer <= 41 do
+      let a = label(panel(a, 18.0, 116.0, 472.0, 44.0), 24.0, 119.0, 11.0, Ur.Layers.legend(layer), true)
+      let detail = if !S.valid(hover) do ""
+        else if layer == 40 && S.get(c.heights, hover) > 0 do
+          "Soil fertility " ++ int_to_string(S.soil_fertility(c, hover)) ++ "%" ++
+            (if S.fertile(c, hover) do " · " ++ (S.crop_profile(S.crop_at(c, hover))).name else "" end)
+        else if S.fishing_sea(c, hover) do
+          if layer == 39 do Ur.Fish.inspect(c, hover)
+          else if layer == 41 do S.fishing_policy_name(S.get(c.fishing_policy, hover))
+          else "" end end
+        else "" end end end
+      label(a, 24.0, 138.0, 11.0, detail, false)
+    else a end
     let a = if layer == 29 do
       let a = label(panel(a, 18.0, 116.0, 468.0, 49.0), 24.0, 120.0, 11.0, Ur.Layers.legend(layer), true)
       label(a, 24.0, 140.0, 12.0, S.wind_caption(c, hover), false)

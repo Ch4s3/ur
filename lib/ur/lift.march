@@ -44,9 +44,11 @@ mod Ur.Lift do
     end
   end
 
+  pfn fishing_source(source : Int) : Bool do source >= S.count() && source < S.water_bus_source(0) end
+
   pfn make_vessel(c : Ur.Sim.City, source : Int, path : List(Int), speed : Float, calls : List((Int, Int))) : List(Vessel) do
     let (length, windows) = route_windows(c, path, 0.0, Nil)
-    if length <= 0.0 || (List.is_empty(windows) && List.is_empty(calls)) do Nil else
+    if length <= 0.0 || (!fishing_source(source) && List.is_empty(windows) && List.is_empty(calls)) do Nil else
       let windows = List.map(List.reverse(windows), fn w -> { w with
         entry: w.entry /. length, exit: w.exit /. length, lead: w.lead /. length })
       let calls = List.map(calls, fn call ->
@@ -86,7 +88,7 @@ mod Ur.Lift do
 
   fn routes(c : Ur.Sim.City, food : List(Ur.Food.Trip)) : List(Vessel) do
     let fishing = List.flat_map(food, fn trip ->
-      if trip.mode != 8 do Nil else
+      if trip.mode != 8 || trip.legs == 0 do Nil else
         let legs = fishing_legs(c, List.drop(trip.stops, 1), 0)
         vessel(c, S.count() + trip.source, List.take(trip.stops, legs + 1), 0.42)
       end)
@@ -95,10 +97,10 @@ mod Ur.Lift do
 
   fn reconcile_water_buses(positions : Map(Int, Ur.Sim.VesselMotion), old : List(Vessel), next : List(Vessel)) : Map(Int, Ur.Sim.VesselMotion) do
     Map.fold(positions, Map.empty(), fn (out, source, motion) ->
-      let same_line = source >= S.water_bus_source(0) && List.any(next, fn boat ->
+      let same_line = List.any(next, fn boat ->
         boat.source == source && List.any(old, fn previous ->
           previous.source == source && previous.path == boat.path && previous.calls == boat.calls))
-      if source < S.water_bus_source(0) || same_line do
+      if source < S.count() || same_line do
         Map.insert(out, source, motion, Map.int_cmp)
       else out end)
   end

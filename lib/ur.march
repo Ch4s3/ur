@@ -618,12 +618,13 @@ mod Ur do
         else if (clicked_tool >= 44 && clicked_tool <= 47) || clicked_tool == 62 do 10
         else if S.grade_tool(clicked_tool) || clicked_tool == 54 do (if layer == 35 do 35 else 11 end)
         else if S.timed_street_tool(clicked_tool) do 27
+        else if S.fishing_policy_tool(clicked_tool) do 41
         else if S.area_policy_tool(clicked_tool) do (if clicked_tool <= 66 do 23 else 24 end)
         else if (changed_tool || (utility_page && page != 5)) && Ur.Layers.is_utility(layer) do 0
-        else if changed_tool && (layer == 11 || layer == 35 || layer == 23 || layer == 24 || layer == 27) do 0
+        else if changed_tool && (layer == 11 || layer == 35 || layer == 23 || layer == 24 || layer == 27 || layer == 41) do 0
         -- closing the utilities menu puts its overlay away with the tool
         else if group == 0 && p.group == 4 && Ur.Layers.is_utility(layer) do 0
-        else layer end end end end end end end end end end end
+        else layer end end end end end end end end end end end end
       let layer = if p.city.harbour >= 0 && pressed(keys, p.keys, 22) do (if p.layer == 35 do 0 else 35 end) else layer end
       let tool_layer = Ur.Layers.utility_tool(tool)
       let layer = if p.city.harbour >= 0 && tool_layer > 0 do tool_layer else layer end
@@ -1136,7 +1137,7 @@ mod Ur do
       Ur.Scene.citizen_vehicles(c, walk_map, Ur.Citizens.visible_actors(citizens), Ur.Citizens.visible_actors(p.shown), night, !scene_changed && p.frame > 0, section.after > 0)
       let truck_selected = truck_selected && sanitation.driver >= 0 && sanitation.pickup == p.sanitation.pickup && !undone
       let citizen_stats = Ur.Citizens.indexed_counts(c, citizens)
-      if layer != p.layer || (stats_landed && Ur.Layers.is_utility(layer)) || (layer > 0 && (flood_day || religion_event)) || (midnight && (layer == 29 || layer == 30 || layer == 26 || layer == 4 || layer == 3 || layer == 9 || layer == 32 || layer == 33 || layer == 34 || Ur.Layers.is_utility(layer))) || (layer > 0 && (paint || undone || policy_changed || day_changed || (due && (layer == 3 || layer == 4 || layer == 9 || Ur.Layers.is_utility(layer) || layer >= 12)))) do Ur.Scene.map_layer(c, st, p.layer, layer) else () end
+      if layer != p.layer || (stats_landed && Ur.Layers.is_utility(layer)) || (layer > 0 && (flood_day || religion_event)) || (midnight && (layer == 39 || layer == 29 || layer == 30 || layer == 26 || layer == 4 || layer == 3 || layer == 9 || layer == 32 || layer == 33 || layer == 34 || Ur.Layers.is_utility(layer))) || (layer > 0 && (paint || undone || policy_changed || day_changed || (due && (layer == 3 || layer == 4 || layer == 9 || Ur.Layers.is_utility(layer) || layer >= 12)))) do Ur.Scene.map_layer(c, st, p.layer, layer) else () end
       Ur.Scene.camera(cx, cz, zoom, if h > 0.0 do w /. h else 1.6 end, yaw)
       let weather = S.current_weather(c)
       let weather_time = int_to_float(c.month * S.days_per_month() + c.calendar_day) *. S.day_seconds() +. elapsed
@@ -1591,7 +1592,7 @@ mod Ur do
           Math.atan2(int_to_float(contact.water.x - x * 32 - 16), int_to_float(contact.water.z - z * 32 - 16)) +. 0.8
         None -> yaw
       end
-      let layer = S.clamp(Authority.must(Env.get_int("UR_LAYER", if S.grade_tool(start_tool) do 11 else if fire_demo do 22 else if demo == 14 do 4 else if demo == 13 || demo == 21 do 28 else if demo == 19 do 2 else if c.harbour < 0 && !volcano_view do 8 else 0 end end end end end end)), 0, 39)
+      let layer = S.clamp(Authority.must(Env.get_int("UR_LAYER", if S.grade_tool(start_tool) do 11 else if fire_demo do 22 else if demo == 14 do 4 else if demo == 13 || demo == 21 do 28 else if demo == 19 do 2 else if c.harbour < 0 && !volcano_view do 8 else 0 end end end end end end)), 0, 41)
       let signal_tick = S.signal_tick(clock_phase(c))
       Ur.Scene.sync(c, c, 0, true, false, 0, S.street_hour(clock_phase(c)),
         { before: stats.junctions, after: stats.junctions, before_tick: signal_tick, after_tick: signal_tick }, stats.utilities.electric, stats.utilities.electric, { before: 0, after: Ur.Scene.tunnel_view(layer, yaw) }, Nil, Ur.Volcano.reached(volcano_flow, volcano_time))
@@ -1679,7 +1680,7 @@ mod Ur do
       let religion_site = if demo == 27 do S.index(8, 18) else -1 end
       let tool = if road_demo do start_tool else if industrial || layer > 0 || civic_demo || demo == 2 || demo == 15 || demo == 16 || demo == 17 || demo == 18 || demo == 20 || demo == 22 || demo == 27 do 0 else 1 end end
       let group = if road_demo do 1 else if layer > 0 && demo != 14 do 7 else if civic_demo || demo == 8 do 5 else if demo == 2 do 3 else if industrial || demo == 14 || demo == 15 do 0 else 1 end end end end end
-      let page = if S.grade_tool(start_tool) do 1 else if layer == 35 do 7 else if layer == 4 || layer == 29 || layer == 30 || layer == 32 || layer == 33 do 2 else if layer >= 5 && layer <= 8 do 1 else if layer == 23 || layer == 24 || layer == 27 || layer == 28 do 6 else if layer >= 23 && layer != 31 do 5 else if layer >= 20 && layer != 31 do 4 else if layer >= 12 && layer != 31 do 3 else if demo == 7 && layer == 0 do 1 else if demo == 8 && layer == 0 do 2 else 0 end end end end end end end end end end
+      let page = if S.grade_tool(start_tool) do 1 else if layer == 35 do 7 else if layer == 4 || layer == 29 || layer == 30 || layer == 32 || layer == 33 do 2 else if (layer >= 5 && layer <= 8) || layer >= 39 do 1 else if layer == 23 || layer == 24 || layer == 27 || layer == 28 do 6 else if layer >= 23 && layer != 31 do 5 else if layer >= 20 && layer != 31 do 4 else if layer >= 12 && layer != 31 do 3 else if demo == 7 && layer == 0 do 1 else if demo == 8 && layer == 0 do 2 else 0 end end end end end end end end end end
       let food = Ur.Food.traffic(c, stats)
       run_frames({ water_time: 0.0, volcano: volcano, volcano_flow: volcano_flow, volcano_time: volcano_time, volcano_lake: volcano_lake, flood_gates: Ur.Scene.flood_gates(c, Nil, Vk.time(), true), wildlife: Ur.Wildlife.empty(0.0), ocean: ocean, ocean_city: c, ocean_job: None, ocean_dirty: true, sea_job: sea_job, sea_sector: sea_sector, sea_lam: sea_lam, sea_stale: false, sea_field: None, sea_exposure: NativeArray.make_f32(Ur.Ocean.ring_cells(), 1.0), flood_drill: demo == 22 && drill == 1, sanitation: Ur.Scene.empty_sanitation(), truck_selected: false, citizen_focus: -1, activity: Nil, fleet: Ur.Fleet.step(c, stats.traffic, Nil, fleet_routes, 0.0, true), fleet_routes: fleet_routes, lift_routes: Ur.Lift.routes(c, food), service_roads: Ur.Lift.empty_service_frame(), city: c, stats: stats, food: food, citizens: citizens, shown: citizens, stepping: None, step_ms: 0, rebuilding: None, stale_rebuilds: Nil, stats_wait: { task: None, stale: Nil, city: c, undo: false }, walk_map: Ur.Citizens.walk_map(c), day_plan: None, traffic_time: clock_phase(c), rotor_phases: NativeArray.make_f32(S.count(), 0.0), cloud_offset: start_drift, peaks: Ur.Scene.mountains(c), weather: Ur.Scene.new_weather(c, if forced_weather >= 0 do forced_weather else S.current_weather(c) end), forced_weather: forced_weather, watch_pending: false, cx: cx, cz: cz, zoom: zoom, yaw: yaw, tool: tool, group: group, page: page, layer: layer, sidebar_visible: (demo > 0 && !road_demo && !metro && !streets_demo && demo != 11 && demo != 14 && demo != 15 && demo != 16 && demo != 18 && demo != 19 && demo != 20 && demo != 22 && wall_site < 0 && ferry < 0 && world_seed == 0) || details_tab >= 5 || inspect >= 0, sidebar_tab: if inspect >= 0 do 1 else details_tab end, crime_focus: -1, council_focus: -1, finance_view: { month: 0, lines: finance_lines, stock: -1 }, paused: (demo == 0 && !volcano_view) || industrial || road_demo || fire_demo || demo == 13 || demo == 18 || demo == 19 || demo == 20 || demo == 21 || demo == 22 || demo == 27, speed: if metro || (demo == 22 && drill == 1) do 3 else 1 end,
         road_draft: draft, road_bench: road_bench, road_pointer: (-1.0, -1.0), sidewalk_spot: -1, keys: 0, mouse: false, anchor: -1, stroke: Nil, hovered: -1, parcel_focus: if inspect >= 0 do inspect else if demo == 17 do S.index(10, 17) else if details_tab == 12 do S.index(9, 19) else -1 end end end, popup: if fire_demo do Ur.Scenario.fire_recovery_home() else if demo == 22 do (if evacuation_demo do Ur.Scenario.evacuation_home() else Ur.Scenario.storm_station() end) else -1 end end, religion_site: religion_site, religion_choice: 0, preview: preview, undo: Nil, reason: if c.harbour < 0 do "Choose a cyan shoreline parcel to land." else "Select a parcel to inspect development" end,

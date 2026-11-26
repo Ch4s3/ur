@@ -146,10 +146,12 @@ still require their own connections. Oil is shown as a prospect.
 ### Earning back the first expansion
 
 Connect the farming island or the fishing shoals with a ferry from your road
-network. Build a fishery beside the shoals' terminal, or connect farms to a
-piped well on the farming island. Farms there can grow 144 food per month, and a
-clean fishery at the shoals can catch 224. Shops and local households get first claim on ferry
-capacity. Surplus cargo actually delivered to the founding harbour earns $3 per
+network. Place a **Fishing Dock** on road-connected shoreline using **Utilities → Food**.
+The city maintains the pier, and a privately owned boat hires up to four
+residents and casts its net offshore.
+The crew, fish population, weather, and pollution determine the catch.
+You can also connect farms to a piped well on the farming island. Shops and
+local households get first claim on ferry capacity. Surplus cargo actually delivered to the founding harbour earns $3 per
 unit, subject to available trade capacity. Imports use the same harbour trade allowance. Local food deliveries
 share the ferry with export loads.
 
@@ -178,9 +180,16 @@ both road and pipe access. Homes need pipe access before they can grow.
 - Discharge builds up local coastal pollution. Nearby fisheries lose catch and
   revenue as pollution rises. Removing or disconnecting an outfall lets its
   plume decay over subsequent months.
-- Farms use 24 water to produce 96 food. Fisheries produce up to 128 food each.
-  The harbour imports any remaining food it can afford, up to 160 per month plus
-  192 per connected trade depot.
+- Farms use 24 water. The game selects sweet potato, taro, or breadfruit based
+  on seed temperature, elevation, soil fertility, and regional rainfall.
+  Soil fertility and moisture affect harvests. Open **Map Layers → Resources
+  → Soil fertility** to survey a parcel, or select a farm to see its crop.
+- Use **Utilities → Food** to paint open fishing, limited fishing, or protected
+  waters. Limited waters allow half the usual fishing effort. Fishing boats can
+  pass through protected waters, where catch is zero. **Map Layers → Resources**
+  shows both the fish population and the fishing policy.
+- The harbour imports any remaining food it can afford, up to 160 per month
+  plus 192 per connected trade depot.
 - Standard power stations supply 100 power. Geothermal stations supply 180 on
   the eastern volcanic field. The eastern island lacks mapped freshwater.
 

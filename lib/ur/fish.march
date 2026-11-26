@@ -88,26 +88,26 @@ mod Ur.Fish do
   pfn all_zero(a : NativeIntArr, i : Int) : Bool do
     if i >= NativeArray.length_int(a) do true else if NativeArray.get_int(a, i) != 0 do false else all_zero(a, i + 1) end end
   end
-  -- take [amount] from the parcels of [run], each in proportion to what it holds
-  pfn take_go(fish : NativeIntArr, run : List(Int), amount : Int, held : Int) : NativeIntArr do
+  -- Take fish in proportion to each parcel’s stock and permitted fishing effort.
+  pfn take_go(c : Ur.Sim.City, fish : NativeIntArr, run : List(Int), amount : Int, held : Int) : NativeIntArr do
     match run do
       Nil -> fish
       Cons(j, rest) ->
         let n = S.get(fish, j)
-        let part = if held <= 0 do 0 else float_to_int(int_to_float(amount) *. int_to_float(n) /. int_to_float(held)) end
-        take_go(NativeArray.set_int(fish, j, S.clamp(n - part, 0, n)), rest, amount, held)
+        let part = if held <= 0 do 0 else float_to_int(int_to_float(amount) *. int_to_float(n * S.fishing_effort(c, j)) /. int_to_float(held)) end
+        take_go(c, NativeArray.set_int(fish, j, S.clamp(n - part, 0, n)), rest, amount, held)
     end
   end
   pfn harvest_go(c : Ur.Sim.City, routes : NativeIntArr, fish : NativeIntArr, i : Int) : NativeIntArr do
     if i >= S.count() do fish else
       let fish = if !S.fishery_working(c, routes, i) do fish else
         let run = S.fishing_water(c, i)
-        let held = List.fold_left(run, 0, fn (a, j) -> a + S.get(fish, j))
+        let held = List.fold_left(run, 0, fn (a, j) -> a + S.get(fish, j) * S.fishing_effort(c, j))
         let caught = match S.production_at(c, i) do
           Some(site) -> site.produced * 8
           None -> S.catch_yield(c, i)
         end
-        take_go(fish, run, float_to_int(int_to_float(caught) *. take_per_catch() *. int_to_float(full_shelf()) /. 1000.0), held)
+        take_go(c, fish, run, float_to_int(int_to_float(caught) *. take_per_catch() *. int_to_float(full_shelf()) /. 1000.0), held)
       end
       harvest_go(c, routes, fish, i + 1)
     end
@@ -141,7 +141,7 @@ mod Ur.Fish do
 
   doc "City [c] after a day of fish: capacity from [habitat] and today's pollution; a stock never set starts full; today's working fisheries take their catch from their water; every stock grows; on the first day of a month fish spread. Nothing for a city saved before reefs and fish."
   fn day(c : Ur.Sim.City, habitat : NativeIntArr) : Ur.Sim.City do
-    if c.sea_features == 0 do c else
+    if c.sea_features == 0 && all_zero(c.private_docks, 0) && all_zero(c.fish_capacity, 0) do c else
       let cap = capacity_go(c, habitat, NativeArray.make_int(S.count(), 0), 0)
       let fish = if all_zero(c.fish, 0) do capacity_go(c, habitat, NativeArray.make_int(S.count(), 0), 0) else c.fish end
       let c = { c with fish: fish, fish_capacity: cap }
@@ -197,7 +197,7 @@ mod Ur.Fish do
   doc "The parcel inspector's line for water parcel [i]: its fish against what it can hold, the month's trend, and the water. Empty on land or where fish are not counted."
   fn inspect(c : Ur.Sim.City, i : Int) : String do
     let k = S.get(c.fish_capacity, i)
-    if c.sea_features == 0 || S.get(c.heights, i) > 0 || k <= 0 do "" else
+    if S.get(c.heights, i) > 0 || k <= 0 do "" else
       let n = S.get(c.fish, i)
       let pct = n / (k / 100 + 1)
       let last = S.get(c.fish_last, i)

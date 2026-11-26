@@ -1784,7 +1784,8 @@ mod Ur.Scene do
   pfn vessel_mesh(fishing : Bool, east : Bool) : Ur.SceneMesh.Mesh do
     let length = if fishing do 15 else 19 end
     let breadth = if fishing do 6 else 8 end
-    let m = hull_box(vehicle_body(), east, 1, 0, 1, length - 3, 1, breadth - 2, 19)
+    let body = if fishing do { words: NativeArray.make_i32(576, 0), quads: 0 } else vehicle_body() end
+    let m = hull_box(body, east, 1, 0, 1, length - 3, 1, breadth - 2, 19)
     let m = hull_box(m, east, 0, 1, 0, length - 3, 2, breadth, 7)
     let m = hull_box(m, east, length - 3, 1, 1, 2, 2, breadth - 2, 7)
     let m = hull_box(m, east, length - 1, 1, 2, 1, 2, breadth - 4, 7)
@@ -1807,6 +1808,16 @@ mod Ur.Scene do
       let m = hull_box(m, east, 9, 5, 0, 1, 2, 1, 8)
       let m = hull_box(m, east, 9, 5, breadth - 1, 1, 2, 1, 8)
       hull_box(m, east, 2, 4, 2, 3, 1, breadth - 4, 13)
+    end
+  end
+  pfn fishing_net(m : Ur.SceneMesh.Mesh, spread : Int) : Ur.SceneMesh.Mesh do
+    if spread == 0 do m else
+      let m = box(m, 2, 4, 4, 1, 2, 6, 17)
+      let m = box(m, 2, 2, 9, 1, 2, spread, 8)
+      let m = box(m, 0, 1, 9 + spread, 2 * spread + 1, 1, 1, 8)
+      List.fold_left(List.range(0, spread + 1), m, fn (mesh, row) ->
+        let mesh = box(box(mesh, row, 0, 9 + row, 1, 1, 1, 17), 2 * spread - row, 0, 9 + row, 1, 1, 1, 17)
+        if row % 2 == 0 do box(mesh, row, 0, 9 + row, 2 * (spread - row) + 1, 1, 1, 17) else mesh end)
     end
   end
   pfn vehicle_mesh(mode : Int) : Ur.SceneMesh.Mesh do
@@ -2943,7 +2954,7 @@ mod Ur.Scene do
     let ferry = trip.mode == 6 && S.get(c.ferries, i) == j + 1
     let boat = trip.mode == 8 || ferry
     let east = !farm && dx != 0
-    let progress = if trip.mode == 8 && index == 0 do 19.0 +. t *. 13.0 else t *. 32.0 end
+    let progress = t *. 32.0
     let x = ix * 32 + (if farm do 0 else if east do (if boat do 8 else 10 end) else 13 end end) + float_to_int(int_to_float(dx) *. progress)
     let z = iz * 32 + (if farm do 2 + float_to_int(t *. 19.0) else if east do 13 else if boat do 8 else 10 end end end) + float_to_int(int_to_float(dz) *. progress)
     let h = S.get(c.heights, i)
@@ -2961,11 +2972,18 @@ mod Ur.Scene do
         let facing = if forward do 1.0 else -1.0 end
         posed_vehicle(slot, delivery_mesh(7), int_to_float(x + 3), int_to_float(y), int_to_float(z + 4),
           0.0, facing, 8.0, 6.0)
+      else if trip.mode == 8 do
+        let along = if index == 0 do 24.0 +. t *. 8.0 else t *. 32.0 end
+        let x = int_to_float(ix * 32 + 16) +. int_to_float(dx) *. along
+        let z = int_to_float(iz * 32 + 16) +. int_to_float(dz) *. along
+        let facing = if forward || rotation > 0.0 do 1.0 else -1.0 end
+        let mesh = fishing_net(vessel_mesh(true, true), float_to_int(rotation *. 7.0))
+        pose_vehicle(slot, mesh, x, 1.0, z, int_to_float(dx) *. facing, int_to_float(dz) *. facing, 15.0, 6.0, false, false)
       else
         let m = vessel_mesh(true, east)
         if Vk.chunk_begin(slot, x, y, z, 0) && Vk.chunk_part(0, m.words, m.quads) && Vk.chunk_commit() do ()
         else Ur.AppError.stop("Food vehicle upload failed") end
-      end
+      end end
     end end end end
   end
   type SanitationMoment = { run : Ur.Sim.WasteRun, step : Float, stage : Int, load : Int, start : Bool }
@@ -3193,22 +3211,29 @@ mod Ur.Scene do
     end
   end
   pfn food_vehicle(c : Ur.Sim.City, trip : Ur.Food.Trip, time : Float, slot : Int, section : Bool) : Unit do
-    let legs = if trip.mode == 8 do Ur.Lift.fishing_legs(c, List.drop(trip.stops, 1), 0) else trip.legs end
-    let trip = { trip with legs: legs }
-    if trip.legs == 0 do Vk.chunk_free(slot) else
-      let span = int_to_float(trip.legs)
-      let speed = if trip.mode == 8 do 0.42 else 0.38 end
-      let phase = (time *. speed +. int_to_float(trip.source % 13) *. 0.21) /. (span *. 2.0)
-      let fraction = phase -. Math.floor(phase)
-      let (step, forward) = match Map.get(c.lift_vessels, S.count() + trip.source, Map.int_cmp) do
-        Some(phase) ->
-          let (position, outward) = S.vessel_position(phase)
-          (position *. span, outward)
-        None ->
-          let forward = fraction < 0.5
-          ((if forward do fraction else 1.0 -. fraction end) *. span *. 2.0, forward)
+    if trip.mode == 8 && trip.legs == 0 do
+      trip_pose(c, { trip with legs: 1 }, 0.0, false, 0.0, slot, section)
+    else
+      let legs = if trip.mode == 8 do Ur.Lift.fishing_legs(c, List.drop(trip.stops, 1), 0) else trip.legs end
+      let trip = { trip with legs: legs }
+      if trip.legs == 0 do Vk.chunk_free(slot) else
+        let span = int_to_float(trip.legs)
+        let speed = if trip.mode == 8 do 0.42 else 0.38 end
+        let phase = (time *. speed +. int_to_float(trip.source % 13) *. 0.21) /. (span *. 2.0)
+        let fraction = phase -. Math.floor(phase)
+        let (step, forward, net) = match Map.get(c.lift_vessels, S.count() + trip.source, Map.int_cmp) do
+          Some(phase) ->
+            let (position, outward) = S.vessel_position(phase)
+            let net = if trip.mode == 8 && !outward && position >= 1.0 && phase.moored > 0.0 do
+              Math.sin(phase.moored /. 3.0 *. 3.14159265)
+            else 0.0 end
+            (position *. span, outward, net)
+          None ->
+            let forward = fraction < 0.5
+            ((if forward do fraction else 1.0 -. fraction end) *. span *. 2.0, forward, 0.0)
+        end
+        trip_pose(c, trip, step, forward, net, slot, section)
       end
-      trip_pose(c, trip, step, forward, 0.0, slot, section)
     end
   end
   pfn clear_fleet(active : List(Ur.Fleet.Run), old : List(Ur.Fleet.Run)) : Unit do

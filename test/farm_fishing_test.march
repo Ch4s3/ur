@@ -1,0 +1,57 @@
+mod FarmFishingTest do
+  needs IO
+  alias Ur.Sim as S
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let city = S.new()
+    let lot = S.index(9, 23)
+    let city = S.act(S.act(city, S.index(9, 22), 7), S.index(9, 22), 1)
+    let dock = S.act(city, lot, 154)
+    Test.assert_true(S.private_fishing_dock(dock, lot), "the dock tool places a privately operated fishing berth")
+    Test.assert_eq_int(S.job_slots(dock, lot), 4, "a private boat offers four resident jobs")
+    Test.assert_eq_int(S.catch_yield(dock, lot), 0, "a boat without hires stays docked")
+    let idle = Ur.Food.producer_traffic(dock, S.stats(dock))
+    Test.assert_true(List.any(idle, fn boat -> boat.source == lot && boat.legs == 0), "the unstaffed boat is visible at its berth")
+    let staffed = { dock with facility_staff: NativeArray.set_int(dock.facility_staff, lot, 5) }
+    let open_catch = S.catch_yield(staffed, lot)
+    Test.assert_true(open_catch > 0, "a staffed boat catches fish")
+    let boats = Ur.Food.producer_traffic(staffed, S.stats(staffed))
+    let voyages = Ur.Lift.routes(staffed, boats)
+    let boat = List.find(voyages, fn voyage -> voyage.source == S.count() + lot)
+    Test.assert_true(Option.is_some(boat), "the fishing voyage animates in open water without a bridge")
+    let fishing = Ur.Lift.step(staffed, voyages, Map.empty(), 30.0)
+    match Map.get(fishing.lift_vessels, S.count() + lot, Map.int_cmp) do
+      Some(motion) -> Test.assert_true(!motion.outbound && motion.moored > 0.0, "the boat stops offshore to cast before returning")
+      None -> Test.assert_true(false, "the fishing boat has a voyage cursor")
+    end
+    let waters = S.fishing_water(staffed, lot)
+    let limited = List.fold_left(waters, staffed, fn (c, i) -> S.act(c, i, 152))
+    Test.assert_eq_int(S.catch_yield(limited, lot), open_catch / 2, "limited fishing halves the catch")
+    let protected = List.fold_left(waters, limited, fn (c, i) -> S.act(c, i, 153))
+    Test.assert_eq_int(S.catch_yield(protected, lot), 0, "a protected run yields no catch")
+    let habitat = Ur.Fish.habitat(protected, Ur.Ocean.field(protected))
+    let with_dock = Ur.Fish.day(protected, habitat)
+    let legacy = Ur.Fish.day({ protected with sea_features: 0 }, habitat)
+    Test.assert_true(List.any(waters, fn i -> S.get(legacy.fish_capacity, i) > 0), "a private dock enables fish stocks in a city saved before stocks existed")
+    let without_dock = Ur.Fish.day(dock, habitat)
+    Test.assert_true(List.all(waters, fn i -> S.get(with_dock.fish, i) == S.get(without_dock.fish, i)), "protected water keeps its fish")
+    Test.assert_true(List.is_empty(S.fishing_course(protected, lot)), "no fishing boat departs for a protected run")
+    let reopened = List.fold_left(waters, protected, fn (c, i) -> S.act(c, i, 151))
+    Test.assert_eq_int(S.catch_yield(reopened, lot), open_catch, "opening water restores normal fishing")
+    let saved = Ur.Save.encode({ city: protected, cx: 0.0, cz: 0.0, zoom: 100.0, yaw: 0.0, paused: true, speed: 1 })
+    match Ur.Save.decode(saved) do
+      Ok(game) ->
+        Test.assert_true(S.private_fishing_dock(game.city, lot), "dock ownership survives saving")
+        Test.assert_eq_int(S.catch_yield(game.city, lot), 0, "protected water survives saving")
+      Err(reason) -> Test.assert_true(false, reason)
+    end
+    let farm = S.index(8, 18)
+    let cool = { city with climate_seed: 4, setup: NativeArray.set_int(city.setup, 2, 0) }
+    let hot = { city with climate_seed: 4, setup: NativeArray.set_int(city.setup, 2, 4) }
+    let cool_crop = S.crop_profile(S.crop_at(cool, farm))
+    let hot_crop = S.crop_profile(S.crop_at(hot, farm))
+    Test.assert_true(cool_crop.name != hot_crop.name, "seed climate changes the crop")
+    Test.assert_true(S.soil_fertility(city, farm) > 0, "cultivable land has fertility")
+    Test.assert_eq_int(S.soil_fertility(city, S.index(0, 0)), 0, "the sea has no soil")
+  end
+end
