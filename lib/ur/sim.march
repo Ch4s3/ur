@@ -1804,6 +1804,9 @@ mod Ur.Sim do
   fn road_half_width(kind : Int) : Int do
     if kind == 2 do 14 else if kind == 3 do 12 else 10 end end
   end
+  fn sidewalk_width(kind : Int) : Int do
+    Math.min_int(4, 16 - road_half_width(kind))
+  end
   fn road_capacity(c : City, i : Int) : Int do
     match get(c.roads, i) do
       2 -> 24
@@ -2474,10 +2477,13 @@ mod Ur.Sim do
     else
       let arm = street_end_arm(c, lot)
       let length = if spot % 2 == 0 do 9 else 23 end
-      let offset = clamp(road_half_width(road) + 1, 0, 14)
-      let side = if spot < 2 do 16 - offset else 16 + offset end
+      let width = road_half_width(road)
+      let walk = sidewalk_width(road)
+      let side = if spot < 2 do 16 - width - walk / 2 else 15 + width + walk / 2 end
       if arm >= 0 do end_sidewalk_point(road, arm, spot)
-      else if along || !across do (side, length) else (length, side) end end
+      else if !across && !along && get(c.road_shapes, lot) == 0 && get(c.transit, lot) != 3 do
+        end_sidewalk_point(road, 0, spot)
+      else if along || !across do (side, length) else (length, side) end end end
     end
   end
   fn sidewalk_cans(c : City, lot : Int) : Int do

@@ -3185,7 +3185,8 @@ mod Ur.Scene do
     if spot == 4 do best else
       let (x, z) = S.sidewalk_point(c, lot, spot)
       if x < 0 do best else
-        let (px, py) = world_point(view, int_to_float(lot % S.width() * 32 + x), int_to_float(S.get(c.heights, lot) + 2), int_to_float(lot / S.width() * 32 + z))
+        let y = L.sidewalk_height(c, lot, x, z) + 1
+        let (px, py) = world_point(view, int_to_float(lot % S.width() * 32 + x), int_to_float(y), int_to_float(lot / S.width() * 32 + z))
         let dx = px -. mx
         let dy = py -. my
         let delta = dx *. dx +. dy *. dy
@@ -3201,23 +3202,27 @@ mod Ur.Scene do
       closest_sidewalk(c, view, lot, mx, my, 0, -1, radius *. radius)
     end
   end
-  pfn sidewalk_marker_faces(c : Ur.Sim.City, lot : Int, selected : Int, valid : Bool, spot : Int, mesh : Ur.SceneMesh.Mesh) : Ur.SceneMesh.Mesh do
+  pfn sidewalk_marker_faces(c : Ur.Sim.City, lot : Int, base : Int, selected : Int, valid : Bool, spot : Int, mesh : Ur.SceneMesh.Mesh) : Ur.SceneMesh.Mesh do
     if spot == 4 do mesh else
       let (x, z) = S.sidewalk_point(c, lot, spot)
       let mesh = if x < 0 do mesh else
-        let size = if spot == selected do 3 else 1 end
-        let colour = if spot == selected do (if valid do 20 else 30 end) else 17 end
-        face(mesh, x - size / 2, 0, z - size / 2, size, size, 0, colour)
+        let size = if spot == selected do 3 else 2 end
+        let colour = if spot == selected do (if valid do 20 else 30 end)
+          else if S.sidewalk_item(c, lot, spot) > 0 do 10 else 8 end end
+        let y = L.sidewalk_height(c, lot, x, z) + 1 - base
+        face(mesh, x - size / 2, y, z - size / 2, size, size, 0, colour)
       end
-      sidewalk_marker_faces(c, lot, selected, valid, spot + 1, mesh)
+      sidewalk_marker_faces(c, lot, base, selected, valid, spot + 1, mesh)
     end
   end
   fn sidewalk_marker(c : Ur.Sim.City, lot : Int, spot : Int, valid : Bool) : Unit do
     let slot = marker_slot()
     let (x, _) = S.sidewalk_point(c, lot, 0)
     if x < 0 do Vk.chunk_free(slot) else
-      let mesh = sidewalk_marker_faces(c, lot, spot, valid, 0, { words: NativeArray.make_i32(8, 0), quads: 0 })
-      if Vk.chunk_begin(slot, lot % S.width() * 32, S.get(c.heights, lot) + 2, lot / S.width() * 32, 0) &&
+      let (_, before, after) = L.road_profile(c, lot)
+      let base = Math.min_int(S.get(c.heights, lot), Math.min_int(before, after))
+      let mesh = sidewalk_marker_faces(c, lot, base, spot, valid, 0, { words: NativeArray.make_i32(8, 0), quads: 0 })
+      if Vk.chunk_begin(slot, lot % S.width() * 32, base, lot / S.width() * 32, 0) &&
         Vk.chunk_part(0, mesh.words, mesh.quads) && Vk.chunk_commit() do ()
       else Ur.AppError.stop("Sidewalk preview upload failed") end
     end
