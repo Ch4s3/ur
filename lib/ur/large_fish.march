@@ -1,0 +1,109 @@
+-- One shark or manta ray at a time, on a short pass through open water.
+mod Ur.LargeFish do
+  alias Ur.Ocean as O
+  alias Ur.Wildlife as W
+
+  type SwimRoute = { kind : Atom, x : Float, z : Float, dx : Float, dz : Float, heading : Float, reach : Float }
+  type SwimPose = { x : Float, y : Float, z : Float, heading : Float }
+  type SwimTrack = { due : Float, route : Option(SwimRoute), next_kind : Atom }
+
+  fn empty(now : Float) : SwimTrack do { due: now +. 11.0, route: None, next_kind: :none } end
+  pfn speed(kind : Atom) : Float do if kind == :shark do 3.0 else 2.35 end end
+  -- Depth under the wave surface. The fins can break the surface during a stroke.
+  pfn depth(kind : Atom) : Float do if kind == :shark do -0.40 else -0.10 end end
+  pfn span(kind : Atom) : Float do if kind == :shark do 1.15 else 2.45 end end
+  fn duration(route : SwimRoute) : Float do 2.0 *. route.reach /. speed(route.kind) end
+
+  fn pose(route : SwimRoute, age : Float) : SwimPose do
+    let distance = Math.min_float(duration(route), Math.max_float(0.0, age)) *. speed(route.kind) -. route.reach
+    let drift = if route.kind == :shark do 0.07 *. Math.sin(age *. 0.85) else 0.06 *. Math.sin(age *. 0.62) end
+    { x: route.x +. route.dx *. distance, y: depth(route.kind) +. drift,
+      z: route.z +. route.dz *. distance, heading: route.heading }
+  end
+
+  pfn clear_sample(c : Ur.Sim.City, ocean : Ur.Ocean.Field, route : SwimRoute, x : Float, z : Float, cross : Float) : Bool do
+    let sx = x +. route.dz *. cross
+    let sz = z -. route.dx *. cross
+    let vx = float_to_int(Math.floor(sx *. 4.0))
+    let vz = float_to_int(Math.floor(sz *. 4.0))
+    -- Use the reef-free water corridor so wing tips and tails clear the scenery.
+    let floor_kind = O.kind(ocean, vx, vz)
+    (floor_kind == 0 || floor_kind == 2) && W.open_water(c, ocean, sx, sz, 10)
+  end
+
+  pfn clear_strip(c : Ur.Sim.City, ocean : Ur.Ocean.Field, route : SwimRoute, along : Int, last : Int) : Bool do
+    if along > last do true else
+      let x = route.x +. route.dx *. int_to_float(along)
+      let z = route.z +. route.dz *. int_to_float(along)
+      let width = span(route.kind)
+      List.all([-1.0, -0.5, 0.0, 0.5, 1.0], fn u -> clear_sample(c, ocean, route, x, z, u *. width)) &&
+        clear_strip(c, ocean, route, along + 1, last)
+    end
+  end
+
+  pfn clear_route(c : Ur.Sim.City, ocean : Ur.Ocean.Field, route : SwimRoute) : Bool do
+    let bound = float_to_int(Math.ceil(route.reach +. 2.7))
+    clear_strip(c, ocean, route, 0 - bound, bound)
+  end
+
+  pfn route_at(c : Ur.Sim.City, ocean : Ur.Ocean.Field, view : Ur.Wildlife.WildlifeView,
+    kind : Atom, x : Float, z : Float, seed : Int, attempt : Int) : Option(SwimRoute) do
+    if attempt >= 8 do None else
+      let y = depth(kind)
+      let (right, up) = W.screen_offset(view, x, y, z)
+      let half_height = view.zoom /. view.aspect
+      if Math.abs(right) > view.zoom *. 0.75 || Math.abs(up) > half_height *. 0.72 do None else
+        let turn = int_to_float(int_mod_euclid(seed + attempt, 8)) *. 0.39269908
+        let direction = if int_mod_euclid(seed, 2) == 0 do 0.0 else 3.14159265 end
+        let heading = view.yaw +. turn +. direction
+        let dx = Math.sin(heading)
+        let dz = Math.cos(heading)
+        let (right1, up1) = W.screen_offset(view, x +. dx, y, z +. dz)
+        -- Clear an edge at both ends, with room for the body, its stroke and the swell.
+        let reach_x = (view.zoom +. Math.abs(right) +. 4.5) /. Math.max_float(0.001, Math.abs(right1 -. right))
+        let reach_y = (half_height +. Math.abs(up) +. 4.5) /. Math.max_float(0.001, Math.abs(up1 -. up))
+        let route = { kind: kind, x: x, z: z, dx: dx, dz: dz, heading: heading, reach: Math.min_float(reach_x, reach_y) }
+        if clear_route(c, ocean, route) do Some(route)
+        else route_at(c, ocean, view, kind, x, z, seed, attempt + 1) end
+      end
+    end
+  end
+
+  pfn find_route(c : Ur.Sim.City, ocean : Ur.Ocean.Field, view : Ur.Wildlife.WildlifeView,
+    kind : Atom, seed : Int, n : Int) : Option(SwimRoute) do
+    if n >= 49 do None else
+      let k = int_mod_euclid(seed + n * 17, 49)
+      let x = view.x +. int_to_float(k % 7 - 3) *. 6.0
+      let z = view.z +. int_to_float(k / 7 - 3) *. 6.0
+      let route = if W.open_water(c, ocean, x, z, 10) do
+        route_at(c, ocean, view, kind, x, z, Strata.Seed.mix(seed, k), 0)
+      else None end
+      match route do
+        Some(_) -> route
+        None -> find_route(c, ocean, view, kind, seed, n + 1)
+      end
+    end
+  end
+
+  fn step(c : Ur.Sim.City, ocean : Ur.Ocean.Field, view : Ur.Wildlife.WildlifeView,
+    now : Float, old : SwimTrack, changed : Bool, seed : Int) : SwimTrack do
+    if view.zoom > 38.0 do empty(now) else
+      match old.route do
+        Some(route) ->
+          if now -. old.due >= duration(route) || (changed && !clear_route(c, ocean, route)) do
+            { due: now +. 31.0 +. int_to_float(int_mod_euclid(seed, 21)), route: None, next_kind: old.next_kind }
+          else old end
+        None ->
+          if now < old.due do old else
+            let kind = if old.next_kind != :none do old.next_kind
+              else if int_mod_euclid(seed, 2) == 0 do :shark else :manta end end
+            match find_route(c, ocean, view, kind, seed, 0) do
+              Some(route) ->
+                { due: now, route: Some(route), next_kind: if kind == :shark do :manta else :shark end }
+              None -> { old with due: now +. 6.0 }
+            end
+          end
+      end
+    end
+  end
+end

@@ -1,0 +1,47 @@
+mod LargeFishTest do
+  needs IO
+  needs IO.Console
+  alias Ur.LargeFish as Fish
+  alias Ur.Wildlife as W
+  alias Ur.Sim as S
+
+  pfn off_camera(view : Ur.Wildlife.WildlifeView, pose : Ur.LargeFish.SwimPose) : Bool do
+    let (right, up) = W.screen_offset(view, pose.x, pose.y, pose.z)
+    Math.abs(right) > view.zoom +. 2.7 || Math.abs(up) > view.zoom /. view.aspect +. 2.7
+  end
+
+  fn main(_cap : Cap(IO)) : Unit do
+    let city = S.new()
+    let ocean = Ur.Ocean.field(city)
+    let view : Ur.Wildlife.WildlifeView = { x: -68.0, z: -68.0, zoom: 24.0, aspect: 1.6, yaw: 0.55 }
+    let current = Fish.empty(0.0)
+    let waiting = Fish.step(city, ocean, view, 0.0, current, false, 0)
+    let wide = Fish.step(city, ocean, { view with zoom: 80.0 }, 12.0, current, false, 0)
+    Test.assert_true(Option.is_none(waiting.route) && Option.is_none(wide.route), "large fish wait and stay out of wide views")
+
+    let active = Fish.step(city, ocean, view, 12.0, current, false, 0)
+    match active.route do
+      None -> Test.assert_true(false, "a close ocean view offers a large fish pass")
+      Some(route) ->
+        let length = Fish.duration(route)
+        let middle = Fish.pose(route, length *. 0.5)
+        let (right, up) = W.screen_offset(view, middle.x, middle.y, middle.z)
+        Test.assert_true(off_camera(view, Fish.pose(route, 0.0)) && off_camera(view, Fish.pose(route, length)),
+          "the whole animal enters and exits off camera")
+        Test.assert_true(Math.abs(right) < view.zoom && Math.abs(up) < view.zoom /. view.aspect && middle.y < 0.0,
+          "the pass crosses the view with its body under the surface")
+        let shallow = { ocean with floor: NativeArray.make_int(NativeArray.length_int(ocean.floor), 2) }
+        let invalidated = Fish.step(city, shallow, view, 13.0, active, true, 1)
+        Test.assert_true(Option.is_none(invalidated.route), "a route is dropped when its water becomes too shallow")
+        let quiet = Fish.step(city, ocean, view, 12.1 +. length, active, false, 1)
+        Test.assert_true(Option.is_none(quiet.route) && quiet.due > 12.1 +. length +. 20.0,
+          "large animal passes are separated by quiet intervals")
+        let next = Fish.step(city, ocean, view, quiet.due, quiet, false, 2)
+        match next.route do
+          None -> Test.assert_true(false, "another pass comes after the interval")
+          Some(other) -> Test.assert_true(other.kind != route.kind, "the shark and manta take turns")
+        end
+    end
+    Authority.must(println("Large fish checks passed"))
+  end
+end

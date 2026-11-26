@@ -1,0 +1,75 @@
+mod Ur.MantaRays do
+  needs IO.Console
+  needs IO.Process
+  needs IO.Foreign
+  needs Window
+  alias Ur.WildlifeMesh as Draw
+  alias Strata.Model as Model
+  import Ur.SwimMesh.{section, loft}
+
+  fn slots() : Int do 3 end
+  pfn voxel() : Float do 0.14 end
+
+  pfn body() : Strata.Model.Geometry do
+    let hull = loft(Model.empty(), [
+      section(5.5, 4.4, 6.8, 0.71, 0.44), section(5.5, 4.55, 9.5, 2.42, 0.98),
+      section(5.5, 4.65, 13.6, 4.64, 1.89), section(5.5, 4.61, 17.6, 4.80, 1.72),
+      section(5.5, 4.55, 21.5, 3.83, 1.28), section(5.5, 4.48, 23.8, 3.25, 0.73),
+      section(5.5, 4.41, 24.65, 2.45, 0.12)
+    ], :forward, 9, 2)
+    let tail = loft(hull, [
+      section(4.46, 4.28, 0.0, 0.05, 0.06), section(4.76, 4.30, 2.3, 0.12, 0.14),
+      section(5.1, 4.33, 4.6, 0.23, 0.21), section(5.5, 4.4, 7.5, 0.64, 0.39)
+    ], :forward, 19, 19)
+    -- The cephalic lobes curl outward at the tips, with an eye outside each root.
+    List.fold_left([-1.0, 1.0], tail, fn (mesh, sign) ->
+      let mesh = loft(mesh, [
+        section(5.5 +. sign *. 2.52, 4.45, 22.9, 0.72, 0.53),
+        section(5.5 +. sign *. 2.72, 4.23, 24.7, 0.61, 0.48),
+        section(5.5 +. sign *. 3.00, 4.3, 26.2, 0.45, 0.39),
+        section(5.5 +. sign *. 3.32, 4.63, 27.1, 0.11, 0.09)
+      ], :forward, 4, 2)
+      let eye_x = 5.5 +. sign *. 3.86
+      Model.box(mesh, eye_x -. 0.17, 4.61, 21.1, eye_x +. 0.17, 4.97, 21.54, 19))
+  end
+
+  pfn wing(left : Bool) : Strata.Model.Geometry do
+    let x = if left do 12.0 else 0.0 end
+    let sign = if left do -1.0 else 1.0 end
+    let axis = if left do :left else :right end
+    loft(Model.empty(), [
+      section(x -. sign *. 0.44, 4.55, 14.6, 7.85, 0.92),
+      section(x +. sign *. 2.4, 4.53, 14.45, 7.26, 0.73),
+      section(x +. sign *. 5.6, 4.60, 13.55, 5.91, 0.48),
+      section(x +. sign *. 8.3, 4.79, 12.35, 4.17, 0.29),
+      section(x +. sign *. 10.4, 5.05, 10.9, 2.38, 0.15),
+      section(x +. sign *. 12.0, 5.53, 8.9, 0.10, 0.07)
+    ], axis, 4, 2)
+  end
+
+  fn setup(base : Int) : Unit do
+    Draw.upload_model(base, body(), voxel())
+    Draw.upload_model(base + 1, wing(true), voxel())
+    Draw.upload_model(base + 2, wing(false), voxel())
+  end
+
+  fn hide(base : Int) : Unit do
+    Draw.show(base, false)
+    Draw.show(base + 1, false)
+    Draw.show(base + 2, false)
+    ()
+  end
+
+  fn draw(base : Int, p : Ur.LargeFish.SwimPose, age : Float) : Unit do
+    let size = voxel()
+    let wing_roll = 0.26 *. Math.sin(age *. 2.9)
+    let pitch = 0.045 *. Math.sin(age *. 2.9 -. 0.6)
+    let offset = 4.5 *. size
+    let dx = Math.cos(p.heading) *. offset
+    let dz = Math.sin(p.heading) *. offset
+    Draw.pose(base, p.x, p.y, p.z, p.heading, pitch, 0.0, 5.5 *. size, 4.5 *. size, 14.0 *. size)
+    Draw.pose(base + 1, p.x -. dx, p.y, p.z +. dz, p.heading, pitch, wing_roll, 12.0 *. size, 4.5 *. size, 14.0 *. size)
+    Draw.pose(base + 2, p.x +. dx, p.y, p.z -. dz, p.heading, pitch, 0.0 -. wing_roll, 0.0, 4.5 *. size, 14.0 *. size)
+    ()
+  end
+end

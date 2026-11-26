@@ -1,0 +1,79 @@
+mod Ur.Sharks do
+  needs IO.Console
+  needs IO.Process
+  needs IO.Foreign
+  needs Window
+  alias Ur.WildlifeMesh as Draw
+  alias Strata.Model as Model
+  import Ur.SwimMesh.{section, loft}
+
+  fn slots() : Int do 2 end
+  pfn voxel() : Float do 0.13 end
+
+  pfn body() : Strata.Model.Geometry do
+    let hull = loft(Model.empty(), [
+      section(8.5, 6.0, 5.8, 0.62, 0.53), section(8.5, 6.0, 8.8, 0.85, 0.88),
+      section(8.5, 6.05, 12.2, 1.61, 1.50), section(8.5, 6.1, 15.6, 2.30, 2.02),
+      section(8.5, 6.08, 19.0, 2.50, 2.15), section(8.5, 6.02, 23.0, 2.12, 1.70),
+      section(8.5, 5.94, 26.5, 1.57, 1.24), section(8.5, 5.8, 28.9, 0.91, 0.70),
+      section(8.5, 5.7, 30.0, 0.08, 0.06)
+    ], :forward, 9, 2)
+    let dorsal = loft(hull, [
+      section(8.5, 7.5, 16.8, 0.68, 3.40), section(8.5, 9.5, 16.9, 0.47, 2.55),
+      section(8.5, 11.6, 16.0, 0.29, 1.60), section(8.5, 13.6, 14.9, 0.14, 0.58),
+      section(8.5, 14.0, 14.6, 0.05, 0.07)
+    ], :up, 19, 19)
+    List.fold_left([-1.0, 1.0], dorsal, fn (mesh, sign) ->
+      let side = if sign < 0.0 do :left else :right end
+      let mesh = loft(mesh, [
+        section(8.5 +. sign *. 1.66, 5.18, 18.8, 2.77, 0.51),
+        section(8.5 +. sign *. 3.92, 4.78, 17.7, 2.25, 0.31),
+        section(8.5 +. sign *. 5.92, 4.42, 16.4, 1.21, 0.18),
+        section(8.5 +. sign *. 7.1, 4.17, 15.12, 0.05, 0.05)
+      ], side, 4, 2)
+      let eye_x = 8.5 +. sign *. 1.68
+      let mesh = Model.box(mesh, eye_x -. 0.14, 6.18, 25.5, eye_x +. 0.13, 6.53, 26.0, 19)
+      List.fold_left([0, 1, 2], mesh, fn (out, i) ->
+        let z = 21.3 +. int_to_float(i) *. 0.53
+        let x = 8.5 +. sign *. (2.27 -. int_to_float(i) *. 0.05)
+        Model.box(out, x -. 0.08, 5.56, z, x +. 0.08, 6.38, z +. 0.13, 19)))
+  end
+
+  pfn tail() : Strata.Model.Geometry do
+    let stem = loft(Model.empty(), [
+      section(8.5, 6.0, 2.3, 0.36, 0.38), section(8.5, 6.0, 4.5, 0.51, 0.48),
+      section(8.5, 6.0, 7.25, 0.68, 0.63)
+    ], :forward, 9, 2)
+    let upper = loft(stem, [
+      section(8.5, 6.0, 3.4, 0.43, 1.25), section(8.5, 8.25, 3.15, 0.31, 1.74),
+      section(8.5, 10.8, 2.03, 0.23, 1.23), section(8.5, 12.7, 0.40, 0.06, 0.08)
+    ], :up, 19, 19)
+    loft(upper, [
+      section(8.5, 6.05, 3.36, 0.43, 1.20), section(8.5, 4.0, 2.98, 0.29, 1.33),
+      section(8.5, 2.3, 2.0, 0.19, 0.80), section(8.5, 1.18, 1.1, 0.05, 0.08)
+    ], :down, 4, 4)
+  end
+
+  fn setup(base : Int) : Unit do
+    Draw.upload_model(base, body(), voxel())
+    Draw.upload_model(base + 1, tail(), voxel())
+  end
+
+  fn hide(base : Int) : Unit do
+    Draw.show(base, false)
+    Draw.show(base + 1, false)
+    ()
+  end
+
+  fn draw(base : Int, p : Ur.LargeFish.SwimPose, age : Float) : Unit do
+    let size = voxel()
+    let beat = Math.sin(age *. 5.2)
+    let yaw = p.heading +. beat *. 0.065
+    let hub = 8.0 *. size
+    let tail_x = p.x -. Math.sin(yaw) *. hub
+    let tail_z = p.z -. Math.cos(yaw) *. hub
+    Draw.pose(base, p.x, p.y, p.z, yaw, 0.0, 0.0, 8.5 *. size, 6.0 *. size, 14.0 *. size)
+    Draw.pose(base + 1, tail_x, p.y, tail_z, yaw -. beat *. 0.48, 0.0, 0.0, 8.5 *. size, 6.0 *. size, 6.0 *. size)
+    ()
+  end
+end

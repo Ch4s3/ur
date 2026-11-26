@@ -1,0 +1,41 @@
+mod Ur.SwimMesh do
+  alias Strata.Model as Model
+
+  type SwimSection = SwimSection(Float, Float, Float, Float, Float)
+  fn section(x : Float, y : Float, z : Float, width : Float, height : Float) : SwimSection do
+    SwimSection(x, y, z, width, height)
+  end
+
+  pfn vertex(ring : SwimSection, axis : Atom, angle : Float, u : Float, v : Float) : List(Float) do
+    match ring do
+      SwimSection(x, y, z, width, height) ->
+        let a = width *. Math.cos(angle)
+        let b = height *. Math.sin(angle)
+        match axis do
+          :right -> [x, y +. b, z -. a, u, v]
+          :left -> [x, y +. b, z +. a, u, v]
+          :up -> [x +. a, y, z -. b, u, v]
+          :down -> [x +. a, y, z +. b, u, v]
+          _ -> [x +. a, y +. b, z, u, v]
+        end
+    end
+  end
+
+  -- Wind each cross section toward the next one so its normals face out.
+  fn loft(mesh : Strata.Model.Geometry, sections : List(SwimSection), axis : Atom, top : Int, underside : Int) : Strata.Model.Geometry do
+    match sections do
+      Cons(a, Cons(b, rest)) ->
+        let mesh = List.fold_left(List.range(0, 12), mesh, fn (out, i) ->
+          let u = int_to_float(i) /. 12.0
+          let v = int_to_float(i + 1) /. 12.0
+          let lo = u *. 6.283185307
+          let hi = v *. 6.283185307
+          let tex = if i < 6 do top else underside end
+          let corners = List.concat([vertex(a, axis, lo, u, 0.0), vertex(a, axis, hi, v, 0.0),
+            vertex(b, axis, lo, u, 1.0), vertex(b, axis, hi, v, 1.0)])
+          Model.quad(out, NativeArray.from_list_f32(corners), tex))
+        loft(mesh, Cons(b, rest), axis, top, underside)
+      _ -> mesh
+    end
+  end
+end

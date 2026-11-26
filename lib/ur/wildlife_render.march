@@ -7,12 +7,16 @@ mod Ur.WildlifeRender do
   pfn whale_base(base : Int) : Int do base + Ur.Birds.slots() end
   pfn turtle_base(base : Int) : Int do whale_base(base) + Ur.Whales.slots() end
   pfn fish_base(base : Int) : Int do turtle_base(base) + Ur.Turtles.slots() end
-  fn slots() : Int do fish_base(0) + Ur.ReefFish.slots() end
+  pfn shark_base(base : Int) : Int do fish_base(base) + Ur.ReefFish.slots() end
+  pfn manta_base(base : Int) : Int do shark_base(base) + Ur.Sharks.slots() end
+  fn slots() : Int do manta_base(0) + Ur.MantaRays.slots() end
   fn setup(base : Int) : Unit do
     Ur.Birds.setup(base)
     Ur.Whales.setup(whale_base(base))
     Ur.Turtles.setup(turtle_base(base))
     Ur.ReefFish.setup(fish_base(base))
+    Ur.Sharks.setup(shark_base(base))
+    Ur.MantaRays.setup(manta_base(base))
   end
 
   fn hide(base : Int) : Unit do
@@ -20,6 +24,8 @@ mod Ur.WildlifeRender do
     Ur.Whales.hide(whale_base(base))
     Ur.Turtles.hide(turtle_base(base))
     Ur.ReefFish.hide(fish_base(base))
+    Ur.Sharks.hide(shark_base(base))
+    Ur.MantaRays.hide(manta_base(base))
   end
   fn draw(base : Int, c : Ur.Sim.City, ocean : Ur.Ocean.Field, sightings : Ur.Wildlife.Sightings,
     waves : Strata.Waves.SeaWaves, field : Option(Strata.Waves.Swell), exposure : NativeF32Arr, before : Float, now : Float) : Unit do
@@ -40,6 +46,23 @@ mod Ur.WildlifeRender do
     match sightings.fish.route do
       Some(route) -> Ur.ReefFish.draw(fish_base(base), route, now -. sightings.fish.due)
       None -> Ur.ReefFish.hide(fish_base(base))
+    end
+    match sightings.large_fish.route do
+      Some(route) ->
+        let age = now -. sightings.large_fish.due
+        let p = Ur.LargeFish.pose(route, age)
+        let surface = Ur.Sea.surface_height(waves, field, exposure, p.x, p.z, now)
+        let pose = { p with y: surface +. p.y }
+        if route.kind == :shark do
+          Ur.MantaRays.hide(manta_base(base))
+          Ur.Sharks.draw(shark_base(base), pose, age)
+        else
+          Ur.Sharks.hide(shark_base(base))
+          Ur.MantaRays.draw(manta_base(base), pose, age)
+        end
+      None ->
+        Ur.Sharks.hide(shark_base(base))
+        Ur.MantaRays.hide(manta_base(base))
     end
   end
 end

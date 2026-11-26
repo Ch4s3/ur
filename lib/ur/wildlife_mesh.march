@@ -11,6 +11,16 @@ mod Ur.WildlifeMesh do
       Vk.chunk_show(slot, false)
     else Ur.AppError.stop("Wildlife mesh upload failed") end
   end
+  fn upload_model(slot : Int, mesh : Strata.Model.Geometry, voxel : Float) : Unit do
+    -- Commit copies the geometry, so the swimming models share this scratch ID.
+    let model = 3
+    let instance = NativeArray.set_i32(NativeArray.make_i32(2, 0), 0, Strata.Quad.pack_instance0(0, 0, 0, model))
+    if Vk.model_set(model, Strata.Model.floats(mesh), Strata.Model.count(mesh)) &&
+      Vk.body_begin(slot) && Vk.chunk_part(3, instance, 1) && Vk.chunk_commit() do
+      Vk.slot_voxel(slot, voxel)
+      Vk.chunk_show(slot, false)
+    else Ur.AppError.stop("Wildlife model upload failed") end
+  end
   fn show(slot : Int, shown : Bool) : Unit do Vk.chunk_show(slot, shown) end
   fn pose(slot : Int, x : Float, y : Float, z : Float, yaw : Float, pitch : Float, roll : Float,
     anchor_x : Float, anchor_y : Float, anchor_z : Float) : Unit do

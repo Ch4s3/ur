@@ -8,11 +8,13 @@ mod Ur.Wildlife do
   type WildlifePose = { x : Float, y : Float, z : Float, pitch : Float, flight : Float }
   type WildlifeView = { x : Float, z : Float, zoom : Float, aspect : Float, yaw : Float }
   type SightingTrack = { due : Float, site : Option(WildlifeSite) }
-  type Sightings = { bird : SightingTrack, bird_kind : Int, whale : SightingTrack, turtle : Ur.Turtles.TurtleTrack, fish : Ur.ReefFish.FishTrack }
+  type Sightings = { bird : SightingTrack, bird_kind : Int, whale : SightingTrack, turtle : Ur.Turtles.TurtleTrack,
+    fish : Ur.ReefFish.FishTrack, large_fish : Ur.LargeFish.SwimTrack }
 
   fn empty(now : Float) : Sightings do
     { bird: { due: now +. 1.5, site: None }, bird_kind: 0,
-      whale: { due: now +. 7.0, site: None }, turtle: Ur.Turtles.empty(now), fish: Ur.ReefFish.empty(now) }
+      whale: { due: now +. 7.0, site: None }, turtle: Ur.Turtles.empty(now), fish: Ur.ReefFish.empty(now),
+      large_fish: Ur.LargeFish.empty(now) }
   end
 
   fn close(view : WildlifeView) : Bool do view.zoom <= 48.0 end
@@ -92,7 +94,7 @@ mod Ur.Wildlife do
     end
   end
 
-  pfn whale_water(c : Ur.Sim.City, ocean : Ur.Ocean.Field, x : Float, z : Float) : Bool do
+  fn open_water(c : Ur.Sim.City, ocean : Ur.Ocean.Field, x : Float, z : Float, min_depth : Int) : Bool do
     let vx = float_to_int(Math.floor(x)) * 4
     let vz = float_to_int(Math.floor(z)) * 4
     let px = int_div_euclid(vx, 32)
@@ -102,18 +104,18 @@ mod Ur.Wildlife do
       S.get(c.heights, i) == 0 && S.get(c.seawalls, i) == 0 && S.get(c.ferries, i) == 0 &&
         S.get(c.roads, i) == 0 && S.grade_kind(c, i) == 0 && !S.canal_water(c, i)
     else true end
-    clear && O.corner_depth(ocean, vx, vz) >= 20
+    clear && O.corner_depth(ocean, vx, vz) >= min_depth
   end
 
   pfn whale_strip(c : Ur.Sim.City, ocean : Ur.Ocean.Field, x : Float, z : Float, dx : Float, dz : Float, along : Int) : Bool do
     if along > 16 do true else
       let px = x +. dx *. int_to_float(along)
       let pz = z +. dz *. int_to_float(along)
-      whale_water(c, ocean, px, pz) &&
-        whale_water(c, ocean, px +. dz *. 1.8, pz -. dx *. 1.8) &&
-        whale_water(c, ocean, px -. dz *. 1.8, pz +. dx *. 1.8) &&
-        whale_water(c, ocean, px +. dz *. 3.6, pz -. dx *. 3.6) &&
-        whale_water(c, ocean, px -. dz *. 3.6, pz +. dx *. 3.6) &&
+      open_water(c, ocean, px, pz, 20) &&
+        open_water(c, ocean, px +. dz *. 1.8, pz -. dx *. 1.8, 20) &&
+        open_water(c, ocean, px -. dz *. 1.8, pz +. dx *. 1.8, 20) &&
+        open_water(c, ocean, px +. dz *. 3.6, pz -. dx *. 3.6, 20) &&
+        open_water(c, ocean, px -. dz *. 3.6, pz +. dx *. 3.6, 20) &&
         whale_strip(c, ocean, x, z, dx, dz, along + 1)
     end
   end
@@ -245,7 +247,8 @@ mod Ur.Wildlife do
       let visible = fn (x : Float, y : Float, z : Float) -> in_view(view, x, y, z, 0.70)
       let turtle = Ur.Turtles.step(c, ocean, view.x, view.z, visible, now, old.turtle, changed, seed)
       let fish = Ur.ReefFish.step(ocean, view, now, old.fish, changed, seed)
-      { bird: bird, bird_kind: bird_kind, whale: whale, turtle: turtle, fish: fish }
+      let large_fish = Ur.LargeFish.step(c, ocean, view, now, old.large_fish, changed, seed)
+      { bird: bird, bird_kind: bird_kind, whale: whale, turtle: turtle, fish: fish, large_fish: large_fish }
     end
   end
 end
