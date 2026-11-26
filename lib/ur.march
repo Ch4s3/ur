@@ -538,12 +538,12 @@ mod Ur do
       let input_keys = if p.confirm == :setup do seed_keys(0, 0) else 0 end
       let p = if p.confirm == :setup do { p with world_seed: if p.seed_focus do Strata.Controls.base36_input(input_keys, p.setup_keys, 0, p.world_seed, 2147483646) else p.world_seed end, setup_keys: input_keys } else p end
       let (setup_row, setup_value) = if p.confirm != :setup || !mouse do (-1, 0)
-        else if p.mouse && p.setup_drag >= 0 do (p.setup_drag, Menu.setup_drag(mx, w, p.setup_drag))
+        else if p.mouse && p.setup_drag >= 0 do (p.setup_drag, Menu.setup_drag(mx, w, h, p.setup_drag))
         else if !p.mouse do Menu.setup_click(mx, my, w, h) else (-1, 0) end end end
       -- the lighting page: a slider a row, applied as it moves; the settings are written when the page closes
       let was_lighting = p.confirm == :lighting
       let (light_row, light_value) = if !was_lighting || !mouse do (-1, 0)
-        else if p.mouse && p.setup_drag >= 0 do (p.setup_drag, Menu.lighting_drag(mx, w, p.setup_drag))
+        else if p.mouse && p.setup_drag >= 0 do (p.setup_drag, Menu.lighting_drag(mx, w, h, p.setup_drag))
         else if !p.mouse do Menu.lighting_click(mx, my, w, h) else (-1, 0) end end end
       let lighting = if light_row >= 0 && light_row < 8 do Ur.Lighting.set(p.lighting, light_row, light_value) else p.lighting end
       let relit = !Ur.Lighting.same(lighting, p.lighting)
@@ -632,7 +632,7 @@ mod Ur do
       let keys_zoom = (if Vk.key(61) || Vk.key(334) do 1.0 else 0.0 end) -. (if Vk.key(45) || Vk.key(333) do 1.0 else 0.0 end)
       let over_toolbar = Toolbar.over(mx, my, w, h, p.group, p.page)
       let over_utility_inspector = !p.sidebar_visible && Ur.Hud.over_utility_inspector(mx, my, p.layer, p.tool, S.valid(p.utility.inspection.lot))
-      let scroll = if Ur.Hud.over_panel(mx, my, w, h, p.sidebar_visible) || Ur.Hud.over_utility_panel(mx, my, p.layer, p.tool) ||
+      let scroll = if Ur.Hud.over_panel(mx, my, w, h, p.sidebar_visible) || Ur.Hud.over_layer_legend(mx, my, w, p.layer) ||
         over_utility_inspector || over_toolbar do 0.0 else Vk.scroll_y() end
       let amount = maximum(-1.0, minimum(1.0, scroll *. 0.14 +. keys_zoom *. dt *. 1.2))
       let zoom = maximum(18.0, minimum(S.max_zoom(), p.zoom *. Math.exp(0.0 -. amount)))
@@ -838,7 +838,7 @@ mod Ur do
       let point = Ur.Scene.tile_anchor(c, p.popup, w, h, cx, cz, zoom, yaw)
       let over_popup = tool == 0 && Ur.Hud.over_parcel_popup(c, p.popup, w, h, point, mx, my)
       let over_ui = cut_modal || over_notices || popup_temple || over_popup || truck_popup_over || citizen_panel || planner_hit >= 0 || over_toolbar || Toolbar.over(mx, my, w, h, group, page) ||
-        Ur.Hud.over_panel(mx, my, w, h, p.sidebar_visible) || Ur.Hud.over_utility_panel(mx, my, layer, tool) ||
+        Ur.Hud.over_panel(mx, my, w, h, p.sidebar_visible) || Ur.Hud.over_layer_legend(mx, my, w, layer) ||
         (utility_open && Ur.Hud.over_utility_inspector(mx, my, layer, tool, utility_pinned)) ||
         (!utility_open && Ur.Hud.over_starter(p.stats.startup_step, sidebar_visible, mx, my))
       let utility_pick = click && !over_ui && utility_view && tool == 0 && !sidebar_visible

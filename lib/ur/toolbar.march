@@ -3,6 +3,8 @@ mod Ur.Toolbar do
   needs Window
   alias Strata.Ui as U
   alias Strata.Text as T
+  alias Ur.UiTheme as Theme
+  import Ur.UiTheme.{label, fitted, centred}
   alias Ur.Sim as S
 
   type Layout = { x : Float, y : Float, width : Float, columns : Int, cell : Float, cards_y : Float,
@@ -305,35 +307,16 @@ mod Ur.Toolbar do
     end end
   end
 
-  pfn background() : (Float, Float, Float, Float) do (0.045, 0.084, 0.106, 0.99) end
   pfn accent(group : Int) : (Float, Float, Float, Float) do
     match group do
       1 -> (0.56, 0.78, 0.95, 1.0)
       2 -> (0.66, 0.86, 0.54, 1.0)
-      3 -> (0.98, 0.72, 0.40, 1.0)
-      4 -> (0.45, 0.86, 0.77, 1.0)
+      3 -> Theme.amber()
+      4 -> Theme.accent()
       5 -> (0.76, 0.74, 0.98, 1.0)
       6 -> (0.86, 0.76, 0.57, 1.0)
       _ -> (0.69, 0.82, 0.94, 1.0)
     end
-  end
-  pfn face(active : Bool, hover : Bool) : (Float, Float, Float, Float) do
-    if active do (0.15, 0.27, 0.31, 1.0)
-    else if hover do (0.12, 0.22, 0.26, 1.0)
-    else (0.075, 0.137, 0.168, 1.0) end end
-  end
-  pfn text(u : Strata.Ui.Ui, x : Float, y : Float, size : Float, name : String, bright : Bool) : Strata.Ui.Ui do
-    T.text(u, 0, x, y, T.default_font(), size,
-      if bright do (0.93, 0.95, 0.92, 1.0) else (0.68, 0.79, 0.80, 1.0) end, name)
-  end
-  pfn fitted(u : Strata.Ui.Ui, x : Float, y : Float, width : Float, size : Float, name : String, bright : Bool) : Strata.Ui.Ui do
-    let (measured, _, _) = T.measure(T.default_font(), size, name, 0.0)
-    text(u, x, y, if measured > width do size *. width /. measured else size end, name, bright)
-  end
-  pfn centred(u : Strata.Ui.Ui, centre : Float, y : Float, width : Float, size : Float, name : String, bright : Bool) : Strata.Ui.Ui do
-    let (measured, _, _) = T.measure(T.default_font(), size, name, 0.0)
-    let fit = minimum(width, measured)
-    text(u, centre -. fit *. 0.5, y, if measured > width do size *. width /. measured else size end, name, bright)
   end
   pfn groups(u : Strata.Ui.Ui, group : Int, hot : Int, i : Int) : Strata.Ui.Ui do
     if i > 7 do u else
@@ -342,7 +325,7 @@ mod Ur.Toolbar do
       let y = bar_y(U.height(u))
       let active = i == group
       let (name, art) = category(i)
-      let a = U.rect(u, 0, x +. 2.0, y, w -. 4.0, 56.0, face(active, i == hot))
+      let a = U.rect(u, 0, x +. 2.0, y, w -. 4.0, 56.0, Theme.face(active, i == hot, true))
       let a = if active do U.rect(a, 0, x +. 2.0, y +. 54.0, w -. 4.0, 2.0, accent(i)) else a end
       let a = if w < 90.0 do
         let centre = x +. w *. 0.5
@@ -362,7 +345,7 @@ mod Ur.Toolbar do
         let x = l.x +. 8.0 +. int_to_float(i % l.tab_columns) *. l.tab_step
         let y = tab_top(l) +. int_to_float(i / l.tab_columns) *. 27.0
         let width = l.tab_step -. 4.0
-        let a = U.rect(u, 0, x, y, width, 23.0, face(i == page, i == hot))
+        let a = U.rect(u, 0, x, y, width, 23.0, Theme.face(i == page, i == hot, true))
         let a = if i == page do U.rect(a, 0, x, y +. 21.0, width, 2.0, accent(group)) else a end
         let a = centred(a, x +. width *. 0.5, y +. 3.0, width -. 10.0, 11.0, name, i == page || i == hot)
         pages(a, rest, l, group, page, hot, i + 1)
@@ -372,12 +355,12 @@ mod Ur.Toolbar do
     let size = if compact do 11.0 else 12.0 end
     let (_, _, lines) = T.measure(T.default_font(), size, name, width)
     let size = if compact && lines > 2 do size *. 2.0 /. int_to_float(lines) else size end
-    let colour = if locked do (0.65, 0.74, 0.75, 1.0) else (0.93, 0.95, 0.92, 1.0) end
+    let colour = if locked do Theme.muted() else Theme.foreground() end
     T.styled(a, 0, x, y, T.default_font(), size, colour, T.with_wrap(T.style(), width), name)
   end
   pfn card_caption(a : Strata.Ui.Ui, c : Ur.Sim.City, tool : Int, x : Float, y : Float, width : Float, locked : Bool) : Strata.Ui.Ui do
-    if locked do T.text(a, 0, x, y, T.default_font(), 10.0, (0.98, 0.72, 0.40, 1.0), "Locked")
-    else if tool == 55 do text(a, x, y, 10.5, "Click a park", true)
+    if locked do T.text(a, 0, x, y, T.default_font(), 10.0, Theme.amber(), "Locked")
+    else if tool == 55 do label(a, x, y, 10.5, "Click a park", true)
     else
       let cost = S.cost(c, 0, tool)
       let upkeep = S.civic_tool_upkeep(tool)
@@ -400,7 +383,7 @@ mod Ur.Toolbar do
         let compact = l.card_height <= 57.0
         let width = l.cell -. 5.0
         let art_width = if compact do 32.0 else 48.0 end
-        let a = U.rect(u, 0, x, y, width, l.card_height, face(active, tool == hot))
+        let a = U.rect(u, 0, x, y, width, l.card_height, Theme.face(active, tool == hot, !locked))
         let a = if active do U.rect(a, 0, x, y, 2.0, l.card_height, accent(group)) else a end
         let a = U.rect(a, 0, x +. 6.0, y +. 6.0, art_width, if compact do 25.0 else 39.0 end, (0.04, 0.095, 0.123, 1.0))
         let art = if map do layer_icon(tool) else icon(tool) end
@@ -417,14 +400,11 @@ mod Ur.Toolbar do
     let m = menu(group, page)
     let l = layout(w, h, m)
     let height = drawer_bottom(h) -. l.y
-    let a = U.rect(u, 0, l.x +. 3.0, l.y +. 4.0, l.width, height, (0.015, 0.028, 0.035, 0.56))
-    let a = U.rect(a, 0, l.x, l.y, l.width, height, background())
-    let a = U.rect(a, 0, l.x, l.y, l.width, 2.0, accent(group))
+    let a = Theme.frame(u, l.x, l.y, l.width, height, 38.0, accent(group))
     let (name, _) = category(group)
-    let a = text(a, l.x +. 12.0, l.y +. 7.0, 18.0, name, true)
+    let a = label(a, l.x +. 12.0, l.y +. 7.0, 18.0, name, true)
     let close = close_x(l)
-    let a = U.rect(a, 0, close, l.y +. 7.0, 27.0, 25.0, face(false, close_at(mx, my, w, h, group, page)))
-    let a = text(a, close +. 8.0, l.y +. 8.0, 16.0, "×", true)
+    let a = Theme.close(a, close, l.y +. 7.0, 27.0, 25.0, close_at(mx, my, w, h, group, page))
     let a = pages(a, m.pages, l, group, page, page_at(mx, my, w, h, group, page), 0)
     cards(a, c, m.items, l, group, if group == 7 do layer else tool end, option_at(mx, my, w, h, group, page), 0)
   end
@@ -432,15 +412,14 @@ mod Ur.Toolbar do
     let w = U.width(u)
     let h = U.height(u)
     let a = if group == 0 do u else drawer(u, c, tool, group, page, layer, mx, my) end
-    let a = U.rect(a, 0, bar_x(w) -. 6.0, bar_y(h) -. 4.0, 7.0 *. bar_cell(w) +. 12.0, 64.0, background())
+    let a = U.rect(a, 0, bar_x(w) -. 6.0, bar_y(h) -. 4.0, 7.0 *. bar_cell(w) +. 12.0, 64.0, Theme.surface())
     let a = groups(a, group, group_at(mx, my, w, h), 1)
-    let a = U.rect(a, 0, 0.0, h -. 30.0, w, 30.0, background())
+    let a = U.rect(a, 0, 0.0, h -. 30.0, w, 30.0, Theme.surface())
     let hovered_tool = option_at(mx, my, w, h, group, page)
     let prerequisite = if group == 7 || hovered_tool <= 0 do "" else S.construction_requirement(c, hovered_tool) end
     let status = if c.harbour < 0 do c.message
       else if prerequisite != "" do prerequisite ++ "."
-      else if group == 7 && layer > 0 && !Ur.Layers.is_utility(layer) do Ur.Layers.legend(layer)
-      else c.message end end end
+      else c.message end end
     let controls = w >= 1250.0
     let selected = w >= 830.0 && tool > 0 && c.harbour >= 0 && group != 7
     let selected_width = if selected do minimum(220.0, w *. 0.24) else 0.0 end

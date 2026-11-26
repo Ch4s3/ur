@@ -2,13 +2,17 @@ mod Ur.Menu do
   needs IO.Foreign
   needs Window
   alias Strata.Ui as U
+  alias Strata.Ffi.Vk as Vk
   alias Strata.Text as T
   alias Strata.Controls as Controls
-
+  alias Ur.UiTheme as Theme
+  import Ur.UiTheme.{label, fitted, centred}
 
   pfn left(w : Float) : Float do (w -. 344.0) *. 0.5 end
-  -- the panel grew by the Lighting row and kept its top, so the rows above it are where they were
-  pfn top(h : Float) : Float do (h -. 394.0) *. 0.5 end
+  pfn height(boot : Bool) : Float do if boot do 362.0 else 512.0 end end
+  pfn top(h : Float, boot : Bool) : Float do
+    Math.max_float(0.0, Math.min_float((h -. 394.0) *. 0.5, h -. height(boot) -. 8.0))
+  end
   pfn item(boot : Bool, row : Int) : Atom do
     if boot do
       match row do
@@ -33,7 +37,7 @@ mod Ur.Menu do
   end
   fn at(mx : Float, my : Float, w : Float, h : Float, boot : Bool, saved : Bool) : Atom do
     let x = mx -. left(w)
-    let y = my -. top(h) -. 108.0
+    let y = my -. top(h, boot) -. 108.0
     if x < 22.0 || x >= 322.0 || y < 0.0 || y >= (if boot do 176.0 else 308.0 end) do :nothing else
       let row = float_to_int(y /. 44.0)
       if y -. int_to_float(row) *. 44.0 >= 38.0 do :nothing else
@@ -56,7 +60,7 @@ mod Ur.Menu do
   end
   pfn button_name(action : Atom, confirm : Atom, sea : Int) : String do
     match action do
-      :sea -> "Sea storms: " ++ sea_name(sea) ++ "   (click to change)"
+      :sea -> "Sea storms · " ++ sea_name(sea) ++ "  (click to cycle)"
       :resume -> "Resume"
       :save_city -> "Save city"
       :load_city -> if confirm == :load_city do "Load and replace current city" else "Load city" end
@@ -71,10 +75,14 @@ mod Ur.Menu do
       let action = item(boot, row)
       let enabled = action != :load_city || saved
       let hot = action == hover
-      let face = if hot do (0.22, 0.43, 0.43, 1.0) else (0.10, 0.20, 0.24, 1.0) end
+      let confirming = action == confirm
+      let face = if confirming do Theme.danger_face() else Theme.face(row == 0, hot, enabled) end
       let a = U.rect(a, 0, x, y, 300.0, 38.0, face)
+      let a = if confirming || row == 0 do
+        U.rect(a, 0, x, y, 2.0, 38.0, if confirming do Theme.danger() else Theme.accent() end)
+      else a end
       let a = T.text(a, 0, x +. 14.0, y +. 9.0, T.default_font(), 15.0,
-        if enabled do (0.93, 0.96, 0.94, 1.0) else (0.49, 0.60, 0.61, 1.0) end, button_name(action, confirm, sea))
+        if enabled do Theme.foreground() else Theme.disabled() end, button_name(action, confirm, sea))
       buttons(a, x, y +. 44.0, boot, saved, confirm, hover, sea, row + 1)
     end
   end
@@ -83,22 +91,37 @@ mod Ur.Menu do
     let w = U.width(a)
     let h = U.height(a)
     let x = left(w)
-    let y = top(h)
-    let a = U.rect(a, 0, 0.0, 0.0, w, h, (0.015, 0.036, 0.043, 0.43))
-    let a = U.rect(a, 0, x, y, 344.0, if boot do 362.0 else 512.0 end, (0.05, 0.10, 0.13, 0.98))
-    let a = U.rect(a, 0, x, y, 344.0, 3.0, (0.35, 0.71, 0.67, 1.0))
-    let a = T.text(a, 0, x +. 22.0, y +. 18.0, T.default_font(), 32.0, (0.93, 0.96, 0.94, 1.0), if boot do "UR" else "Game menu" end)
-    let a = T.text(a, 0, x +. 23.0, y +. 68.0, T.default_font(), 13.0, (0.65, 0.79, 0.79, 1.0), if boot do "The island region" else "Manage your city" end)
+    let y = top(h, boot)
+    let a = Theme.frame(Theme.dim(a, 0.43), x, y, 344.0, height(boot), 92.0, Theme.accent())
+    let a = label(a, x +. 22.0, y +. 20.0, 31.0, if boot do "UR" else "Game menu" end, true)
+    let a = if boot do label(a, x +. 23.0, y +. 65.0, 12.0, "The island region", false) else a end
     let a = buttons(a, x +. 22.0, y +. 108.0, boot, saved, confirm, at(mx, my, w, h, boot, saved), sea, 0)
-    let a = if !boot && seed >= 0 do T.text(a, 0, x +. 22.0, y +. 488.0, T.default_font(), 11.0, (0.65, 0.79, 0.79, 1.0), "Region seed  " ++ seed_code(seed)) else a end
+    let a = if !boot && seed >= 0 do label(a, x +. 22.0, y +. 488.0, 11.0, "Region seed  " ++ seed_code(seed), false) else a end
     T.styled(a, 0, x +. 22.0, y +. (if boot do 298.0 else 426.0 end), T.default_font(), 12.0,
-      (0.76, 0.84, 0.82, 1.0), T.with_wrap(T.style(), 300.0), notice)
+      Theme.muted(), T.with_wrap(T.style(), 300.0), notice)
   end
   fn seed_code(seed : Int) : String do Controls.base36(seed) end
+  pfn setup_height() : Float do 630.0 end
+  pfn lighting_height() : Float do 560.0 end
+  pfn settings_scale(w : Float, h : Float, height : Float) : Float do
+    let fit = Math.min_float((w -. 16.0) /. 520.0, (h -. 16.0) /. height)
+    Math.max_float(0.02, Math.min_float(1.0, fit))
+  end
+  pfn settings_ui(height : Float) : Strata.Ui.Ui do
+    Strata.Render.ui_begin(settings_scale(int_to_float(Vk.win_w()), int_to_float(Vk.win_h()), height))
+  end
+  pfn settings_pointer(mx : Float, my : Float, w : Float, h : Float, height : Float) : (Float, Float) do
+    let scale = settings_scale(w, h, height)
+    ((mx -. w *. 0.5) /. scale +. 260.0, (my -. h *. 0.5) /. scale +. height *. 0.5)
+  end
+  pfn settings_button(a : Strata.Ui.Ui, x : Float, y : Float, width : Float, h : Float, name : String, primary : Bool) : Strata.Ui.Ui do
+    let a = U.rect(a, 0, x, y, width, h, Theme.face(primary, false, true))
+    let a = if primary do U.rect(a, 0, x, y, 2.0, h, Theme.accent()) else a end
+    centred(a, x +. width *. 0.5, y +. 9.0, width -. 18.0, 14.0, name, true)
+  end
   -- A click on the new-region page: (row, step) on a slider row 0..7, or (17, 0) New seed, (18, 0) Back, (19, 0) Create region, (20, 0) the seed field.
   fn setup_click(mx : Float, my : Float, w : Float, h : Float) : (Int, Int) do
-    let x = mx -. (w -. 520.0) *. 0.5
-    let y = my -. (h -. 630.0) *. 0.5
+    let (x, y) = settings_pointer(mx, my, w, h, setup_height())
     if y >= 555.0 && y < 593.0 do
       if x >= 30.0 && x < 180.0 do (18, 0)
       else if x >= 310.0 && x < 490.0 do (19, 0) else (-1, 0) end end
@@ -110,8 +133,9 @@ mod Ur.Menu do
       (row, if value < 0 do 0 else if value > 4 do 4 else value end end)
     else (-1, 0) end end end end
   end
-  fn setup_drag(mx : Float, w : Float, row : Int) : Int do
-    Controls.slider_step(mx, (w -. 520.0) *. 0.5 +. 210.0, 260.0, if row == 1 do 4 else 5 end)
+  fn setup_drag(mx : Float, w : Float, h : Float, row : Int) : Int do
+    let (x, _) = settings_pointer(mx, 0.0, w, h, setup_height())
+    Controls.slider_step(x, 210.0, 260.0, if row == 1 do 4 else 5 end)
   end
   fn setup_index(row : Int) : Int do
     if row == 3 do 5 else if row == 4 do 6 else if row == 5 do 3 else if row == 6 do 4 else row end end end end
@@ -141,71 +165,64 @@ mod Ur.Menu do
         else if i == 3 do (match value do 0 -> "Dry" | 1 -> "Drier" | 2 -> "Varied" | 3 -> "Wetter" | _ -> "Wet" end)
         else if i == 7 do sea_name(value)
         else (match value do 0 -> "Low" | 1 -> "Modest" | 2 -> "Medium" | 3 -> "High" | _ -> "Very high" end) end end end end
-      let a = T.text(a, 0, x +. 30.0, y, T.default_font(), 14.0, (0.90, 0.95, 0.94, 1.0), setup_label(i))
+      let a = label(a, x +. 30.0, y, 14.0, setup_label(i), true)
       let a = Controls.slider(a, x +. 210.0, y, 260.0, pos, if i == 1 do 4 else 5 end,
-        (0.27, 0.38, 0.39, 1.0), (0.40, 0.78, 0.71, 1.0))
-      let a = T.text(a, 0, x +. 210.0, y +. 20.0, T.default_font(), 11.0, (0.65, 0.79, 0.79, 1.0), description)
+        Theme.edge(), Theme.accent())
+      let a = label(a, x +. 210.0, y +. 20.0, 11.0, description, false)
       setup_rows(a, setup, x, y +. 50.0, i + 1)
     end
   end
   fn draw_setup(setup : NativeIntArr, seed : Int, focused : Bool) : Strata.Ui.Ui do
-    let a = Strata.Render.ui_begin(1.0)
-    let w = U.width(a)
-    let h = U.height(a)
-    let x = (w -. 520.0) *. 0.5
-    let y = (h -. 630.0) *. 0.5
-    let a = U.rect(a, 0, 0.0, 0.0, w, h, (0.015, 0.036, 0.043, 0.65))
-    let a = U.rect(a, 0, x, y, 520.0, 630.0, (0.05, 0.10, 0.13, 0.98))
-    let a = T.text(a, 0, x +. 30.0, y +. 20.0, T.default_font(), 25.0, (0.93, 0.96, 0.94, 1.0), "New island region")
+    let height = setup_height()
+    let a = settings_ui(height)
+    let x = (U.width(a) -. 520.0) *. 0.5
+    let y = (U.height(a) -. height) *. 0.5
+    let a = Theme.frame(Theme.dim(a, 0.65), x, y, 520.0, height, 59.0, Theme.accent())
+    let a = label(a, x +. 30.0, y +. 16.0, 25.0, "New island region", true)
     let a = Controls.text_field(a, x +. 30.0, y +. 70.0, 320.0, 35.0, "Seed  " ++ seed_code(seed), focused,
-      if focused do (0.13, 0.27, 0.29, 1.0) else (0.10, 0.20, 0.24, 1.0) end, (0.93, 0.96, 0.94, 1.0), 14.0)
-    let a = U.rect(a, 0, x +. 370.0, y +. 70.0, 120.0, 35.0, (0.10, 0.20, 0.24, 1.0))
-    let a = T.text(a, 0, x +. 388.0, y +. 79.0, T.default_font(), 13.0, (0.93, 0.96, 0.94, 1.0), "New seed")
+      Theme.face(focused, false, true), Theme.foreground(), 14.0)
+    let a = settings_button(a, x +. 370.0, y +. 70.0, 120.0, 35.0, "New seed", false)
     let a = setup_rows(a, setup, x, y +. 125.0, 0)
-    let a = T.text(a, 0, x +. 30.0, y +. 526.0, T.default_font(), 11.0, (0.65, 0.79, 0.79, 1.0),
-      "Founders stay at the harbour until homes are available. Sea storms can be changed in play.")
-    let a = U.rect(a, 0, x +. 30.0, y +. 555.0, 150.0, 38.0, (0.10, 0.20, 0.24, 1.0))
-    let a = T.text(a, 0, x +. 48.0, y +. 565.0, T.default_font(), 14.0, (0.93, 0.96, 0.94, 1.0), "Back")
-    let a = U.rect(a, 0, x +. 310.0, y +. 555.0, 180.0, 38.0, (0.23, 0.41, 0.40, 1.0))
-    T.text(a, 0, x +. 329.0, y +. 565.0, T.default_font(), 14.0, (0.93, 0.96, 0.94, 1.0), "Create region")
+    let a = U.rect(a, 0, x +. 30.0, y +. 518.0, 460.0, 1.0, Theme.edge())
+    let a = fitted(a, x +. 30.0, y +. 526.0, 460.0, 11.0,
+      "Founders stay at the harbour until homes are available.", false)
+    let a = settings_button(a, x +. 30.0, y +. 555.0, 150.0, 38.0, "Back", false)
+    settings_button(a, x +. 310.0, y +. 555.0, 180.0, 38.0, "Create region", true)
   end
   -- The lighting page: a slider a row (Ur.Lighting), and Back. A click answers (row, step); row 8 is Back.
   fn lighting_click(mx : Float, my : Float, w : Float, h : Float) : (Int, Int) do
-    let x = mx -. (w -. 520.0) *. 0.5
-    let y = my -. (h -. 560.0) *. 0.5
+    let (x, y) = settings_pointer(mx, my, w, h, lighting_height())
     if y >= 500.0 && y < 538.0 && x >= 30.0 && x < 180.0 do (8, 0)
     else if y >= 70.0 && y < 470.0 && x >= 250.0 && x <= 500.0 do
       let row = float_to_int((y -. 70.0) /. 50.0)
       (row, Controls.slider_step(x, 260.0, 230.0, Ur.Lighting.steps(row)))
     else (-1, 0) end end
   end
-  fn lighting_drag(mx : Float, w : Float, row : Int) : Int do
-    Controls.slider_step(mx, (w -. 520.0) *. 0.5 +. 260.0, 230.0, Ur.Lighting.steps(row))
+  fn lighting_drag(mx : Float, w : Float, h : Float, row : Int) : Int do
+    let (x, _) = settings_pointer(mx, 0.0, w, h, lighting_height())
+    Controls.slider_step(x, 260.0, 230.0, Ur.Lighting.steps(row))
   end
   pfn lighting_rows(a : Strata.Ui.Ui, l : NativeIntArr, x : Float, y : Float, i : Int) : Strata.Ui.Ui do
     if i >= Ur.Lighting.rows() do a else
       let value = Ur.Lighting.get(l, i)
-      let a = T.text(a, 0, x +. 30.0, y, T.default_font(), 14.0, (0.90, 0.95, 0.94, 1.0), Ur.Lighting.label(i))
+      let a = label(a, x +. 30.0, y, 14.0, Ur.Lighting.label(i), true)
       let a = Controls.slider(a, x +. 260.0, y, 230.0, value, Ur.Lighting.steps(i),
-        (0.27, 0.38, 0.39, 1.0), (0.40, 0.78, 0.71, 1.0))
-      let a = T.text(a, 0, x +. 260.0, y +. 20.0, T.default_font(), 11.0, (0.65, 0.79, 0.79, 1.0), Ur.Lighting.value_name(i, value))
+        Theme.edge(), Theme.accent())
+      let a = label(a, x +. 260.0, y +. 20.0, 11.0, Ur.Lighting.value_name(i, value), false)
       lighting_rows(a, l, x, y +. 50.0, i + 1)
     end
   end
   fn draw_lighting(l : NativeIntArr) : Strata.Ui.Ui do
-    let a = Strata.Render.ui_begin(1.0)
-    let w = U.width(a)
-    let h = U.height(a)
-    let x = (w -. 520.0) *. 0.5
-    let y = (h -. 560.0) *. 0.5
-    let a = U.rect(a, 0, 0.0, 0.0, w, h, (0.015, 0.036, 0.043, 0.25))
-    let a = U.rect(a, 0, x, y, 520.0, 560.0, (0.05, 0.10, 0.13, 0.94))
-    let a = T.text(a, 0, x +. 30.0, y +. 20.0, T.default_font(), 25.0, (0.93, 0.96, 0.94, 1.0), "Lighting")
+    let height = lighting_height()
+    let a = settings_ui(height)
+    let x = (U.width(a) -. 520.0) *. 0.5
+    let y = (U.height(a) -. height) *. 0.5
+    let a = Theme.frame(Theme.dim(a, 0.25), x, y, 520.0, height, 59.0, Theme.accent())
+    let a = label(a, x +. 30.0, y +. 16.0, 25.0, "Lighting", true)
     let a = lighting_rows(a, l, x, y +. 70.0, 0)
-    let a = T.text(a, 0, x +. 30.0, y +. 474.0, T.default_font(), 11.0, (0.65, 0.79, 0.79, 1.0),
-      "Changes show behind this page; building lights are rebuilt when the menu closes. Lamp shadows cost most at night.")
-    let a = U.rect(a, 0, x +. 30.0, y +. 500.0, 150.0, 38.0, (0.10, 0.20, 0.24, 1.0))
-    T.text(a, 0, x +. 48.0, y +. 510.0, T.default_font(), 14.0, (0.93, 0.96, 0.94, 1.0), "Back")
+    let a = U.rect(a, 0, x +. 30.0, y +. 470.0, 460.0, 1.0, Theme.edge())
+    let a = fitted(a, x +. 30.0, y +. 479.0, 460.0, 11.0,
+      "Building lights rebuild on close. Lamp shadows cost most at night.", false)
+    settings_button(a, x +. 30.0, y +. 500.0, 150.0, 38.0, "Back", false)
   end
-
 end

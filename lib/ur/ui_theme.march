@@ -1,0 +1,66 @@
+mod Ur.UiTheme do
+  needs IO.Foreign
+  needs Window
+  alias Strata.Ui as U
+  alias Strata.Text as T
+
+  fn foreground() : (Float, Float, Float, Float) do (0.93, 0.95, 0.92, 1.0) end
+  fn muted() : (Float, Float, Float, Float) do (0.64, 0.75, 0.76, 1.0) end
+  fn disabled() : (Float, Float, Float, Float) do (0.49, 0.60, 0.61, 1.0) end
+  fn accent() : (Float, Float, Float, Float) do (0.45, 0.86, 0.77, 1.0) end
+  fn amber() : (Float, Float, Float, Float) do (0.98, 0.72, 0.40, 1.0) end
+  fn danger() : (Float, Float, Float, Float) do (0.99, 0.49, 0.41, 1.0) end
+  fn danger_face() : (Float, Float, Float, Float) do (0.37, 0.17, 0.16, 1.0) end
+  fn surface() : (Float, Float, Float, Float) do (0.047, 0.088, 0.11, 0.99) end
+  fn raised() : (Float, Float, Float, Float) do (0.09, 0.17, 0.20, 1.0) end
+  fn edge() : (Float, Float, Float, Float) do (0.20, 0.32, 0.34, 1.0) end
+  fn well() : (Float, Float, Float, Float) do (0.063, 0.114, 0.143, 1.0) end
+
+  fn face(active : Bool, hot : Bool, enabled : Bool) : (Float, Float, Float, Float) do
+    if !enabled do well()
+    else if active do (if hot do (0.19, 0.33, 0.36, 1.0) else (0.15, 0.27, 0.31, 1.0) end)
+    else if hot do (0.12, 0.22, 0.26, 1.0)
+    else (0.075, 0.137, 0.168, 1.0) end end end
+  end
+
+  fn label(u : Strata.Ui.Ui, x : Float, y : Float, size : Float, text : String, bright : Bool) : Strata.Ui.Ui do
+    T.text(u, 0, x, y, T.default_font(), size, if bright do foreground() else muted() end, text)
+  end
+
+  fn fitted(u : Strata.Ui.Ui, x : Float, y : Float, w : Float, size : Float, text : String, bright : Bool) : Strata.Ui.Ui do
+    if w <= 0.0 || text == "" do u else
+      let (wide, _, _) = T.measure(T.default_font(), size, text, 0.0)
+      label(u, x, y, if wide > w do size *. w /. wide else size end, text, bright)
+    end
+  end
+
+  fn centred(u : Strata.Ui.Ui, x : Float, y : Float, w : Float, size : Float, text : String, bright : Bool) : Strata.Ui.Ui do
+    let (wide, _, _) = T.measure(T.default_font(), size, text, 0.0)
+    label(u, x -. Math.min_float(w, wide) *. 0.5, y, if wide > w do size *. w /. wide else size end, text, bright)
+  end
+
+  fn panel(u : Strata.Ui.Ui, x : Float, y : Float, w : Float, h : Float) : Strata.Ui.Ui do
+    U.rect(u, 0, x, y, w, h, surface())
+  end
+
+  fn header(u : Strata.Ui.Ui, x : Float, y : Float, w : Float, h : Float, ink : (Float, Float, Float, Float)) : Strata.Ui.Ui do
+    let u = U.rect(u, 0, x, y, w, h, raised())
+    U.rect(u, 0, x, y, w, 2.0, ink)
+  end
+
+  fn frame(u : Strata.Ui.Ui, x : Float, y : Float, w : Float, h : Float, header_height : Float, ink : (Float, Float, Float, Float)) : Strata.Ui.Ui do
+    let u = U.rect(u, 0, x +. 3.0, y +. 4.0, w, h, (0.015, 0.028, 0.035, 0.56))
+    let u = U.rect(u, 0, x, y, w, h, edge())
+    let u = panel(u, x +. 1.0, y +. 1.0, w -. 2.0, h -. 2.0)
+    header(u, x +. 1.0, y, w -. 2.0, header_height, ink)
+  end
+
+  fn close(u : Strata.Ui.Ui, x : Float, y : Float, w : Float, h : Float, hot : Bool) : Strata.Ui.Ui do
+    let u = U.rect(u, 0, x, y, w, h, face(true, hot, true))
+    centred(u, x +. w *. 0.5, y +. (h -. 22.0) *. 0.5, w, 17.0, "×", true)
+  end
+
+  fn dim(u : Strata.Ui.Ui, opacity : Float) : Strata.Ui.Ui do
+    U.rect(u, 0, 0.0, 0.0, U.width(u), U.height(u), (0.015, 0.036, 0.043, opacity))
+  end
+end

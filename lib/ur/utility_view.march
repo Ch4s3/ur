@@ -51,7 +51,7 @@ mod Ur.UtilityView do
     layer : Int, lot : Int) : String do
     let (_, current) = project_service(c, S.project_reservations(c, before), layer, lot)
     let (demand, planned) = project_service(next, S.project_reservations(next, after), layer, lot)
-    "Next floor capacity · " ++ int_to_string(current) ++ " → " ++ int_to_string(planned) ++ " of " ++ int_to_string(demand)
+    "Next floor capacity · " ++ int_to_string(current) ++ " to " ++ int_to_string(planned) ++ " of " ++ int_to_string(demand)
   end
 
   fn inspectable(c : Ur.Sim.City, st : Ur.Sim.Stats, layer : Int, lot : Int) : Bool do
