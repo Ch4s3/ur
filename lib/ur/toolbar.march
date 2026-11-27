@@ -60,7 +60,7 @@ mod Ur.Toolbar do
           _ -> Cons(44, Cons(45, Cons(62, Cons(46, Cons(47, Cons(78, Nil))))))
         end
         { span: 6, pages: ["Services", "Parks", "Street planting", "Education", "Faculties", "Worship", "Disaster", "Expansions", "Community"], items: items }
-      6 -> { span: 6, pages: Nil, items: [6, 7, 118, 119, 120, 121] }
+      6 -> { span: 7, pages: Nil, items: [6, 7, 118, 119, 120, 121, 155] }
       7 ->
         let items = match page do
           1 -> [5, 6, 7, 8, 39, 40, 41]
@@ -89,7 +89,7 @@ mod Ur.Toolbar do
     match tool do
       1 -> "road"
       48 -> "avenue"
-      49 -> "promenade"
+      49 | 155 -> "promenade"
       50 | 124 | 125 | 126 -> "overpass"
       51 -> "underpass"
       52 -> "road_tunnel"
@@ -362,9 +362,9 @@ mod Ur.Toolbar do
     if locked do T.text(a, 0, x, y, T.default_font(), 10.0, Theme.amber(), "Locked")
     else if tool == 55 do label(a, x, y, 10.5, "Click a park", true)
     else
-      let cost = S.cost(c, 0, tool)
+      let cost = S.cost(c, if tool == 155 do -1 else 0 end, tool)
       let upkeep = S.civic_tool_upkeep(tool)
-      let unit = if tool == 53 || tool == 127 || S.grade_tool(tool) do "/tile" else "" end
+      let unit = if tool == 53 || tool == 127 || tool == 155 || S.grade_tool(tool) do "/tile" else "" end
       let price = if cost > 0 do "$" ++ int_to_string(cost) ++ unit else "" end
       let monthly = if upkeep > 0 do "$" ++ int_to_string(upkeep) ++ "/mo" else "" end
       let caption = if cost > 0 && upkeep > 0 do price ++ " · " ++ monthly else price ++ monthly end
@@ -419,7 +419,9 @@ mod Ur.Toolbar do
     let prerequisite = if group == 7 || hovered_tool <= 0 do "" else S.construction_requirement(c, hovered_tool) end
     let status = if c.harbour < 0 do c.message
       else if prerequisite != "" do prerequisite ++ "."
-      else c.message end end
+      else if group == 6 && hovered_tool == 155 do
+        "Choose a clear shore or a waterfront pedestrian street. Drag along the bank for a continuous planted quay."
+      else c.message end end end
     let controls = w >= 1250.0
     let selected = w >= 830.0 && tool > 0 && c.harbour >= 0 && group != 7
     let selected_width = if selected do minimum(220.0, w *. 0.24) else 0.0 end

@@ -1478,6 +1478,7 @@ mod Ur.Scene do
   end
   pfn changed(a : Ur.Sim.City, b : Ur.Sim.City, i : Int) : Bool do
     S.valid(i) && (S.get(a.road_shapes, i) != S.get(b.road_shapes, i) ||
+      S.get(a.quays, i) != S.get(b.quays, i) ||
       S.get(a.water_bus, i) != S.get(b.water_bus, i) || S.get(a.canals, i) != S.get(b.canals, i) || S.get(a.canal_docks, i) != S.get(b.canal_docks, i) ||
       (a.harbour_basin != b.harbour_basin && (i == a.harbour_basin || i == b.harbour_basin || i == a.harbour || i == b.harbour)) ||
       S.public_work_stage(a, i) != S.public_work_stage(b, i) || S.get(a.seawalls, i) != S.get(b.seawalls, i) || S.flood_repair_days(a, i) != S.flood_repair_days(b, i) || S.get(a.sidewalk_items, i) != S.get(b.sidewalk_items, i) || S.get(a.waste_bins, i) != S.get(b.waste_bins, i) || (a.harbour != b.harbour && (i == a.harbour || i == b.harbour)) || S.get(a.heights, i) != S.get(b.heights, i) || S.campus_root(a, i) != S.campus_root(b, i) || S.get(a.roads, i) != S.get(b.roads, i) || S.get(a.grade_cover, i) != S.get(b.grade_cover, i) || S.get(a.fire_recovery, i) != S.get(b.fire_recovery, i) || S.get(a.park_tiers, i) != S.get(b.park_tiers, i) || S.get(a.streetscape, i) != S.get(b.streetscape, i) || S.get(a.parks, i) != S.get(b.parks, i) || S.get(a.tolls, i) != S.get(b.tolls, i) || S.get(a.public_parking, i) != S.get(b.public_parking, i) ||
@@ -1597,7 +1598,8 @@ mod Ur.Scene do
       if force || cut_changed || clearing_changed || basalt_changed || lighting_changed || signal_changed || (water_changed && S.get(c.heights, i) > 0 && flagged_near(floods, i, 1)) ||
         (structural && arch_changed(old, c, i)) || (structural && flagged_near(flags, i, 2) && (changed(old, c, i) || nearby_shape_changed(old, c, i) || changed(old, c, S.neighbour(i, 0)) ||
         changed(old, c, S.neighbour(i, 1)) || changed(old, c, S.neighbour(i, 2)) ||
-        changed(old, c, S.neighbour(i, 3)) || L.road_profile(old, i) != L.road_profile(c, i) || corner_changed(old, c, i, 0, 2) ||
+        changed(old, c, S.neighbour(i, 3)) || S.quay_mooring(old, i) != S.quay_mooring(c, i) ||
+        L.road_profile(old, i) != L.road_profile(c, i) || corner_changed(old, c, i, 0, 2) ||
         corner_changed(old, c, i, 0, 3) || corner_changed(old, c, i, 1, 2) || corner_changed(old, c, i, 1, 3))) do parcel(c, i, now, control, signals.after_tick, section.after, clearings) else () end
       sync_parcels(old, c, i + 1, force, structural, water_changed, before, after, signals, section, flags, floods, volcano)
     end
