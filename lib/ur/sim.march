@@ -1,6 +1,7 @@
 -- Parcel simulation: money and quantities use integers for deterministic ticks.
 mod Ur.Sim do
   alias Ur.Demography as D
+  alias Ur.Commerce as Commerce
   alias Ur.Industry as Industry
   alias Ur.ProductionFreight as Production
   alias Ur.UtilitiesNetwork as Net
@@ -174,10 +175,32 @@ mod Ur.Sim do
       end
     end end end end end end
   end
+  pfn trade_variant(c : City, i : Int) : Int do
+    let x = i % width()
+    let z = i / width()
+    let seed = int_mod_euclid(c.world_seed, 257)
+    int_mod_euclid(x * 23 + z * 37 + x * z * 7 + seed, 257)
+  end
+  pfn open_all_day(i : Int) : Bool do (i % width() + i / width()) % 5 == 0 end
+  fn trade_kind(c : City, i : Int) : Option(Ur.Commerce.TradeKind) do
+    match building_use(c, i) do
+      Grocery | GroceryHomes -> Some(Commerce.food_shop(trade_variant(c, i), open_all_day(i)))
+      Restaurant | RestaurantHomes -> Some(Commerce.dining(trade_variant(c, i)))
+      Bar | BarHomes -> Some(Commerce.nightlife(trade_variant(c, i)))
+      Workplace ->
+        if get(c.zones, i) == 2 && get(c.business_sector, i) == 0 && ground_at(c, i) != 1 do
+          Commerce.service(trade_variant(c, i))
+        else None end
+      _ -> None
+    end
+  end
+  pfn trade_available(c : City, i : Int) : Bool do !building_offline(c, i) && !business_closed(c, i) end
   fn nightlife(c : City, i : Int) : Bool do
     get(c.buildings, i) > 0 && storefront(c, i) == 2 && !building_offline(c, i) && !business_closed(c, i)
   end
-  fn public_trade(c : City, i : Int) : Bool do retail(c, i) > 0 || nightlife(c, i) end
+  fn public_trade(c : City, i : Int) : Bool do
+    trade_available(c, i) && Option.is_some(trade_kind(c, i))
+  end
   fn retail(c : City, i : Int) : Int do
     if building_offline(c, i) || business_closed(c, i) do 0 else retail_kind(c, i) end
   end
@@ -264,6 +287,11 @@ mod Ur.Sim do
   fn building_name(c : City, i : Int) : String do
     match public_work_at(c, i) do
       Some(work) -> tool_name(work.tool)
+      None -> match trade_kind(c, i) do
+      Some(kind) ->
+        let profile = Commerce.profile(kind)
+        let homes = match building_use(c, i) do GroceryHomes | RestaurantHomes | BarHomes -> get(c.buildings, i) > 1 | _ -> false end
+        profile.name ++ (if homes do " + apartments" else "" end)
       None -> match building_use(c, i) do
       Apartments -> "Apartments"
       Workplace -> if get(c.zones, i) == 4 do
@@ -279,7 +307,7 @@ mod Ur.Sim do
       EmptyShop -> "Vacant storefront"
       WorkshopHomes -> if get(c.buildings, i) == 1 do "Workshop" else "Workshop + apartments" end
       Vacant -> if private_fishing_dock(c, i) do "Fishing Dock" else if get(c.plants, i) > 0 do facility_name(get(c.plants, i)) else "" end end
-    end end
+    end end end
   end
   type Accounts = { earnings : Int, rent : Int, tax : Int, costs : Int }
   fn margin(a : Accounts) : Int do a.earnings - a.rent - a.tax - a.costs end
@@ -1702,16 +1730,24 @@ mod Ur.Sim do
   fn bar_open(c : City, i : Int, hour : Int) : Bool do
     nightlife(c, i) && (if quiet_at(c, i) == 2 do hour >= 17 && hour < 22 else hour >= 17 || hour < 2 end)
   end
-  fn overnight_business(c : City, i : Int) : Bool do
-    retail(c, i) == 1 && (i % width() + i / width()) % 5 == 0
+  pfn business_profile(c : City, i : Int) : Option(Ur.Commerce.BusinessProfile) do
+    Option.map(trade_kind(c, i), fn kind ->
+      let schedule = Commerce.profile(kind)
+      if nightlife(c, i) && quiet_at(c, i) == 2 do { schedule with closes: 22 } else schedule end)
+  end
+  fn business_hours(c : City, i : Int) : String do
+    match business_profile(c, i) do
+      Some(profile) -> Commerce.hours_label(profile)
+      None -> ""
+    end
   end
   fn business_open(c : City, i : Int, hour : Int) : Bool do
-    if nightlife(c, i) do bar_open(c, i, hour)
-    else match retail(c, i) do
-      1 -> overnight_business(c, i) || (hour >= 7 && hour < 21)
-      2 -> hour >= 11 && hour < 23
-      _ -> false
-    end end
+    if !trade_available(c, i) do false else
+      match business_profile(c, i) do
+        Some(profile) -> Commerce.open_at(profile, hour)
+        None -> false
+      end
+    end
   end
   fn traffic_pace(weekday : Int, hour : Int) : Float do
     if weekday < 5 && ((hour >= 7 && hour < 10) || (hour >= 16 && hour < 19)) do 0.80

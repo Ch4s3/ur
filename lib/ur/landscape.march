@@ -82,7 +82,8 @@ mod Ur.Landscape do
         let along = int_mod_euclid(if axis == 0 do x else z end, 32)
         graded_height(h, before, after, along / 4 * 4 + 2)
       else if cut do h - 8
-      else if S.public_work_stage(c, i) > 0 || S.valid(S.campus_root(c, i)) || S.building_offline(c, i) || S.get(c.parks, i) > 0 || (S.get(c.roads, i) > 0 && h > 0) || S.get(c.buildings, i) > 0 || S.get(c.construction, i) > 0 || S.get(c.plants, i) > 0 do h
+      else if S.public_work_stage(c, i) > 0 || S.valid(S.campus_root(c, i)) || S.building_offline(c, i) || S.get(c.parks, i) > 0 || (S.get(c.roads, i) > 0 && h > 0) || S.get(c.buildings, i) > 0 || S.get(c.construction, i) > 0 || S.get(c.plants, i) > 0 ||
+        (h > 0 && (S.get(c.transit, i) == 3 || S.get(c.stops, i) == 4)) do h
       else
         let ground = S.unbuilt_ground_height(c, x, z)
         if h == 0 && ground > 0 &&
@@ -988,24 +989,27 @@ mod Ur.Landscape do
       let x = i % S.width()
       let z = i / S.width()
       let seed = (x * 19 + z * 37 + x * z * 11) % 257
-      let retail = S.retail_kind(c, i)
-      let bar = S.storefront(c, i) == 2
+      let trade = S.trade_kind(c, i)
+      let vacant = S.storefront(c, i) == 3
       let closed = S.building_offline(c, i) || S.business_closed(c, i)
-      let parts = if b > 0 do (if zone == 4 do industrial_building(b, seed, Industry.kind(S.get(c.business_sector, i)), !closed && S.production_running(c, i), lighting % 2 == 1) else A.building(b, zone != 2, seed, stage == 0 && !S.building_offline(c, i), retail > 0 || bar, lighting % 2 == 1) end) else Nil end
+      let frontage_shop = Option.is_some(trade) || vacant
+      let parts = if b > 0 do
+        let roofed = stage == 0 && !S.building_offline(c, i)
+        if zone == 4 do industrial_building(b, seed, Industry.kind(S.get(c.business_sector, i)), !closed && S.production_running(c, i), lighting % 2 == 1)
+        else match trade do
+          Some(kind) -> if zone == 2 do A.commercial_building(b, seed, roofed, kind)
+            else A.building(b, true, seed, roofed, true, lighting % 2 == 1) end
+          None -> A.building(b, zone != 2, seed, roofed, frontage_shop, lighting % 2 == 1)
+        end end
+      else Nil end
       let parts = if stage > 0 do A.worksite(b, stage, parts) else parts end
-      let parts = if bar do
-        let front = A.storefront(false, closed, lighting / 2 % 2 == 1, parts)
-        let front = Cons(A.piece(6, 6, 29, 20, 2, 2, 19), front)
-        if closed do front else
-          let sign = if lighting / 2 % 2 == 1 do 20 else 7 end
-          Cons(A.piece(9, 7, 31, 3, 1, 1, sign), Cons(A.piece(15, 7, 31, 3, 1, 1, 15),
-          Cons(A.piece(21, 7, 31, 3, 1, 1, sign), front)))
-        end
-      else if S.live_work(c, i) && b > 0 do
+      let parts = if S.live_work(c, i) && b > 0 do
         List.append(industrial_bay(10, 28, 11, !closed && S.production_running(c, i), lighting % 2 == 1), parts)
-      else if S.storefront(c, i) == 3 do A.storefront(false, true, false, parts)
-      else if retail > 0 do A.storefront(retail == 1, closed, lighting / 2 % 2 == 1, parts)
-        else if closed do Cons(A.piece(12, 3, 29, 8, 5, 1, 19), parts) else parts end end end end end
+      else if vacant do A.storefront(false, true, false, parts)
+      else match trade do
+        Some(kind) -> A.trade_storefront(kind, closed, lighting / 2 % 2 == 1, parts)
+        None -> if closed do Cons(A.piece(12, 3, 29, 8, 5, 1, 19), parts) else parts end
+      end end end
       let parts = if S.flood_repair_days(c, i) > 0 do
         Cons(A.piece(4, h + 1, 3, 24, 2, 2, 17), Cons(A.piece(8, h + 3, 3, 16, 2, 1, 10), parts))
       else if S.fire_offline(c, i) do
@@ -1019,7 +1023,8 @@ mod Ur.Landscape do
       shift(A.orient(parts, side), h)
     else if zone > 0 do zone_edge(c, i, 0, if zone == 1 do 11 else if zone == 4 do 10 else 12 end end, Nil)
     else if !c.founding_map && !S.valid(c.harbour_basin) && i % S.width() == 9 && i / S.width() >= 22 && i / S.width() <= 25 do harbour_piece(i / S.width(), h)
-    else vegetation(c, i, Ur.Flora.site(c, i), clearings, 0, Nil) end end end end end end end end end end end end
+    else if S.get(c.transit, i) == 3 || S.get(c.stops, i) == 4 do Nil
+    else vegetation(c, i, Ur.Flora.site(c, i), clearings, 0, Nil) end end end end end end end end end end end end end
   end
   pfn tunnel_approach(c : Ur.Sim.City, lot : Int, peer : Int, z : Int, ground : Int) : List(Ur.Architecture.Piece) do
     if z >= 16 do Nil else
@@ -1446,6 +1451,213 @@ mod Ur.Landscape do
       List.append(A.orient(quay, side), base)
     end
   end
+
+  pfn tram_arm(c : Ur.Sim.City, lot : Int, arm : Int) : Bool do
+    let peer = S.neighbour(lot, arm)
+    S.get(c.transit, peer) == 3 && int_abs(S.get(c.heights, lot) - S.get(c.heights, peer)) <= 12
+  end
+  fn tram_bend(c : Ur.Sim.City, lot : Int) : Bool do
+    tram_arm(c, lot, 0) != tram_arm(c, lot, 1) && tram_arm(c, lot, 2) != tram_arm(c, lot, 3)
+  end
+  type TramGrade = { deck : Int, axis : Int, before : Int, after : Int, west : Int, east : Int, north : Int, south : Int }
+  pfn tram_deck(c : Ur.Sim.City, lot : Int) : Int do
+    let h = S.get(c.heights, lot)
+    if h == 0 do 2 else h end
+  end
+  pfn tram_rise(c : Ur.Sim.City, lot : Int, arm : Int, deck : Int, axis : Int, street_peer : Int, linked : Bool) : Int do
+    let target = tram_deck(c, S.neighbour(lot, arm))
+    if !linked || (axis == arm / 2 * 2 && street_peer == target) do 0
+    else Math.max_int(0, target - deck) end
+  end
+  pfn tram_grade(c : Ur.Sim.City, lot : Int, west : Bool, east : Bool, north : Bool, south : Bool) : TramGrade do
+    let deck = tram_deck(c, lot)
+    let (axis, before, after) = road_profile(c, lot)
+    let axis = if axis >= 0 && RoadSurface.uses_curve(c, lot) do -1 else axis end
+    { deck: deck, axis: axis, before: before, after: after,
+      west: tram_rise(c, lot, 0, deck, axis, before, west),
+      east: tram_rise(c, lot, 1, deck, axis, after, east),
+      north: tram_rise(c, lot, 2, deck, axis, before, north),
+      south: tram_rise(c, lot, 3, deck, axis, after, south) }
+  end
+  pfn tram_surface(g : TramGrade, x : Int, z : Int) : Int do
+    let along = if g.axis == 0 do x else z end
+    if g.axis < 0 do g.deck else graded_height(g.deck, g.before, g.after, along / 4 * 4 + 2) end
+  end
+  pfn tram_rail_base(g : TramGrade, x : Int, z : Int) : Int do
+    -- Keep the curve and crossing flat so each approach meets its own neighbor.
+    let horizontal = Math.max_int((11 - x) * g.west, (x - 20) * g.east)
+    let vertical = Math.max_int((11 - z) * g.north, (z - 20) * g.south)
+    let rise = Math.max_int(horizontal, vertical)
+    let deck = if rise > 0 do Math.max_int(g.deck + (rise + 5) / 11, tram_surface(g, x, z))
+      else tram_surface(g, x, z) end
+    deck + 1
+  end
+  fn tram_track_height(c : Ur.Sim.City, lot : Int, x : Int, z : Int) : Int do
+    let grade = tram_grade(c, lot, tram_arm(c, lot, 0), tram_arm(c, lot, 1), tram_arm(c, lot, 2), tram_arm(c, lot, 3))
+    tram_rail_base(grade, x, z) + 1
+  end
+  pfn tram_gauge(at : Int) : Bool do at == 13 || at == 18 end
+  -- In the north-west bend, the wheel paths are 2.5 voxels either side
+  -- of a radius-four centre line. Reflect the same bend for the other corners.
+  pfn tram_curve_cell(x : Int, z : Int) : Bool do
+    if x < 12 do tram_gauge(z)
+    else if z < 12 do tram_gauge(x)
+    else
+      let dx = (x - 12) * 2
+      let dz = (z - 12) * 2
+      -- Include every voxel the rail crosses so the stepped mesh has no gaps.
+      let near = dx * dx + dz * dz
+      let far = (dx + 2) * (dx + 2) + (dz + 2) * (dz + 2)
+      (near < 9 && far > 9) || (near < 169 && far > 169)
+    end end
+  end
+  pfn tram_curve_row(y : Int, west : Bool, north : Bool, x : Int, z : Int, start : Int,
+    out : List(Ur.Architecture.Piece)) : List(Ur.Architecture.Piece) do
+    if x < 20 && tram_curve_cell(x, z) do
+      tram_curve_row(y, west, north, x + 1, z, if start < 0 do x else start end, out)
+    else
+      let out = if start < 0 do out else
+        Cons(A.piece(if west do start else 32 - x end, y, if north do z else 31 - z end,
+          x - start, 1, 1, 17), out)
+      end
+      if x == 20 do out else tram_curve_row(y, west, north, x + 1, z, -1, out) end
+    end
+  end
+  pfn tram_straight(y : Int, horizontal : Bool, first : Int, last : Int) : List(Ur.Architecture.Piece) do
+    List.map([13, 18], fn at ->
+      if horizontal do A.piece(first, y, at, last - first, 1, 1, 17)
+      else A.piece(at, y, first, 1, 1, last - first, 17) end)
+  end
+  pfn tram_rail_span(p : Ur.Architecture.Piece, g : TramGrade, along_x : Bool, start : Int, finish : Int,
+    out : List(Ur.Architecture.Piece)) : List(Ur.Architecture.Piece) do
+    if start >= finish do out else
+      let x = if along_x do start else p.x end
+      let z = if along_x do p.z else start end
+      let y = tram_rail_base(g, x, z)
+      let surface = tram_surface(g, x, z) + 1
+      let out = if y > surface do Cons(A.piece(x, surface, z, 1, y - surface, 1, 19), out) else out end
+      tram_rail_span(p, g, along_x, start + 1, finish, Cons(A.piece(x, y, z, 1, 1, 1, p.material), out))
+    end
+  end
+  pfn tram_tracks(c : Ur.Sim.City, i : Int) : List(Ur.Architecture.Piece) do
+    let y = tram_deck(c, i) + 1
+    let west = tram_arm(c, i, 0)
+    let east = tram_arm(c, i, 1)
+    let north = tram_arm(c, i, 2)
+    let south = tram_arm(c, i, 3)
+    let horizontal = west || east
+    let vertical = north || south
+    let rails = if west != east && north != south do
+      List.fold_left(List.range(0, 20), Nil, fn (out, z) -> tram_curve_row(y, west, north, 0, z, -1, out))
+    else
+      let isolated = !horizontal && !vertical
+      -- At a route end the rear wheels still need track behind the parcel center.
+      let (first, last) = if horizontal && vertical do (13, 19) else (9, 23) end
+      let along = if horizontal do
+        tram_straight(y, true, if west do 0 else first end, if east do 32 else last end)
+        else Nil end
+      let across = if vertical || isolated do
+        tram_straight(y, false, if north do 0 else first end, if south do 32 else last end)
+        else Nil end
+      List.fold_left(across, along, fn (parts, rail) -> Cons(rail, cut_road_pieces(parts, rail)))
+    end
+    let grade = tram_grade(c, i, west, east, north, south)
+    if grade.west + grade.east + grade.north + grade.south > 0 do
+      List.fold_left(rails, Nil, fn (out, p) ->
+        if p.d == 1 do tram_rail_span(p, grade, true, p.x, p.x + p.w, out)
+        else tram_rail_span(p, grade, false, p.z, p.z + p.d, out) end)
+    else if grade.axis >= 0 do grade_road(rails, grade.axis, grade.deck, grade.before, grade.after)
+    else rails end end
+  end
+  pfn tram_stop(c : Ur.Sim.City, i : Int, base : List(Ur.Architecture.Piece)) : List(Ur.Architecture.Piece) do
+    let h = S.get(c.heights, i)
+    let road = S.get(c.roads, i)
+    let east = if road > 0 do S.street_link(c, i, 0) || S.street_link(c, i, 1)
+      else tram_arm(c, i, 0) || tram_arm(c, i, 1) end
+    let near = tram_arm(c, i, if east do 2 else 0 end)
+    let far = tram_arm(c, i, if east do 3 else 1 end)
+    let along = if near && far do 1 else 10 end
+    let side = if east do (if far && !near do 2 else 3 end)
+      else (if far && !near do 0 else 1 end) end
+    let across = if road > 0 do 16 + S.road_half_width(road) + 1 else 21 end
+    let edge = if side % 2 == 0 do 31 - across else across end
+    let at = if side == 1 || side == 2 do 25 - along else along + 6 end
+    let y = if road > 0 do sidewalk_height(c, i, if east do at else edge end, if east do edge else at end)
+      else h end
+    let platform = if road == 0 do [A.piece(along, y, across - 1, 12, 1, 5, 23),
+      A.piece(along, y + 1, across, 12, 1, 4, 23), A.piece(along, y + 1, across - 1, 12, 1, 1, 10)]
+      else Nil end
+    let y = if road == 0 do y + 2 else y end
+    let sign = [A.piece(along + 6, y, across, 1, 5, 1, 19), A.piece(along + 4, y + 5, across, 5, 2, 1, 7),
+      A.piece(along + 5, y + 5, across - 1, 3, 1, 1, 20)]
+    List.append(A.orient(List.append(sign, platform), side), base)
+  end
+
+  ptype SubwaySite = { side : Int, x : Int, z : Int, depth : Int, floor : Int }
+  pfn subway_site(c : Ur.Sim.City, i : Int, base : List(Ur.Architecture.Piece), side : Int, x : Int,
+    z : Int, depth : Int) : Option(SubwaySite) do
+    match A.orient([A.piece(x, 0, z, 10, 1, depth, 0)], side) do
+      Cons(p, _) ->
+        let road = S.get(c.roads, i) > 0
+        let floor = if road do sidewalk_height(c, i, p.x + p.w / 2, p.z + p.d / 2)
+          else S.get(c.heights, i) + 1 end
+        let footprint = { x: p.x, z: p.z, w: p.w, d: p.d }
+        let blocked = List.any(base, fn q ->
+          let sidewalk = road && q.h <= 2 && (q.material == 23 || q.material == 24)
+          overlaps(q, footprint) && !sidewalk && (q.y + q.h > floor || (road && q.y >= floor - 3)))
+        if blocked do None else Some({ side: side, x: x, z: z, depth: depth, floor: floor }) end
+      Nil -> None
+    end
+  end
+  pfn subway_entrance(site : SubwaySite) : List(Ur.Architecture.Piece) do
+    let x = site.x
+    let z = site.z
+    let y = site.floor
+    let d = site.depth
+    let front = z + d - 1
+    let roof = if d <= 4 do d else d - 3 end
+    let stairs = if d >= 4 do
+      [A.piece(x + 1, y, front - 2, 8, 1, 1, 23), A.piece(x + 1, y, front - 1, 8, 2, 1, 23),
+        A.piece(x + 1, y, front, 8, 3, 1, 24)]
+      else [A.piece(x + 1, y, front, 8, 1, 1, 24)] end
+    A.orient(List.append(stairs, [
+      A.piece(x, y, z, 1, 3, d, 23), A.piece(x + 9, y, z, 1, 3, d, 23),
+      A.piece(x + 1, y, z, 8, 7, 1, 19),
+      A.piece(x, y + 3, z, 1, 4, roof - 1, 3), A.piece(x + 9, y + 3, z, 1, 4, roof - 1, 3),
+      A.piece(x, y + 7, z, 10, 1, roof, 7), A.piece(x, y + 8, z, 10, 1, roof, 24),
+      A.piece(x + 2, y + 9, z + roof - 2, 6, 4, 1, 7),
+      A.piece(x + 3, y + 10, z + roof - 1, 1, 2, 1, 20),
+      A.piece(x + 4, y + 10, z + roof - 1, 2, 1, 1, 20),
+      A.piece(x + 6, y + 10, z + roof - 1, 1, 2, 1, 20)
+    ]), site.side)
+  end
+  pfn subway_station(c : Ur.Sim.City, i : Int, base : List(Ur.Architecture.Piece)) : List(Ur.Architecture.Piece) do
+    let road = S.get(c.roads, i)
+    let front = frontage(c, i, 0)
+    let sides = if road > 0 do [3, 2, 0, 1]
+      else Cons(front, List.filter([3, 2, 0, 1], fn side -> side != front)) end
+    let depth = if road > 0 do S.sidewalk_width(road) else 11 end
+    let z = if road > 0 do 0 else 32 - depth end
+    let sites = List.flat_map(sides, fn side -> List.map([11, 2, 20], fn x -> (side, x)))
+    let site = List.fold_left(sites, None, fn (found, candidate) ->
+      let (side, x) = candidate
+      if Option.is_some(found) do found else subway_site(c, i, base, side, x, z, depth) end)
+    match site do
+      Some(site) ->
+        let h = S.get(c.heights, i)
+        let pad = A.orient([A.piece(site.x, h, site.z, 10, Math.max_int(0, site.floor - h), site.depth, 24)], site.side)
+        let pad = List.fold_left(base, pad, fn (parts, piece) ->
+          if piece.y < site.floor && piece.y + piece.h > h do cut_road_pieces(parts, piece) else parts end)
+        List.append(subway_entrance(site), List.append(List.filter(pad, fn piece -> piece.h > 0), base))
+      None ->
+        -- Preserve a street-level marker where a crossing or another building
+        -- occupies every shoulder wide enough for the stairwell.
+        let y = S.get(c.heights, i) + 2
+        let marker = [A.piece(15, y, 31, 1, 5, 1, 19), A.piece(14, y + 5, 31, 3, 2, 1, 20)]
+        List.append(A.orient(marker, front), base)
+    end
+  end
+
   fn structures(c : Ur.Sim.City, i : Int, lighting : Int) : List(Ur.Architecture.Piece) do
     structures_cleared(c, i, lighting, Nil)
   end
@@ -1510,11 +1722,9 @@ mod Ur.Landscape do
       1 -> Cons(A.piece(12, y, 0, 8, 1, 32, 16), Cons(A.piece(0, y, 12, 32, 1, 8, 16), base))
       2 -> if stop do Cons(A.piece(1, y, 2, 3, 7, 1, 20), Cons(A.piece(1, y, 3, 4, 1, 7, 7), base)) else base end
       3 ->
-        let base = if stop do Cons(A.piece(2, y, 3, 4, 1, 10, 17), Cons(A.piece(2, y + 1, 3, 1, 6, 1, 20), base)) else base end
-        let east = S.get(c.transit, S.neighbour(i, 0)) == 3 || S.get(c.transit, S.neighbour(i, 1)) == 3
-        if east do Cons(A.piece(0, y, 10, 32, 1, 1, 19), Cons(A.piece(0, y, 20, 32, 1, 1, 19), base))
-        else Cons(A.piece(10, y, 0, 1, 1, 32, 19), Cons(A.piece(20, y, 0, 1, 1, 32, 19), base)) end
-      4 -> if stop do Cons(A.piece(2, y, 2, 7, 3, 6, 19), Cons(A.piece(2, y + 3, 2, 2, 3, 2, 9), base)) else base end
+        let base = if stop do tram_stop(c, i, base) else base end
+        List.append(tram_tracks(c, i), base)
+      4 -> if stop do subway_station(c, i, base) else base end
       _ -> base
     end
     if S.get(c.ferries, i) > 0 && S.get(c.canal_docks, i) == 0 &&

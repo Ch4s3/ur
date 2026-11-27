@@ -1991,12 +1991,6 @@ mod Ur.Hud do
       rain_streaks(a, w, h, time, intensity, i + 1)
     end
   end
-  pfn business_hours(c : Ur.Sim.City, lot : Int) : String do
-    if S.nightlife(c, lot) do
-      if S.quiet_at(c, lot) == 2 do "17:00–22:00" else "17:00–02:00" end
-    else if S.overnight_business(c, lot) do "24 hours"
-    else if S.retail(c, lot) == 1 do "07:00–21:00" else "11:00–23:00" end end end
-  end
   pfn popup_frame(w : Float, h : Float, point : (Float, Float)) : (Float, Float, Float) do
     let (px, py) = point
     let width = if w < 350.0 do w -. 16.0 else 326.0 end
@@ -2489,7 +2483,7 @@ mod Ur.Hud do
         let box = if jobs > 0 && S.get(st.staffed_jobs, lot) < jobs do label(box, x, top, 10.0, S.job_vacancy_reason(c, st, lot), false) else box end
         let top = if jobs > 0 && S.get(st.staffed_jobs, lot) < jobs do top +. 20.0 else top end
         let box = if S.public_trade(c, lot) do
-          label(box, x, top, 11.0, (if S.business_open(c, lot, hour) do "Open · " else "Closed · " end) ++ business_hours(c, lot), false)
+          label(box, x, top, 11.0, (if S.business_open(c, lot, hour) do "Open · " else "Closed · " end) ++ S.business_hours(c, lot), false)
         else if S.business_closed(c, lot) do label(box, x, top, 11.0, "Vacant business premises", false) else box end end
         let box = if S.utility_disruption(c, lot) > 0 && (jobs > 0 || S.business_closed(c, lot)) do
           label(box, x, top +. 21.0, 10.5, S.shop_market_reason(c, st, lot), true)
@@ -2790,7 +2784,7 @@ mod Ur.Hud do
     let a = if layer > 0 && !Ur.Layers.is_utility(layer) do layer_legend(a, layer, layer_detail(c, st, layer, hover)) else a end
     let a = if S.valid(hover) && S.public_trade(c, hover) && !sidebar_visible && !Ur.Layers.is_utility(layer) do
       let open = S.business_open(c, hover, hour)
-      let hours = business_hours(c, hover)
+      let hours = S.business_hours(c, hover)
       label(panel(a, 18.0, 170.0, 326.0, 30.0), 24.0, 176.0, 11.0,
         S.building_name(c, hover) ++ (if open do " · Open · " else " · Closed · " end) ++ hours, open)
     else a end
