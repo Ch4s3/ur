@@ -8,10 +8,11 @@ mod Ur.Scene do
   alias Strata.Quad as Q
   alias Ur.Sim as S
   alias Ur.Landscape as L
+  alias Ur.Architecture as A
   alias Ur.UtilitiesNetwork as Net
   import Ur.SceneMesh.{empty, face, box, vehicle_body}
   pfn canal_material() : Int do 44 end
-  pfn material_count() : Int do Ur.VolcanoRender.ash_material() + Ur.VolcanoRender.ash_materials() end
+  pfn material_count() : Int do A.brick_base() + A.brick_count() end
   pfn colour(i : Int) : (Int, Int, Int) do
     match i do
       0 -> (108, 157, 92)
@@ -53,7 +54,8 @@ mod Ur.Scene do
       54 -> (132, 121, 110)
       55 -> (138, 86, 64)
       56 -> (93, 91, 84)
-      _ -> Ur.ReefArt.colour(i)
+      _ -> if i >= A.brick_base() do A.brick_rgb(i - A.brick_base())
+        else if i >= A.plaster_base() do A.plaster_rgb(i - A.plaster_base()) else Ur.ReefArt.colour(i) end end
     end
   end
   pfn pixels(a : NativeU8Arr, tex : Int, j : Int, r : Int, g : Int, b : Int) : NativeU8Arr do
@@ -61,11 +63,12 @@ mod Ur.Scene do
       let x = j % 16
       let y = j / 16
       let grain = ((x * 43 + y * 71 + x * y * 23) % 13) - 6
-      let pattern = if tex == 6 do (if y == 0 || (x + (y / 8) * 4) % 8 == 0 do -15 else 3 end)
+      let pattern = if tex >= A.brick_base() do (if y % 4 == 0 || (x + (y / 4) * 4) % 8 == 0 do -17 else 3 end)
+        else if tex == 6 do (if y == 0 || (x + (y / 8) * 4) % 8 == 0 do -15 else 3 end)
         else if tex == 17 || tex == 2 do (if y == 0 || x == 0 do -11 else 0 end)
         else if tex == 19 do (if x == 0 || y == 0 do 20 else 0 end)
         else if tex == 3 do (if (x + y / 2) % 15 == 0 do 3 else 0 end)
-        else 0 end end end end
+        else 0 end end end end end
       let delta = grain + pattern
       let a = NativeArray.set_u8(a, j * 4, S.clamp(r + delta, 0, 255))
       let a = NativeArray.set_u8(a, j * 4 + 1, S.clamp(g + delta, 0, 255))
@@ -78,7 +81,8 @@ mod Ur.Scene do
       let steam = i - Ur.VolcanoRender.steam_material()
       let alpha = if i == canal_material() do 214 else if i >= 32 && i <= 34 do 122 - (i - 32) * 31
         else if steam >= 0 && steam < 3 do 142 - steam * 53 else 255 end end end
-      let a = if i >= Ur.VolcanoRender.ash_material() do Ur.VolcanoRender.ash_texture(i - Ur.VolcanoRender.ash_material())
+      let ash = i - Ur.VolcanoRender.ash_material()
+      let a = if ash >= 0 && ash < Ur.VolcanoRender.ash_materials() do Ur.VolcanoRender.ash_texture(ash)
         else pixels(NativeArray.make_u8(1024, alpha), i, 0, red, green, blue) end
       if !Vk.texture_set(i, a) do Ur.AppError.stop("Material texture upload failed") else () end
       let roughness = if i == canal_material() do 28 else if i == 3 do 65 else if i == 9 || i == 19 do 116 else 245 end end end
@@ -820,7 +824,7 @@ mod Ur.Scene do
         let high = S.clamp(p.y + p.h - y, 0, 32)
         if low >= high do pieces(m, a, rest, y, window, shop, every)
         else
-          let emissive = p.material == 20 || p.material >= 26
+          let emissive = p.material == 20 || (p.material >= 26 && p.material < A.plaster_base())
           let volume_piece = if emissive do { p with material: 8 } else p end
           let a = paint(a, volume_piece, low, high, p.x, p.z)
           let m = box(m, p.x, low, p.z, p.w, high - low, p.d, p.material)

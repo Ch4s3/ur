@@ -4,6 +4,31 @@ mod Ur.Architecture do
   fn piece(x : Int, y : Int, z : Int, w : Int, h : Int, d : Int, material : Int) : Piece do
     { x: x, y: y, z: z, w: w, h: h, d: d, material: material }
   end
+  fn plaster_base() : Int do 60 end
+  fn plaster_count() : Int do 8 end
+  fn plaster_rgb(shade : Int) : (Int, Int, Int) do
+    match shade do
+      0 -> (218, 108, 89)
+      1 -> (226, 159, 71)
+      2 -> (232, 204, 137)
+      3 -> (131, 169, 149)
+      4 -> (118, 153, 193)
+      5 -> (225, 158, 151)
+      6 -> (225, 216, 191)
+      _ -> (178, 128, 96)
+    end
+  end
+  fn plaster(shade : Int) : Int do plaster_base() + int_mod_euclid(shade, plaster_count()) end
+  fn brick_base() : Int do plaster_base() + plaster_count() end
+  fn brick_count() : Int do 3 end
+  fn brick(shade : Int) : Int do brick_base() + int_mod_euclid(shade, brick_count()) end
+  fn brick_rgb(shade : Int) : (Int, Int, Int) do
+    match shade do
+      0 -> (170, 106, 83)
+      1 -> (182, 145, 103)
+      _ -> (129, 89, 76)
+    end
+  end
   pfn roof(i : Int, y : Int, material : Int, out : List(Piece)) : List(Piece) do
     if i >= 9 do out else
       roof(i + 1, y, material, Cons(piece(4, y + i, 5 + i, 24, 1, 22 - 2 * i, material), out))
@@ -59,16 +84,38 @@ mod Ur.Architecture do
       opening(first + n * bay, width, if lit && (n + phase) % 3 != 0 do 26 else glass end))
   end
 
+  pfn dress_windows(windows : List(WindowOpening), y : Int, front : Int, skin : Facade,
+    out : List(Piece)) : List(Piece) do
+    List.fold_left(windows, out, fn (parts, window) ->
+      let x = window.start
+      let w = window.width
+      if skin.form == 0 || skin.form == 3 do
+        List.append([piece(x - 1, y + 4, front + 1, 1, 4, 1, 13),
+          piece(x + w, y + 4, front + 1, 1, 4, 1, 13),
+          piece(x, y + 3, front + 1, w, 1, 2, 24)], parts)
+      else
+        List.append([piece(x, y + 2, front + 1, w, 2, 2, 55),
+          piece(x, y + 4, front + 2, w, 1, 1, 21),
+          piece(x + w / 2, y + 5, front + 2, 1, 1, 1, 15)], parts)
+      end)
+  end
+
   pfn facade(y : Int, x : Int, span : Int, front : Int, skin : Facade, lit : Bool,
-    shop : Bool, out : List(Piece)) : List(Piece) do
+    shop : Bool, home : Bool, out : List(Piece)) : List(Piece) do
     let rear = 6
     let side_span = front - rear - 3
     let core = piece(x + 2, y, rear + 2, span - 4, 11, side_span, skin.wall)
     let wide = if skin.form == 1 do 2 else 3 end
     let front_wall = piece(x, y, front - 1, span, 11, 2, skin.wall)
-    let front_parts = if shop do [front_wall] else
-      window_wall(front_wall, 3, y + 4, 4, bays(x, span, wide, skin.glass, lit, x + y))
-    end
+    let windows = bays(x, span, wide, skin.glass, lit, x + y)
+    let window_y = y + (if home do 4 else 3 end)
+    let aperture = if home do 4 else 6 end
+    let front_parts = if shop do [front_wall] else window_wall(front_wall, 3, window_y, aperture, windows) end
+    let front_parts = if shop do front_parts
+      else if home && y == 2 do dress_windows(windows, y, front, skin, front_parts)
+      else if !home do List.append([piece(x + 1, y + 2, front + 1, span - 2, 1, 1, 24),
+        piece(x, y, front + 1, 1, 11, 1, skin.wall), piece(x + span - 1, y, front + 1, 1, 11, 1, skin.wall)], front_parts)
+      else front_parts end end end
     let back = window_wall(piece(x, y, rear, span, 11, 2, skin.wall), 2, y + 4, 4,
       bays(x, span, wide, skin.glass, lit, x + y + 1))
     let west = window_wall(piece(x, y, rear + 2, 2, 11, side_span, skin.wall), 0, y + 4, 4,
@@ -77,7 +124,7 @@ mod Ur.Architecture do
       bays(rear + 2, side_span, 2, skin.glass, lit, x + y + 3))
     List.append(front_parts, List.append(back, List.append(west, List.append(east, Cons(core, out)))))
   end
-  pfn floors(n : Int, level : Int, skin : Facade, lit : Bool, shop : Bool, out : List(Piece)) : List(Piece) do
+  pfn floors(n : Int, level : Int, skin : Facade, lit : Bool, shop : Bool, home : Bool, out : List(Piece)) : List(Piece) do
     if level >= n do out else
       let y = 2 + 11 * level
       -- Above the two setbacks, upper floors continue at the same width.
@@ -87,23 +134,22 @@ mod Ur.Architecture do
       let span = 22 - inset * 2
       let front = 25 - setback
       let floor_lit = lit && (!shop || level > 0) && (n == 1 || (level + skin.form) % 4 != 3)
-      let a = facade(y, x, span, front, skin, floor_lit, shop && level == 0, out)
-      let a = Cons(piece(x - 1, y + 10, 5, span + 2, 1, front - 3, skin.trim), a)
-      let a = if level == 0 || skin.form == 1 do a else
+      let a = facade(y, x, span, front, skin, floor_lit, shop && level == 0, home, out)
+      let a = if home do Cons(piece(x - 1, y + 10, 5, span + 2, 1, front - 3, skin.trim), a) else a end
+      let a = if !home || level == 0 || skin.form == 1 do a else
         let bx = if skin.form == 3 do 15 else if skin.form == 2 do 9 else 11 end end
         let a = Cons(piece(bx, y + 1, front, 10, 1, 30 - front, 17), a)
         let a = Cons(piece(bx, y + 4, 29, 10, 1, 1, skin.trim), a)
         let a = Cons(piece(bx, y + 2, 29, 1, 2, 1, skin.trim), Cons(piece(bx + 9, y + 2, 29, 1, 2, 1, skin.trim), a))
         Cons(piece(bx + 1, y + 2, 27, 3, 2, 2, 14), a)
       end
-      floors(n, level + 1, skin, lit, shop, a)
+      floors(n, level + 1, skin, lit, shop, home, a)
     end
   end
   pfn stepped_office(y : Int, out : List(Piece)) : List(Piece) do
-    let a = Cons(piece(4, y, 4, 24, 2, 23, 17), out)
-    let a = Cons(piece(7, y + 2, 7, 17, 5, 15, 23), a)
-    let a = Cons(piece(9, y + 7, 8, 13, 5, 12, 17), a)
-    Cons(piece(11, y + 12, 10, 9, 3, 8, 56), a)
+    List.append([piece(4, y, 4, 24, 2, 23, 24), piece(5, y + 2, 5, 22, 1, 21, 56),
+      piece(7, y + 3, 7, 14, 5, 11, 23), piece(6, y + 8, 6, 16, 1, 13, 56),
+      piece(22, y + 3, 11, 4, 2, 5, 17)], out)
   end
   pfn garden_office(y : Int, out : List(Piece)) : List(Piece) do
     let a = Cons(piece(4, y, 4, 24, 2, 23, 17), out)
@@ -120,10 +166,20 @@ mod Ur.Architecture do
   end
   pfn entry(home : Bool, shade : Int, out : List(Piece)) : List(Piece) do
     let a = Cons(piece(11, 0, 28, 10, 1, 4, 16), Cons(piece(12, 1, 27, 8, 1, 3, 17), out))
-    let a = Cons(piece(10, 10, 25, 12, 1, 5, if home do 6 else 20 end), a)
-    let a = Cons(piece(11, 7, 28, 1, 2, 1, 20), Cons(piece(20, 7, 28, 1, 2, 1, 20), a))
-    if home do planter(if shade % 2 == 0 do 7 else 21 end, 29, a)
-    else Cons(piece(5, 1, 29, 3, 4, 2, 19), Cons(piece(5, 4, 28, 3, 1, 3, 20), a)) end
+    if home do
+      let awning = if shade % 2 == 0 do 6 else 55 end
+      let porch = [piece(10, 10, 25, 12, 1, 4, awning), piece(10, 9, 29, 12, 1, 2, awning),
+        piece(10, 1, 29, 1, 8, 1, 24), piece(21, 1, 29, 1, 8, 1, 24),
+        piece(11, 7, 28, 1, 2, 1, 15), piece(20, 7, 28, 1, 2, 1, 15)]
+      planter(5, 29, List.append(porch, a))
+    else
+      let accent = plaster(match shade do 0 -> 0 | 1 -> 4 | 2 -> 3 | _ -> 1 end)
+      let entry = [piece(11, 9, 25, 10, 1, 5, accent), piece(11, 9, 30, 10, 1, 1, 56),
+        piece(12, 2, 27, 1, 7, 2, 24), piece(19, 2, 27, 1, 7, 2, 24),
+        piece(14, 3, 29, 4, 6, 1, 9), piece(16, 3, 30, 1, 6, 1, accent),
+        piece(7, 5, 29, 1, 1, 1, accent)]
+      planter(5, 29, List.append(entry, a))
+    end
   end
   pfn canopy(bay : Int, tint : Int, out : List(Piece)) : List(Piece) do
     if bay >= 7 do out else
@@ -141,22 +197,47 @@ mod Ur.Architecture do
     let a = Cons(piece(x + 1, 1, 29, 1, 2, 1, 13), Cons(piece(x, 3, 28, 3, 1, 3, 16), out))
     Cons(piece(x - 2, 1, 29, 1, 2, 2, 6), Cons(piece(x + 4, 1, 29, 1, 2, 2, 6), a))
   end
+  pfn terrace_table(x : Int, out : List(Piece)) : List(Piece) do
+    List.append([piece(x + 1, 1, 29, 1, 2, 1, 13), piece(x, 3, 28, 3, 1, 3, 16),
+      piece(x - 1, 1, 29, 1, 2, 2, 55), piece(x + 3, 1, 29, 1, 2, 2, 55)], out)
+  end
+  pfn tropical_pot(x : Int, out : List(Piece)) : List(Piece) do
+    List.append([piece(x, 1, 28, 3, 2, 3, 55), piece(x, 3, 28, 3, 1, 3, 13), piece(x + 1, 4, 29, 1, 3, 1, 14),
+      piece(x - 1, 5, 29, 3, 1, 1, 21), piece(x + 2, 6, 29, 2, 1, 2, 14),
+      piece(x + 1, 7, 27, 1, 1, 3, 22)], out)
+  end
+  pfn terrace_awning(tint : Int, out : List(Piece)) : List(Piece) do
+    List.fold_left(List.range(0, 8), out, fn (parts, bay) ->
+      let x = 4 + bay * 3
+      let stripe = if tint % 3 == 1 do bay else bay / 2 end
+      let fabric = if stripe % 2 == 0 do tint else plaster(6) end
+      List.append([piece(x, 10, 26, 3, 1, 2, fabric), piece(x, 9, 28, 3, 1, 2, fabric),
+        piece(x, 8, 30, 3, 1, 2, fabric)], parts))
+  end
   pfn shelving(x : Int, colour : Int, out : List(Piece)) : List(Piece) do
     let stand = [piece(x, 1, 29, 4, 1, 2, 13), piece(x, 2, 29, 1, 2, 1, colour),
       piece(x + 1, 2, 29, 1, 1, 1, 12), piece(x + 2, 2, 29, 1, 2, 1, 18),
       piece(x + 3, 2, 29, 1, 1, 1, 8)]
     List.append(stand, out)
   end
-  fn trade_storefront(kind : Ur.Commerce.TradeKind, closed : Bool, lit : Bool, out : List(Piece)) : List(Piece) do
+  fn trade_storefront(kind : Ur.Commerce.TradeKind, closed : Bool, lit : Bool, frontage : Option(Int), out : List(Piece)) : List(Piece) do
     let profile = Ur.Commerce.profile(kind)
-    let tint = profile.colour
+    let dining = profile.storefront == :cafe || profile.storefront == :diner || profile.storefront == :restaurant
+    let terrace = dining && Option.is_some(frontage)
+    let tint = if terrace do plaster(Option.unwrap_or(frontage, 0)) else
+      match profile.colour do 20 -> 7 | 31 -> 18 | _ -> profile.colour end
+    end
     let a = Cons(piece(4, 0, 27, 24, 1, 5, 16), out)
     let glass = if lit do 27 else 9 end
     let left = window_wall(piece(5, 2, 26, 8, 7, 2, 17), 3, 3, 5, [opening(6, 6, glass)])
     let right = window_wall(piece(19, 2, 26, 8, 7, 2, 17), 3, 3, 5, [opening(20, 6, glass)])
     let a = List.append(left, List.append(right, a))
-    let a = Cons(piece(11, 10, 27, 10, 2, 1, tint), Cons(piece(13, 10, 28, 6, 1, 1, 8), a))
-    let a = match profile.storefront do
+    let a = List.append([piece(4, 2, 27, 1, 7, 2, tint), piece(27, 2, 27, 1, 7, 2, tint),
+      piece(5, 1, 28, 8, 1, 1, 55), piece(19, 1, 28, 8, 1, 1, 55),
+      piece(12, 3, 28, 1, 6, 1, 24), piece(19, 3, 28, 1, 6, 1, 24)], a)
+    let sign_y = if terrace do 11 else 10 end
+    let a = Cons(piece(11, sign_y, 27, 10, 2, 1, tint), Cons(piece(13, sign_y, 28, 6, 1, 1, 8), a))
+    let a = if terrace do terrace_awning(tint, a) else match profile.storefront do
       :grocery | :bakery | :fish_market | :restaurant ->
         canopy(0, tint, a)
       :cafe | :diner ->
@@ -165,7 +246,7 @@ mod Ur.Architecture do
         List.append([piece(6, 9, 27, 12, 1, 4, tint), piece(6, 2, 28, 1, 7, 2, 23),
           piece(17, 2, 28, 1, 7, 2, 23), piece(7, 8, 28, 10, 1, 2, 8)], a)
       _ -> List.append([piece(5, 9, 27, 22, 2, 3, tint), piece(8, 9, 30, 16, 1, 1, 8)], a)
-    end
+    end end
     let a = match profile.storefront do
       :pharmacy ->
         List.append([piece(23, 10, 30, 3, 1, 1, 8), piece(24, 9, 30, 1, 1, 1, 8), piece(24, 11, 30, 1, 1, 1, 8)], a)
@@ -176,36 +257,57 @@ mod Ur.Architecture do
     if closed do
       let a = Cons(piece(5, 3, 28, 7, 5, 1, 19), Cons(piece(20, 3, 28, 7, 5, 1, 19), a))
       Cons(piece(12, 2, 29, 8, 6, 1, 17), Cons(piece(12, 5, 30, 8, 1, 1, 23), a))
+    else if terrace do
+      let a = tropical_pot(3, tropical_pot(27, a))
+      terrace_table(8, terrace_table(22, Cons(piece(19, 1, 30, 1, 3, 1, 56), a)))
     else match profile.storefront do
       :grocery | :corner_market -> produce_stand(6, 21, produce_stand(22, 10, a))
       :bakery -> produce_stand(6, 15, shelving(22, 5, a))
       :fish_market -> produce_stand(6, 12, produce_stand(22, 9, a))
-      :bookshop -> shelving(6, 15, shelving(22, 21, a))
+      :bookshop ->
+        let sign = [piece(5, 7, 29, 1, 1, 2, 13), piece(4, 5, 30, 3, 2, 1, 55),
+          piece(5, 5, 31, 1, 1, 1, 24)]
+        shelving(6, 15, shelving(22, 21, List.append(sign, a)))
       :repair_shop ->
         List.append([piece(7, 2, 28, 10, 6, 1, 4), piece(8, 1, 29, 8, 1, 3, 17),
           piece(23, 1, 29, 2, 2, 2, 19), piece(25, 2, 29, 2, 3, 2, 6)], a)
       :pharmacy -> a
+      :cafe | :diner | :restaurant ->
+        let sign = [piece(18, 1, 30, 3, 3, 1, 13), piece(18, 1, 31, 3, 2, 1, 56),
+          piece(19, 2, 31, 1, 1, 1, 24)]
+        cafe_table(6, cafe_table(23, List.append(sign, a)))
       _ -> cafe_table(6, cafe_table(23, a))
-    end end
+    end end end
   end
   fn storefront(grocery : Bool, closed : Bool, lit : Bool, out : List(Piece)) : List(Piece) do
-    trade_storefront(Ur.Commerce.standard(grocery), closed, lit, out)
+    trade_storefront(Ur.Commerce.standard(grocery), closed, lit, None, out)
+  end
+  pfn dormer(x : Int, y : Int, wall : Int, tile : Int, out : List(Piece)) : List(Piece) do
+    let front = window_wall(piece(x, y + 3, 24, 6, 5, 2, wall), 3, y + 4, 3, [opening(x + 2, 2, 9)])
+    let cap = [piece(x, y + 3, 19, 6, 5, 5, wall),
+      piece(x - 1, y + 8, 18, 8, 1, 9, tile), piece(x, y + 9, 19, 6, 1, 8, tile),
+      piece(x + 1, y + 10, 20, 4, 1, 7, tile), piece(x + 1, y + 3, 26, 4, 1, 1, 24)]
+    List.append(front, List.append(cap, out))
   end
   fn building(levels : Int, home : Bool, seed : Int, roofed : Bool, shop : Bool, lit : Bool) : List(Piece) do
     let y = 2 + levels * 11
     let form = seed % 4
     let shade = (seed / 4) % 4
-    let wall = if home do (if shade == 0 do 18 else if shade == 1 do 5 else if shade == 2 do 8 else 7 end end end)
-      else if shade == 0 do 23 else if shade == 1 do 8 else if shade == 2 do 7 else 19 end end end end
+    let wall = if home do (if shade == 0 do 18 else if shade == 1 do 5 else if shade == 2 do 8 else plaster(3) end end end)
+      else if shade == 1 do plaster(6) else brick(shade) end end
     let trim = if shade == 3 do 8 else if form == 1 do 19 else 17 end end
     let glass = 9
     let a = Cons(piece(3, 0, 3, 26, 2, 27, 17), Nil)
-    let a = floors(levels, 0, { wall: wall, trim: trim, glass: glass, form: form }, lit, shop, a)
+    let a = floors(levels, 0, { wall: wall, trim: trim, glass: glass, form: form }, lit, shop, home, a)
     let a = Cons(piece(13, 2, 26, 6, 8, 2, 13), Cons(piece(14, 3, 28, 4, 6, 1, 7), a))
     let a = if shop do a else entry(home, shade, a) end
     if !roofed do a
     else if home && (form == 0 || form == 3) do
-      let a = roof(0, y, if shade % 2 == 0 do 19 else 6 end, a)
+      let tile = match shade do 0 -> 6 | 1 -> 55 | 2 -> 56 | _ -> 13 end
+      let a = roof(0, y, tile, a)
+      let a = Cons(piece(4, y, 26, 24, 1, 2, 24), a)
+      let a = dormer(8, y, wall, tile, a)
+      let a = if form == 3 do dormer(18, y, wall, tile, a) else a end
       Cons(piece(20, y + 3, 12, 3, 10, 3, 17), Cons(piece(19, y + 13, 11, 5, 1, 5, 13), a))
     else if form == 2 do garden_office(y, a)
     else if !home && form == 0 do stepped_office(y, a)
@@ -244,6 +346,85 @@ mod Ur.Architecture do
       end
     end
     List.append(roof, building(levels, false, seed, roofed && List.is_empty(roof), true, false))
+  end
+  type Townhouse = { x : Int, span : Int, wall : Int, tile : Int, form : Int, shop : Bool, lit : Bool }
+
+  pfn sash(window : WindowOpening, y : Int, out : List(Piece)) : List(Piece) do
+    let x = window.start
+    let w = window.width
+    List.append([piece(x - 1, y - 1, 26, w + 2, 1, 1, 24), piece(x, y + 6, 26, w, 1, 1, 24),
+      piece(x + w / 2, y, 25, 1, 6, 1, 24), piece(x, y + 3, 25, w, 1, 1, 24)], out)
+  end
+
+  pfn townhouse_floor(level : Int, house : Townhouse, out : List(Piece)) : List(Piece) do
+    let x = house.x
+    let span = house.span
+    let y = 2 + level * 11
+    let top = y + 3
+    let glass = if house.lit && (level + house.form) % 4 != 3 do 26 else 9 end
+    let windows = bays(x, span, 4, glass, false, 0)
+    let windows = if level == 0 do List.filter(windows, fn window -> window.start < 12 || window.start >= 20) else windows end
+    let face = piece(x, y, 24, span, 11, 2, house.wall)
+    let front = if house.shop && level == 0 do [face] else
+      List.fold_left(windows, window_wall(face, 3, top, 6, windows), fn (parts, window) -> sash(window, top, parts))
+    end
+    let back = window_wall(piece(x, y, 4, span, 11, 2, house.wall), 2, top, 6, bays(x, span, 4, glass, false, 0))
+    let west = window_wall(piece(x, y, 6, 2, 11, 18, house.wall), 0, top, 6, [opening(9, 4, glass), opening(17, 4, 9)])
+    let east = window_wall(piece(x + span - 2, y, 6, 2, 11, 18, house.wall), 1, top, 6, [opening(9, 4, 9), opening(17, 4, glass)])
+    let core = piece(x + 2, y, 6, span - 4, 11, 18, house.wall)
+    List.append(front, List.append(back, List.append(west, List.append(east, Cons(core, out)))))
+  end
+
+  pfn townhouse_gable(y : Int, house : Townhouse, out : List(Piece)) : List(Piece) do
+    List.fold_left(List.range(0, (house.span + 2) / 3), out, fn (parts, row) ->
+      let slope = row * 3 / 2
+      let step = if house.form == 2 do slope / 3 * 3 else slope end
+      let x = house.x + step
+      let span = house.span - step * 2
+      let wall = piece(x, y + row, 24, span, 1, 2, house.wall)
+      let roof = piece(house.x + slope, y + row, 4, house.span - slope * 2, 1, 20, house.tile)
+      Cons(wall, Cons(roof, parts)))
+  end
+
+  pfn townhouse_roof(y : Int, house : Townhouse, out : List(Piece)) : List(Piece) do
+    let edge = Cons(piece(house.x, y - 1, 24, house.span, 1, 3, 24), out)
+    let roof = if house.form == 1 do
+      let ridge = List.fold_left(List.range(0, 11), edge, fn (parts, row) ->
+        Cons(piece(house.x, y + row, 4 + row, house.span, 1, 22 - row * 2, house.tile), parts))
+      dormer(house.x + 4, y, house.wall, house.tile, dormer(house.x + house.span - 10, y, house.wall, house.tile, ridge))
+    else if house.form == 3 do
+      List.append([piece(house.x, y, 4, house.span, 1, 22, 56),
+        piece(house.x, y + 1, 24, house.span, 2, 2, house.wall),
+        piece(house.x, y + 3, 24, house.span, 1, 3, 24),
+        piece(house.x + 3, y + 1, 9, 10, 3, 6, 23)], edge)
+    else
+      let gable = townhouse_gable(y, house, edge)
+      let attic = [piece(13, y + 2, 26, 6, 1, 1, 24), piece(14, y + 3, 26, 4, 4, 1, 9),
+        piece(16, y + 3, 27, 1, 4, 1, 24)]
+      List.append(attic, gable)
+    end end
+    if house.form == 3 do roof else
+      Cons(piece(house.x + 5, y + 4, 13, 3, 7, 3, brick(0)), Cons(piece(house.x + 4, y + 11, 12, 5, 1, 5, 56), roof))
+    end
+  end
+
+  fn townhouse(levels : Int, seed : Int, shade : Int, roofed : Bool, shop : Bool, lit : Bool) : List(Piece) do
+    let x = 1 + seed % 2
+    let tile = match seed / 3 % 4 do 0 | 1 -> 6 | 2 -> 55 | _ -> 56 end
+    let wall = if shade % 4 == 1 do brick(shade / 3) else plaster(shade) end
+    let house = { x: x, span: 32 - x * 2, wall: wall, tile: tile, form: seed % 4, shop: shop, lit: lit }
+    let base = [piece(x, 0, 4, house.span, 2, 22, 24), piece(x, 12, 24, house.span, 1, 3, 24)]
+    let parts = List.fold_left(List.range(0, levels), base, fn (out, level) -> townhouse_floor(level, house, out))
+    let parts = if shop do
+      List.append([piece(13, 2, 26, 6, 8, 2, 13), piece(14, 3, 28, 4, 6, 1, 7)], parts)
+    else
+      let door = if shade % 2 == 0 do 7 else plaster(shade + 3) end
+      let entrance = [piece(12, 0, 26, 8, 1, 6, 16), piece(13, 1, 26, 6, 9, 1, 8),
+        piece(14, 2, 27, 4, 7, 1, door), piece(16, 6, 28, 1, 1, 1, 15),
+        piece(12, 10, 26, 8, 1, 4, tile), piece(11, 9, 28, 10, 1, 3, tile)]
+      tropical_pot(4, List.append(entrance, parts))
+    end
+    if roofed do townhouse_roof(2 + levels * 11, house, parts) else parts end
   end
   fn parking_pad(kind : Int, out : List(Piece)) : List(Piece) do
     let out = Cons(piece(25, 0, 24, 7, 1, 8, 17), out)

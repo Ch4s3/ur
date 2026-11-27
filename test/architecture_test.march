@@ -62,6 +62,70 @@ mod ArchitectureTest do
       "The track at a route end supports the rear wheels of a stopped tram")
   end
 
+  pfn street_buildings() : Unit do
+    let plaster = A.plaster_base()
+    let house = A.townhouse(3, 0, 2, true, false, false)
+    let cafe = Ur.Commerce.dining(1, true)
+    let terrace = A.trade_storefront(cafe, false, false, Some(3), house)
+    Test.assert_true(has(house, 1, 20, 24, plaster + 2) && has(house, 6, 16, 24, 9) &&
+      has(house, 6, 15, 26, 24) && has(house, 16, 44, 16, 6),
+      "A painted row house has tall recessed windows, narrow stone sills and a tiled gable")
+    Test.assert_true(has(terrace, 4, 8, 31, plaster + 3) && has(terrace, 11, 8, 31, plaster + 6) &&
+      has(terrace, 4, 5, 29, 14) && has(terrace, 9, 3, 29, 16),
+      "A sidewalk cafe has striped shade, tropical plants and outdoor tables")
+    Test.assert_true(has(terrace, 14, 10, 27, plaster + 6) && !has(terrace, 14, 10, 27, plaster + 3) &&
+      has(terrace, 14, 11, 27, plaster + 3), "The cafe fascia clears the top row of the striped awning")
+    Test.assert_true(List.all([0, 1, 2, 3], fn side -> List.all(A.orient(terrace, side), fn p ->
+      p.x >= 0 && p.z >= 0 && p.x + p.w <= 32 && p.z + p.d <= 32)),
+      "Cafe furniture, canopies and the gabled building stay inside the parcel on every frontage")
+
+    let c = S.new()
+    let empty = NativeArray.make_int(S.count(), 0)
+    let lots = List.map(List.range(20, 38), fn x -> S.index(x, 24))
+    let buildings = List.fold_left(lots, empty, fn (field, lot) -> NativeArray.set_int(field, lot, 2))
+    let roads = List.fold_left(lots, empty, fn (field, lot) -> NativeArray.set_int(field, S.neighbour(lot, 3), 3))
+    let block = { c with zones: buildings, buildings: buildings, roads: empty, transit: empty }
+    let street = { block with roads: roads }
+    let cafes = fn city -> List.length(List.filter(lots, fn lot -> S.building_name(city, lot) == "Cafe"))
+    Test.assert_true(cafes(street) > cafes(block), "Pedestrian frontage makes cafes more common among dining businesses")
+  end
+
+  pfn brick_buildings() : Unit do
+    let c = S.new()
+    let empty = NativeArray.make_int(S.count(), 0)
+    let school = S.index(25, 24)
+    let depot = S.index(26, 24)
+    let factory = S.index(27, 24)
+    let heights = NativeArray.make_int(S.count(), 12)
+    let plants = NativeArray.set_int(NativeArray.set_int(empty, school, 18), depot, 23)
+    let c = { c with heights: heights, roads: empty, plants: plants,
+      zones: NativeArray.set_int(empty, factory, 4), buildings: NativeArray.set_int(empty, factory, 2) }
+    let brick = fn p -> p.material >= A.brick_base() && p.material < A.brick_base() + A.brick_count()
+    Test.assert_true(List.all([school, depot, factory], fn lot -> List.any(L.structures(c, lot, 0), brick)),
+      "Education, transport and industry use the shared brick palette")
+    Test.assert_true(List.any(A.building(8, false, 0, true, false, false), brick),
+      "Tall offices use brick without inheriting the row-house roof")
+  end
+
+  pfn civic_entries() : Unit do
+    let base = S.new()
+    let empty = NativeArray.make_int(S.count(), 0)
+    let clinic = S.index(25, 24)
+    let depot = S.index(26, 24)
+    let plants = NativeArray.set_int(NativeArray.set_int(empty, clinic, 19), depot, 23)
+    let c = { base with heights: NativeArray.make_int(S.count(), 12), plants: plants, roads: empty, transit: empty }
+    let clinic_parts = L.structures(c, clinic, 0)
+    Test.assert_true(has(clinic_parts, 15, 19, 18, 9) && !has(clinic_parts, 16, 17, 25, -1) &&
+      has(clinic_parts, 16, 26, 28, 6) && has(clinic_parts, 16, 13, 31, 16),
+      "The clinic has a recessed doorway, a clear approach, and a visible medical sign")
+    let expanded = { c with facility_expansion: NativeArray.set_int(empty, clinic, 2) }
+    Test.assert_true(has(L.structures(expanded, clinic, 0), 29, 17, 10, A.brick(1)),
+      "The clinic extension meets the main building in matching masonry")
+    let depot_parts = L.structures(c, depot, 0)
+    Test.assert_true(!has(depot_parts, 16, 21, 25, -1) && has(depot_parts, 16, 23, 25, 56),
+      "The redesigned depot canopy leaves the turning bay open below it")
+  end
+
   fn main(_cap : Cap(IO)) : Unit do
     let parts = A.building(2, true, 0, true, false, false)
     Test.assert_true(!has(parts, 8, 7, 25, -1) && has(parts, 8, 7, 24, 9) &&
@@ -87,6 +151,9 @@ mod ArchitectureTest do
       "The shop pane sits behind the frame and still emits light")
     commercial_trade()
     graded_tram_track()
+    street_buildings()
+    brick_buildings()
+    civic_entries()
     Authority.must(println("Architecture checks passed"))
   end
 end

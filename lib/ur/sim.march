@@ -182,10 +182,17 @@ mod Ur.Sim do
     int_mod_euclid(x * 23 + z * 37 + x * z * 7 + seed, 257)
   end
   pfn open_all_day(i : Int) : Bool do (i % width() + i / width()) % 5 == 0 end
+  fn sidewalk_frontage(c : City, i : Int, side : Int) : Int do
+    if side >= 4 do -1 else
+      let peer = neighbour(i, side)
+      if get(c.roads, peer) > 0 || get(c.transit, peer) == 1 do side
+      else sidewalk_frontage(c, i, side + 1) end
+    end
+  end
   fn trade_kind(c : City, i : Int) : Option(Ur.Commerce.TradeKind) do
     match building_use(c, i) do
       Grocery | GroceryHomes -> Some(Commerce.food_shop(trade_variant(c, i), open_all_day(i)))
-      Restaurant | RestaurantHomes -> Some(Commerce.dining(trade_variant(c, i)))
+      Restaurant | RestaurantHomes -> Some(Commerce.dining(trade_variant(c, i), sidewalk_frontage(c, i, 0) >= 0))
       Bar | BarHomes -> Some(Commerce.nightlife(trade_variant(c, i)))
       Workplace ->
         if get(c.zones, i) == 2 && get(c.business_sector, i) == 0 && ground_at(c, i) != 1 do

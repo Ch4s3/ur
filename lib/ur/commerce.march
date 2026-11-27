@@ -35,10 +35,12 @@ mod Ur.Commerce do
     end
   end
 
-  fn dining(variation : Int) : TradeKind do
-    match variation % 3 do
-      0 -> Cafe
-      1 -> Diner
+  fn dining(variation : Int, sidewalk : Bool) : TradeKind do
+    match variation % 6 do
+      0 | 3 -> Cafe
+      1 -> if sidewalk do Cafe else Diner end
+      2 -> if sidewalk do Cafe else Restaurant end
+      4 -> Diner
       _ -> Restaurant
     end
   end
