@@ -669,8 +669,9 @@ mod Ur.Hud do
       else if S.get(c.public_parking, lot) > 0 do S.parking_name(S.get(c.public_parking, lot))
       else if S.get(c.heights, lot) == 0 do "Water" else "Parcel" end end end end end end end end end end end end end end
     if S.automatic_canal_gate(c, lot) do "Automatic flood gate"
+      else if S.canal_footbridge(c, lot) > 0 do "Canal footbridge"
       else if S.water_bus_yard(c, lot) do "Water bus maintenance dock"
-      else if S.water_bus_site(c, lot) do "Water bus stop" else name end end end
+      else if S.water_bus_site(c, lot) do "Water bus stop" else name end end end end
   end
   pfn parcel_kind(c : Ur.Sim.City, lot : Int) : InspectorKind do
     if S.building_name(c, lot) != "" || S.fire_rebuilding(c, lot) || lot == c.harbour do BuildingInspector else TileInspector end
@@ -806,7 +807,7 @@ mod Ur.Hud do
       let land = "Pollution " ++ int_to_string(S.land_pollution_at(c, hover)) ++ "% · " ++
         S.nuisance_name(S.get(c.nuisance, hover)) ++ " nuisance limit · Land $" ++ int_to_string(S.land_value(c, hover))
       let a = if height > 0 do fitted(a, x, y +. 155.0, left, 11.0, land, false) else a end
-      let trip = S.commute(st.commutes, hover)
+      let trip = S.commute_with(c, st.commutes, hover)
       let travel = if S.water_bus_site(c, hover) do S.water_bus_summary(c, hover)
       else if S.get(c.ferries, hover) > 0 do S.ferry_summary(c, hover)
       else if S.get(c.transit, hover) >= 2 do

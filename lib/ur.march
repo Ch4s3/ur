@@ -1568,7 +1568,7 @@ mod Ur do
     let people = Ur.Citizens.refresh_with(c, Nil, st.routes, st.people, st.job_matches)
     let assigned = List.length(List.filter(people, fn p -> p.home == home && p.work == work && p.study < 0))
     Authority.must(println(label ++ " month=" ++ int_to_string(c.month) ++ service ++
-      " commute=" ++ int_to_string(S.commute(st.commutes, home)) ++
+      " commute=" ++ int_to_string(S.commute_with(c, st.commutes, home)) ++
       " east_jobs=" ++ int_to_string(S.get(st.staffed_jobs, work)) ++
       " visible_west_to_east=" ++ int_to_string(assigned) ++
       " fares=$" ++ int_to_string(st.budget.bus_fares) ++ " operating_cost=$" ++ int_to_string(st.budget.bus_operations) ++

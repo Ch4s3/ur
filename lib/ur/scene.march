@@ -1479,6 +1479,7 @@ mod Ur.Scene do
   pfn changed(a : Ur.Sim.City, b : Ur.Sim.City, i : Int) : Bool do
     S.valid(i) && (S.get(a.road_shapes, i) != S.get(b.road_shapes, i) ||
       S.get(a.quays, i) != S.get(b.quays, i) ||
+      S.canal_footbridge(a, i) != S.canal_footbridge(b, i) ||
       S.get(a.water_bus, i) != S.get(b.water_bus, i) || S.get(a.canals, i) != S.get(b.canals, i) || S.get(a.canal_docks, i) != S.get(b.canal_docks, i) ||
       (a.harbour_basin != b.harbour_basin && (i == a.harbour_basin || i == b.harbour_basin || i == a.harbour || i == b.harbour)) ||
       S.public_work_stage(a, i) != S.public_work_stage(b, i) || S.get(a.seawalls, i) != S.get(b.seawalls, i) || S.flood_repair_days(a, i) != S.flood_repair_days(b, i) || S.get(a.sidewalk_items, i) != S.get(b.sidewalk_items, i) || S.get(a.waste_bins, i) != S.get(b.waste_bins, i) || (a.harbour != b.harbour && (i == a.harbour || i == b.harbour)) || S.get(a.heights, i) != S.get(b.heights, i) || S.campus_root(a, i) != S.campus_root(b, i) || S.get(a.roads, i) != S.get(b.roads, i) || S.get(a.grade_cover, i) != S.get(b.grade_cover, i) || S.get(a.fire_recovery, i) != S.get(b.fire_recovery, i) || S.get(a.park_tiers, i) != S.get(b.park_tiers, i) || S.get(a.streetscape, i) != S.get(b.streetscape, i) || S.get(a.parks, i) != S.get(b.parks, i) || S.get(a.tolls, i) != S.get(b.tolls, i) || S.get(a.public_parking, i) != S.get(b.public_parking, i) ||
@@ -3459,6 +3460,78 @@ mod Ur.Scene do
   pfn walk_lerp(ax : Int, az : Int, bx : Int, bz : Int, t : Float) : (Int, Int) do
     (ax + float_to_int(int_to_float(bx - ax) *. t), az + float_to_int(int_to_float(bz - az) *. t))
   end
+  pfn canal_corner_position(c : Ur.Sim.City, node : Int) : (Int, Int, Int) do
+    let lot = S.walk_lot(node)
+    let corner = S.canal_walk_corner(node)
+    let x = lot % S.width() * 32 + 4 + 24 * (corner % 2)
+    let z = lot / S.width() * 32 + 4 + 24 * (corner / 2)
+    (x, z, S.canal_bank_height(c, lot) + 1)
+  end
+  pfn footbridge_landing(lot : Int, x : Int, z : Int, east : Bool) : (Int, Int, Int, Int) do
+    let left = lot % S.width() * 32
+    let top = lot / S.width() * 32
+    if east do
+      let edge = left + (if x - left < 16 do 0 else 31 end)
+      (edge, z, edge, top + 16)
+    else
+      let edge = top + (if z - top < 16 do 0 else 31 end)
+      (x, edge, left + 16, edge)
+    end
+  end
+  pfn footbridge_approach(x : Int, z : Int, landing : (Int, Int, Int, Int), t : Float) : (Int, Int) do
+    let (turn_x, turn_z, entry_x, entry_z) = landing
+    if t <= 0.25 do walk_lerp(x, z, turn_x, turn_z, t *. 4.0)
+    else walk_lerp(turn_x, turn_z, entry_x, entry_z, (t -. 0.25) /. 0.75) end
+  end
+  pfn footbridge_walk_position(c : Ur.Sim.City, a : Int, b : Int, t : Float) : (Int, Int, Int) do
+    let lot = S.walk_lot(a)
+    let (ax, az, _) = canal_corner_position(c, a)
+    let (bx, bz, _) = canal_corner_position(c, b)
+    let east = S.canal_footbridge(c, lot) == 2
+    let base = S.canal_bank_height(c, lot) + 1
+    let start = footbridge_landing(lot, ax, az, east)
+    let finish = footbridge_landing(lot, bx, bz, east)
+    if t < 0.25 do
+      let (x, z) = footbridge_approach(ax, az, start, t *. 4.0)
+      (x, z, base)
+    else if t > 0.75 do
+      let (x, z) = footbridge_approach(bx, bz, finish, (1.0 -. t) *. 4.0)
+      (x, z, base)
+    else
+      let (_, _, start_x, start_z) = start
+      let (_, _, end_x, end_z) = finish
+      let (x, z) = walk_lerp(start_x, start_z, end_x, end_z, (t -. 0.25) *. 2.0)
+      (x, z, S.canal_footbridge_height(c, lot, (if east do x else z end) % 32))
+    end end
+  end
+  fn canal_walk_position(c : Ur.Sim.City, a : Int, b : Int, side : Int, t : Float) : (Int, Int, Int) do
+    if S.canal_footbridge_link(c, a, b) do footbridge_walk_position(c, a, b, t)
+    else bank_walk_position(c, a, b, side, t) end
+  end
+  pfn bank_walk_position(c : Ur.Sim.City, a : Int, b : Int, side : Int, t : Float) : (Int, Int, Int) do
+    let reverse = !S.canal_walk_node(a)
+    let (bank, peer, t) = if reverse do (b, a, 1.0 -. t) else (a, b, t) end
+    let lot = S.walk_lot(bank)
+    let (ax, az, ay) = canal_corner_position(c, bank)
+    let (bx, bz, by) = if S.canal_walk_node(peer) do canal_corner_position(c, peer)
+      else if S.canal_water(c, peer) do canal_corner_position(c, S.canal_boardwalk(c, peer))
+      else walking_point(c, peer, lot, side) end end
+    let (x, z) = if S.canal_walk_node(peer) || S.canal_water(c, peer) do walk_lerp(ax, az, bx, bz, t)
+      else
+        -- Leave the canal square perpendicular to its edge before turning
+        -- towards the neighbouring door or sidewalk.
+        let edge = S.direction(lot, peer)
+        let (ex, ez) = match edge do
+          0 -> (lot % S.width() * 32 - 1, az)
+          1 -> ((lot % S.width() + 1) * 32, az)
+          2 -> (ax, lot / S.width() * 32 - 1)
+          _ -> (ax, (lot / S.width() + 1) * 32)
+        end
+        if t < 0.25 do walk_lerp(ax, az, ex, ez, t *. 4.0)
+        else walk_lerp(ex, ez, bx, bz, (t -. 0.25) /. 0.75) end
+      end
+    (x, z, ay + float_to_int(int_to_float(by - ay) *. t))
+  end
   pfn school_walk(c : Ur.Sim.City, person : Ur.Citizens.Citizen, a : Int, b : Int, side : Int, t : Float) : (Int, Int, Int) do
     let prev = person.previous
     let transfer = S.valid(prev) && (S.program_at(c, a) >= 0 || S.valid(S.campus_root(c, a))) &&
@@ -3513,6 +3586,12 @@ mod Ur.Scene do
   -- The walker's position as if its progress were [t].
   pfn walker_position_at(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, person : Ur.Citizens.Citizen, t : Float, a : Int, b : Int) : (Int, Int, Int) do
     let side = if person.id % 2 == 0 do 3 else 29 end
+    if S.canal_walk_node(a) || S.canal_walk_node(b) do canal_walk_position(c, a, b, side, t) else
+      street_walker_position(c, map, person, t, a, b, side)
+    end
+  end
+  pfn street_walker_position(c : Ur.Sim.City, map : Ur.Citizens.WalkMap, person : Ur.Citizens.Citizen, t : Float,
+    a : Int, b : Int, side : Int) : (Int, Int, Int) do
     let ay = walking_height(c, a)
     let height_b = walking_height(c, b)
     let (x, z) = if S.get(c.roads, a) > 0 && S.get(c.roads, b) > 0 do
@@ -3795,13 +3874,14 @@ mod Ur.Scene do
     end
   end
   pfn walking_segment(c : Ur.Sim.City, person : Ur.Citizens.Citizen, a : Int, b : Int) : Bool do
-    if person.transit_phase == 3 || (person.progress > 0.0 && S.canal_taxi_leg(c, a, b)) || Ur.Citizens.driving(c, person, a, b) do false else
+    if S.canal_walk_node(a) || S.canal_walk_node(b) do S.canal_walk_link(c, a, b)
+    else if person.transit_phase == 3 || (person.progress > 0.0 && S.canal_taxi_leg(c, a, b)) || Ur.Citizens.driving(c, person, a, b) do false else
       match (person.car_phase, Ur.Citizens.parking_at(person.parking), Ur.Citizens.parking_at(person.arrival)) do
         (1, Some(p), _) -> b != p.road || person.progress < 0.5
         (2, _, Some(p)) -> a != p.road || person.progress >= 0.5
         _ -> true
       end
-    end
+    end end
   end
   -- Every lot a vehicle footprint (this frame's or the last, the two sets footprint_blocked tests)
   -- reaches into: its bounds, widened by a few voxels for rounding. Read on the main thread once
@@ -3845,6 +3925,7 @@ mod Ur.Scene do
       Cons(n, Cons(m, _)) -> (n, m)
       _ -> (a, b)
     end
+    let (a, b, n, m) = (S.walk_lot(a), S.walk_lot(b), S.walk_lot(n), S.walk_lot(m))
     let w = S.width()
     let x0 = Math.min_int(Math.min_int(a % w, b % w), Math.min_int(n % w, m % w))
     let x1 = Math.max_int(Math.max_int(a % w, b % w), Math.max_int(n % w, m % w))

@@ -1478,6 +1478,22 @@ mod Ur.Landscape do
       ]), side)
     end
   end
+  pfn footbridge_tread(c : Ur.Sim.City, i : Int, east : Bool, across : Int, length : Int) : List(Ur.Architecture.Piece) do
+    let y = S.canal_footbridge_height(c, i, across)
+    let tread = canal_piece(east, across, y - 1, 12, length, 1, 8, 24)
+    if across == 0 || across == 31 do [tread]
+    else [tread, canal_piece(east, across, y, 12, length, 2, 1, 19),
+      canal_piece(east, across, y, 19, length, 2, 1, 19)] end
+  end
+  pfn canal_footbridge_parts(c : Ur.Sim.City, i : Int) : List(Ur.Architecture.Piece) do
+    let across = S.canal_footbridge(c, i)
+    if across == 0 do Nil else
+      let east = across == 2
+      let steps = List.append(List.range(0, 8), List.range(24, 32))
+      List.append(footbridge_tread(c, i, east, 8, 16),
+        List.flat_map(steps, fn at -> footbridge_tread(c, i, east, at, 1)))
+    end
+  end
   pfn canal_parts(c : Ur.Sim.City, i : Int) : List(Ur.Architecture.Piece) do
     let east = S.canal_outlet(c, i, 0) || S.canal_outlet(c, i, 1) ||
       (!(S.canal_outlet(c, i, 2) || S.canal_outlet(c, i, 3)) && (S.canal_arm(c, i, 0) || S.canal_arm(c, i, 1)))
@@ -1500,8 +1516,9 @@ mod Ur.Landscape do
     let quays = if dock > 0 || i == c.harbour_basin do
       List.append(dry_quay(c, i, bank, if dock == 1 do 7 else 10 end), works)
       else works end
-    canal_bank(c, i, 0, List.append(if S.water_bus_site(c, i) do water_bus_berth(c, i, bank, water) else Nil end,
-      List.append(canal_cranes(c, i, bank), quays)))
+    canal_bank(c, i, 0, List.append(canal_footbridge_parts(c, i),
+      List.append(if S.water_bus_site(c, i) do water_bus_berth(c, i, bank, water) else Nil end,
+        List.append(canal_cranes(c, i, bank), quays))))
   end
   pfn harbour_quay(c : Ur.Sim.City, lot : Int, base : List(Ur.Architecture.Piece)) : List(Ur.Architecture.Piece) do
     let side = S.harbour_quay_side(c)

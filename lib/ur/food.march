@@ -13,6 +13,19 @@ mod Ur.Food do
     let tail = r.tail
     { next: NativeArray.set_int(links, i, next), queue: NativeArray.set_int(queue, tail, i), tail: tail + 1 }
   end
+  pfn walking_mode(mode : Int) : Bool do mode == 0 || mode == 4 end
+  pfn walk_edge(r : Routes, node : Int, parent : Int) : Routes do
+    if S.walk_node_value(r.next, node) < 0 do enqueue(r, node, parent) else r end
+  end
+  pfn bank_edges(c : Ur.Sim.City, r : Routes, i : Int) : Routes do
+    let lot = S.walk_lot(i)
+    let edges = S.canal_bank_edges(c, i)
+    let berth = i == S.canal_boardwalk(c, lot) &&
+      (S.get(c.canal_docks, lot) == 1 || S.water_bus_site(c, lot) || S.get(r.next, lot) == lot)
+    let r = if berth do walk_edge(r, lot, i) else r end
+    List.fold_left(edges, r, fn (r, node) ->
+      if S.canal_walk_node(node) || walkable(c, node) do walk_edge(r, node, i) else r end)
+  end
 
   pfn visit(c : Ur.Sim.City, r : Routes, i : Int, d : Int, mode : Int) : Routes do
     if d >= 8 do r else
@@ -29,7 +42,13 @@ mod Ur.Food do
         5 | 6 -> d < 4 && S.transit_link(c, i, j, mode - 2)
         _ -> walkable(c, j)
       end
-      let r = if open && S.get(r.next, j) < 0 && (mode == 6 || d >= 4 || int_abs(S.get(c.heights, i) - S.get(c.heights, j)) <= 12) do
+      let walking = walking_mode(mode)
+      let r = if walking && d < 4 && !S.canal_water(c, i) &&
+        (mode != 4 || !S.valid(S.campus_root(c, i)) || i == S.campus_root(c, i)) do
+        List.fold_left(S.canal_bank_entry(c, i, d), r, fn (r, node) -> walk_edge(r, node, i))
+      else r end
+      let surface = !walking || d >= 4 || (!S.canal_water(c, i) && !S.canal_water(c, j))
+      let r = if open && surface && S.get(r.next, j) < 0 && (mode == 6 || d >= 4 || int_abs(S.get(c.heights, i) - S.get(c.heights, j)) <= 12) do
         enqueue(r, j, i)
       else r end
       visit(c, r, i, d + 1, mode)
@@ -45,7 +64,12 @@ mod Ur.Food do
 
   pfn expand(c : Ur.Sim.City, r : Routes, head : Int, mode : Int) : Routes do
     if head >= r.tail do r else
-      expand(c, visit(c, r, S.get(r.queue, head), 0, mode), head + 1, mode)
+      let i = NativeArray.get_int(r.queue, head)
+      let next = if S.canal_walk_node(i) do bank_edges(c, r, i) else
+        let r = if walking_mode(mode) && S.canal_walk_open(c, i) do walk_edge(r, S.canal_boardwalk(c, i), i) else r end
+        visit(c, r, i, 0, mode)
+      end
+      expand(c, next, head + 1, mode)
     end
   end
   pfn flood(c : Ur.Sim.City, r : Routes, head : Int, mode : Int) : NativeIntArr do
@@ -53,13 +77,14 @@ mod Ur.Food do
     result.next
   end
 
-  fn destinations(c : Ur.Sim.City, destination : (Int) -> Bool) : NativeIntArr do
-    let r = { next: NativeArray.make_int(S.count(), -1), queue: NativeArray.make_int(S.count(), 0), tail: 0 }
-    flood(c, seed(c, destination, r, 0), 0, 0)
+  pfn walk_destinations(c : Ur.Sim.City, destination : (Int) -> Bool, mode : Int) : NativeIntArr do
+    let size = if S.has_canals(c) do S.walk_node_count() else S.count() end
+    let r = { next: NativeArray.make_int(size, -1), queue: NativeArray.make_int(size, 0), tail: 0 }
+    flood(c, seed(c, destination, r, 0), 0, mode)
   end
+  fn destinations(c : Ur.Sim.City, destination : (Int) -> Bool) : NativeIntArr do walk_destinations(c, destination, 0) end
   fn campus_destinations(c : Ur.Sim.City, destination : (Int) -> Bool) : NativeIntArr do
-    let r = { next: NativeArray.make_int(S.count(), -1), queue: NativeArray.make_int(S.count(), 0), tail: 0 }
-    flood(c, seed(c, destination, r, 0), 0, 4)
+    walk_destinations(c, destination, 4)
   end
   fn driving_destinations_avoiding(c : Ur.Sim.City, target : Int, blocked : Int) : NativeIntArr do
     let next = NativeArray.make_int(S.count(), -1)
@@ -97,16 +122,25 @@ mod Ur.Food do
   end
 
   fn path_to(links : NativeIntArr, i : Int, suffix : List(Int)) : List(Int) do
-    let parent = S.get(links, i)
-    if parent == i || !S.valid(parent) do Cons(i, suffix)
+    let parent = S.walk_node_value(links, i)
+    if parent == i || parent < 0 do Cons(i, suffix)
     else path_to(links, parent, Cons(i, suffix)) end
   end
 
+  fn entrances(c : Ur.Sim.City, links : NativeIntArr, i : Int, side : Int) : List(Int) do
+    let j = S.neighbour(i, side)
+    if S.canal_water(c, j) do
+      List.filter(S.canal_bank_entry(c, i, side), fn node -> S.walk_node_value(links, node) >= 0)
+    else if walkable(c, j) && S.get(links, j) >= 0 &&
+      int_abs(S.get(c.heights, i) - S.get(c.heights, j)) <= 12 do [j]
+    else Nil end end
+  end
   fn entrance(c : Ur.Sim.City, links : NativeIntArr, i : Int, d : Int) : Int do
     if d >= 4 do -1 else
-      let j = S.neighbour(i, d)
-      if walkable(c, j) && S.get(links, j) >= 0 && int_abs(S.get(c.heights, i) - S.get(c.heights, j)) <= 12 do j
-      else entrance(c, links, i, d + 1) end
+      match entrances(c, links, i, d) do
+        Cons(node, _) -> node
+        Nil -> entrance(c, links, i, d + 1)
+      end
     end
   end
 
