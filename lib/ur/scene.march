@@ -1793,22 +1793,25 @@ mod Ur.Scene do
     let m = paired_trim(m, 1, 0, wheel, 2, breadth, 4)
     paired_trim(m, length - wheel - 1, 0, wheel, 2, breadth, 4)
   end
-  pfn tram_windows(m : Ur.SceneMesh.Mesh, x : Int, length : Int) : Ur.SceneMesh.Mesh do
-    if x + 3 >= length do m else
-      tram_windows(paired_trim(m, x, 4, 2, 2, 5, 9), x + 3, length)
+  pfn passenger_windows(m : Ur.SceneMesh.Mesh, x : Int, limit : Int, breadth : Int) : Ur.SceneMesh.Mesh do
+    if x + 2 > limit do m else
+      passenger_windows(paired_trim(m, x, 4, 2, 2, breadth, 9), x + 3, limit, breadth)
     end
   end
   pfn hull_box(m : Ur.SceneMesh.Mesh, east : Bool, x : Int, y : Int, z : Int, w : Int, h : Int, d : Int, tex : Int) : Ur.SceneMesh.Mesh do
     if east do box(m, x, y, z, w, h, d, tex) else box(m, z, y, x, d, h, w, tex) end
   end
+  pfn ferry_length() : Int do 19 end
+  pfn ferry_breadth() : Int do 8 end
   pfn vessel_mesh(fishing : Bool, east : Bool) : Ur.SceneMesh.Mesh do
-    let length = if fishing do 15 else 19 end
-    let breadth = if fishing do 6 else 8 end
+    let length = if fishing do 15 else ferry_length() end
+    let breadth = if fishing do 6 else ferry_breadth() end
+    let hull = if fishing do 7 else 19 end
     let body = if fishing do { words: NativeArray.make_i32(576, 0), quads: 0 } else vehicle_body() end
     let m = hull_box(body, east, 1, 0, 1, length - 3, 1, breadth - 2, 19)
-    let m = hull_box(m, east, 0, 1, 0, length - 3, 2, breadth, 7)
-    let m = hull_box(m, east, length - 3, 1, 1, 2, 2, breadth - 2, 7)
-    let m = hull_box(m, east, length - 1, 1, 2, 1, 2, breadth - 4, 7)
+    let m = hull_box(m, east, 0, 1, 0, length - 3, 2, breadth, hull)
+    let m = hull_box(m, east, length - 3, 1, 1, 2, 2, breadth - 2, hull)
+    let m = hull_box(m, east, length - 1, 1, 2, 1, 2, breadth - 4, hull)
     let m = hull_box(m, east, 0, 3, 0, length - 3, 1, breadth, 8)
     let m = hull_box(m, east, length - 3, 3, 1, 2, 1, breadth - 2, 8)
     let m = hull_box(m, east, 1, 4, 0, 5, 1, 1, 17)
@@ -1825,9 +1828,14 @@ mod Ur.Scene do
       let m = hull_box(m, east, 7, 8, 3, 1, 3, 1, 17)
       hull_box(m, east, 7, 10, 1, 1, 1, 2, 17)
     else
-      let m = hull_box(m, east, 9, 5, 0, 1, 2, 1, 8)
-      let m = hull_box(m, east, 9, 5, breadth - 1, 1, 2, 1, 8)
-      hull_box(m, east, 2, 4, 2, 3, 1, breadth - 4, 13)
+      let m = List.fold_left([7, 10, 13], m, fn (boat, post) ->
+        let boat = hull_box(boat, east, post, 5, 0, 1, 2, 1, 8)
+        hull_box(boat, east, post, 5, breadth - 1, 1, 2, 1, 8))
+      let m = hull_box(m, east, 6, 4, 0, 9, 1, 1, 7)
+      let m = hull_box(m, east, 6, 4, breadth - 1, 9, 1, 1, 7)
+      let m = hull_box(m, east, 2, 4, 2, 3, 1, breadth - 4, 13)
+      let m = hull_box(m, east, 11, 8, 3, 3, 1, 2, 17)
+      hull_box(m, east, 12, 9, 3, 1, 1, 1, 8)
     end
   end
   pfn fishing_net(m : Ur.SceneMesh.Mesh, spread : Int) : Ur.SceneMesh.Mesh do
@@ -1840,21 +1848,27 @@ mod Ur.Scene do
         if row % 2 == 0 do box(mesh, row, 0, 9 + row, 2 * (spread - row) + 1, 1, 1, 17) else mesh end)
     end
   end
-  pfn vehicle_mesh(mode : Int) : Ur.SceneMesh.Mesh do
-    let tram = mode == 3
-    let length = if tram do 16 else 10 end
-    let colour = if tram do 6 else if mode == 2 do 10 else 7 end end
-    let m = running_gear(vehicle_body(), length, 5, 2)
-    let m = box(m, 0, 2, 0, length, 1, 5, colour)
-    let m = box(m, 0, 3, 0, length, 1, 5, 8)
-    let m = box(m, 1, 4, 1, length - 2, 2, 3, 19)
-    let m = tram_windows(m, 1, length)
-    let m = box(m, length - 1, 4, 1, 1, 2, 3, 9)
-    let m = box(m, 0, 4, 1, 1, 2, 3, 9)
-    let m = box(m, 0, 6, 0, length, 1, 5, 8)
-    let m = box(m, 3, 7, 1, length - 6, 1, 3, 17)
-    if tram do box(m, 7, 8, 2, 3, 1, 1, 19)
-    else paired_trim(m, 7, 4, 2, 2, 5, 19) end
+  type PassengerBody = { mesh : Ur.SceneMesh.Mesh, length : Int, width : Int }
+  pfn passenger_body(tram : Bool) : PassengerBody do
+    let length = if tram do 18 else 12 end
+    let width = if tram do 6 else 5 end
+    let colour = if tram do 6 else 7 end
+    let m = running_gear(vehicle_body(), length, width, if tram do 3 else 2 end)
+    let m = box(m, 1, 2, 0, length - 2, 1, width, colour)
+    let m = box(m, 1, 3, 0, length - 2, 1, width, if tram do 8 else 20 end)
+    let m = box(m, 0, 2, 1, 1, 2, width - 2, colour)
+    let m = box(m, length - 1, 2, 1, 1, 1, width - 2, colour)
+    let m = box(m, length - 1, 3, 1, 1, 1, width - 2, 19)
+    let m = box(m, 1, 4, 1, length - 2, 2, width - 2, 19)
+    let m = passenger_windows(m, 2, if tram do length - 2 else length - 4 end, width)
+    let m = box(m, length - 1, 4, 1, 1, 2, width - 2, 9)
+    let m = box(m, 0, 4, 1, 1, 2, width - 2, if tram do 9 else 19 end)
+    let m = box(m, 1, 6, 0, length - 2, 1, width, 8)
+    let m = box(m, 3, 7, 1, length - 6, 1, width - 2, if tram do 17 else 8 end)
+    let m = if tram do
+      box(box(m, 7, 8, 2, 4, 1, 2, 19), 8, 9, 2, 2, 1, 2, 17)
+    else paired_trim(m, length - 4, 4, 2, 2, width, 12) end
+    { mesh: m, length: length, width: width }
   end
   -- [blocks]: whether walkers yield to it. Only a vehicle in traffic does; a parked car is street furniture.
   pfn pose_vehicle(slot : Int, mesh : Ur.SceneMesh.Mesh, x : Float, y : Float, z : Float, dx : Float, dz : Float, length : Float, width : Float, lights : Bool, blocks : Bool) : Unit do
@@ -2010,25 +2024,50 @@ mod Ur.Scene do
       None -> (0.0, true)
     end
   end
-  -- Where ferry [i]'s boat is: its mesh's low corner in voxels and whether it runs along x, or None when [i] is not the lower end of a crossing.
-  pfn ferry_spot(c : Ur.Sim.City, i : Int, time : Float, clock : Float) : Option((Int, Int, Bool)) do
+  type FerryPose = { x : Float, z : Float, dx : Float, dz : Float }
+  pfn ferry_spot(c : Ur.Sim.City, i : Int, time : Float, clock : Float) : Option(FerryPose) do
     let peer = S.get(c.ferries, i) - 1
     if !S.valid(peer) || peer <= i || S.get(c.canal_docks, i) > 0 do None else
       let passage = S.crossing_navigation(c, i, peer, S.ferry_air_draft(c, i))
       if passage == -2 do None else
-      let phase = time *. 0.25 +. int_to_float(i % 11) *. 0.17
-      let fraction = phase -. Math.floor(phase)
-      let sweep = if fraction < 0.5 do fraction *. 2.0 else (1.0 -. fraction) *. 2.0 end
-      let (position, _) = lift_vessel(c, i)
-      let t = if passage >= 0 do position else vessel_progress(c, i, clock, sweep) end
-      let x0 = i % S.width()
-      let z0 = i / S.width()
-      let x1 = peer % S.width()
-      let z1 = peer / S.width()
-      let x = x0 * 32 + 9 + float_to_int(int_to_float((x1 - x0) * 32) *. t)
-      let z = z0 * 32 + 9 + float_to_int(int_to_float((z1 - z0) * 32) *. t)
-      Some((x, z, int_abs(x1 - x0) >= int_abs(z1 - z0)))
-    end end
+        let phase = time *. 0.25 +. int_to_float(i % 11) *. 0.17
+        let fraction = phase -. Math.floor(phase)
+        let forward = fraction < 0.5
+        let sweep = (if forward do fraction else 1.0 -. fraction end) *. 2.0
+        let (position, outbound) = if passage >= 0 do lift_vessel(c, i) else
+          let outbound = match c.freight do
+            Some(route) -> if S.freight_port(c, i) do i == route.island else forward end
+            None -> forward
+          end
+          (vessel_progress(c, i, clock, sweep), outbound)
+        end
+        let x = int_to_float(i % S.width() * 8 + 4)
+        let z = int_to_float(i / S.width() * 8 + 4)
+        let vx = int_to_float(peer % S.width() * 8 + 4) -. x
+        let vz = int_to_float(peer / S.width() * 8 + 4) -. z
+        let distance = Math.sqrt(vx *. vx +. vz *. vz)
+        let dx = vx /. distance
+        let dz = vz /. distance
+        -- Keep the bow clear of the terminal platform without shifting bridge encounters.
+        let platform = 13.0 *. (Math.abs(dx) +. Math.abs(dz))
+        let berth = Math.min_float((platform +. int_to_float(ferry_length()) *. 0.5) *. 0.25, distance *. 0.45)
+        let at = Math.max_float(berth, Math.min_float(distance -. berth, distance *. position))
+        let sign = if outbound do 1.0 else -1.0 end
+        Some({ x: x +. dx *. at, z: z +. dz *. at, dx: dx *. sign, dz: dz *. sign })
+      end
+    end
+  end
+  pfn ferry_pose(slot : Int, boat : FerryPose, height : Float, nx : Float, nz : Float, nw : Float) : Unit do
+    let heading = Math.atan2(0.0 -. boat.dz, boat.dx) *. 0.5
+    let sy = Math.sin(heading)
+    let cy = Math.cos(heading)
+    let qx = nx *. cy -. nz *. sy
+    let qy = nw *. sy
+    let qz = nz *. cy +. nx *. sy
+    let qw = nw *. cy
+    let (ox, oy, oz) = Ur.SceneMesh.turn(qx, qy, qz, qw,
+      int_to_float(ferry_length()) *. 0.125, 0.0, int_to_float(ferry_breadth()) *. 0.125)
+    Vk.slot_pose(slot, boat.x -. ox, height -. 0.125 -. oy, boat.z -. oz, qx, qy, qz, qw)
   end
   type FloodGate = { slot : Int, lot : Int, side : Int, bottom : Int, height : Int,
     closed : Bool, from : Float, since : Float, moving : Bool }
@@ -2139,8 +2178,11 @@ mod Ur.Scene do
   pfn canal_boat_mesh(taxi : Bool) : Ur.SceneMesh.Mesh do
     if taxi do vessel_mesh(true, true) else
       let m = box(vehicle_body(), 1, 0, 1, 17, 1, 6, 19)
-      let m = box(m, 0, 1, 0, 19, 2, 8, 13)
-      let m = box(m, 0, 3, 0, 19, 1, 8, 8)
+      let m = box(m, 0, 1, 0, 16, 2, 8, 13)
+      let m = box(m, 16, 1, 1, 2, 2, 6, 13)
+      let m = box(m, 18, 1, 2, 1, 2, 4, 13)
+      let m = box(m, 0, 3, 0, 16, 1, 8, 8)
+      let m = box(m, 16, 3, 1, 2, 1, 6, 8)
       let m = box(m, 2, 4, 1, 5, 3, 6, 9)
       -- The center bay is clear for the crane's suspended load.
       box(m, 14, 4, 1, 4, 3, 6, 10)
@@ -2277,8 +2319,11 @@ mod Ur.Scene do
   end
   pfn water_bus_mesh() : Ur.SceneMesh.Mesh do
     let mesh = box(vehicle_body(), 1, 0, 1, 16, 1, 6, 19)
-    let mesh = box(mesh, 0, 1, 0, 18, 2, 8, 7)
-    let mesh = box(mesh, 0, 3, 0, 18, 1, 8, 17)
+    let mesh = box(mesh, 0, 1, 0, 15, 2, 8, 7)
+    let mesh = box(mesh, 15, 1, 1, 2, 2, 6, 7)
+    let mesh = box(mesh, 17, 1, 2, 1, 2, 4, 7)
+    let mesh = box(mesh, 0, 3, 0, 15, 1, 8, 8)
+    let mesh = box(mesh, 15, 3, 1, 2, 1, 6, 8)
     let mesh = box(mesh, 2, 4, 1, 13, 3, 6, 9)
     let mesh = List.fold_left([4, 7, 10, 13], mesh, fn (mesh, x) -> box(mesh, x, 4, 1, 1, 3, 6, 17))
     let mesh = box(mesh, 1, 7, 0, 15, 1, 8, 17)
@@ -2324,12 +2369,12 @@ mod Ur.Scene do
     let slot = rotor_slot(i)
     match ferry_spot(c, i, time, clock) do
       None -> if refresh do Vk.chunk_free(slot) else () end
-      Some((x, z, east)) ->
+      Some(boat) ->
         if refresh do
-          let mesh = vessel_mesh(false, east)
+          let mesh = vessel_mesh(false, true)
           if Vk.body_begin(slot) && Vk.chunk_part(0, mesh.words, mesh.quads) && Vk.chunk_commit() do () else Ur.AppError.stop("Ferry upload failed") end
         else () end
-        Vk.slot_pose(slot, int_to_float(x) *. 0.25, 0.25, int_to_float(z) *. 0.25, 0.0, 0.0, 0.0, 1.0)
+        ferry_pose(slot, boat, 0.0, 0.0, 0.0, 1.0)
     end
     end
   end
@@ -2340,24 +2385,20 @@ mod Ur.Scene do
       else if S.get(c.ferries, i) > 0 && !S.wind_turbine(S.get(c.plants, i)) do
         match ferry_spot(c, i, time, clock) do
           None -> ()
-          Some((x, z, east)) ->
-            -- the hull's middle at the waterline, its half length and half breadth, in metres
-            let half_l = 19.0 *. 0.125
-            let half_b = 8.0 *. 0.125
-            let (lx, lz) = if east do (half_l, half_b) else (half_b, half_l) end
-            let cx = int_to_float(x) *. 0.25 +. lx
-            let cz = int_to_float(z) *. 0.25 +. lz
-            let e = Ur.Sea.exposure_at(exposure, cx, cz)
-            let sea = fn (px : Float, pz : Float) -> Strata.Waves.height(waves, field, e, px, pz, water_time)
-            let mid = sea(cx, cz)
-            let (ax, az) = if east do (1.0, 0.0) else (0.0, 1.0) end
-            let bow = sea(cx +. ax *. half_l, cz +. az *. half_l)
-            let stern = sea(cx -. ax *. half_l, cz -. az *. half_l)
-            let port = sea(cx +. az *. half_b, cz +. ax *. half_b)
-            let star = sea(cx -. az *. half_b, cz -. ax *. half_b)
+          Some(boat) ->
+            let half_l = int_to_float(ferry_length()) *. 0.125
+            let half_b = int_to_float(ferry_breadth()) *. 0.125
+            let exposure = Ur.Sea.exposure_at(exposure, boat.x, boat.z)
+            let sea = fn (x : Float, z : Float) -> Strata.Waves.height(waves, field, exposure, x, z, water_time)
+            let mid = sea(boat.x, boat.z)
+            let bow = sea(boat.x +. boat.dx *. half_l, boat.z +. boat.dz *. half_l)
+            let stern = sea(boat.x -. boat.dx *. half_l, boat.z -. boat.dz *. half_l)
+            let port = sea(boat.x -. boat.dz *. half_b, boat.z +. boat.dx *. half_b)
+            let star = sea(boat.x +. boat.dz *. half_b, boat.z -. boat.dx *. half_b)
             let along = (bow -. stern) /. (2.0 *. half_l)
             let across = (port -. star) /. (2.0 *. half_b)
-            let (gx, gz) = if east do (along, across) else (across, along) end
+            let gx = boat.dx *. along -. boat.dz *. across
+            let gz = boat.dz *. along +. boat.dx *. across
             -- no steeper than 20 degrees
             let steep = Math.sqrt(gx *. gx +. gz *. gz)
             let limit = 0.364
@@ -2372,9 +2413,7 @@ mod Ur.Scene do
             let qx = nz /. ql
             let qz = 0.0 -. nx /. ql
             let qw = (1.0 +. ny) /. ql
-            -- the low corner, so the hull's middle stays at (cx, heave, cz)
-            let (ox, oy, oz) = Ur.SceneMesh.turn(qx, 0.0, qz, qw, lx, 0.0, lz)
-            Vk.slot_pose(rotor_slot(i), cx -. ox, 0.25 +. heave -. oy, cz -. oz, qx, 0.0, qz, qw)
+            ferry_pose(rotor_slot(i), boat, heave, qx, qz, qw)
         end
       else () end end
       float_ferries(c, waves, field, exposure, water_time, time, clock, i + 1)
@@ -2932,6 +2971,10 @@ mod Ur.Scene do
     let offset = if magnitude > 0.0001 do (taper *. 3.0 +. spread) *. sign /. magnitude else 0.0 end
     (x -. dz *. offset, z +. dx *. offset)
   end
+  pfn draw_bus(slot : Int, x : Float, y : Float, z : Float, dx : Float, dz : Float) : Unit do
+    let body = passenger_body(false)
+    posed_vehicle(slot, body.mesh, x, y, z, dx, dz, int_to_float(body.length), int_to_float(body.width))
+  end
   pfn bus_pose(c : Ur.Sim.City, trip : Ur.Food.Trip, i : Int, j : Int, index : Int, t : Float, forward : Bool, rotation : Float, slot : Int, section : Bool) : Unit do
     let bulb = trip.mode == 2 && index == trip.legs - 1 && S.span_distance(i, j) == 1 &&
       S.motor_street(c, j) && S.street_end_arm(c, j) == S.direction(j, i)
@@ -2953,14 +2996,51 @@ mod Ur.Scene do
     let y = if grade do S.grade_surface(c, i, j, t) +. 2.0 else ay +. (end_y -. ay) *. height_t end
     if bulb && t >= 1.0 do
       let (x, z, dx, dz) = turnaround_pose(i, j, rotation)
-      posed_vehicle(slot, vehicle_mesh(2), x, y, z, dx, dz, 10.0, 5.0)
+      draw_bus(slot, x, y, z, dx, dz)
     else if grade && covered_lane(c, i, x, z, section) do Vk.chunk_free(slot)
     else
       let front_x = dx *. Math.cos(rotation) -. dz *. Math.sin(rotation)
       let front_z = dz *. Math.cos(rotation) +. dx *. Math.sin(rotation)
       if trip.mode == 9 do posed_vehicle(slot, delivery_mesh(9), x, y, z, front_x, front_z, 11.0, 6.0)
-      else posed_vehicle(slot, vehicle_mesh(2), x, y, z, front_x, front_z, 10.0, 5.0) end
+      else draw_bus(slot, x, y, z, front_x, front_z) end
     end end
+  end
+  pfn rail_centre(lot : Int) : (Float, Float) do
+    (int_to_float(lot % S.width() * 32 + 16), int_to_float(lot / S.width() * 32 + 16))
+  end
+  pfn rail_position(c : Ur.Sim.City, trip : Ur.Food.Trip, index : Int, a : Int, b : Int, t : Float) : (Float, Float) do
+    let turn = if t < 0.125 do index else if t > 0.875 do index + 1 else -1 end end
+    let centre = if turn == index do a else b end
+    if turn > 0 && turn < trip.legs && L.tram_bend(c, centre) do
+      let (previous, centre) = Ur.Food.leg(trip.stops, turn - 1)
+      let (_, next) = Ur.Food.leg(trip.stops, turn)
+      let (x, z) = rail_centre(centre)
+      let (px, pz) = rail_centre(previous)
+      let (nx, nz) = rail_centre(next)
+      let u = (if turn == index do t +. 0.125 else t -. 0.875 end) *. 4.0
+      let angle = u *. 1.5707963268
+      let from = 0.125 *. (1.0 -. Math.sin(angle))
+      let toward = 0.125 *. (1.0 -. Math.cos(angle))
+      (x +. from *. (px -. x) +. toward *. (nx -. x),
+       z +. from *. (pz -. z) +. toward *. (nz -. z))
+    else
+      let (x, z) = rail_centre(a)
+      let (nx, nz) = rail_centre(b)
+      (x +. (nx -. x) *. t, z +. (nz -. z) *. t)
+    end
+  end
+  pfn draw_tram(c : Ur.Sim.City, trip : Ur.Food.Trip, index : Int, a : Int, b : Int, t : Float, forward : Bool, slot : Int) : Unit do
+    let (x, z) = rail_position(c, trip, index, a, b, t)
+    let (px, pz) = rail_position(c, trip, index, a, b, Math.max_float(0.0, t -. 0.01))
+    let (nx, nz) = rail_position(c, trip, index, a, b, Math.min_float(1.0, t +. 0.01))
+    let lot = if t < 0.5 do a else b end
+    let rail_x = S.clamp(float_to_int(x) - lot % S.width() * 32, 0, 31)
+    let rail_z = S.clamp(float_to_int(z) - lot / S.width() * 32, 0, 31)
+    let y = int_to_float(L.tram_track_height(c, lot, rail_x, rail_z))
+    let sign = if forward do 1.0 else -1.0 end
+    let body = passenger_body(true)
+    posed_vehicle(slot, body.mesh, x, y, z, (nx -. px) *. sign, (nz -. pz) *. sign,
+      int_to_float(body.length), int_to_float(body.width))
   end
   pfn trip_pose(c : Ur.Sim.City, trip : Ur.Food.Trip, step : Float, forward : Bool, rotation : Float, slot : Int, section : Bool) : Unit do
     let index = S.clamp(float_to_int(step), 0, trip.legs - 1)
@@ -2980,12 +3060,7 @@ mod Ur.Scene do
     let h = S.get(c.heights, i)
     let y = if boat do 1 else h + 2 + float_to_int(int_to_float(S.get(c.heights, j) - h) *. t) end
     if trip.mode == 4 || (ferry && S.get(c.canal_docks, i) > 0) do Vk.chunk_free(slot)
-    else if trip.mode == 3 do
-      let direction = if forward do 1.0 else -1.0 end
-      posed_vehicle(slot, vehicle_mesh(3),
-        int_to_float(ix * 32 + 16) +. int_to_float(dx * 32) *. t, int_to_float(y + 1),
-        int_to_float(iz * 32 + 16) +. int_to_float(dz * 32) *. t,
-        int_to_float(dx) *. direction, int_to_float(dz) *. direction, 16.0, 5.0)
+    else if trip.mode == 3 do draw_tram(c, trip, index, i, j, t, forward, slot)
     else if trip.mode == 2 || (trip.mode == 9 && (index == 0 || index == trip.legs - 1 || (index == 1 && t < 0.2) || (index == trip.legs - 2 && t > 0.8))) do bus_pose(c, trip, i, j, index, t, forward, rotation, slot, section)
     else if (trip.mode == 6 || trip.mode == 9) && !ferry do delivery_pose(c, trip, i, j, index, t, forward, slot, section) else
       if farm do
@@ -3562,8 +3637,8 @@ mod Ur.Scene do
     end
   end
   pfn lane_pose(c : Ur.Sim.City, id : Int, a : Int, b : Int, t : Float) : CarPose do
-    let lane_a = if S.get(c.roads, a) == 2 && id % 2 == 0 do 10.0 else 5.0 end
-    let lane_b = if S.get(c.roads, b) == 2 && id % 2 == 0 do 10.0 else 5.0 end
+    let lane_a = if S.get(c.roads, a) == 2 && id % 2 == 0 do 9.0 else 5.0 end
+    let lane_b = if S.get(c.roads, b) == 2 && id % 2 == 0 do 9.0 else 5.0 end
     let grade = S.grade_link(c, a, b)
     let lane = if grade && S.mountain_tunnel(c, a, b) do
       let distance = int_to_float(S.span_distance(a, b)) *. (if t < 0.5 do t else 1.0 -. t end)
@@ -3626,21 +3701,26 @@ mod Ur.Scene do
     end
   end
   pfn draw_car(id : Int, pose : CarPose, slot : Int, moving : Bool, night : Bool) : Unit do
-    let colour = match id % 4 do
+    let length = 8
+    let width = 3
+    let colour = match id % 6 do
       0 -> 6
       1 -> 7
       2 -> 8
-      _ -> 10
+      3 -> 15
+      4 -> 31
+      _ -> 21
     end
-    let m = running_gear(vehicle_body(), 7, 3, 1)
-    let m = box(m, 0, 2, 0, 7, 1, 3, colour)
-    let m = box(m, 1, 3, 0, 2, 1, 3, 9)
-    let m = box(m, 3, 3, 0, 1, 1, 3, 19)
-    let m = box(m, 4, 3, 0, 1, 1, 3, 9)
-    let m = box(m, 2, 4, 0, 2, 1, 3, colour)
-    let m = box(m, 6, 1, 1, 1, 1, 1, 17)
-    let m = paired_trim(m, 0, 1, 1, 1, 3, if moving && night do 30 else 6 end)
-    pose_vehicle(slot, m, pose.x, pose.y, pose.z, pose.dx, pose.dz, 7.0, 3.0, moving, moving)
+    let m = running_gear(vehicle_body(), length, width, 1)
+    let m = box(m, 1, 2, 0, 6, 1, width, colour)
+    let m = box(m, 0, 2, 1, 1, 1, 1, colour)
+    let m = box(m, 7, 2, 1, 1, 1, 1, 17)
+    let m = box(m, 2, 3, 0, 1, 1, width, 9)
+    let m = box(m, 3, 3, 0, 1, 1, width, 19)
+    let m = box(m, 4, 3, 0, 2, 1, width, 9)
+    let m = box(m, 3, 4, 0, 2, 1, width, colour)
+    let m = paired_trim(m, 0, 2, 1, 1, width, if moving && night do 30 else 6 end)
+    pose_vehicle(slot, m, pose.x, pose.y, pose.z, pose.dx, pose.dz, int_to_float(length), int_to_float(width), moving, moving)
   end
   pfn parked_car(c : Ur.Sim.City, id : Int, parking : Int, slot : Int, reuse : Bool) : Unit do
     match Ur.Citizens.parking_at(parking) do

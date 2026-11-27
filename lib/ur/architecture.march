@@ -101,16 +101,15 @@ mod Ur.Architecture do
   end
   pfn stepped_office(y : Int, out : List(Piece)) : List(Piece) do
     let a = Cons(piece(4, y, 4, 24, 2, 23, 17), out)
-    let a = Cons(piece(7, y + 2, 7, 17, 5, 15, 7), a)
-    let a = Cons(piece(9, y + 7, 8, 13, 5, 12, 9), a)
-    let a = Cons(piece(11, y + 12, 10, 9, 3, 8, 19), a)
-    Cons(piece(14, y + 15, 13, 2, 1, 2, 20), a)
+    let a = Cons(piece(7, y + 2, 7, 17, 5, 15, 23), a)
+    let a = Cons(piece(9, y + 7, 8, 13, 5, 12, 17), a)
+    Cons(piece(11, y + 12, 10, 9, 3, 8, 56), a)
   end
   pfn garden_office(y : Int, out : List(Piece)) : List(Piece) do
     let a = Cons(piece(4, y, 4, 24, 2, 23, 17), out)
-    let a = Cons(piece(6, y + 2, 6, 11, 7, 14, 9), a)
+    let a = Cons(piece(6, y + 2, 6, 11, 7, 14, 23), a)
     let a = Cons(piece(5, y + 9, 5, 13, 1, 16, 8), a)
-    let a = Cons(piece(6, y + 10, 6, 11, 1, 14, 19), a)
+    let a = Cons(piece(6, y + 10, 6, 11, 1, 14, 56), a)
     let a = Cons(piece(19, y + 2, 6, 7, 1, 18, 22), a)
     let a = Cons(piece(20, y + 3, 9, 4, 3, 4, 14), a)
     let a = Cons(piece(20, y + 3, 17, 4, 4, 4, 21), a)
@@ -142,20 +141,55 @@ mod Ur.Architecture do
     let a = Cons(piece(x + 1, 1, 29, 1, 2, 1, 13), Cons(piece(x, 3, 28, 3, 1, 3, 16), out))
     Cons(piece(x - 2, 1, 29, 1, 2, 2, 6), Cons(piece(x + 4, 1, 29, 1, 2, 2, 6), a))
   end
-  fn storefront(grocery : Bool, closed : Bool, lit : Bool, out : List(Piece)) : List(Piece) do
-    let tint = if grocery do 21 else 6 end
+  pfn shelving(x : Int, colour : Int, out : List(Piece)) : List(Piece) do
+    let stand = [piece(x, 1, 29, 4, 1, 2, 13), piece(x, 2, 29, 1, 2, 1, colour),
+      piece(x + 1, 2, 29, 1, 1, 1, 12), piece(x + 2, 2, 29, 1, 2, 1, 18),
+      piece(x + 3, 2, 29, 1, 1, 1, 8)]
+    List.append(stand, out)
+  end
+  fn trade_storefront(kind : Ur.Commerce.TradeKind, closed : Bool, lit : Bool, out : List(Piece)) : List(Piece) do
+    let profile = Ur.Commerce.profile(kind)
+    let tint = profile.colour
     let a = Cons(piece(4, 0, 27, 24, 1, 5, 16), out)
     let glass = if lit do 27 else 9 end
     let left = window_wall(piece(5, 2, 26, 8, 7, 2, 17), 3, 3, 5, [opening(6, 6, glass)])
     let right = window_wall(piece(19, 2, 26, 8, 7, 2, 17), 3, 3, 5, [opening(20, 6, glass)])
     let a = List.append(left, List.append(right, a))
     let a = Cons(piece(11, 10, 27, 10, 2, 1, tint), Cons(piece(13, 10, 28, 6, 1, 1, 8), a))
-    let a = canopy(0, tint, a)
+    let a = match profile.storefront do
+      :grocery | :bakery | :fish_market | :restaurant ->
+        canopy(0, tint, a)
+      :cafe | :diner ->
+        List.append([piece(5, 9, 27, 22, 1, 5, tint), piece(5, 8, 31, 22, 1, 1, 8)], a)
+      :repair_shop ->
+        List.append([piece(6, 9, 27, 12, 1, 4, tint), piece(6, 2, 28, 1, 7, 2, 23),
+          piece(17, 2, 28, 1, 7, 2, 23), piece(7, 8, 28, 10, 1, 2, 8)], a)
+      _ -> List.append([piece(5, 9, 27, 22, 2, 3, tint), piece(8, 9, 30, 16, 1, 1, 8)], a)
+    end
+    let a = match profile.storefront do
+      :pharmacy ->
+        List.append([piece(23, 10, 30, 3, 1, 1, 8), piece(24, 9, 30, 1, 1, 1, 8), piece(24, 11, 30, 1, 1, 1, 8)], a)
+      :bookshop ->
+        Cons(piece(6, 6, 29, 1, 4, 3, tint), a)
+      _ -> a
+    end
     if closed do
       let a = Cons(piece(5, 3, 28, 7, 5, 1, 19), Cons(piece(20, 3, 28, 7, 5, 1, 19), a))
       Cons(piece(12, 2, 29, 8, 6, 1, 17), Cons(piece(12, 5, 30, 8, 1, 1, 23), a))
-    else if grocery do produce_stand(6, 21, produce_stand(22, 10, a))
-    else cafe_table(6, cafe_table(23, a)) end end
+    else match profile.storefront do
+      :grocery | :corner_market -> produce_stand(6, 21, produce_stand(22, 10, a))
+      :bakery -> produce_stand(6, 15, shelving(22, 5, a))
+      :fish_market -> produce_stand(6, 12, produce_stand(22, 9, a))
+      :bookshop -> shelving(6, 15, shelving(22, 21, a))
+      :repair_shop ->
+        List.append([piece(7, 2, 28, 10, 6, 1, 4), piece(8, 1, 29, 8, 1, 3, 17),
+          piece(23, 1, 29, 2, 2, 2, 19), piece(25, 2, 29, 2, 3, 2, 6)], a)
+      :pharmacy -> a
+      _ -> cafe_table(6, cafe_table(23, a))
+    end end
+  end
+  fn storefront(grocery : Bool, closed : Bool, lit : Bool, out : List(Piece)) : List(Piece) do
+    trade_storefront(Ur.Commerce.standard(grocery), closed, lit, out)
   end
   fn building(levels : Int, home : Bool, seed : Int, roofed : Bool, shop : Bool, lit : Bool) : List(Piece) do
     let y = 2 + levels * 11
@@ -175,13 +209,41 @@ mod Ur.Architecture do
       Cons(piece(20, y + 3, 12, 3, 10, 3, 17), Cons(piece(19, y + 13, 11, 5, 1, 5, 13), a))
     else if form == 2 do garden_office(y, a)
     else if !home && form == 0 do stepped_office(y, a)
+    else if !home && form == 3 do
+      let roof = [piece(3, y, 3, 26, 1, 25, 8), piece(5, y + 1, 5, 22, 2, 20, 23),
+        piece(6, y + 3, 6, 20, 1, 18, 17), piece(9, y + 4, 7, 14, 2, 6, 56),
+        piece(23, y + 3, 17, 3, 3, 4, 19)]
+      List.append(roof, a)
     else
       let a = Cons(piece(4, y, 4, 24, 2, 23, 17), a)
-      let a = Cons(piece(7, y + 2, 8, 18, 5, 13, if home do wall else 7 end), a)
+      let a = Cons(piece(7, y + 2, 8, 18, 5, 13, 23), a)
       let a = Cons(piece(8, y + 7, 9, 16, 1, 11, 8), a)
-      let a = Cons(piece(9, y + 8, 10, 6, 1, 9, 19), Cons(piece(17, y + 8, 10, 6, 1, 9, 19), a))
-      Cons(piece(22, y + 8, 19, 1, 6, 1, 13), Cons(piece(21, y + 14, 18, 3, 2, 3, 20), a))
-    end end end end
+      let a = Cons(piece(9, y + 8, 10, 6, 1, 9, 56), Cons(piece(17, y + 8, 10, 6, 1, 9, 56), a))
+      Cons(piece(22, y + 8, 19, 1, 6, 1, 13), a)
+    end end end end end
+  end
+  fn commercial_building(levels : Int, seed : Int, roofed : Bool, kind : Ur.Commerce.TradeKind) : List(Piece) do
+    let profile = Ur.Commerce.profile(kind)
+    let y = 2 + levels * 11
+    let roof = if !roofed || levels > 2 do Nil else
+      match profile.storefront do
+        :bakery | :tavern ->
+          let base = [piece(4, y, 4, 24, 1, 24, 17), piece(19, y + 5, 19, 3, 6, 3, 23),
+            piece(18, y + 11, 18, 5, 1, 5, 17)]
+          roof(0, y + 1, profile.colour, base)
+        :diner | :corner_market ->
+          let trim = if profile.storefront == :corner_market do 23 else profile.colour end
+          [piece(3, y, 3, 26, 2, 26, trim), piece(3, y + 2, 3, 26, 1, 26, 8),
+            piece(8, y + 3, 8, 16, 1, 12, 17), piece(10, y + 4, 10, 10, 2, 8, 56),
+            piece(19, y + 3, 25, 7, 3, 1, trim)]
+        :repair_shop | :fish_market ->
+          [piece(3, y, 3, 26, 2, 26, 17), piece(5, y + 2, 6, 22, 1, 21, 19),
+            piece(7, y + 3, 8, 7, 3, 16, 23), piece(17, y + 3, 8, 7, 3, 16, 23),
+            piece(7, y + 6, 9, 7, 1, 14, 56), piece(17, y + 6, 9, 7, 1, 14, 56)]
+        _ -> Nil
+      end
+    end
+    List.append(roof, building(levels, false, seed, roofed && List.is_empty(roof), true, false))
   end
   fn parking_pad(kind : Int, out : List(Piece)) : List(Piece) do
     let out = Cons(piece(25, 0, 24, 7, 1, 8, 17), out)
@@ -246,8 +308,8 @@ mod Ur.Architecture do
     let a = Cons(piece(3, y - 2, 3, 26, 2, 27, 17), base)
     let a = Cons(piece(6, y, 6, 2, rise, 2, 13), Cons(piece(24, y, 6, 2, rise, 2, 13), a))
     let a = Cons(piece(6, y, 23, 2, rise, 2, 13), Cons(piece(24, y, 23, 2, rise, 2, 13), a))
-    let a = Cons(piece(6, y + rise - 1, 6, 20, 1, 2, 20), Cons(piece(6, y + rise - 1, 23, 20, 1, 2, 20), a))
-    let a = Cons(piece(6, y + rise - 1, 8, 2, 1, 15, 20), Cons(piece(24, y + rise - 1, 8, 2, 1, 15, 20), a))
+    let a = Cons(piece(6, y + rise - 1, 6, 20, 1, 2, 1), Cons(piece(6, y + rise - 1, 23, 20, 1, 2, 1), a))
+    let a = Cons(piece(6, y + rise - 1, 8, 2, 1, 15, 1), Cons(piece(24, y + rise - 1, 8, 2, 1, 15, 1), a))
     Cons(piece(12, y, 10, 8, rise - 1, 9, 17), a)
   end
   pfn plant_fins(i : Int, out : List(Piece)) : List(Piece) do

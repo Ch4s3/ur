@@ -2,10 +2,57 @@ mod ArchitectureTest do
   needs IO
   needs IO.Console
   alias Ur.Architecture as A
+  alias Ur.Landscape as L
+  alias Ur.Sim as S
 
   pfn has(parts : List(Ur.Architecture.Piece), x : Int, y : Int, z : Int, material : Int) : Bool do
     List.any(parts, fn p -> (material < 0 || p.material == material) && x >= p.x && x < p.x + p.w &&
       y >= p.y && y < p.y + p.h && z >= p.z && z < p.z + p.d)
+  end
+
+  pfn commercial_trade() : Unit do
+    let c = S.new()
+    let zero = NativeArray.make_int(S.count(), 0)
+    let block = { c with zones: NativeArray.make_int(S.count(), 2), buildings: NativeArray.make_int(S.count(), 2),
+      business_sector: zero, storefronts: zero }
+    let lots = List.range(0, 75)
+    let names = List.map(lots, fn lot -> S.building_name(block, lot))
+    List.each(["Corner market", "Bakery", "Fish market", "Cafe", "Diner", "Bookshop", "Repair shop", "Pharmacy"],
+      fn name -> Test.assert_true(List.any(names, fn entry -> entry == name), name ++ " can open in a commercial block"))
+    match List.find(lots, fn lot -> S.building_name(block, lot) == "Bookshop") do
+      None -> Test.assert_true(false, "The sample block has a bookshop")
+      Some(lot) ->
+        Test.assert_true(S.public_trade(block, lot) && S.retail(block, lot) == 0,
+          "Visitors can reach a bookshop while food provisioning keeps it out of the retail inventory")
+        Test.assert_true(S.business_open(block, lot, 10) && !S.business_open(block, lot, 19),
+          "A bookshop follows its posted hours")
+        let offices = { block with ground_rule: 1 }
+        Test.assert_true(S.building_name(offices, lot) == "Workplace" && !S.public_trade(offices, lot),
+          "Offices-only zoning suppresses public storefronts")
+    end
+    match List.find(lots, fn lot -> S.building_name(block, lot) == "Corner market") do
+      None -> Test.assert_true(false, "The sample block has a corner market")
+      Some(lot) -> Test.assert_true(S.retail(block, lot) == 1 && S.business_open(block, lot, 3) &&
+        S.business_hours(block, lot) == "24 hours", "The overnight grocery keeps its original service")
+    end
+  end
+
+  pfn graded_tram_track() : Unit do
+    let centre = S.index(25, 24)
+    let north = S.neighbour(centre, 2)
+    let east = S.neighbour(centre, 1)
+    let c = S.new()
+    let empty = NativeArray.make_int(S.count(), 0)
+    let tram = List.fold_left([centre, north, east], empty, fn (track, lot) -> NativeArray.set_int(track, lot, 3))
+    let heights = NativeArray.set_int(NativeArray.make_int(S.count(), 10), east, 22)
+    let city = { c with roads: empty, buildings: empty, zones: empty, heights: heights, transit: tram }
+    let bend = L.structures(city, centre, 0)
+    let upper = L.structures(city, east, 0)
+    let deck = L.tram_track_height(city, centre, 31, 16)
+    Test.assert_true(L.tram_bend(city, centre) && has(bend, 31, deck - 1, 13, 17) && has(bend, 31, deck - 1, 18, 17),
+      "Both rails of a tram bend reach the vehicle deck at the upper parcel edge")
+    Test.assert_true(deck == L.tram_track_height(city, east, 0, 16) && has(upper, 0, deck - 1, 13, 17),
+      "A difference in terrain elevation keeps the tram track aligned at the parcel boundary")
   end
 
   fn main(_cap : Cap(IO)) : Unit do
@@ -31,6 +78,8 @@ mod ArchitectureTest do
     let shop = A.storefront(true, false, true, A.building(2, true, 0, true, true, true))
     Test.assert_true(!has(shop, 8, 5, 27, -1) && has(shop, 8, 5, 26, 27) && has(shop, 5, 5, 27, 17),
       "The shop pane sits behind the frame and still emits light")
+    commercial_trade()
+    graded_tram_track()
     Authority.must(println("Architecture checks passed"))
   end
 end

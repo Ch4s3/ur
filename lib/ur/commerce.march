@@ -1,0 +1,71 @@
+-- Commercial uses share the existing food and property economies. Their
+-- profiles describe the storefront a resident can visit and when it opens.
+mod Ur.Commerce do
+  type TradeKind = Grocery | CornerMarket | Bakery | FishMarket | Restaurant | Cafe | Diner |
+    Bookshop | RepairShop | Pharmacy | Bar | Tavern
+
+  type BusinessProfile = { name : String, opens : Int, closes : Int, colour : Int, storefront : Atom }
+
+  fn profile(kind : TradeKind) : BusinessProfile do
+    match kind do
+      Grocery -> { name: "Grocery store", opens: 7, closes: 21, colour: 21, storefront: :grocery }
+      CornerMarket -> { name: "Corner market", opens: 0, closes: 24, colour: 20, storefront: :corner_market }
+      Bakery -> { name: "Bakery", opens: 6, closes: 17, colour: 15, storefront: :bakery }
+      FishMarket -> { name: "Fish market", opens: 8, closes: 18, colour: 12, storefront: :fish_market }
+      Restaurant -> { name: "Restaurant", opens: 11, closes: 23, colour: 6, storefront: :restaurant }
+      Cafe -> { name: "Cafe", opens: 7, closes: 19, colour: 31, storefront: :cafe }
+      Diner -> { name: "Diner", opens: 8, closes: 23, colour: 18, storefront: :diner }
+      Bookshop -> { name: "Bookshop", opens: 10, closes: 19, colour: 13, storefront: :bookshop }
+      RepairShop -> { name: "Repair shop", opens: 8, closes: 18, colour: 17, storefront: :repair_shop }
+      Pharmacy -> { name: "Pharmacy", opens: 8, closes: 21, colour: 11, storefront: :pharmacy }
+      Bar -> { name: "Bar", opens: 17, closes: 2, colour: 7, storefront: :bar }
+      Tavern -> { name: "Tavern", opens: 17, closes: 2, colour: 15, storefront: :tavern }
+    end
+  end
+
+  fn standard(grocery : Bool) : TradeKind do if grocery do Grocery else Restaurant end end
+
+  fn food_shop(variation : Int, overnight : Bool) : TradeKind do
+    if overnight do CornerMarket else
+      match variation % 4 do
+        0 -> Bakery
+        1 -> FishMarket
+        _ -> Grocery
+      end
+    end
+  end
+
+  fn dining(variation : Int) : TradeKind do
+    match variation % 3 do
+      0 -> Cafe
+      1 -> Diner
+      _ -> Restaurant
+    end
+  end
+
+  fn service(variation : Int) : Option(TradeKind) do
+    match variation % 6 do
+      0 -> Some(Bookshop)
+      1 -> Some(RepairShop)
+      2 -> Some(Pharmacy)
+      _ -> None
+    end
+  end
+
+  fn nightlife(variation : Int) : TradeKind do if variation % 2 == 0 do Bar else Tavern end end
+
+  fn open_at(hours : BusinessProfile, hour : Int) : Bool do
+    if hours.closes > hours.opens do hour >= hours.opens && hour < hours.closes
+    else hour >= hours.opens || hour < hours.closes end
+  end
+
+  pfn time(hour : Int) : String do
+    let hour = hour % 24
+    (if hour < 10 do "0" else "" end) ++ int_to_string(hour) ++ ":00"
+  end
+
+  fn hours_label(hours : BusinessProfile) : String do
+    if hours.opens == 0 && hours.closes == 24 do "24 hours"
+    else time(hours.opens) ++ "–" ++ time(hours.closes) end
+  end
+end
