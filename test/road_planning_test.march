@@ -334,6 +334,56 @@ mod RoadPlanningTest do
         Test.assert_true(!S.grade_link(removed, a, b) && S.get(removed.roads, a) == 1 && S.get(removed.roads, b) == 2, "Removal preserves both surface approaches")
     end
   end
+  pfn waterfront_quays() : Unit do
+    let c = fixture()
+    let first = S.index(9, 15)
+    let middle = S.index(10, 15)
+    let last = S.index(11, 15)
+    let water = S.neighbour(first, 3)
+    let heights = List.fold_left([first, middle, last], c.heights, fn (heights, lot) ->
+      NativeArray.set_int(heights, S.neighbour(lot, 3), 0))
+    let bank = S.act({ c with heights: heights }, first, 49)
+    let quote = RoadBuild.preview(bank, 155, first, last)
+    Test.assert_true(quote.valid && quote.changed && quote.cost == 1005 && quote.city.cash == bank.cash - quote.cost,
+      "Dragging a quay upgrades an existing pedestrian street and builds across the clear bank")
+    Test.assert_true(List.all([first, middle, last], fn lot -> S.quay_side(quote.city, lot) == 3 && S.get(quote.city.roads, lot) == 3),
+      "Quay segments face the water and are traversable pedestrian streets")
+    Test.assert_true(S.street_link(quote.city, first, 1) && S.street_link(quote.city, middle, 1),
+      "Adjacent quay segments connect as a continuous promenade")
+    Test.assert_true(S.quay_mooring(quote.city, water) == 2 && S.quay_mooring(quote.city, S.neighbour(last, 3)) == -1,
+      "Moored boats face back toward their quay with gaps along a run")
+    let duplicate = RoadBuild.preview(quote.city, 155, first, last)
+    Test.assert_true(duplicate.valid && !duplicate.changed && duplicate.cost == 0, "Repeating a finished quay stroke is free")
+    let blocked = RoadBuild.preview(bank, 155, first, S.index(12, 15))
+    Test.assert_true(!blocked.valid && blocked.city.cash == bank.cash && S.get(blocked.city.quays, first) == 0,
+      "An inland endpoint rejects the entire quay stroke")
+    let blocked = RoadBuild.preview({ bank with cash: 300 }, 155, first, last)
+    Test.assert_true(!blocked.valid && blocked.city.cash == 300 && S.get(blocked.city.quays, first) == 0,
+      "An unaffordable stroke preserves the existing street and treasury")
+    let game = { city: quote.city, cx: 60.0, cz: 80.0, zoom: 30.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(game)) do
+      Err(message) -> Test.assert_true(false, message)
+      Ok(loaded) ->
+        let city = loaded.city
+        Test.assert_true(S.quay_side(city, first) == 3 && S.quay_mooring(city, water) == 2 && city.cash == quote.city.cash,
+          "Save and load restore the quay, berth and treasury")
+        let converted = S.act(city, first, 1)
+        Test.assert_true(S.quay_side(converted, first) == 3 && converted.cash == city.cash,
+          "A motor street cannot replace the quay in place")
+        let ferry = S.act({ city with ferry_start: first }, S.index(9, 17), 37)
+        Test.assert_true(ferry.ferry_start == -1 && S.get(ferry.ferries, first) == 0,
+          "A pending ferry endpoint cannot overwrite a newly built quay")
+        let protected = S.act(city, water, 100)
+        Test.assert_true(S.quay_side(protected, first) == 3 && S.quay_mooring(protected, water) == -1,
+          "A breakwater keeps the retaining wall and clears the obstructed berth")
+        let reclaimed = S.act(city, water, 120)
+        Test.assert_true(S.get(reclaimed.quays, first) == 4 && S.quay_side(reclaimed, first) == -1 && S.quay_mooring(reclaimed, water) == -1,
+          "Reclamation keeps the promenade and removes its obsolete berth")
+        let cleared = S.act(city, first, 7)
+        Test.assert_true(S.get(cleared.quays, first) == 0 && S.get(cleared.roads, first) == 0 && S.quay_mooring(cleared, water) == -1,
+          "Bulldozing clears the promenade and the associated boat")
+    end
+  end
   fn main(_cap : Cap(IO)) : Unit do
     List.each([1, 2, 3, 4], fn kind ->
       let demo = Ur.Scenario.road_planning(kind, false)
@@ -350,6 +400,7 @@ mod RoadPlanningTest do
     off_grid_streets()
     long_bridge()
     tunnels()
+    waterfront_quays()
     Authority.must(println("Road planning checks passed"))
   end
 end

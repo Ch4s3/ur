@@ -65,13 +65,14 @@ mod Ur.Build do
         let left = if ax < bx do ax else bx end
         let top = if az < bz do az else bz end
         rectangle(left, top, left, if ax > bx do ax else bx end, if az > bz do az else bz end, Nil)
-      else if tool == 127 || tool == 99 || tool == 100 || S.utility_upgrade(tool) || S.timed_street_tool(tool) || S.street_planting_tool(tool) || S.grade_tool(tool) || S.road_tool(tool) || tool == 7 || tool == 18 || tool == 19 || tool == 26 || tool == 27 || (tool >= 33 && tool <= 36) do
+      else if tool == 127 || tool == 155 || tool == 99 || tool == 100 || S.utility_upgrade(tool) || S.timed_street_tool(tool) || S.street_planting_tool(tool) || S.grade_tool(tool) || S.road_tool(tool) || tool == 7 || tool == 18 || tool == 19 || tool == 26 || tool == 27 || (tool >= 33 && tool <= 36) do
         line(anchor, target)
       else Cons(target, Nil) end end
     end
   end
 
   pfn changed(old : Ur.Sim.City, next : Ur.Sim.City, i : Int) : Bool do
+    S.get(old.quays, i) != S.get(next.quays, i) ||
     old.cash != next.cash || S.get(old.water_bus, i) != S.get(next.water_bus, i) || S.get(old.canals, i) != S.get(next.canals, i) || S.get(old.canal_docks, i) != S.get(next.canal_docks, i) || S.public_work_stage(old, i) != S.public_work_stage(next, i) || S.get(old.pump_orders, i) != S.get(next.pump_orders, i) || S.get(old.seawalls, i) != S.get(next.seawalls, i) || S.get(old.waste_bins, i) != S.get(next.waste_bins, i) || old.harbour != next.harbour || old.ferry_start != next.ferry_start || old.water_bus_selection != next.water_bus_selection ||
       S.get(old.car_free_days, i) != S.get(next.car_free_days, i) || S.get(old.fishing_policy, i) != S.get(next.fishing_policy, i) || S.get(old.ground_areas, i) != S.get(next.ground_areas, i) || S.get(old.quiet_areas, i) != S.get(next.quiet_areas, i) ||
       S.get(old.streetscape, i) != S.get(next.streetscape, i) || S.get(old.parks, i) != S.get(next.parks, i) || S.get(old.grade_cover, i) != S.get(next.grade_cover, i) || S.get(old.pipes, i) != S.get(next.pipes, i) || S.get(old.grid, i) != S.get(next.grid, i) ||
@@ -84,7 +85,7 @@ mod Ur.Build do
     match tiles do
       Nil -> draft
       Cons(i, rest) ->
-        let surface = S.road_tool(tool) || (tool >= 33 && tool <= 35)
+        let surface = S.road_tool(tool) || tool == 155 || (tool >= 33 && tool <= 35)
         let rise = if surface && S.valid(previous) && S.get(c.heights, previous) > 0 && S.get(c.heights, i) > 0 do int_abs(S.get(c.heights, previous) - S.get(c.heights, i)) else 0 end
         let draft = { draft with rise: if rise > draft.rise do rise else draft.rise end }
         let steep = rise > 12

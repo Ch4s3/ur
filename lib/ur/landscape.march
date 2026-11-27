@@ -3,6 +3,7 @@ mod Ur.Landscape do
   alias Ur.Architecture as A
   alias Ur.Industry as Industry
   alias Ur.RoadSurface as RoadSurface
+  alias Ur.QuayArt as QuayArt
   pfn road_axis(c : Ur.Sim.City, lot : Int) : Int do
     if !S.valid(lot) || S.get(c.heights, lot) == 0 || S.get(c.roads, lot) == 0 ||
       S.get(c.road_shapes, lot) != 0 || S.valid(S.grade_peer(c, lot)) do -1 else
@@ -19,7 +20,7 @@ mod Ur.Landscape do
   fn road_profile(c : Ur.Sim.City, lot : Int) : (Int, Int, Int) do
     let axis = road_axis(c, lot)
     let h = S.get(c.heights, lot)
-    if axis < 0 do (-1, h, h) else
+    if axis < 0 || S.get(c.quays, lot) > 0 do (-1, h, h) else
       let before = grade_neighbor(c, lot, axis, axis, h)
       let after = grade_neighbor(c, lot, axis + 1, axis, h)
       (if before == h && after == h do -1 else axis end, before, after)
@@ -57,6 +58,18 @@ mod Ur.Landscape do
     let progress = int_to_float(inward) /. int_to_float(S.span_distance(lot, peer) * 32)
     float_to_int(Math.floor(S.grade_surface(c, lot, peer, progress)))
   end
+  pfn near_bank(side : Int, x : Int, z : Int, reach : Int) : Bool do
+    match side do
+      0 -> x < reach
+      1 -> x >= 32 - reach
+      2 -> z < reach
+      _ -> z >= 32 - reach
+    end
+  end
+  pfn quay_water_edge(c : Ur.Sim.City, lot : Int, x : Int, z : Int) : Bool do
+    (x < 12 && S.quay_bank(c, lot, 0)) || (x >= 20 && S.quay_bank(c, lot, 1)) ||
+      (z < 12 && S.quay_bank(c, lot, 2)) || (z >= 20 && S.quay_bank(c, lot, 3))
+  end
   fn ground_height(c : Ur.Sim.City, x : Int, z : Int) : Int do
     let px = int_div_euclid(x, 32)
     let pz = int_div_euclid(z, 32)
@@ -77,6 +90,10 @@ mod Ur.Landscape do
       if S.canal_water(c, i) do
         if S.canal_wet(c, i, int_mod_euclid(x, 32), int_mod_euclid(z, 32)) do S.canal_level(c, i) - S.canal_depth()
         else S.canal_bank_height(c, i) end
+      else if S.get(c.quays, i) > 0 do
+        -- The retaining wall occupies the outer four voxels of the parcel.
+        let side = S.quay_side(c, i)
+        if side >= 0 && near_bank(side, int_mod_euclid(x, 32), int_mod_euclid(z, 32), 4) do 0 else h end
       else if portal_cut do S.clamp(portal_floor(c, i, other, S.clamp(inward + 2, 0, 16)) - 1, 0, h)
       else if axis >= 0 do
         let along = int_mod_euclid(if axis == 0 do x else z end, 32)
@@ -86,9 +103,12 @@ mod Ur.Landscape do
         (h > 0 && (S.get(c.transit, i) == 3 || S.get(c.stops, i) == 4)) do h
       else
         let ground = S.unbuilt_ground_height(c, x, z)
-        if h == 0 && ground > 0 &&
-          S.canal_approach_cell(S.canal_approach_mask(c, i), int_mod_euclid(x, 32), int_mod_euclid(z, 32), 32) do 0 else ground end
-      end end end end end
+        if h == 0 && ground > 0 do
+          let lx = int_mod_euclid(x, 32)
+          let lz = int_mod_euclid(z, 32)
+          if quay_water_edge(c, i, lx, lz) || S.canal_approach_cell(S.canal_approach_mask(c, i), lx, lz, 32) do 0 else ground end
+        else ground end
+      end end end end end end
     end
   end
   fn height(c : Ur.Sim.City, x : Int, z : Int) : Int do
@@ -1700,24 +1720,35 @@ mod Ur.Landscape do
     end
   end
 
-  fn structures(c : Ur.Sim.City, i : Int, lighting : Int) : List(Ur.Architecture.Piece) do
-    structures_cleared(c, i, lighting, Nil)
-  end
-  fn structures_cleared(c : Ur.Sim.City, i : Int, lighting : Int, clearings : List(Clearing)) : List(Ur.Architecture.Piece) do
+  pfn ordinary_landscape(c : Ur.Sim.City, i : Int, lighting : Int, clearings : List(Clearing)) : List(Ur.Architecture.Piece) do
     let base = if S.canal_water(c, i) do canal_parts(c, i)
       else if S.get(c.seawalls, i) > 0 do seawall_parts(c, i)
       else if S.get(c.parks, i) > 0 do park(c, i) else buildings_and_land(c, i, lighting, clearings) end end end
     let base = if i == c.harbour && !S.valid(c.harbour_basin) do harbour_quay(c, i, base) else base end
     let spill = RoadSurface.pieces(c, i, false)
-    let base = if List.is_empty(spill) do base else
+    if List.is_empty(spill) do base else
       -- Street shoulders displace natural decorations in their neighboring parcel.
       let clear = List.filter(base, fn piece -> !List.any(spill, fn paving ->
         piece.x < paving.x + paving.w && piece.x + piece.w > paving.x &&
         piece.z < paving.z + paving.d && piece.z + piece.d > paving.z))
       List.append(spill, clear)
     end
+  end
+  fn structures(c : Ur.Sim.City, i : Int, lighting : Int) : List(Ur.Architecture.Piece) do
+    structures_cleared(c, i, lighting, Nil)
+  end
+  fn structures_cleared(c : Ur.Sim.City, i : Int, lighting : Int, clearings : List(Clearing)) : List(Ur.Architecture.Piece) do
+    let quay = S.get(c.quays, i) - 1
+    let base = if quay >= 0 do QuayArt.promenade(S.get(c.heights, i), i, lighting, quay, S.quay_side(c, i) >= 0)
+      else ordinary_landscape(c, i, lighting, clearings) end
+    let mooring = if S.get(c.heights, i) == 0 do S.quay_mooring(c, i) else -1 end
+    let base = if mooring < 0 do base else
+      let boat = QuayArt.moored_boat(S.get(c.heights, S.neighbour(i, mooring)), i, mooring)
+      let clear = List.filter(base, fn p -> !List.any(boat, fn b -> overlaps(p, { x: b.x, z: b.z, w: b.w, d: b.d })))
+      List.append(boat, clear)
+    end
     let base = if S.get(c.public_parking, i) == 3 do List.append(base, parking_pieces(c, i)) else base end
-    let base = if S.get(c.roads, i) > 0 && S.get(c.heights, i) > 0 &&
+    let base = if quay < 0 && S.get(c.roads, i) > 0 && S.get(c.heights, i) > 0 &&
       S.get(c.road_shapes, i) == 0 && (i % S.width() + i / S.width()) % 2 == 0 do
       let deck = S.get(c.heights, i)
       let east = S.street_link(c, i, 0) || S.street_link(c, i, 1)

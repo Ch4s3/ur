@@ -661,12 +661,13 @@ mod Ur.Hud do
   pfn parcel_title(c : Ur.Sim.City, lot : Int, road : Int, kind : Int) : String do
     let name = if lot == c.harbour do "Founding harbour" else if S.get(c.canal_docks, lot) == 2 do "Canal freight quay"
       else if S.get(c.canal_docks, lot) == 1 do "Water taxi dock"
-      else if S.undeveloped_zone(c, lot) do zone_heading(c, lot) else if S.freight_port(c, lot) || S.get(c.ferries, lot) > 0 do "Freight dock" else if S.get(c.stops, lot) == 2 do "Bus stop" else if S.get(c.stops, lot) == 4 do "Subway station" else if road > 0 do S.road_name(road)
+      else if S.undeveloped_zone(c, lot) do zone_heading(c, lot) else if S.freight_port(c, lot) || S.get(c.ferries, lot) > 0 do "Freight dock" else if S.get(c.stops, lot) == 2 do "Bus stop" else if S.get(c.stops, lot) == 4 do "Subway station"
+      else if S.get(c.quays, lot) > 0 do "Waterfront promenade" else if road > 0 do S.road_name(road)
       else if kind > 0 do S.building_name(c, lot)
       else if S.fire_rebuilding(c, lot) do "Fire ruin"
       else if S.get(c.buildings, lot) > 0 do S.building_name(c, lot)
       else if S.get(c.public_parking, lot) > 0 do S.parking_name(S.get(c.public_parking, lot))
-      else if S.get(c.heights, lot) == 0 do "Water" else "Parcel" end end end end end end end end end end end end end
+      else if S.get(c.heights, lot) == 0 do "Water" else "Parcel" end end end end end end end end end end end end end end
     if S.automatic_canal_gate(c, lot) do "Automatic flood gate"
       else if S.water_bus_yard(c, lot) do "Water bus maintenance dock"
       else if S.water_bus_site(c, lot) do "Water bus stop" else name end end end
@@ -791,8 +792,9 @@ mod Ur.Hud do
       let a = inspector_header(a, x -. 8.0, y +. 49.0, width -. 20.0, 51.0, style)
       let a = fitted(a, x, y +. 53.0, title_width, 20.0, title, true)
       let location = "Parcel " ++ parcel_location(hover)
-      let a = label(a, x, y +. 79.0, 11.0,
-        if height > 0 do location ++ " · " ++ int_to_string(height / 4) ++ " m elevation" else location end, false)
+      let location = if height > 0 do location ++ " · " ++ int_to_string(height / 4) ++ " m elevation" else location end
+      let location = if S.get(c.quays, hover) > 0 && road > 0 do location ++ " · " ++ S.road_name(road) else location end
+      let a = fitted(a, x, y +. 79.0, title_width, 11.0, location, false)
       let content = width -. 36.0
       let left = content *. 0.57 -. 8.0
       let right = x +. left +. 16.0
@@ -2320,7 +2322,8 @@ mod Ur.Hud do
       let used = S.power_use(c, st, lot)
       let received = S.power_received(c, st, lot)
       let power_note = if used <= 0 do "" else " · " ++ int_to_string(received) ++ (if received < used do " of " ++ int_to_string(used) else "" end) ++ " power" end
-      let box = fitted(box, x, y +. 29.0, width -. 24.0, 11.0, "Parcel " ++ parcel_location(lot) ++ " · " ++ temp ++ power_note, false)
+      let quay_note = if S.get(c.quays, lot) > 0 && road > 0 do " · " ++ S.road_name(road) else "" end
+      let box = fitted(box, x, y +. 29.0, width -. 24.0, 11.0, "Parcel " ++ parcel_location(lot) ++ " · " ++ temp ++ power_note ++ quay_note, false)
       let box = if extra <= 0.0 do box else
         let box = U.rect(box, 0, x, y +. 202.0, width -. 24.0, 1.0, (0.20, 0.32, 0.34, 1.0))
         let box = staffing_stepper(box, c, lot, x, y +. 210.0, width -. 24.0)
