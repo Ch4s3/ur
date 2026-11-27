@@ -1871,24 +1871,32 @@ mod Ur.Scene do
     { mesh: m, length: length, width: width }
   end
   -- [blocks]: whether walkers yield to it. Only a vehicle in traffic does; a parked car is street furniture.
-  pfn pose_vehicle(slot : Int, mesh : Ur.SceneMesh.Mesh, x : Float, y : Float, z : Float, dx : Float, dz : Float, length : Float, width : Float, lights : Bool, blocks : Bool) : Unit do
+  pfn pose_vehicle(slot : Int, mesh : Ur.SceneMesh.Mesh, x : Float, y : Float, z : Float, dx : Float, dz : Float, pitch : Float,
+    length : Float, width : Float, lights : Bool, blocks : Bool) : Unit do
     let yaw = Math.atan2(0.0 -. dz, dx)
     let cosine = Math.cos(yaw)
     let sine = Math.sin(yaw)
-    let low_x = x -. ((length *. cosine +. width *. sine) *. 0.5)
-    let low_z = z -. ((width *. cosine -. length *. sine) *. 0.5)
-    let front = length *. 0.5 +. 0.5
-    let mesh = if lights && Vk.headlight(x +. front *. cosine, y +. 1.5, z -. front *. sine, cosine, 0.0 -. sine, 30) do
+    let slant = Math.sin(pitch)
+    let horizontal_length = length *. Math.cos(pitch)
+    let low_x = x -. ((horizontal_length *. cosine +. width *. sine) *. 0.5)
+    let low_y = y -. length *. slant *. 0.5
+    let low_z = z -. ((width *. cosine -. horizontal_length *. sine) *. 0.5)
+    let front = horizontal_length *. 0.5 +. 0.5
+    let mesh = if lights && Vk.headlight(x +. front *. cosine, y +. length *. slant *. 0.5 +. 1.5, z -. front *. sine, cosine, 0.0 -. sine, 30) do
       let end_x = float_to_int(length)
       box(box(mesh, end_x, 1, 0, 1, 1, 1, 29), end_x, 1, float_to_int(width) - 1, 1, 1, 1, 29)
     else mesh end
     if Vk.body_begin(slot) && Vk.chunk_part(0, mesh.words, mesh.quads) && Vk.chunk_commit() do
-      Vk.slot_pose(slot, low_x *. 0.25, y *. 0.25, low_z *. 0.25, 0.0, Math.sin(yaw *. 0.5), 0.0, Math.cos(yaw *. 0.5))
-      if blocks do Vk.footprint(slot, x, y, z, cosine, 0.0 -. sine, length, width) else () end
+      let sy = Math.sin(yaw *. 0.5)
+      let cy = Math.cos(yaw *. 0.5)
+      let sp = Math.sin(pitch *. 0.5)
+      let cp = Math.cos(pitch *. 0.5)
+      Vk.slot_pose(slot, low_x *. 0.25, low_y *. 0.25, low_z *. 0.25, sy *. sp, sy *. cp, cy *. sp, cy *. cp)
+      if blocks do Vk.footprint(slot, x, y, z, cosine, 0.0 -. sine, horizontal_length, width) else () end
     else Ur.AppError.stop("Vehicle pose upload failed") end
   end
   pfn posed_vehicle(slot : Int, mesh : Ur.SceneMesh.Mesh, x : Float, y : Float, z : Float, dx : Float, dz : Float, length : Float, width : Float) : Unit do
-    pose_vehicle(slot, mesh, x, y, z, dx, dz, length, width, true, true)
+    pose_vehicle(slot, mesh, x, y, z, dx, dz, 0.0, length, width, true, true)
   end
   fn begin_vehicle_lights(hour : Int) : Unit do
     Vk.footprints_begin()
@@ -3029,18 +3037,31 @@ mod Ur.Scene do
       (x +. (nx -. x) *. t, z +. (nz -. z) *. t)
     end
   end
+  pfn rail_axle_height(c : Ur.Sim.City, trip : Ur.Food.Trip, step : Float) : Float do
+    let step = Math.max_float(0.0, Math.min_float(int_to_float(trip.legs), step))
+    let index = Math.min_int(float_to_int(step), trip.legs - 1)
+    let (a, b) = Ur.Food.leg(trip.stops, index)
+    let (x, z) = rail_position(c, trip, index, a, b, step -. int_to_float(index))
+    let x = float_to_int(x)
+    let z = float_to_int(z)
+    int_to_float(L.tram_track_height(c, S.index(x / 32, z / 32), x % 32, z % 32))
+  end
   pfn draw_tram(c : Ur.Sim.City, trip : Ur.Food.Trip, index : Int, a : Int, b : Int, t : Float, forward : Bool, slot : Int) : Unit do
     let (x, z) = rail_position(c, trip, index, a, b, t)
     let (px, pz) = rail_position(c, trip, index, a, b, Math.max_float(0.0, t -. 0.01))
     let (nx, nz) = rail_position(c, trip, index, a, b, Math.min_float(1.0, t +. 0.01))
-    let lot = if t < 0.5 do a else b end
-    let rail_x = S.clamp(float_to_int(x) - lot % S.width() * 32, 0, 31)
-    let rail_z = S.clamp(float_to_int(z) - lot / S.width() * 32, 0, 31)
-    let y = int_to_float(L.tram_track_height(c, lot, rail_x, rail_z))
-    let sign = if forward do 1.0 else -1.0 end
     let body = passenger_body(true)
-    posed_vehicle(slot, body.mesh, x, y, z, (nx -. px) *. sign, (nz -. pz) *. sign,
-      int_to_float(body.length), int_to_float(body.width))
+    -- The three-voxel wheel blocks are centered 2.5 voxels from each end.
+    let length = int_to_float(body.length)
+    let axle_span = length -. 5.0
+    let axle_offset = axle_span /. 64.0
+    let step = int_to_float(index) +. t
+    let back = rail_axle_height(c, trip, step -. axle_offset)
+    let front = rail_axle_height(c, trip, step +. axle_offset)
+    let sign = if forward do 1.0 else -1.0 end
+    let pitch = Math.atan2(front -. back, axle_span) *. sign
+    pose_vehicle(slot, body.mesh, x, (front +. back) *. 0.5, z, (nx -. px) *. sign, (nz -. pz) *. sign, pitch,
+      length, int_to_float(body.width), true, true)
   end
   pfn trip_pose(c : Ur.Sim.City, trip : Ur.Food.Trip, step : Float, forward : Bool, rotation : Float, slot : Int, section : Bool) : Unit do
     let index = S.clamp(float_to_int(step), 0, trip.legs - 1)
@@ -3073,7 +3094,7 @@ mod Ur.Scene do
         let z = int_to_float(iz * 32 + 16) +. int_to_float(dz) *. along
         let facing = if forward || rotation > 0.0 do 1.0 else -1.0 end
         let mesh = fishing_net(vessel_mesh(true, true), float_to_int(rotation *. 7.0))
-        pose_vehicle(slot, mesh, x, 1.0, z, int_to_float(dx) *. facing, int_to_float(dz) *. facing, 15.0, 6.0, false, false)
+        pose_vehicle(slot, mesh, x, 1.0, z, int_to_float(dx) *. facing, int_to_float(dz) *. facing, 0.0, 15.0, 6.0, false, false)
       else
         let m = vessel_mesh(true, east)
         if Vk.chunk_begin(slot, x, y, z, 0) && Vk.chunk_part(0, m.words, m.quads) && Vk.chunk_commit() do ()
@@ -3200,7 +3221,7 @@ mod Ur.Scene do
       Some(m) ->
         if driver < 0 do Vk.chunk_free(slot) else
           let p = sanitation_vehicle(c, m, section)
-          if p.visible do pose_vehicle(slot, trash_truck_mesh(), p.x, p.y, p.z, p.dx, p.dz, 11.0, 6.0, night, true)
+          if p.visible do pose_vehicle(slot, trash_truck_mesh(), p.x, p.y, p.z, p.dx, p.dz, 0.0, 11.0, 6.0, night, true)
           else Vk.chunk_free(slot) end
         end
       None -> Vk.chunk_free(slot)
@@ -3720,7 +3741,7 @@ mod Ur.Scene do
     let m = box(m, 4, 3, 0, 2, 1, width, 9)
     let m = box(m, 3, 4, 0, 2, 1, width, colour)
     let m = paired_trim(m, 0, 2, 1, 1, width, if moving && night do 30 else 6 end)
-    pose_vehicle(slot, m, pose.x, pose.y, pose.z, pose.dx, pose.dz, int_to_float(length), int_to_float(width), moving, moving)
+    pose_vehicle(slot, m, pose.x, pose.y, pose.z, pose.dx, pose.dz, 0.0, int_to_float(length), int_to_float(width), moving, moving)
   end
   pfn parked_car(c : Ur.Sim.City, id : Int, parking : Int, slot : Int, reuse : Bool) : Unit do
     match Ur.Citizens.parking_at(parking) do

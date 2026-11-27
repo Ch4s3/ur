@@ -53,6 +53,13 @@ mod ArchitectureTest do
       "Both rails of a tram bend reach the vehicle deck at the upper parcel edge")
     Test.assert_true(deck == L.tram_track_height(city, east, 0, 16) && has(upper, 0, deck - 1, 13, 17),
       "A difference in terrain elevation keeps the tram track aligned at the parcel boundary")
+    let flat = L.tram_track_height(city, north, 16, 31) - 1
+    Test.assert_true(List.all([13, 18], fn gauge ->
+      has(bend, gauge, flat, 0, 17) && !has(bend, gauge, flat + 1, 0, 17)),
+      "The climb stays on the uphill arm and both rails meet the level neighbor")
+    let terminal = L.structures(city, north, 0)
+    Test.assert_true(List.all([13, 18], fn gauge -> has(terminal, gauge, flat, 9, 17)),
+      "The track at a route end supports the rear wheels of a stopped tram")
   end
 
   fn main(_cap : Cap(IO)) : Unit do

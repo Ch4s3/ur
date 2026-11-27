@@ -1484,10 +1484,11 @@ mod Ur.Landscape do
     if g.axis < 0 do g.deck else graded_height(g.deck, g.before, g.after, along / 4 * 4 + 2) end
   end
   pfn tram_rail_base(g : TramGrade, x : Int, z : Int) : Int do
-    let horizontal = Math.max_int((15 - x) * g.west, (x - 16) * g.east)
-    let vertical = Math.max_int((15 - z) * g.north, (z - 16) * g.south)
+    -- Keep the curve and crossing flat so each approach meets its own neighbor.
+    let horizontal = Math.max_int((11 - x) * g.west, (x - 20) * g.east)
+    let vertical = Math.max_int((11 - z) * g.north, (z - 20) * g.south)
     let rise = Math.max_int(horizontal, vertical)
-    let deck = if rise > 0 do Math.max_int(g.deck + (rise + 7) / 15, tram_surface(g, x, z))
+    let deck = if rise > 0 do Math.max_int(g.deck + (rise + 5) / 11, tram_surface(g, x, z))
       else tram_surface(g, x, z) end
     deck + 1
   end
@@ -1550,11 +1551,13 @@ mod Ur.Landscape do
       List.fold_left(List.range(0, 20), Nil, fn (out, z) -> tram_curve_row(y, west, north, 0, z, -1, out))
     else
       let isolated = !horizontal && !vertical
+      -- At a route end the rear wheels still need track behind the parcel center.
+      let (first, last) = if horizontal && vertical do (13, 19) else (9, 23) end
       let along = if horizontal do
-        tram_straight(y, true, if west do 0 else 13 end, if east do 32 else 19 end)
+        tram_straight(y, true, if west do 0 else first end, if east do 32 else last end)
         else Nil end
       let across = if vertical || isolated do
-        tram_straight(y, false, if north do 0 else 13 end, if south do 32 else 19 end)
+        tram_straight(y, false, if north do 0 else first end, if south do 32 else last end)
         else Nil end
       List.fold_left(across, along, fn (parts, rail) -> Cons(rail, cut_road_pieces(parts, rail)))
     end
