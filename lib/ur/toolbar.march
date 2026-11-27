@@ -15,9 +15,9 @@ mod Ur.Toolbar do
       1 ->
         let items = if page == 4 do [127, 128, 129, 133, 130, 131, 132]
           else if page == 3 do [99, 100, 101] else if page == 2 do Cons(71, Cons(72, Cons(73, Cons(74, Cons(75, Nil)))))
-          else if page == 1 do [124, 125, 126, 50, 51, 52, 54]
+          else if page == 1 do [124, 125, 126, 156, 50, 51, 52, 54]
           else Cons(1, Cons(48, Cons(49, Cons(33, Cons(40, Nil))))) end end end end
-        { span: 7, pages: ["Streets", "Crossings", "Car-free days", "Flood protection", "Canals"], items: items }
+        { span: if page == 1 do 8 else 7 end, pages: ["Streets", "Crossings", "Car-free days", "Flood protection", "Canals"], items: items }
       2 ->
         let items = match page do
           2 -> Cons(64, Cons(65, Cons(66, Cons(63, Nil))))
@@ -90,7 +90,7 @@ mod Ur.Toolbar do
       1 -> "road"
       48 -> "avenue"
       49 | 155 -> "promenade"
-      50 | 124 | 125 | 126 -> "overpass"
+      50 | 124 | 125 | 126 | 156 -> "overpass"
       51 -> "underpass"
       52 -> "road_tunnel"
       53 -> "park"
@@ -421,7 +421,8 @@ mod Ur.Toolbar do
       else if prerequisite != "" do prerequisite ++ "."
       else if group == 6 && hovered_tool == 155 do
         "Choose a clear shore or a waterfront pedestrian street. Drag along the bank for a continuous planted quay."
-      else c.message end end end
+      else if hovered_tool == 156 do "Click a straight canal parcel to join its sidewalks with a footbridge."
+      else c.message end end end end
     let controls = w >= 1250.0
     let selected = w >= 830.0 && tool > 0 && c.harbour >= 0 && group != 7
     let selected_width = if selected do minimum(220.0, w *. 0.24) else 0.0 end

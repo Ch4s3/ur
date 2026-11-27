@@ -73,14 +73,15 @@ mod Ur.Citizens do
       (S.grade_link(c, a, b) || (S.span_distance(a, b) == 1 && int_abs(S.get(c.heights, a) - S.get(c.heights, b)) <= 12))
   end
   pfn follow(c : Ur.Sim.City, links : NativeIntArr, i : Int, rest : List(Int), left : Int) : (Int, List(Int)) do
-    if !S.valid(i) || left == 0 do (-1, Nil)
-    else if S.get(links, i) == i do (i, List.reverse(Cons(i, rest)))
-    else follow(c, links, S.get(links, i), Cons(i, rest), left - 1) end end
+    let next = S.walk_node_value(links, i)
+    if next < 0 || left == 0 do (-1, Nil)
+    else if next == i do (i, List.reverse(Cons(i, rest)))
+    else follow(c, links, next, Cons(i, rest), left - 1) end end
   end
   pfn destination(c : Ur.Sim.City, links : NativeIntArr, home : Int) : (Int, List(Int)) do
     if S.get(links, home) == home do (home, Nil)
-    else if Ur.Food.walkable(c, home) && S.get(links, home) >= 0 do follow(c, links, home, Nil, S.count())
-    else follow(c, links, Ur.Food.entrance(c, links, home, 0), Cons(home, Nil), S.count()) end end
+    else if Ur.Food.walkable(c, home) && S.get(links, home) >= 0 do follow(c, links, home, Nil, NativeArray.length_int(links))
+    else follow(c, links, Ur.Food.entrance(c, links, home, 0), Cons(home, Nil), NativeArray.length_int(links)) end end
   end
   doc "Whether [route] can still be walked in [c]: no closed ground, every step a grade link or a short climb, and every lot after the first ([first] true) walkable."
   fn valid_route(c : Ur.Sim.City, route : List(Int), first : Bool) : Bool do
@@ -98,11 +99,15 @@ mod Ur.Citizens do
   -- roster took.
   type RouteChecks = { steps : NativeIntArr, walks : NativeIntArr }
   pfn step_ok(c : Ur.Sim.City, a : Int, b : Int) : Bool do
-    !S.ground_closed(c, b) && (S.grade_link(c, a, b) || (S.span_distance(a, b) == 1 && int_abs(S.get(c.heights, a) - S.get(c.heights, b)) <= 12) ||
+    if S.canal_walk_node(a) || S.canal_walk_node(b) do S.canal_walk_link(c, a, b) else
+    !S.ground_closed(c, b) && (S.grade_link(c, a, b) ||
+      (!S.canal_water(c, a) && !S.canal_water(c, b) && S.pedestrian_edge(c, a, b)) ||
       (S.valid(b) && (S.canal_taxi_peer(c, a) == b || S.water_bus_peer(c, a, true) == b || S.water_bus_peer(c, a, false) == b)))
+    end
   end
   pfn passable(c : Ur.Sim.City, a : Int) : Bool do
-    Ur.Food.walkable(c, a) || S.valid(S.campus_root(c, a)) || S.get(c.parks, a) > 0
+    if S.canal_walk_node(a) do S.canal_walk_open(c, S.walk_lot(a))
+    else Ur.Food.walkable(c, a) || S.valid(S.campus_root(c, a)) || S.get(c.parks, a) > 0 end
   end
   doc "valid_route's per-step tests over [c], for checked_route."
   fn route_checks(c : Ur.Sim.City) : RouteChecks do
@@ -325,8 +330,8 @@ mod Ur.Citizens do
     end
   end
   pfn park_path(c : Ur.Sim.City, field : Ur.Sim.ParkWalk, i : Int, seed : Int) : List(Int) do
-    if !S.valid(i) do Nil else
-      let j = S.get(field.next, i)
+    let j = S.walk_node_value(field.next, i)
+    if j < 0 do Nil else
       if i == j do Cons(i, park_stroll(c, i, -1, 0, seed, 1 + seed % 2))
       else Cons(i, park_path(c, field, j, seed)) end
     end
@@ -339,7 +344,7 @@ mod Ur.Citizens do
   end
   pfn plan_park(c : Ur.Sim.City, field : Ur.Sim.ParkWalk, person : Citizen, road_park : Int, road_route : List(Int)) : Citizen do
     let entry = S.park_entry(c, field, person.home)
-    let route = if S.valid(entry) && S.walkable_park_score(c, field, person.home) > 0 do park_path(c, field, entry, person.id) else Nil end
+    let route = if entry >= 0 && S.walkable_park_score(c, field, person.home) > 0 do park_path(c, field, entry, person.id) else Nil end
     let park = last_stop(route, -1)
     let route = if S.valid(park) && entry != person.home do Cons(person.home, route) else route end
     let by_road = person.parking != 0 && S.valid(road_park)
@@ -348,7 +353,7 @@ mod Ur.Citizens do
     -- Finish an active visit on the same path, or reset it if editing broke that path.
     if person.park_trip && (person.location < 0 || person.activity == 5) do
       if (S.get(c.parks, person.park) > 0 || person.park_by_road) && valid_route(c, person.park_route, true) &&
-        (!person.park_by_road || valid_route(c, person.route, true)) do person
+        valid_route(c, person.route, true) do person
       else
         let parking = match parking_at(person.parking) do
           Some(p) -> if p.lot == person.home && person.car_phase < 2 do person.parking else 0 end
@@ -624,7 +629,7 @@ mod Ur.Citizens do
         park_trip: false, by_car: false, car_phase: 0, arrival: 0, board: -1, alight: -1, bus_slot: -1, transit_phase: 0 }
     else
       let start = if S.valid(prior.location) do prior.location else current_plot(prior.route) end
-      let start = if S.valid(start) do start else person.home end
+      let start = if S.valid(S.walk_lot(start)) do start else person.home end
       let route = if start == target do Nil else Ur.Evacuation.walk_route(c, start, target) end
       let walking = !List.is_empty(route)
       let activity = if walking do activity
@@ -632,7 +637,7 @@ mod Ur.Citizens do
         else 10 end end
       let shelter = if activity == 0 do -1 else shelter end
       { person with shelter: shelter, activity: activity, park_trip: false, target: target,
-        location: if walking do -1 else start end, route: route, progress: 0.0, wait: 0.0, queued: false,
+        location: if walking do -1 else S.walk_lot(start) end, route: route, progress: 0.0, wait: 0.0, queued: false,
         previous: -1, parking: prior.parking, by_car: false, car_phase: 0, arrival: 0, board: -1, alight: -1, bus_slot: -1, transit_phase: 0 }
     end
   end
@@ -676,7 +681,9 @@ mod Ur.Citizens do
     if i >= S.count() do false
     else if S.storefront(c, i) != S.storefront(old, i) || S.ground_at(c, i) != S.ground_at(old, i) || S.building_offline(c, i) != S.building_offline(old, i) || S.get(c.parks, i) != S.get(old.parks, i) || S.get(c.roads, i) != S.get(old.roads, i) || S.get(c.grades, i) != S.get(old.grades, i) || S.get(c.transit, i) != S.get(old.transit, i) || S.get(c.stops, i) != S.get(old.stops, i) || S.get(c.heights, i) != S.get(old.heights, i) ||
       S.get(c.buildings, i) != S.get(old.buildings, i) || S.job_requirement(c, i) != S.job_requirement(old, i) || S.get(c.plants, i) != S.get(old.plants, i) || S.get(c.waste_bins, i) != S.get(old.waste_bins, i) || S.get(c.public_parking, i) != S.get(old.public_parking, i) || S.resident_homes(c, i) != S.resident_homes(old, i) || S.business_closed(c, i) != S.business_closed(old, i) || S.get(c.zones, i) != S.get(old.zones, i) do true
-    else if S.get(c.water_bus, i) != S.get(old.water_bus, i) || S.get(c.canals, i) != S.get(old.canals, i) || S.get(c.canal_docks, i) != S.get(old.canal_docks, i) do true
+    else if S.get(c.water_bus, i) != S.get(old.water_bus, i) || S.get(c.canals, i) != S.get(old.canals, i) ||
+      S.get(c.seawalls, i) != S.get(old.seawalls, i) ||
+      S.canal_footbridge(c, i) != S.canal_footbridge(old, i) || S.get(c.canal_docks, i) != S.get(old.canal_docks, i) do true
     else if ((S.get(c.roads, i) > 0 || S.get(c.transit, i) == 1 || S.get(c.parks, i) > 0 || S.canal_water(c, i) || S.valid(S.campus_root(c, i))) &&
       S.ground_closed(c, i) != S.ground_closed(old, i)) do true
     else changed(c, old, i + 1) end end end end
@@ -739,6 +746,34 @@ mod Ur.Citizens do
         saved_assignments(rest, shelters, saved, hold(spaces, parking_at(travel.arrival)))
     end
   end
+  pfn resume_canal_walk(c : Ur.Sim.City, person : Citizen, node : Int) : Citizen do
+    let lot = S.walk_lot(node)
+    let from = person.previous
+    let start = if S.canal_water(c, node) do
+      let banks = if S.pedestrian_edge(c, from, lot) && !S.canal_water(c, from) do
+        S.canal_bank_entry(c, from, S.direction(from, lot))
+      else Nil end
+      match banks do
+        Cons(bank, _) -> bank
+        Nil -> S.canal_boardwalk(c, lot)
+      end
+    else node end
+    let route = Ur.Evacuation.walk_route(c, start, person.target)
+    match route do
+      Cons(_, Cons(_, _)) -> { person with route: route, previous: -1, progress: 0.0, wait: 0.0 }
+      _ -> { person with route: Nil, location: lot, previous: -1, progress: 0.0, wait: 0.0 }
+    end
+  end
+  pfn restore_evacuation(c : Ur.Sim.City, person : Citizen) : Citizen do
+    match person.route do
+      Cons(node, _) ->
+        if person.car_phase == 0 && person.transit_phase < 2 &&
+          List.any(person.route, fn lot -> S.canal_water(c, S.walk_lot(lot))) &&
+          !valid_route(c, person.route, true) do resume_canal_walk(c, person, node)
+        else person end
+      Nil -> person
+    end
+  end
   fn restore_with(c : Ur.Sim.City, trips : List(EvacuationTrip), roads : NativeIntArr, people : Int, hires : List(Ur.Sim.JobMatch)) : List(Citizen) do
     if List.is_empty(trips) do refresh_with(c, Nil, roads, people, hires) else
       let (previous, saved, spaces) = saved_assignments(trips, NativeArray.make_int(S.count(), 0), Map.empty(), Map.empty())
@@ -750,11 +785,11 @@ mod Ur.Citizens do
           Some(trip) ->
             if trip.home == person.home do
               let travel = trip.travel
-              { person with shelter: trip.shelter, activity: trip.activity, location: trip.location,
+              restore_evacuation(c, { person with shelter: trip.shelter, activity: trip.activity, location: trip.location,
                 target: trip.target, route: trip.route, previous: trip.previous, progress: trip.progress, wait: trip.wait,
                 work: travel.work, study: travel.study, qualification: travel.qualification, work_position: travel.position,
                 parking: travel.parking, arrival: travel.arrival, by_car: travel.car_phase > 0, car_phase: travel.car_phase,
-                transit_phase: travel.transit_phase, board: travel.board, alight: travel.alight }
+                transit_phase: travel.transit_phase, board: travel.board, alight: travel.alight })
             else evacuate(c, orders, none, person) end
           None ->
             let person = match parking_at(person.parking) do
@@ -870,6 +905,8 @@ mod Ur.Citizens do
     (code / 5 - 1, code % 5 - 1)
   end
   fn walk_segment_pace(map : WalkMap, a : Int, b : Int) : Float do
+    let a = S.walk_lot(a)
+    let b = S.walk_lot(b)
     if !S.valid(a) || (S.valid(b) && int_and(NativeArray.get_int(map.terrain, b * 3), 16) > 0) do 0.0
     else NativeArray.get_float(map.pace, a) end
   end
@@ -1249,7 +1286,7 @@ mod Ur.Citizens do
     let next = { person with activity: activity, park_trip: access != OrdinaryTrip, target: target, route: route, progress: 0.0, queued: false, by_car: by_car, car_phase: if by_car do 1 else 0 end, arrival: parking_value(arrival), previous: -1, board: board, alight: alight, bus_slot: -1, transit_phase: if uses_transit do 1 else 0 end, rest_until: -1 }
     match route do
       Cons(_, Cons(_, _)) -> ({ next with location: -1 }, occupied)
-      _ -> if guest(person) && person.location != target do
+      _ -> if person.location != target do
         ({ person with wait: 0.0, rest_until: -1 }, occupied)
       else (arrive(next), occupied) end
     end
@@ -1391,7 +1428,10 @@ mod Ur.Citizens do
     let a = current_plot(person.route)
     let on_lift = person.progress > 0.0 && S.grade_link(c, a, b) && S.movable_bridge(c, a)
     let pace = if on_lift do 1.0 else walk_segment_pace(occupied.walk, a, b) end
-    let proposed = walk_through_junction(person, occupied, a, b, person.progress +. dt *. speed *. pace)
+    let bank_speed = if S.canal_walk_node(a) && S.canal_walk_node(b) do
+      if S.walk_lot(a) == S.walk_lot(b) do 1.33 else 4.0 end
+    else 1.0 end
+    let proposed = walk_through_junction(person, occupied, a, b, person.progress +. dt *. speed *. pace *. bank_speed)
     let occupied = mark_crossing(occupied, { person with progress: proposed }, a, b)
     let (progress, occupied) = match tail do
       Cons(next, _) ->
@@ -1486,9 +1526,7 @@ mod Ur.Citizens do
     if slot >= 0 do { person with bus_slot: slot, transit_phase: 3, wait: arrival, progress: NativeArray.get_float(motion, slot) }
     else if person.wait > -75.0 do { person with wait: person.wait -. dt }
     else
-      let links = Ur.Food.destinations(c, fn lot -> lot == person.target)
-      let path = Ur.Food.path_to(links, person.board, Nil)
-      let route = if S.get(links, person.board) >= 0 do List.reverse(path) else Nil end
+      let route = Ur.Evacuation.walk_route(c, person.board, person.target)
       { person with route: route, location: person.board, transit_phase: 0, wait: 0.0 }
     end end
   end
@@ -1522,11 +1560,13 @@ mod Ur.Citizens do
           end
           if progress >= 1.0 do next_leg(c, person, occupied, b, tail)
           else ({ person with progress: progress }, occupied) end
+        else if (S.canal_walk_node(a) || S.canal_walk_node(b)) && !S.canal_walk_link(c, a, b) do
+          (resume_canal_walk(c, person, a), occupied)
         else if person.progress <= 0.0 && !S.bridge_road_open(c, a, b) do
           ({ person with queued: true }, occupied)
         else if driving(c, person, a, b) do drive(c, person, occupied, clock_hour % 24, dt, a, b, tail)
         else if S.canal_taxi_leg(c, a, b) do ride_canal_taxi(c, person, occupied, dt, a, b, tail)
-        else walk(c, person, occupied, dt, b, tail) end end end end end end end
+        else walk(c, person, occupied, dt, b, tail) end end end end end end end end
       _ ->
         if person.wait > 0.0 do ({ person with wait: person.wait -. dt }, occupied)
         else if guest(person) do depart_shelter(c, running, bus, person, occupied, clock_hour)
@@ -2270,7 +2310,8 @@ mod Ur.Citizens do
       Cons(n, rest) ->
         let pace = walk_segment_pace(map, b, n)
         let stop = person.transit_phase == 1 && b == person.board
-        if legs >= coarse_max_legs() || stop || pace <= 0.0 || S.span_distance(b, n) != 1 || S.canal_taxi_leg(c, b, n) ||
+        if legs >= coarse_max_legs() || stop || pace <= 0.0 || S.canal_walk_node(b) || S.canal_walk_node(n) ||
+          S.span_distance(b, n) != 1 || S.canal_taxi_leg(c, b, n) ||
           near_lot(map, b) || near_lot(map, n) do (legs, time)
         else coarse_legs(c, map, person, n, rest, legs + 1, time +. 1.0 /. (0.32 *. pace)) end
       Nil -> (legs, time)
@@ -2309,7 +2350,8 @@ mod Ur.Citizens do
           let pace = walk_segment_pace(occupied.walk, a, b)
           let (turn_a, _) = walk_turn(occupied.walk, a)
           let (turn_b, _) = walk_turn(occupied.walk, b)
-          if pace <= 0.0 || S.span_distance(a, b) != 1 || person.progress >= 1.0 || S.canal_taxi_leg(c, a, b) do None
+          if pace <= 0.0 || S.canal_walk_node(a) || S.canal_walk_node(b) ||
+            S.span_distance(a, b) != 1 || person.progress >= 1.0 || S.canal_taxi_leg(c, a, b) do None
           else if !near_lot(occupied.walk, a) && !near_lot(occupied.walk, b) do Some(coarse_walk(c, entry, occupied.walk, now, pace))
           else if turn_a >= 0 || turn_b >= 0 do None else
             let stage = sidewalk_stage(occupied.walk, person, a, b)
@@ -2475,7 +2517,7 @@ mod Ur.Citizens do
   -- sub-step. step_guarded passes far_dt = dt, which steps everyone every time.
   pfn deferrable(map : WalkMap, person : Citizen) : Bool do
     person.car_phase == 0 && person.bus_slot < 0 && person.transit_phase < 2 && !emergency_move(person) && !guest(person) &&
-      !near_lot(map, if person.location >= 0 do person.location else current_plot(person.route) end)
+      !near_lot(map, if person.location >= 0 do person.location else S.walk_lot(current_plot(person.route)) end)
   end
   pfn advance_actors(c : Ur.Sim.City, running : NativeIntArr, bus : Option(TransitService), actors : List(Actor),
     roster : Roster, active : List(Actor), occupied : Occupied, dt : Float, far_dt : Float, tick_time : Float, motion : NativeFloatArr, boarding : List(Citizen),

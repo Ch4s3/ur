@@ -233,7 +233,7 @@ mod Ur.Layers do
           if used >= capacity do 6 else if used * 5 >= capacity * 4 do 10 else 20 end end
         end end
       3 ->
-        let trip = S.commute(st.commutes, i)
+        let trip = S.commute_with(c, st.commutes, i)
         if S.get(c.ferries, i) > 0 || S.get(c.transit, i) == 1 || S.get(st.running_transit, i) > 0 do 20
         else if S.get(c.transit, i) >= 2 do 10
         else if land && S.get(c.zones, i) > 0 && trip < 999 do (if trip <= 14 do 11 else 10 end)

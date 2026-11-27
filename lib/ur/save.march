@@ -892,6 +892,7 @@ mod Ur.Save do
     end
     let fields = List.append([("public_works", Json.encode_array(List.map(v.public_works, encode_public_work))), ("facility_expansion", enc_array(v.facility_expansion, S.count() - 1, Nil)), ("milestones", enc_array(v.milestones, 63, Nil)), ("facility_staff", enc_array(v.facility_staff, S.count() - 1, Nil)), ("founders", Json.encode_int(v.founders)), ("world_seed", Json.encode_int(v.world_seed)), ("volcanic", Json.encode_bool(v.volcanic)), ("basalt", encode_basalt(v.basalt)), ("volcano_ms", Json.encode_int(v.volcano_ms)), ("world_setup", enc_array(v.setup, NativeArray.length_int(v.setup) - 1, Nil)), ("utility_service", enc_array(v.utility_service, S.count() - 1, Nil))], freight)
     let fields = Cons(("staffing_targets", enc_array(v.staffing_targets, S.count() - 1, Nil)), fields)
+    let fields = Cons(("canal_footbridges", enc_array(v.canal_footbridges, S.count() - 1, Nil)), fields)
     let fields = Cons(("quays", enc_array(v.quays, S.count() - 1, Nil)), fields)
     let fields = if S.valid(v.subsea_vent) do
       Cons(("subsea_vent", Json.encode_int(v.subsea_vent)), Cons(("subsea_depths", encode_subsea_depths(v.subsea_depths)), fields))
@@ -1351,6 +1352,7 @@ mod Ur.Save do
     let? storm_drains = optional_array(j, "storm_drains", 1)
     let? seawalls = optional_array(j, "seawalls", 1)
     let? quays = optional_array(j, "quays", 4)
+    let? canal_footbridges = optional_array(j, "canal_footbridges", 2)
     let? seabed = optional_array(j, "seabed", 127)
     let? sea_heights = optional_array(j, "sea_heights", 2000)
     let? ferry_works = optional_array(j, "ferry_works", 15)
@@ -1426,7 +1428,7 @@ mod Ur.Save do
     let harbour_basin = if S.valid(harbour) && S.valid(raw_basin) && S.get(canals, raw_basin) > 0 &&
       List.any([0, 1, 2, 3], fn side -> S.neighbour(harbour, side) == raw_basin) do raw_basin else -1 end
     if !((harbour == -1 || S.valid(harbour)) && (ferry_start == -1 || S.valid(ferry_start)) && month >= 0 && construction_spend >= 0 && tax >= 0 && tax <= 25 && energy >= 1 && energy <= 12) do Err("Invalid city values.") else
-    Ok(S.restore_rain({ lift_decks: Map.empty(), lift_vessels: Map.empty(), public_works: public_works, rain_uniform: rain_uniform, watch: S.clamp(watch, 0, 2), rain_now: NativeArray.make_int(S.count(), 0), storms: storms, air: air, milestones: milestones, facility_staff: facility_staff, facility_expansion: facility_expansion, staffing_targets: staffing_targets, founders: S.clamp(founders, 0, 12), world_seed: world_seed, volcanic: volcanic, basalt: basalt, volcano_ms: S.clamp(volcano_ms, 0, float_to_int(Ur.Volcano.period() *. 1000.0) - 1), volcanic_shade: Map.empty(), subsea_vent: subsea_vent, subsea_depths: subsea_depths, setup: setup, climate_seed: S.clamp(climate_seed, 0, 2147483646), storm_drains: storm_drains, seawalls: seawalls, quays: quays, seabed: seabed, sea_heights: sea_heights, ferry_works: ferry_works, mangrove_harm: mangrove_harm, sea_counted: S.clamp(sea_counted, 0, 4), sea_features: S.clamp(sea_features, 0, 1), sand_changes: sand_changes, sea_run: S.clamp(NativeArray.get_int(sand_storm, 0), 0, 1000), sand_peak: NativeArray.get_int(sand_storm, 1), sand_sector: S.clamp(NativeArray.get_int(sand_storm, 2), 0, 15), sand_day: NativeArray.get_int(sand_storm, 3), sand_marks: NativeArray.make_int(S.count(), 0), sea_shoals: sea_shoals, sea_reefs: NativeArray.make_int(S.count(), 0), fishing_policy: fishing_policy, private_docks: private_docks, fish: fish, fish_capacity: fish_capacity, fish_last: NativeArray.make_int(S.count(), 0), fish_alerts: NativeArray.make_int(S.count(), 0), pump_orders: pump_orders, surface_water: surface_water, flood_damage: flood_damage, flood_active: flood_active, rain_tanks: rain_tanks, subway_water: subway_water, soil_moisture: S.clamp(soil, 0, 100), pumping_cost: S.clamp(pumping, 0, 200000), battery: S.clamp(battery, 0, 1000000), hour: 9,
+    Ok(S.restore_rain({ lift_decks: Map.empty(), lift_vessels: Map.empty(), public_works: public_works, rain_uniform: rain_uniform, watch: S.clamp(watch, 0, 2), rain_now: NativeArray.make_int(S.count(), 0), storms: storms, air: air, milestones: milestones, facility_staff: facility_staff, facility_expansion: facility_expansion, staffing_targets: staffing_targets, founders: S.clamp(founders, 0, 12), world_seed: world_seed, volcanic: volcanic, basalt: basalt, volcano_ms: S.clamp(volcano_ms, 0, float_to_int(Ur.Volcano.period() *. 1000.0) - 1), volcanic_shade: Map.empty(), subsea_vent: subsea_vent, subsea_depths: subsea_depths, setup: setup, climate_seed: S.clamp(climate_seed, 0, 2147483646), storm_drains: storm_drains, seawalls: seawalls, quays: quays, canal_footbridges: canal_footbridges, seabed: seabed, sea_heights: sea_heights, ferry_works: ferry_works, mangrove_harm: mangrove_harm, sea_counted: S.clamp(sea_counted, 0, 4), sea_features: S.clamp(sea_features, 0, 1), sand_changes: sand_changes, sea_run: S.clamp(NativeArray.get_int(sand_storm, 0), 0, 1000), sand_peak: NativeArray.get_int(sand_storm, 1), sand_sector: S.clamp(NativeArray.get_int(sand_storm, 2), 0, 15), sand_day: NativeArray.get_int(sand_storm, 3), sand_marks: NativeArray.make_int(S.count(), 0), sea_shoals: sea_shoals, sea_reefs: NativeArray.make_int(S.count(), 0), fishing_policy: fishing_policy, private_docks: private_docks, fish: fish, fish_capacity: fish_capacity, fish_last: NativeArray.make_int(S.count(), 0), fish_alerts: NativeArray.make_int(S.count(), 0), pump_orders: pump_orders, surface_water: surface_water, flood_damage: flood_damage, flood_active: flood_active, rain_tanks: rain_tanks, subway_water: subway_water, soil_moisture: S.clamp(soil, 0, 100), pumping_cost: S.clamp(pumping, 0, 200000), battery: S.clamp(battery, 0, 1000000), hour: 9,
       waste_live: waste_live, waste_bins: waste_bins, waste_stock: waste_stock, waste_sites: waste_sites,
       waste_last: waste_last, waste_log: waste_log, waste_runs: waste_runs, council: council, religion: religion, construction_spend: construction_spend, island_exports: island_exports, island_crops: island_crops, island_catch: island_catch,
       shop_imports: shop_imports, harbour: harbour, harbour_basin: harbour_basin, ferry_start: ferry_start, trash: trash,
@@ -1526,6 +1528,10 @@ mod Ur.Save do
         parking: parking, arrival: arrival, car_phase: car, transit_phase: transit, board: board, alight: alight })
     else Err("Invalid shelter commute.") end
   end
+  pfn walk_route_node(j : Json.JsonValue) : Result(Int, String) do
+    let? node = integer(j)
+    if S.valid(S.walk_lot(node)) do Ok(node) else Err("Invalid evacuation route.") end
+  end
   pfn decode_evacuation(j : Json.JsonValue) : Result(Ur.Citizens.EvacuationTrip, String) do
     let? id = evacuation_int(j, "id")
     let? home = evacuation_int(j, "home")
@@ -1535,7 +1541,7 @@ mod Ur.Save do
     let? target = evacuation_int(j, "target")
     let? previous = evacuation_int(j, "previous")
     let? raw_route = field(j, "route")
-    let? route = items(raw_route, parcel, S.count())
+    let? route = items(raw_route, walk_route_node, S.walk_node_count())
     let? raw_progress = field(j, "progress")
     let? progress = number(raw_progress)
     let? raw_wait = field(j, "wait")
@@ -1550,7 +1556,8 @@ mod Ur.Save do
         location == -1 && (commute || (activity == 7 && S.valid(shelter) && target == shelter) || (activity == 9 && target == home))
       _ -> false
     end
-    if id >= 0 && S.valid(home) && List.all([shelter, target, previous], fn lot -> lot == -1 || S.valid(lot)) &&
+    if id >= 0 && S.valid(home) && List.all([shelter, target], fn lot -> lot == -1 || S.valid(lot)) &&
+      (previous == -1 || S.valid(S.walk_lot(previous))) &&
       progress >= 0.0 && progress <= 1.0 && valid_phase do
       Ok({ id: id, home: home, shelter: shelter, activity: activity, location: location, target: target,
         previous: previous, route: route, progress: progress, wait: wait, travel: travel })

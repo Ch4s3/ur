@@ -394,7 +394,7 @@ mod Ur.Council do
   end
 
   pfn survey_lot(c : Ur.Sim.City, st : Ur.Sim.Stats, report : WardReport, lot : Int, homes : Int) : WardReport do
-    let trip = S.commute(st.commutes, lot)
+    let trip = S.commute_with(c, st.commutes, lot)
     let food = match S.freight_market_at(c, lot) do
       None -> false
       Some(market) -> market.coverage < 60 || market.price >= 10

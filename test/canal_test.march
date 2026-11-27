@@ -35,6 +35,104 @@ mod CanalTest do
       S.canal_taxi_peer(freight, a) < 0, "Street-connected freight quays provide cargo service")
   end
 
+  pfn sidewalk_access() : Unit do
+    let c = fixture()
+    let road = S.index(3, 10)
+    let first = S.index(3, 11)
+    let last = S.index(7, 11)
+    let frontage = S.index(6, 10)
+    let far_bank = S.index(6, 12)
+    let c = { c with roads: NativeArray.set_int(NativeArray.set_int(c.roads, c.harbour, 1), road, 1) }
+    let canal = (Ur.Build.preview(c, 127, first, last)).city
+    let access = S.access(canal)
+    Test.assert_true(S.building_access(canal, access, frontage) >= 0,
+      "A canal sidewalk connected to the harbour gives neighbouring parcels road frontage")
+    Test.assert_true(S.building_access(canal, access, far_bank) >= 0,
+      "A sidewalk can reach the opposite bank by going around the end of the cut")
+    let around = Ur.Evacuation.walk_route(canal, frontage, far_bank)
+    Test.assert_true(!List.is_empty(around) && List.any(around, fn node -> S.walk_lot(node) == last) &&
+      Ur.Citizens.valid_route(canal, around, true) && dry_walk(canal, around),
+      "Citizens can round a canal end while staying on the sidewalk")
+    let heights = NativeArray.set_int(NativeArray.set_int(canal.heights, S.neighbour(first, 0), 0), S.neighbour(last, 1), 0)
+    let open = { canal with heights: heights }
+    Test.assert_true(S.building_access(open, S.access(open), far_bank) < 0 &&
+      List.is_empty(Ur.Evacuation.walk_route(open, frontage, far_bank)),
+      "Two open ends leave the opposite sidewalks separate")
+    let seawall = S.act(open, S.neighbour(first, 0), 100)
+    Test.assert_true(Ur.Citizens.changed(seawall, open, 0) &&
+      !List.is_empty(Ur.Evacuation.walk_route(seawall, frontage, far_bank)),
+      "A seawall at the mouth opens a bank route and refreshes citizen paths")
+    let park = { open with parks: NativeArray.set_int(open.parks, far_bank, 1) }
+    Test.assert_eq_int(S.walkable_park_score(park, S.park_walk(park), frontage), 0,
+      "An open canal does not give the opposite bank access to a park")
+    let bridge = S.index(6, 11)
+    let quote = Ur.Build.preview(open, 156, -1, bridge)
+    let linked = quote.city
+    Test.assert_true(quote.valid && quote.changed && quote.cost == 300 && S.canal_footbridge(linked, bridge) == 1 &&
+      S.building_access(linked, S.access(linked), far_bank) >= 0 &&
+      S.get(linked.roads, bridge) == 0 && S.canal_path(linked, first, last) == [first, S.index(4, 11), S.index(5, 11), bridge, last],
+      "A footbridge connects development and leaves the canal navigable")
+    let crossing = Ur.Evacuation.walk_route(linked, frontage, far_bank)
+    Test.assert_true(List.length(crossing) == 4 && Ur.Citizens.checked_route(linked, Ur.Citizens.route_checks(linked), crossing, true) &&
+      dry_walk(linked, crossing), "Citizens take the short route over the raised deck")
+    let quay_end = S.neighbour(far_bank, 1)
+    let coast = NativeArray.set_int(NativeArray.set_int(linked.heights, S.neighbour(far_bank, 3), 0), S.neighbour(quay_end, 3), 0)
+    let promenade = Ur.Build.preview({ linked with heights: coast }, 155, far_bank, quay_end)
+    let to_quay = Ur.Evacuation.walk_route(promenade.city, frontage, quay_end)
+    Test.assert_true(promenade.valid && promenade.changed && S.quay_side(promenade.city, quay_end) == 3 &&
+      List.any(to_quay, fn node -> S.canal_walk_node(node) && S.walk_lot(node) == bridge) &&
+      Ur.Citizens.valid_route(promenade.city, to_quay, true),
+      "Citizens can cross the canal footbridge and reach the coastal quay")
+    let disconnected = S.act(promenade.city, bridge, 132)
+    Test.assert_true(List.is_empty(Ur.Evacuation.walk_route(disconnected, frontage, quay_end)),
+      "Removing the only crossing disconnects the quay from the opposite bank")
+    let terminal = S.neighbour(far_bank, 3)
+    let roads = List.fold_left([0, 1, 3], linked.roads, fn (roads, side) ->
+      NativeArray.set_int(roads, S.neighbour(terminal, side), 1))
+    let shore = { linked with harbour: terminal, harbour_basin: -1, roads: roads,
+      heights: NativeArray.set_int(linked.heights, quay_end, 0) }
+    let dug = S.act(shore, terminal, 127)
+    Test.assert_true(dug.harbour_basin == -1 && !S.canal_water(dug, far_bank) &&
+      Ur.Citizens.valid_route(dug, crossing, true),
+      "A new harbour basin cannot cut through a footbridge landing")
+    let park = { linked with parks: park.parks }
+    Test.assert_true(S.walkable_park_score(park, S.park_walk(park), frontage) > 0 &&
+      S.crossing_navigation(linked, first, last, 12) == -1 && S.crossing_navigation(linked, first, last, 18) == -2,
+      "The footbridge gives access to the park and leaves clearance for small boats")
+    let workplaces = NativeArray.set_int(open.zones, far_bank, 2)
+    let buildings = NativeArray.set_int(open.buildings, far_bank, 1)
+    let before = { open with zones: workplaces, buildings: buildings }
+    let after = { linked with zones: workplaces, buildings: buildings }
+    Test.assert_true(S.commute_with(before, S.job_access(before), frontage) > S.commute_limit() &&
+      S.commute_with(after, S.job_access(after), frontage) <= S.commute_limit(),
+      "The employment simulation follows the same bridge as citizens")
+    let removed = Ur.Build.preview(linked, 132, -1, bridge)
+    Test.assert_true(removed.changed && S.canal_water(removed.city, bridge) &&
+      !Ur.Citizens.valid_route(removed.city, crossing, true) &&
+      S.building_access(removed.city, S.access(removed.city), far_bank) < 0,
+      "Removing a footbridge invalidates its route and keeps the canal")
+    let saved = { city: linked, cx: 44.0, cz: 84.0, zoom: 36.0, yaw: 0.55, paused: true, speed: 1 }
+    match Ur.Save.decode(Ur.Save.encode(saved)) do
+      Ok(loaded) -> Test.assert_true(S.canal_footbridge(loaded.city, bridge) == 1 &&
+        Ur.Evacuation.walk_route(loaded.city, frontage, far_bank) == crossing,
+        "The footbridge and its pedestrian connection survive save and load")
+      Err(message) -> Test.assert_true(false, "Footbridge save failed: " ++ message)
+    end
+  end
+  pfn dry_walk(c : Ur.Sim.City, route : List(Int)) : Bool do
+    match route do
+      Cons(a, Cons(b, rest)) ->
+        let dry = List.all([3, 29], fn side -> List.all(List.range(0, 33), fn sample ->
+          let (x, z, y) = Ur.Scene.canal_walk_position(c, a, b, side, int_to_float(sample) /. 32.0)
+          let lot = S.index(x / 32, z / 32)
+          !S.canal_water(c, lot) || !S.canal_wet(c, lot, x % 32, z % 32) ||
+            (S.canal_footbridge_link(c, a, b) && y == S.canal_footbridge_height(c, lot,
+              if S.canal_footbridge(c, lot) == 1 do z % 32 else x % 32 end))))
+        if dry do dry_walk(c, Cons(b, rest)) else false end
+      _ -> true
+    end
+  end
+
   pfn flood_gate() : Unit do
     let c = fixture()
     let sea = S.index(4, 10)
@@ -433,6 +531,7 @@ mod CanalTest do
 
   fn main(_cap : Cap(IO)) : Unit do
     navigation()
+    sidewalk_access()
     flood_gate()
     automatic_surge_gate()
     waterfront_cranes()

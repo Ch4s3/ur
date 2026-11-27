@@ -122,7 +122,13 @@ the selected project built.
 ### Canals
 
 Open **Roads → Canals** and drag **Dig canal** through clear, unzoned land.
-Connected parcels form a channel with sidewalks. Place a **Navigation lock**
+Connected parcels form a channel with sidewalks that give adjacent zones road
+access when linked to the harbour. Citizens follow the banks and can round
+a closed end. To join the two banks, select **Roads → Crossings → Canal
+footbridge** and click a straight canal parcel. **Remove canal works** removes
+the bridge and leaves the channel in place.
+
+Place a **Navigation lock**
 on a straight reach where canal levels change. To start a **Water taxi**
 route, select two connected canal banks. **Freight quay** routes also need an
 adjacent street at both ends.
